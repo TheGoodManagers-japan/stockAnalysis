@@ -30,7 +30,7 @@ function calculateMedian(arr) {
 // Fetch stock data from Yahoo Finance and 30-day prediction
 async function fetchYahooFinanceData(ticker) {
   try {
-    // Fetch stock data using yahoo-finance2 library
+    console.log(`Fetching data for ticker: ${ticker}`);
     const data = await yahooFinance.quote(ticker);
 
     if (!data) {
@@ -38,11 +38,20 @@ async function fetchYahooFinanceData(ticker) {
       return null;
     }
 
+    console.log(`Fetched Yahoo Finance data for ${ticker}:`, data);
+
     // Call the prediction API for the ticker
+    console.log(`Fetching predictions for ticker: ${ticker}`);
     const predictionResponse = await axios.get(
-      `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/predict/${ticker}`
+      `http://localhost:3000/predict/${ticker}`
     );
     const predictions = predictionResponse.data.predictions || [];
+
+    if (!predictions.length) {
+      console.warn(`No predictions available for ${ticker}`);
+    }
+
+    console.log(`Fetched predictions for ${ticker}:`, predictions);
 
     // Extract the predicted price 30 days into the future
     const predictedPrice = predictions.length
@@ -124,8 +133,10 @@ function calculateStopLossAndTarget(data) {
 // Handle stock scanning
 async function scanStocks() {
   const sectorResults = {};
+  const logs = []; // Log all data for debugging
 
   for (const { code, sector } of tickers) {
+    console.log(`Processing ticker: ${code} in sector: ${sector}`);
     const stockData = await fetchYahooFinanceData(code);
     if (!stockData) {
       console.warn(`Skipping ticker ${code} due to missing data.`);
@@ -134,6 +145,8 @@ async function scanStocks() {
 
     const score = computeScore(stockData);
     const { stopLoss, targetPrice } = calculateStopLossAndTarget(stockData);
+
+    logs.push({ ticker: code, stockData, score, stopLoss, targetPrice });
 
     if (!sectorResults[sector]) {
       sectorResults[sector] = [];
@@ -164,6 +177,10 @@ async function scanStocks() {
       scores.reduce((sum, score) => sum + score, 0) / scores.length;
     const medianScore = calculateMedian(scores);
 
+    console.log(
+      `Sector: ${sector}, Scores: ${scores}, Average: ${averageScore}, Median: ${medianScore}`
+    );
+
     sectorMetrics[sector] = {
       averageScore,
       medianScore,
@@ -173,6 +190,10 @@ async function scanStocks() {
     sectorResults[sector].sort((a, b) => b.score - a.score);
     sectorResults[sector] = sectorResults[sector].slice(0, 10);
   });
+
+  console.log("Sector Results:", JSON.stringify(sectorResults, null, 2));
+  console.log("Sector Metrics:", JSON.stringify(sectorMetrics, null, 2));
+  console.log("Logs:", JSON.stringify(logs, null, 2));
 
   return { sectorResults, sectorMetrics };
 }
@@ -184,7 +205,7 @@ module.exports = async (req, res) => {
     res.json({
       success: true,
       data: sectorResults,
-      metrics: sectorMetrics, // Add sector metrics
+      metrics: sectorMetrics,
     });
   } catch (error) {
     console.error("Error during stock scanning:", error.message);
