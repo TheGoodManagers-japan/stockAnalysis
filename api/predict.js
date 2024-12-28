@@ -1,10 +1,7 @@
-const express = require("express");
 const yahooFinance = require("yahoo-finance2").default;
 const tf = require("@tensorflow/tfjs-node");
 const Bottleneck = require("bottleneck");
 
-const app = express();
-const port = 3000; // Or use an environment variable
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
 // Fetch Historical Data (12 Months) using Yahoo Finance
@@ -155,9 +152,10 @@ async function predictNext30Days(ticker, latestData) {
   return predictions;
 }
 
-// API Endpoint
-app.get("/predict/:ticker", async (req, res) => {
-  const ticker = req.params.ticker;
+// Vercel Serverless Function
+module.exports = async (req, res) => {
+  const { ticker } = req.query;
+
   try {
     console.log(`Fetching data for ${ticker}...`);
     const historicalData = await fetchHistoricalData(ticker);
@@ -181,9 +179,4 @@ app.get("/predict/:ticker", async (req, res) => {
     console.error(`Error for ${ticker}: ${error.message}`);
     res.status(500).json({ success: false, error: error.message });
   }
-});
-
-// Start Server
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-});
+};
