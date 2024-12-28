@@ -7,11 +7,6 @@ const API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
 // Tickers and their sectors
 const tickers = [
   { code: "4151.T", sector: "Pharmaceuticals" },
-  { code: "4502.T", sector: "Pharmaceuticals" },
-  { code: "4503.T", sector: "Pharmaceuticals" },
-  { code: "7203.T", sector: "Automobiles" },
-  { code: "6758.T", sector: "Electronics" },
-  { code: "9984.T", sector: "Technology" },
 ];
 
 // Bottleneck to handle rate limits
