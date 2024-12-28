@@ -4,30 +4,6 @@
     {
       "src": "api/**/*.js",
       "use": "@vercel/node"
-    },
-    {
-      "src": "public/**/*",
-      "use": "@vercel/static"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "max-age=0, s-maxage=86400"
-        }
-      ]
-    }
-  ],
-  "env": {
-    "YAHOO_API_KEY": "your-api-key-here"
-  }
+  ]
 }
