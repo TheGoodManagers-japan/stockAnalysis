@@ -8,6 +8,7 @@
     "deploy": "vercel"
   },
   "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0",
     "axios": "^1.7.9",
     "body-parser": "^1.20.3",
     "bottleneck": "^2.19.5",
