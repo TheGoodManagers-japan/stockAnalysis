@@ -1,6 +1,7 @@
 (async function () {
   function init(firebaseConfig) {
-    console.log(firebaseConfig)
+    console.log(firebaseConfig);
+
     // Initialize Firebase
     if (!firebase.apps.length) {
       firebase.initializeApp(firebaseConfig);
@@ -11,7 +12,7 @@
     // Initialize Remote Config
     const remoteConfig = firebase.remoteConfig();
     remoteConfig.settings = {
-      minimumFetchIntervalMillis: 0, // Fetch every hour
+      minimumFetchIntervalMillis: 0, // Always fetch the latest values
     };
 
     const tickers = [
@@ -32,16 +33,11 @@
       }
     }
 
-    /**
-     * Fetch API keys from Firebase Remote Config.
-     */
     async function fetchAPIKeys() {
       try {
         await remoteConfig.fetchAndActivate();
-
         const API_KEY = remoteConfig.getValue("api_finnhub").asString();
         const OPENAI_API_KEY = remoteConfig.getValue("api_openai").asString();
-        console.log(OPENAI_API_KEY)
 
         if (!API_KEY || !OPENAI_API_KEY) {
           throw new Error("API keys not available in Remote Config.");
@@ -215,9 +211,9 @@
     }
 
     return {
-      scanStocks,
+      scanStocks, // Return scanStocks so it can be called independently
     };
   }
 
-  window.initStockAnalysis = init;
+  window.initStockAnalysis = init; // Attach init to window for global access
 })();
