@@ -1,5 +1,5 @@
 const yahooFinance = require("yahoo-finance2").default;
-const tf = require("@tensorflow/tfjs-node");
+const tf = require("@tensorflow/tfjs");
 const Bottleneck = require("bottleneck");
 
 // Custom headers for Yahoo Finance requests
