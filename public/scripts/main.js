@@ -29,13 +29,11 @@
       return isNaN(num) ? 0 : num;
     }
 
-    const Bottleneck = require("bottleneck");
     const limiter = new Bottleneck({
       minTime: 1000, // 1 request per second
       maxConcurrent: 1, // Allow only one request at a time
     });
 
-    const axios = require("axios");
 
     async function limitedAxiosGet(url, headers = {}) {
       try {
