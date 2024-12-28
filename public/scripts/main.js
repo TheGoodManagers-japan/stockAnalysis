@@ -61,9 +61,16 @@
       }
     }
 
+    function normalizeTicker(ticker) {
+      // Remove '.T' suffix or any other suffix
+      return ticker.replace(/\.T$/, "");
+    }
+
+
 
     async function fetchStockData(ticker, API_KEY) {
-      const url = `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${API_KEY}`;
+      const normalizedTicker = normalizeTicker(ticker);
+      const url = `https://finnhub.io/api/v1/quote?symbol=${normalizedTicker}&token=${API_KEY}`;
       const response = await limitedAxiosGet(url, {});
       if (!response || !response.data) return null;
 
@@ -78,7 +85,8 @@
     }
 
     async function fetchFinancialMetrics(ticker, API_KEY) {
-      const url = `https://finnhub.io/api/v1/stock/metric?symbol=${ticker}&metric=all&token=${API_KEY}`;
+      const normalizedTicker = normalizeTicker(ticker);
+      const url = `https://finnhub.io/api/v1/stock/metric?symbol=${normalizedTicker}&metric=all&token=${API_KEY}`;
       const response = await limitedAxiosGet(url, {});
       if (!response || !response.data)
         return {
