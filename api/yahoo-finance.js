@@ -7,25 +7,19 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: "Ticker is required" });
   }
 
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${ticker}.T`;
+  const url = `https://apidojo-yahoo-finance-v1.p.rapidapi.com/stock/v2/get-summary`;
 
   try {
     const response = await axios.get(url, {
+      params: { symbol: `${ticker}.T`, region: "JP" },
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        Accept: "application/json",
+        "X-RapidAPI-Key": process.env.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "apidojo-yahoo-finance-v1.p.rapidapi.com",
       },
     });
     res.status(200).json(response.data);
   } catch (error) {
-    console.error("Error fetching Yahoo Finance data:", {
-      message: error.message,
-      response: error.response ? error.response.data : null,
-      status: error.response ? error.response.status : null,
-      headers: error.response ? error.response.headers : null,
-    });
-
+    console.error("Error fetching data from RapidAPI:", error.message);
     res
       .status(500)
       .json({ error: "Failed to fetch data", details: error.message });
