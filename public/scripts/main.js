@@ -88,7 +88,7 @@
           {
             model: "gpt-4o-mini",
             prompt: `Summarize the following ${context} news articles into a concise paragraph:\n\n${text}`,
-            max_tokens: 150,
+            max_tokens: 16384,
           },
           {
             headers: {
@@ -112,7 +112,7 @@
           {
             model: "gpt-4o-mini",
             prompt: `Determine the sentiment of this text (positive, neutral, or negative):\n\n${summary}\n\nSentiment:`,
-            max_tokens: 10,
+            max_tokens: 16384,
           },
           {
             headers: {
