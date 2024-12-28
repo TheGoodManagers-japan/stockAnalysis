@@ -1,5 +1,9 @@
 {
   "projects": {
     "default": "stockanalysis-ee030"
+  },
+  "hosting": {
+    "public": "scripts",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
   }
 }
