@@ -2,6 +2,14 @@ const yahooFinance = require("yahoo-finance2").default;
 const tf = require("@tensorflow/tfjs-node");
 const Bottleneck = require("bottleneck");
 
+// Custom headers for Yahoo Finance requests
+const customHeaders = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+};
+
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
 // Fetch Historical Data (12 Months) using Yahoo Finance
@@ -10,13 +18,21 @@ async function fetchHistoricalData(ticker) {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
+    console.log(`Fetching historical data for ${ticker}...`);
+
     const historicalData = await limiter.schedule(() =>
-      yahooFinance.historical(ticker, { period1: oneYearAgo })
+      yahooFinance.historical(
+        ticker,
+        { period1: oneYearAgo },
+        { headers: customHeaders } // Include custom headers
+      )
     );
 
     if (!historicalData || historicalData.length === 0) {
       throw new Error(`No historical data available for ${ticker}`);
     }
+
+    console.log(`Historical data for ${ticker} fetched successfully.`);
 
     return historicalData.map((data) => ({
       price: data.close,

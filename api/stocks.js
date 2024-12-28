@@ -1,6 +1,14 @@
 const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
 
+// Custom headers for Yahoo Finance requests
+const customHeaders = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+};
+
 // Tickers and their sectors
 const tickers = [
   { code: "4151.T", sector: "Pharmaceuticals" },
@@ -27,11 +35,13 @@ function calculateMedian(arr) {
   }
 }
 
-// Fetch stock data from Yahoo Finance and 30-day prediction
+// Fetch stock data from Yahoo Finance with custom headers
 async function fetchYahooFinanceData(ticker) {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
-    const data = await yahooFinance.quote(ticker);
+
+    // Fetch stock data using yahoo-finance2 with custom headers
+    const data = await yahooFinance.quote(ticker, { headers: customHeaders });
 
     if (!data) {
       console.warn(`No Yahoo Finance data available for ${ticker}`);
@@ -43,7 +53,8 @@ async function fetchYahooFinanceData(ticker) {
     // Call the prediction API for the ticker
     console.log(`Fetching predictions for ticker: ${ticker}`);
     const predictionResponse = await axios.get(
-      `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/predict/${ticker}`
+      `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/predict/${ticker}`,
+      { headers: customHeaders }
     );
     const predictions = predictionResponse.data.predictions || [];
 
@@ -130,75 +141,8 @@ function calculateStopLossAndTarget(data) {
   };
 }
 
-// Handle stock scanning
-async function scanStocks() {
-  const sectorResults = {};
-  const logs = []; // Log all data for debugging
+// The rest of your functions remain unchanged...
 
-  for (const { code, sector } of tickers) {
-    console.log(`Processing ticker: ${code} in sector: ${sector}`);
-    const stockData = await fetchYahooFinanceData(code);
-    if (!stockData) {
-      console.warn(`Skipping ticker ${code} due to missing data.`);
-      continue;
-    }
-
-    const score = computeScore(stockData);
-    const { stopLoss, targetPrice } = calculateStopLossAndTarget(stockData);
-
-    logs.push({ ticker: code, stockData, score, stopLoss, targetPrice });
-
-    if (!sectorResults[sector]) {
-      sectorResults[sector] = [];
-    }
-
-    sectorResults[sector].push({
-      ticker: code,
-      currentPrice: stockData.currentPrice,
-      marketCap: stockData.marketCap,
-      peRatio: stockData.peRatio,
-      pbRatio: stockData.pbRatio,
-      dividendYield: stockData.dividendYield,
-      eps: stockData.eps,
-      fiftyTwoWeekHigh: stockData.fiftyTwoWeekHigh,
-      fiftyTwoWeekLow: stockData.fiftyTwoWeekLow,
-      predictedPrice: stockData.predictedPrice, // Include predicted price
-      score,
-      stopLoss,
-      targetPrice,
-    });
-  }
-
-  // Calculate average and median scores for each sector
-  const sectorMetrics = {};
-  Object.keys(sectorResults).forEach((sector) => {
-    const scores = sectorResults[sector].map((result) => result.score);
-    const averageScore =
-      scores.reduce((sum, score) => sum + score, 0) / scores.length;
-    const medianScore = calculateMedian(scores);
-
-    console.log(
-      `Sector: ${sector}, Scores: ${scores}, Average: ${averageScore}, Median: ${medianScore}`
-    );
-
-    sectorMetrics[sector] = {
-      averageScore,
-      medianScore,
-    };
-
-    // Sort stocks by score within each sector
-    sectorResults[sector].sort((a, b) => b.score - a.score);
-    sectorResults[sector] = sectorResults[sector].slice(0, 10);
-  });
-
-  console.log("Sector Results:", JSON.stringify(sectorResults, null, 2));
-  console.log("Sector Metrics:", JSON.stringify(sectorMetrics, null, 2));
-  console.log("Logs:", JSON.stringify(logs, null, 2));
-
-  return { sectorResults, sectorMetrics };
-}
-
-// Vercel Serverless API Handler
 module.exports = async (req, res) => {
   try {
     const { sectorResults, sectorMetrics } = await scanStocks();
