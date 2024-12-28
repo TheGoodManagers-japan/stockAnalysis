@@ -52,14 +52,15 @@
     });
 
 
-    async function limitedAxiosGet(url, headers) {
-      return limiter.schedule(() =>
-        axios.get(url, { headers }).catch((error) => {
-          console.error(`API Error: ${error.message}`);
-          return null;
-        })
-      );
+    async function limitedAxiosGet(url, headers = {}) {
+      try {
+        return await limiter.schedule(() => axios.get(url, { headers }));
+      } catch (error) {
+        console.error("API Error:", error.response?.data || error.message);
+        throw error;
+      }
     }
+
 
     async function fetchStockData(ticker, API_KEY) {
       const url = `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${API_KEY}`;
