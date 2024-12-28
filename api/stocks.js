@@ -26,6 +26,13 @@ async function fetchYahooFinanceData(ticker) {
       lowPrice: toNumber(data.regularMarketDayLow),
       openPrice: toNumber(data.regularMarketOpen),
       prevClosePrice: toNumber(data.regularMarketPreviousClose),
+      marketCap: toNumber(data.marketCap),
+      peRatio: toNumber(data.trailingPE),
+      pbRatio: toNumber(data.priceToBook),
+      dividendYield: toNumber(data.dividendYield) * 100, // Convert to percentage
+      fiftyTwoWeekHigh: toNumber(data.fiftyTwoWeekHigh),
+      fiftyTwoWeekLow: toNumber(data.fiftyTwoWeekLow),
+      eps: toNumber(data.epsTrailingTwelveMonths),
     };
   } catch (error) {
     console.error(
@@ -36,15 +43,26 @@ async function fetchYahooFinanceData(ticker) {
   }
 }
 
-// Compute stock score
+// Compute stock score with more metrics
 function computeScore(data) {
-  const { currentPrice, highPrice, lowPrice, prevClosePrice } = data;
+  const {
+    peRatio,
+    pbRatio,
+    dividendYield,
+    currentPrice,
+    highPrice,
+    lowPrice,
+    fiftyTwoWeekHigh,
+    fiftyTwoWeekLow,
+  } = data;
 
+  // Weighted scoring based on various metrics
   return (
-    0.3 * (1 / (currentPrice || 1)) +
-    0.2 * ((highPrice - lowPrice) / (currentPrice || 1)) +
-    0.2 * ((currentPrice - prevClosePrice) / (prevClosePrice || 1)) +
-    0.3 * ((highPrice - currentPrice) / (currentPrice || 1))
+    0.3 * (1 / (peRatio || 1)) + // Lower PE ratio is better
+    0.2 * (1 / (pbRatio || 1)) + // Lower PB ratio is better
+    0.2 * (dividendYield || 0) + // Higher dividend yield is better
+    0.2 * ((fiftyTwoWeekHigh - fiftyTwoWeekLow) / (currentPrice || 1)) + // Volatility over the year
+    0.1 * ((highPrice - lowPrice) / (currentPrice || 1)) // Daily volatility
   );
 }
 
@@ -85,6 +103,14 @@ async function scanStocks() {
 
     sectorResults[sector].push({
       ticker: code,
+      currentPrice: stockData.currentPrice,
+      marketCap: stockData.marketCap,
+      peRatio: stockData.peRatio,
+      pbRatio: stockData.pbRatio,
+      dividendYield: stockData.dividendYield,
+      eps: stockData.eps,
+      fiftyTwoWeekHigh: stockData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: stockData.fiftyTwoWeekLow,
       score,
       stopLoss,
       targetPrice,
