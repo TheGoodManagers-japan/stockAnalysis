@@ -72,6 +72,7 @@
       const normalizedTicker = normalizeTicker(ticker);
       const url = `https://finnhub.io/api/v1/quote?symbol=${normalizedTicker}&token=${API_KEY}`;
       const response = await limitedAxiosGet(url, {});
+      console.log(`Stock Data for ${ticker}:`, response?.data); // Log API response
       if (!response || !response.data) return null;
 
       const data = response.data;
@@ -88,6 +89,7 @@
       const normalizedTicker = normalizeTicker(ticker);
       const url = `https://finnhub.io/api/v1/stock/metric?symbol=${normalizedTicker}&metric=all&token=${API_KEY}`;
       const response = await limitedAxiosGet(url, {});
+      console.log(`Financial Metrics for ${ticker}:`, response?.data); // Log API response
       if (!response || !response.data)
         return {
           peRatio: 0,
