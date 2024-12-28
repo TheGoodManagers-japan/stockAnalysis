@@ -75,58 +75,89 @@
     }
 
     async function summarizeNews(articles, context, OPENAI_API_KEY) {
+      if (!articles || articles.length === 0) {
+        console.error("No articles available for summarization.");
+        return "No summary available.";
+      }
+
       const text = articles
         .map(
           (article) =>
             `${article.title}: ${article.description || article.title}`
         )
         .join("\n");
-      const url = `https://api.openai.com/v1/completions`;
-      try {
-        const response = await axios.post(
-          url,
+
+      const url = `https://api.openai.com/v1/chat/completions`;
+      const payload = {
+        model: "gpt-4o-mini",
+        messages: [
           {
-            model: "gpt-4o-mini",
-            prompt: `Summarize the following ${context} news articles into a concise paragraph:\n\n${text}`,
-            max_tokens: 16384,
+            role: "system",
+            content:
+              "You are a helpful assistant. Summarize the input provided by the user by grouping the information into categories that best fit the content. Use meaningful and intuitive categories based on the main themes of the conversation, such as 'Action Items,' 'Key Updates,' 'Challenges,' or other relevant topics. Avoid forcing predefined categories if they don't fit the content.",
           },
           {
-            headers: {
-              Authorization: `Bearer ${OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-          }
+            role: "user",
+            content: `Summarize the following ${context} news articles:\n\n${text}`,
+          },
+        ],
+        max_tokens: 16384, // Adjust based on needs and OpenAI limits
+      };
+
+      try {
+        const response = await axios.post(url, payload, {
+          headers: {
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        return (
+          response.data.choices[0]?.message.content.trim() ||
+          "No summary available."
         );
-        return response.data.choices[0]?.text.trim() || "No summary available.";
       } catch (error) {
         console.error("Error summarizing news:", error.message);
+        console.error("Request details:", error.response?.data || error);
         return "No summary available.";
       }
     }
 
+
     async function analyzeSentiment(summary, OPENAI_API_KEY) {
-      const url = `https://api.openai.com/v1/completions`;
-      try {
-        const response = await axios.post(
-          url,
+      const url = `https://api.openai.com/v1/chat/completions`;
+      const payload = {
+        model: "gpt-4o-mini",
+        messages: [
           {
-            model: "gpt-4o-mini",
-            prompt: `Determine the sentiment of this text (positive, neutral, or negative):\n\n${summary}\n\nSentiment:`,
-            max_tokens: 16384,
+            role: "system",
+            content:
+              "You are a helpful assistant. Analyze the sentiment of the following text and categorize it as 'positive,' 'neutral,' or 'negative.'",
           },
           {
-            headers: {
-              Authorization: `Bearer ${OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-        return response.data.choices[0]?.text.trim() || "neutral";
+            role: "user",
+            content: `Analyze the sentiment of this text:\n\n${summary}`,
+          },
+        ],
+        max_tokens: 16384, // Minimal tokens for sentiment analysis
+      };
+
+      try {
+        const response = await axios.post(url, payload, {
+          headers: {
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        return response.data.choices[0]?.message.content.trim() || "neutral";
       } catch (error) {
         console.error("Error analyzing sentiment:", error.message);
+        console.error("Request details:", error.response?.data || error);
         return "neutral";
       }
     }
+
 
     async function scanStocks() {
       const { API_KEY, OPENAI_API_KEY } = await fetchAPIKeys();
