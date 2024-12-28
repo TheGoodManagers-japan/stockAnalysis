@@ -20,9 +20,6 @@
       { code: "6758.T", sector: "Technology" },
     ];
 
-    let macroNewsCache = null;
-    let sectorNewsCache = {};
-
     async function fetchJson(url) {
       try {
         const response = await axios.get(url);
@@ -37,166 +34,28 @@
       try {
         await remoteConfig.fetchAndActivate();
         const API_KEY = remoteConfig.getValue("api_finnhub").asString();
-        const OPENAI_API_KEY = remoteConfig.getValue("api_openai").asString();
 
-        if (!API_KEY || !OPENAI_API_KEY) {
+        if (!API_KEY) {
           throw new Error("API keys not available in Remote Config.");
         }
 
-        return { API_KEY, OPENAI_API_KEY };
+        return { API_KEY };
       } catch (error) {
         console.error("Failed to fetch API keys:", error.message);
         throw error;
       }
     }
 
-    async function fetchMacroNews() {
-      if (macroNewsCache) return macroNewsCache;
-
-      const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=Japan economy&mode=ArtList`;
-      const response = await fetchJson(url);
-      macroNewsCache = response?.articles || [];
-      return macroNewsCache;
-    }
-
-    async function fetchSectorNews(sector) {
-      if (sectorNewsCache[sector]) return sectorNewsCache[sector];
-
-      const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${sector} Japan&mode=ArtList`;
-      const response = await fetchJson(url);
-      const articles = response?.articles || [];
-      sectorNewsCache[sector] = articles;
-      return articles;
-    }
-
-    async function fetchNews(ticker, API_KEY) {
-      const url = `https://finnhub.io/api/v1/news?category=company&symbol=${ticker}&token=${API_KEY}`;
-      return (await fetchJson(url)) || [];
-    }
-
-    async function summarizeNews(articles, context, OPENAI_API_KEY) {
-      if (!articles || articles.length === 0) {
-        console.error("No articles available for summarization.");
-        return "No summary available.";
-      }
-
-      const text = articles
-        .map(
-          (article) =>
-            `${article.title}: ${article.description || article.title}`
-        )
-        .join("\n");
-
-      const url = `https://api.openai.com/v1/chat/completions`;
-      const payload = {
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a helpful assistant. Summarize the input provided by the user by grouping the information into categories that best fit the content. Use meaningful and intuitive categories based on the main themes of the conversation, such as 'Action Items,' 'Key Updates,' 'Challenges,' or other relevant topics. Avoid forcing predefined categories if they don't fit the content.",
-          },
-          {
-            role: "user",
-            content: `Summarize the following ${context} news articles:\n\n${text}`,
-          },
-        ],
-        max_tokens: 16384, // Adjust based on needs and OpenAI limits
-      };
-
-      try {
-        const response = await axios.post(url, payload, {
-          headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        return (
-          response.data.choices[0]?.message.content.trim() ||
-          "No summary available."
-        );
-      } catch (error) {
-        console.error("Error summarizing news:", error.message);
-        console.error("Request details:", error.response?.data || error);
-        return "No summary available.";
-      }
-    }
-
-
-    async function analyzeSentiment(summary, OPENAI_API_KEY) {
-      const url = `https://api.openai.com/v1/chat/completions`;
-      const payload = {
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a helpful assistant. Analyze the sentiment of the following text and categorize it as 'positive,' 'neutral,' or 'negative.'",
-          },
-          {
-            role: "user",
-            content: `Analyze the sentiment of this text:\n\n${summary}`,
-          },
-        ],
-        max_tokens: 16384, // Minimal tokens for sentiment analysis
-      };
-
-      try {
-        const response = await axios.post(url, payload, {
-          headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        return response.data.choices[0]?.message.content.trim() || "neutral";
-      } catch (error) {
-        console.error("Error analyzing sentiment:", error.message);
-        console.error("Request details:", error.response?.data || error);
-        return "neutral";
-      }
-    }
-
-
     async function scanStocks() {
-      const { API_KEY, OPENAI_API_KEY } = await fetchAPIKeys();
+      const { API_KEY } = await fetchAPIKeys();
 
       const results = [];
       const sectorResults = {};
-
-      const macroNews = await fetchMacroNews();
-      const macroSummary = await summarizeNews(
-        macroNews,
-        "macroeconomic",
-        OPENAI_API_KEY
-      );
-      const macroSentiment = await analyzeSentiment(
-        macroSummary,
-        OPENAI_API_KEY
-      );
 
       for (const { code: ticker, sector } of tickers) {
         const stockData = {}; // Replace with stock data fetching logic
         const { prices, volumes } = {}; // Replace with historical data fetching logic
         const forecastedChange = 5; // Replace with predicted price change logic
-        const sectorNews = await fetchSectorNews(sector);
-        const sectorSummary = await summarizeNews(
-          sectorNews,
-          `${sector} sector`,
-          OPENAI_API_KEY
-        );
-        const sectorSentiment = await analyzeSentiment(
-          sectorSummary,
-          OPENAI_API_KEY
-        );
-        const stockNews = await fetchNews(ticker, API_KEY);
-        const stockSummary = await summarizeNews(
-          stockNews,
-          "stock-specific",
-          OPENAI_API_KEY
-        );
-        const sentiment = await analyzeSentiment(stockSummary, OPENAI_API_KEY);
 
         const score = computeScore({
           peRatio: stockData.peRatio || 0,
@@ -205,22 +64,13 @@
           rsi: stockData.rsi || 50,
           price: stockData.price || 1000,
           fiftyDayAverage: stockData.fiftyDayAverage || 900,
-          sentiment,
           forecastedChange,
-          macroSentiment,
-          sectorSentiment,
         });
 
         const stockResult = {
           ticker,
           sector,
           score: score.toFixed(3),
-          macroSummary,
-          sectorSummary,
-          stockSummary,
-          macroSentiment,
-          sectorSentiment,
-          sentiment,
           forecastedChange: forecastedChange.toFixed(2),
         };
 
@@ -239,6 +89,32 @@
 
       console.log("Top 10 Stocks Per Sector:");
       console.log(JSON.stringify(topStocksBySector, null, 2));
+    }
+
+    /**
+     * Compute the score for a stock.
+     */
+    function computeScore({
+      peRatio,
+      pbRatio,
+      eps,
+      rsi,
+      price,
+      fiftyDayAverage,
+      forecastedChange,
+    }) {
+      const safePe = peRatio !== 0 ? peRatio : 99999;
+      const safePb = pbRatio !== 0 ? pbRatio : 99999;
+
+      let score = 0;
+      score += (20 / safePe) * 0.2; // Value factors
+      score += (10 / safePb) * 0.2;
+      score += (eps > 0 ? eps : 0) * 0.2; // Growth factors
+      score += (100 - rsi) * 0.2; // Technical factors
+      if (price > fiftyDayAverage) score += 0.2; // Trend factors
+      score += (forecastedChange > 0 ? forecastedChange : 0) * 0.1; // Prediction factor
+
+      return score;
     }
 
     return {
