@@ -47,9 +47,10 @@
     }
 
     const limiter = new Bottleneck({
-      minTime: 200,
-      maxConcurrent: 5,
+      minTime: 1000, // 1 request per second (60 requests/min)
+      maxConcurrent: 1, // Allow only one request at a time
     });
+
 
     async function limitedAxiosGet(url, headers) {
       return limiter.schedule(() =>
