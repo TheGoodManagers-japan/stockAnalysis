@@ -21,24 +21,33 @@ async function fetchHistoricalData(ticker) {
     console.log(`Fetching historical data for ${ticker}...`);
 
     const historicalData = await limiter.schedule(() =>
-      yahooFinance.historical(
+      yahooFinance.chart(
         ticker,
-        { period1: oneYearAgo },
-        { headers: customHeaders } // Include custom headers
+        {
+          period1: oneYearAgo,
+          interval: "1d", // Specify daily intervals
+        },
+        { headers: customHeaders }
       )
     );
 
-    if (!historicalData || historicalData.length === 0) {
+    if (
+      !historicalData ||
+      !historicalData.result ||
+      historicalData.result.length === 0
+    ) {
       throw new Error(`No historical data available for ${ticker}`);
     }
 
     console.log(`Historical data for ${ticker} fetched successfully.`);
 
-    return historicalData.map((data) => ({
-      price: data.close,
-      volume: data.volume,
-      date: new Date(data.date),
-    }));
+    return historicalData.result[0].indicators.quote[0].close.map(
+      (price, index) => ({
+        price,
+        volume: historicalData.result[0].indicators.quote[0].volume[index],
+        date: new Date(historicalData.result[0].timestamp[index] * 1000), // Convert to milliseconds
+      })
+    );
   } catch (error) {
     console.error(
       `Error fetching historical data for ${ticker}:`,
@@ -102,10 +111,10 @@ async function trainModel(ticker, data) {
 
   const model = tf.sequential();
   model.add(
-    tf.layers.lstm({
+    tf.layers.dense({
       units: 64,
       inputShape: [sequenceLength, 2],
-      returnSequences: false,
+      activation: "relu",
     })
   );
   model.add(tf.layers.dropout({ rate: 0.2 }));
@@ -114,22 +123,17 @@ async function trainModel(ticker, data) {
 
   console.log(`Training model for ${ticker}...`);
   await model.fit(inputTensor, outputTensor, {
-    epochs: 100,
+    epochs: 50, // Reduced epochs for faster training
     batchSize: 32,
     validationSplit: 0.2,
   });
 
-  await model.save(`file://models/${ticker}_model`);
-  console.log(`Model for ${ticker} saved.`);
+  console.log(`Model training completed for ${ticker}.`);
   return model;
 }
 
 // Predict the Next 30 Days
-async function predictNext30Days(ticker, latestData) {
-  const model = await tf.loadLayersModel(
-    `file://models/${ticker}_model/model.json`
-  );
-
+async function predictNext30Days(model, latestData) {
   const prices = latestData.map((item) => item.price);
   const volumes = latestData.map((item) => item.volume);
 
@@ -161,10 +165,7 @@ async function predictNext30Days(ticker, latestData) {
     ];
   }
 
-  console.log(
-    `Predicted prices for ${ticker} over the next 30 days:`,
-    predictions
-  );
+  console.log(`Predicted prices for the next 30 days:`, predictions);
   return predictions;
 }
 
@@ -180,10 +181,9 @@ module.exports = async (req, res) => {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    await trainModel(ticker, historicalData);
-
+    const model = await trainModel(ticker, historicalData);
     const latestData = historicalData.slice(-30);
-    const predictions = await predictNext30Days(ticker, latestData);
+    const predictions = await predictNext30Days(model, latestData);
 
     res.json({
       success: true,
