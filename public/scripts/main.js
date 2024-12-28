@@ -11,7 +11,7 @@
     // Initialize Remote Config
     const remoteConfig = firebase.remoteConfig();
     remoteConfig.settings = {
-      minimumFetchIntervalMillis: 3600000, // Fetch every hour
+      minimumFetchIntervalMillis: 0, // Fetch every hour
     };
 
     const tickers = [
