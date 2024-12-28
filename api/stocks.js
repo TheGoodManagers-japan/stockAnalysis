@@ -43,7 +43,7 @@ async function fetchYahooFinanceData(ticker) {
     // Call the prediction API for the ticker
     console.log(`Fetching predictions for ticker: ${ticker}`);
     const predictionResponse = await axios.get(
-      `http://localhost:3000/predict/${ticker}`
+      `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/predict/${ticker}`
     );
     const predictions = predictionResponse.data.predictions || [];
 
