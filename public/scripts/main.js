@@ -40,6 +40,7 @@
         await remoteConfig.fetchAndActivate();
 
         const API_KEY = remoteConfig.getValue("finnhub_api_key").asString();
+        console.log(API_KEY);
         const OPENAI_API_KEY = remoteConfig
           .getValue("openai_api_key")
           .asString();
