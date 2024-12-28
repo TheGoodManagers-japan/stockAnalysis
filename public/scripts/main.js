@@ -29,10 +29,13 @@
       return isNaN(num) ? 0 : num;
     }
 
+    const Bottleneck = require("bottleneck");
     const limiter = new Bottleneck({
-      minTime: 1000, // 1 request per second (60 requests/min)
+      minTime: 1000, // 1 request per second
       maxConcurrent: 1, // Allow only one request at a time
     });
+
+    const axios = require("axios");
 
     async function limitedAxiosGet(url, headers = {}) {
       try {
@@ -43,23 +46,30 @@
       }
     }
 
-    async function fetchStockDataFromYahoo(ticker) {
+    async function fetchYahooFinanceData(ticker) {
       const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${ticker}.T`;
       try {
         const response = await limitedAxiosGet(url);
         const data = response.data.quoteResponse?.result[0];
 
         if (!data) {
-          console.warn(`No data available for ${ticker}`);
+          console.warn(`No Yahoo Finance data available for ${ticker}`);
           return null;
         }
 
+        // Extract relevant metrics
         return {
           currentPrice: toNumber(data.regularMarketPrice),
           highPrice: toNumber(data.regularMarketDayHigh),
           lowPrice: toNumber(data.regularMarketDayLow),
           openPrice: toNumber(data.regularMarketOpen),
           prevClosePrice: toNumber(data.regularMarketPreviousClose),
+          peRatio: toNumber(data.trailingPE),
+          pbRatio: toNumber(data.priceToBook),
+          dividendYield: toNumber(data.dividendYield) * 100, // Convert to percentage
+          marketCap: toNumber(data.marketCap),
+          fiftyTwoWeekHigh: toNumber(data.fiftyTwoWeekHigh),
+          fiftyTwoWeekLow: toNumber(data.fiftyTwoWeekLow),
         };
       } catch (error) {
         console.error(
@@ -71,10 +81,24 @@
     }
 
     function computeScore(data) {
-      const { currentPrice, highPrice, lowPrice } = data;
+      const {
+        peRatio,
+        pbRatio,
+        dividendYield,
+        currentPrice,
+        highPrice,
+        lowPrice,
+        fiftyTwoWeekHigh,
+        fiftyTwoWeekLow,
+      } = data;
 
-      // Simple scoring system based on price range and current price
-      return currentPrice > 0 ? (highPrice - lowPrice) / currentPrice : 0;
+      return (
+        0.3 * (1 / (peRatio || 1)) +
+        0.2 * (1 / (pbRatio || 1)) +
+        0.2 * (dividendYield || 0) +
+        0.2 * ((fiftyTwoWeekHigh - fiftyTwoWeekLow) / (currentPrice || 1)) +
+        0.1 * ((highPrice - lowPrice) / (currentPrice || 1))
+      );
     }
 
     function calculateStopLossAndTarget(data) {
@@ -98,7 +122,7 @@
         const sectorResults = {};
 
         for (const { code, sector } of tickers) {
-          const stockData = await fetchStockDataFromYahoo(code);
+          const stockData = await fetchYahooFinanceData(code);
           if (!stockData) {
             console.warn(`Skipping ticker ${code} due to missing data.`);
             continue;
