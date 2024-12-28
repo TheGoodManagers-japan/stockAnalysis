@@ -39,11 +39,8 @@
       try {
         await remoteConfig.fetchAndActivate();
 
-        const API_KEY = remoteConfig.getValue("finnhub_api_key").asString();
-        console.log(API_KEY);
-        const OPENAI_API_KEY = remoteConfig
-          .getValue("openai_api_key")
-          .asString();
+        const API_KEY = remoteConfig.getValue("api_finnhub").asString();
+        const OPENAI_API_KEY = remoteConfig.getValue("api_openai").asString();
 
         if (!API_KEY || !OPENAI_API_KEY) {
           throw new Error("API keys not available in Remote Config.");
