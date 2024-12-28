@@ -168,7 +168,7 @@ async function predictNext30Days(ticker, latestData) {
   return predictions;
 }
 
-// Vercel Serverless Function
+// Export the Vercel Serverless Function
 module.exports = async (req, res) => {
   const { ticker } = req.query;
 
