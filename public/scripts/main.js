@@ -1,5 +1,6 @@
 (async function () {
   function init(firebaseConfig) {
+    console.log(firebaseConfig)
     // Initialize Firebase
     if (!firebase.apps.length) {
       firebase.initializeApp(firebaseConfig);
