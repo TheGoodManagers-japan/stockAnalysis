@@ -141,21 +141,4 @@ function calculateStopLossAndTarget(data) {
   };
 }
 
-// The rest of your functions remain unchanged...
 
-module.exports = async (req, res) => {
-  try {
-    const { sectorResults, sectorMetrics } = await scanStocks();
-    res.json({
-      success: true,
-      data: sectorResults,
-      metrics: sectorMetrics,
-    });
-  } catch (error) {
-    console.error("Error during stock scanning:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "An error occurred while scanning stocks.",
-    });
-  }
-};
