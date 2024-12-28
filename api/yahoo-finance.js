@@ -19,7 +19,15 @@ module.exports = async (req, res) => {
     });
     res.status(200).json(response.data);
   } catch (error) {
-    console.error("Error fetching Yahoo Finance data:", error.message);
-    res.status(500).json({ error: "Failed to fetch data" });
+    console.error("Error fetching Yahoo Finance data:", {
+      message: error.message,
+      response: error.response ? error.response.data : null,
+      status: error.response ? error.response.status : null,
+      headers: error.response ? error.response.headers : null,
+    });
+
+    res
+      .status(500)
+      .json({ error: "Failed to fetch data", details: error.message });
   }
 };
