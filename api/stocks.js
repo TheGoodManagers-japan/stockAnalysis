@@ -1,19 +1,11 @@
 const yahooFinance = require("yahoo-finance2").default;
-const puppeteer = require("puppeteer");
+const axios = require("axios");
 
 // Tickers and their sectors
 const tickers = [
   { code: "4151.T", sector: "Pharmaceuticals" },
   { code: "4502.T", sector: "Pharmaceuticals" },
-  { code: "4503.T", sector: "Pharmaceuticals" },
-  { code: "4568.T", sector: "Pharmaceuticals" },
-  { code: "4578.T", sector: "Pharmaceuticals" },
-  { code: "6479.T", sector: "Electric Machinery" },
-  { code: "6501.T", sector: "Electric Machinery" },
-  { code: "6503.T", sector: "Electric Machinery" },
-  { code: "6504.T", sector: "Electric Machinery" },
-  { code: "2871.T", sector: "Foods" },
-  { code: "2914.T", sector: "Foods" },
+  { code: "9532.T", sector: "Gas" },
 ];
 
 // Utility function to safely parse numbers
@@ -22,52 +14,20 @@ function toNumber(value) {
   return isNaN(num) ? 0 : num;
 }
 
-// Scrape news articles from Yahoo Finance
-async function scrapeYahooFinanceNews(symbol) {
-  const url = `https://finance.yahoo.com/quote/${symbol}/news`;
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+// Utility function to calculate the median of an array
+function calculateMedian(arr) {
+  if (arr.length === 0) return 0;
+  const sorted = arr.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
 
-  try {
-    // Navigate to the stock's news page
-    await page.goto(url, { waitUntil: "load", timeout: 0 });
-
-    // Scrape news articles
-    const newsArticles = await page.evaluate(() => {
-      const articles = [];
-      const items = document.querySelectorAll("li.js-stream-content");
-
-      items.forEach((item) => {
-        const titleElement = item.querySelector("h3");
-        const linkElement = item.querySelector("a");
-        const sourceElement = item.querySelector(".provider-name");
-        const timestampElement = item.querySelector("time");
-
-        if (titleElement && linkElement) {
-          articles.push({
-            title: titleElement.textContent.trim(),
-            link: linkElement.href,
-            source: sourceElement ? sourceElement.textContent.trim() : null,
-            timestamp: timestampElement
-              ? timestampElement.getAttribute("datetime")
-              : null,
-          });
-        }
-      });
-
-      return articles;
-    });
-
-    return newsArticles;
-  } catch (error) {
-    console.error(`Error scraping Yahoo Finance news for ${symbol}:`, error);
-    return [];
-  } finally {
-    await browser.close();
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  } else {
+    return sorted[middle];
   }
 }
 
-// Fetch stock data and related news from Yahoo Finance
+// Fetch stock data from Yahoo Finance and 30-day prediction
 async function fetchYahooFinanceData(ticker) {
   try {
     // Fetch stock data using yahoo-finance2 library
@@ -78,8 +38,16 @@ async function fetchYahooFinanceData(ticker) {
       return null;
     }
 
-    // Fetch related news
-    const news = await scrapeYahooFinanceNews(ticker);
+    // Call the prediction API for the ticker
+    const predictionResponse = await axios.get(
+      `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/predict/${ticker}`
+    );
+    const predictions = predictionResponse.data.predictions || [];
+
+    // Extract the predicted price 30 days into the future
+    const predictedPrice = predictions.length
+      ? predictions[predictions.length - 1]
+      : null;
 
     return {
       currentPrice: toNumber(data.regularMarketPrice),
@@ -94,18 +62,15 @@ async function fetchYahooFinanceData(ticker) {
       fiftyTwoWeekHigh: toNumber(data.fiftyTwoWeekHigh),
       fiftyTwoWeekLow: toNumber(data.fiftyTwoWeekLow),
       eps: toNumber(data.epsTrailingTwelveMonths),
-      news, // Include related news
+      predictedPrice, // Add the predicted price
     };
   } catch (error) {
-    console.error(
-      `Error fetching Yahoo Finance data for ${ticker}:`,
-      error.message
-    );
+    console.error(`Error fetching data for ${ticker}:`, error.message);
     return null;
   }
 }
 
-// Compute stock score with more metrics
+// Compute stock score with additional metrics
 function computeScore(data) {
   const {
     peRatio,
@@ -116,32 +81,43 @@ function computeScore(data) {
     lowPrice,
     fiftyTwoWeekHigh,
     fiftyTwoWeekLow,
+    predictedPrice,
   } = data;
 
   // Weighted scoring based on various metrics
+  const futureFactor = predictedPrice
+    ? 0.2 * ((predictedPrice - currentPrice) / currentPrice)
+    : 0; // Consider predicted price change
+
   return (
     0.3 * (1 / (peRatio || 1)) + // Lower PE ratio is better
     0.2 * (1 / (pbRatio || 1)) + // Lower PB ratio is better
     0.2 * (dividendYield || 0) + // Higher dividend yield is better
     0.2 * ((fiftyTwoWeekHigh - fiftyTwoWeekLow) / (currentPrice || 1)) + // Volatility over the year
-    0.1 * ((highPrice - lowPrice) / (currentPrice || 1)) // Daily volatility
+    0.1 * ((highPrice - lowPrice) / (currentPrice || 1)) + // Daily volatility
+    futureFactor // Include future factor based on prediction
   );
 }
 
 // Calculate stop-loss and target price
 function calculateStopLossAndTarget(data) {
-  const { currentPrice, highPrice, lowPrice } = data;
+  const { currentPrice, highPrice, lowPrice, predictedPrice } = data;
 
   if (currentPrice <= 0 || highPrice <= 0 || lowPrice <= 0) {
     return { stopLoss: 0, targetPrice: 0 };
   }
 
   const stopLoss = currentPrice * 0.9; // 10% below current price
-  const targetPrice = currentPrice * 1.15; // 15% above current price
+
+  // Combine predicted price and recent highs to determine the target price
+  const targetPrice = predictedPrice
+    ? 0.7 * predictedPrice +
+      0.3 * Math.min(highPrice * 1.1, currentPrice * 1.15)
+    : currentPrice * 1.15; // Weighted blend of prediction and recent highs
 
   return {
     stopLoss: Math.max(stopLoss, lowPrice * 0.95), // At least 5% below recent low
-    targetPrice: Math.min(targetPrice, highPrice * 1.1), // 10% above recent high
+    targetPrice,
   };
 }
 
@@ -173,29 +149,42 @@ async function scanStocks() {
       eps: stockData.eps,
       fiftyTwoWeekHigh: stockData.fiftyTwoWeekHigh,
       fiftyTwoWeekLow: stockData.fiftyTwoWeekLow,
+      predictedPrice: stockData.predictedPrice, // Include predicted price
       score,
       stopLoss,
       targetPrice,
-      news: stockData.news, // Include related news
     });
   }
 
-  // Sort stocks by score within each sector
+  // Calculate average and median scores for each sector
+  const sectorMetrics = {};
   Object.keys(sectorResults).forEach((sector) => {
+    const scores = sectorResults[sector].map((result) => result.score);
+    const averageScore =
+      scores.reduce((sum, score) => sum + score, 0) / scores.length;
+    const medianScore = calculateMedian(scores);
+
+    sectorMetrics[sector] = {
+      averageScore,
+      medianScore,
+    };
+
+    // Sort stocks by score within each sector
     sectorResults[sector].sort((a, b) => b.score - a.score);
     sectorResults[sector] = sectorResults[sector].slice(0, 10);
   });
 
-  return sectorResults;
+  return { sectorResults, sectorMetrics };
 }
 
 // Vercel Serverless API Handler
 module.exports = async (req, res) => {
   try {
-    const results = await scanStocks();
+    const { sectorResults, sectorMetrics } = await scanStocks();
     res.json({
       success: true,
-      data: results,
+      data: sectorResults,
+      metrics: sectorMetrics, // Add sector metrics
     });
   } catch (error) {
     console.error("Error during stock scanning:", error.message);
