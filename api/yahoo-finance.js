@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   const { ticker } = req.query;
 
   if (!ticker) {
@@ -11,9 +11,9 @@ export default async function handler(req, res) {
 
   try {
     const response = await axios.get(url);
-    return res.status(200).json(response.data);
+    res.status(200).json(response.data);
   } catch (error) {
     console.error("Error fetching Yahoo Finance data:", error.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
+    res.status(500).json({ error: "Failed to fetch data" });
   }
-}
+};
