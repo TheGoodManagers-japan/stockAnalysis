@@ -1,19 +1,7 @@
-const axios = require("axios");
-const Bottleneck = require("bottleneck");
-
-// Use environment variables for the API key
-const API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
+const yahooFinance = require("yahoo-finance2").default;
 
 // Tickers and their sectors
-const tickers = [
-  { code: "4151.T", sector: "Pharmaceuticals" },
-];
-
-// Bottleneck to handle rate limits
-const limiter = new Bottleneck({
-  minTime: 15000, // Alpha Vantage free-tier allows 1 request every 15 seconds
-  maxConcurrent: 1,
-});
+const tickers = [{ code: "4151.T", sector: "Pharmaceuticals" }];
 
 // Utility function to safely parse numbers
 function toNumber(value) {
@@ -21,34 +9,27 @@ function toNumber(value) {
   return isNaN(num) ? 0 : num;
 }
 
-// Fetch stock data from Alpha Vantage
-async function fetchAlphaVantageData(ticker) {
-  const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${ticker}&apikey=${API_KEY}`;
+// Fetch stock data from Yahoo Finance
+async function fetchYahooFinanceData(ticker) {
   try {
-    const response = await limiter.schedule(() => axios.get(url));
-    const timeSeries = response.data["Time Series (Daily)"];
+    // Fetch stock data using yahoo-finance2 library
+    const data = await yahooFinance.quote(ticker);
 
-    if (!timeSeries) {
-      console.warn(`No Alpha Vantage data available for ${ticker}`);
+    if (!data) {
+      console.warn(`No Yahoo Finance data available for ${ticker}`);
       return null;
     }
 
-    const latestDate = Object.keys(timeSeries)[0];
-    const latestData = timeSeries[latestDate];
-
-    const previousDate = Object.keys(timeSeries)[1];
-    const previousData = timeSeries[previousDate];
-
     return {
-      currentPrice: toNumber(latestData["4. close"]),
-      highPrice: toNumber(latestData["2. high"]),
-      lowPrice: toNumber(latestData["3. low"]),
-      openPrice: toNumber(latestData["1. open"]),
-      prevClosePrice: toNumber(previousData["4. close"]),
+      currentPrice: toNumber(data.regularMarketPrice),
+      highPrice: toNumber(data.regularMarketDayHigh),
+      lowPrice: toNumber(data.regularMarketDayLow),
+      openPrice: toNumber(data.regularMarketOpen),
+      prevClosePrice: toNumber(data.regularMarketPreviousClose),
     };
   } catch (error) {
     console.error(
-      `Error fetching Alpha Vantage data for ${ticker}:`,
+      `Error fetching Yahoo Finance data for ${ticker}:`,
       error.message
     );
     return null;
@@ -89,7 +70,7 @@ async function scanStocks() {
   const sectorResults = {};
 
   for (const { code, sector } of tickers) {
-    const stockData = await fetchAlphaVantageData(code);
+    const stockData = await fetchYahooFinanceData(code);
     if (!stockData) {
       console.warn(`Skipping ticker ${code} due to missing data.`);
       continue;
