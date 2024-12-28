@@ -1,3 +1,5 @@
+import {trainAndPredict} from "./trainandpredict.js";
+
 (async function () {
   function init(firebaseConfig) {
     console.log(firebaseConfig);
@@ -9,7 +11,6 @@
       console.log("Firebase already initialized");
     }
 
-    // Initialize Remote Config
     const remoteConfig = firebase.remoteConfig();
     remoteConfig.settings = {
       minimumFetchIntervalMillis: 0, // Always fetch the latest values
@@ -20,75 +21,28 @@
       { code: "6758.T", sector: "Technology" },
     ];
 
-    async function fetchJson(url) {
-      try {
-        const response = await axios.get(url);
-        return response.data;
-      } catch (error) {
-        console.error(`Failed to fetch data from ${url}:`, error.message);
-        return null;
-      }
+    /**
+     * Suggest a purchase price based on the predicted price.
+     * @param {number} predictedPrice - Predicted price from the model.
+     * @returns {string} - Suggested purchase price.
+     */
+    function suggestPurchasePrice(predictedPrice) {
+      return (predictedPrice * 0.97).toFixed(2); // 3% below predicted price
     }
 
-    async function fetchAPIKeys() {
-      try {
-        await remoteConfig.fetchAndActivate();
-        const API_KEY = remoteConfig.getValue("api_finnhub").asString();
+    /**
+     * Recommend stop loss and price target based on the suggested purchase price.
+     * @param {number} suggestedPurchasePrice - Suggested purchase price of the stock.
+     * @returns {object} - Recommended stop loss and target price.
+     */
+    function recommendStopLossAndTargetPrice({ suggestedPurchasePrice }) {
+      const stopLoss = suggestedPurchasePrice * 0.95; // 5% below purchase price
+      const targetPrice = suggestedPurchasePrice * 1.15; // 15% above purchase price
 
-        if (!API_KEY) {
-          throw new Error("API keys not available in Remote Config.");
-        }
-
-        return { API_KEY };
-      } catch (error) {
-        console.error("Failed to fetch API keys:", error.message);
-        throw error;
-      }
-    }
-
-    async function scanStocks() {
-      const { API_KEY } = await fetchAPIKeys();
-
-      const results = [];
-      const sectorResults = {};
-
-      for (const { code: ticker, sector } of tickers) {
-        const stockData = {}; // Replace with stock data fetching logic
-        const { prices, volumes } = {}; // Replace with historical data fetching logic
-        const forecastedChange = 5; // Replace with predicted price change logic
-
-        const score = computeScore({
-          peRatio: stockData.peRatio || 0,
-          pbRatio: stockData.pbRatio || 0,
-          eps: stockData.eps || 0,
-          rsi: stockData.rsi || 50,
-          price: stockData.price || 1000,
-          fiftyDayAverage: stockData.fiftyDayAverage || 900,
-          forecastedChange,
-        });
-
-        const stockResult = {
-          ticker,
-          sector,
-          score: score.toFixed(3),
-          forecastedChange: forecastedChange.toFixed(2),
-        };
-
-        if (!sectorResults[sector]) {
-          sectorResults[sector] = [];
-        }
-        sectorResults[sector].push(stockResult);
-      }
-
-      const topStocksBySector = {};
-      for (const sector in sectorResults) {
-        topStocksBySector[sector] = sectorResults[sector]
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 10);
-      }
-
-      console.log("Top 10 Stocks Per Sector:");
-      console.log(JSON.stringify(topStocksBySector, null, 2));
+      return {
+        recommendedStopLoss: stopLoss.toFixed(2),
+        recommendedTargetPrice: targetPrice.toFixed(2),
+      };
     }
 
     /**
@@ -117,10 +71,86 @@
       return score;
     }
 
+    /**
+     * Scan stocks and integrate with the trainAndPredict function.
+     */
+    async function scanStocks() {
+      const results = [];
+      const sectorResults = {};
+
+      for (const { code: ticker, sector } of tickers) {
+        const stockData = {}; // Replace with stock data fetching logic
+        const { prices, volumes } = {}; // Replace with historical data fetching logic
+        const currentPrice = stockData.price || 1000; // Placeholder for the current price
+
+        // Train the model and predict the price
+        const predictedPrice = await trainAndPredict(ticker);
+
+        if (!predictedPrice) {
+          console.error(`No prediction available for ${ticker}.`);
+          continue;
+        }
+
+        // Calculate the suggested purchase price
+        const suggestedPurchasePrice = parseFloat(
+          suggestPurchasePrice(predictedPrice)
+        );
+
+        // Calculate stop loss and target price
+        const { recommendedStopLoss, recommendedTargetPrice } =
+          recommendStopLossAndTargetPrice({
+            suggestedPurchasePrice,
+          });
+
+        // Forecasted change based on predicted price
+        const forecastedChange = (
+          ((predictedPrice - currentPrice) / currentPrice) *
+          100
+        ).toFixed(2);
+
+        // Compute the stock score
+        const score = computeScore({
+          peRatio: stockData.peRatio || 0,
+          pbRatio: stockData.pbRatio || 0,
+          eps: stockData.eps || 0,
+          rsi: stockData.rsi || 50,
+          price: currentPrice,
+          fiftyDayAverage: stockData.fiftyDayAverage || 900,
+          forecastedChange,
+        });
+
+        const stockResult = {
+          ticker,
+          sector,
+          score: score.toFixed(3),
+          forecastedChange,
+          suggestedPurchasePrice: suggestedPurchasePrice.toFixed(2),
+          recommendedStopLoss,
+          recommendedTargetPrice,
+        };
+
+        if (!sectorResults[sector]) {
+          sectorResults[sector] = [];
+        }
+        sectorResults[sector].push(stockResult);
+      }
+
+      // Top 10 stocks per sector
+      const topStocksBySector = {};
+      for (const sector in sectorResults) {
+        topStocksBySector[sector] = sectorResults[sector]
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 10);
+      }
+
+      console.log("Top 10 Stocks Per Sector:");
+      console.log(JSON.stringify(topStocksBySector, null, 2));
+    }
+
     return {
-      scanStocks, // Return scanStocks so it can be called independently
+      scanStocks, // Expose scanStocks function
     };
   }
 
-  window.initStockAnalysis = init; // Attach init to window for global access
+  window.initStockAnalysis = init; // Attach init to the global window object
 })();

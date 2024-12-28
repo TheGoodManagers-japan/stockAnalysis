@@ -157,7 +157,8 @@ function bubble_fn_prediction(output1, output2) {
 }
 
 // Full Workflow
-async function trainAndPredict(ticker) {
+// trainAndPredict.js
+export async function trainAndPredict(ticker) {
   try {
     // Fetch historical data
     console.log(`Fetching data for ${ticker}...`);
@@ -183,6 +184,3 @@ async function trainAndPredict(ticker) {
   }
 }
 
-// Example usage
-const ticker = "7203.T"; // Replace with your ticker
-trainAndPredict(ticker);
