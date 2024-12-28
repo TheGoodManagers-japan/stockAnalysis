@@ -1,8 +1,17 @@
 (async function () {
-  function init() {
-    const API_KEY = "ctnvkd9r01qpsueeeqigctnvkd9r01qpsueeeqj0"; // Replace with your Finnhub API Key
-    const OPENAI_API_KEY =
-      "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"; // Replace with your OpenAI API Key
+  function init(firebaseConfig) {
+    // Initialize Firebase
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    } else {
+      console.log("Firebase already initialized");
+    }
+
+    // Initialize Remote Config
+    const remoteConfig = firebase.remoteConfig();
+    remoteConfig.settings = {
+      minimumFetchIntervalMillis: 3600000, // Fetch every hour
+    };
 
     const tickers = [
       { code: "7203.T", sector: "Automotive" },
@@ -23,8 +32,28 @@
     }
 
     /**
-     * Fetch macro news using GDELT API.
+     * Fetch API keys from Firebase Remote Config.
      */
+    async function fetchAPIKeys() {
+      try {
+        await remoteConfig.fetchAndActivate();
+
+        const API_KEY = remoteConfig.getValue("finnhub_api_key").asString();
+        const OPENAI_API_KEY = remoteConfig
+          .getValue("openai_api_key")
+          .asString();
+
+        if (!API_KEY || !OPENAI_API_KEY) {
+          throw new Error("API keys not available in Remote Config.");
+        }
+
+        return { API_KEY, OPENAI_API_KEY };
+      } catch (error) {
+        console.error("Failed to fetch API keys:", error.message);
+        throw error;
+      }
+    }
+
     async function fetchMacroNews() {
       if (macroNewsCache) return macroNewsCache;
 
@@ -34,9 +63,6 @@
       return macroNewsCache;
     }
 
-    /**
-     * Fetch sector-specific news using GDELT API.
-     */
     async function fetchSectorNews(sector) {
       if (sectorNewsCache[sector]) return sectorNewsCache[sector];
 
@@ -47,18 +73,12 @@
       return articles;
     }
 
-    /**
-     * Fetch stock-specific news using Finnhub.
-     */
-    async function fetchNews(ticker) {
+    async function fetchNews(ticker, API_KEY) {
       const url = `https://finnhub.io/api/v1/news?category=company&symbol=${ticker}&token=${API_KEY}`;
       return (await fetchJson(url)) || [];
     }
 
-    /**
-     * Summarize news using OpenAI API.
-     */
-    async function summarizeNews(articles, context) {
+    async function summarizeNews(articles, context, OPENAI_API_KEY) {
       const text = articles
         .map(
           (article) =>
@@ -88,10 +108,7 @@
       }
     }
 
-    /**
-     * Analyze sentiment using OpenAI API.
-     */
-    async function analyzeSentiment(summary) {
+    async function analyzeSentiment(summary, OPENAI_API_KEY) {
       const url = `https://api.openai.com/v1/completions`;
       try {
         const response = await axios.post(
@@ -115,63 +132,22 @@
       }
     }
 
-    /**
-     * Compute the score for a stock.
-     */
-    function computeScore({
-      peRatio,
-      pbRatio,
-      eps,
-      rsi,
-      price,
-      fiftyDayAverage,
-      sentiment,
-      forecastedChange,
-      macroSentiment,
-      sectorSentiment,
-    }) {
-      const safePe = peRatio !== 0 ? peRatio : 99999;
-      const safePb = pbRatio !== 0 ? pbRatio : 99999;
-
-      let score = 0;
-      score += (20 / safePe) * 0.2; // Value factors
-      score += (10 / safePb) * 0.2;
-      score += (eps > 0 ? eps : 0) * 0.2; // Growth factors
-      score += (100 - rsi) * 0.2; // Technical factors
-      if (price > fiftyDayAverage) score += 0.2; // Trend factors
-
-      // Sentiment factors
-      const stockSentimentWeight =
-        sentiment === "positive" ? 0.3 : sentiment === "negative" ? -0.3 : 0;
-      const macroSentimentWeight =
-        macroSentiment === "positive"
-          ? 0.3
-          : macroSentiment === "negative"
-          ? -0.3
-          : 0;
-      const sectorSentimentWeight =
-        sectorSentiment === "positive"
-          ? 0.3
-          : sectorSentiment === "negative"
-          ? -0.3
-          : 0;
-      score +=
-        stockSentimentWeight + macroSentimentWeight + sectorSentimentWeight;
-
-      score += (forecastedChange > 0 ? forecastedChange : 0) * 0.1; // Prediction factor
-      return score;
-    }
-
-    /**
-     * Main function to scan stocks.
-     */
     async function scanStocks() {
+      const { API_KEY, OPENAI_API_KEY } = await fetchAPIKeys();
+
       const results = [];
       const sectorResults = {};
 
       const macroNews = await fetchMacroNews();
-      const macroSummary = await summarizeNews(macroNews, "macroeconomic");
-      const macroSentiment = await analyzeSentiment(macroSummary);
+      const macroSummary = await summarizeNews(
+        macroNews,
+        "macroeconomic",
+        OPENAI_API_KEY
+      );
+      const macroSentiment = await analyzeSentiment(
+        macroSummary,
+        OPENAI_API_KEY
+      );
 
       for (const { code: ticker, sector } of tickers) {
         const stockData = {}; // Replace with stock data fetching logic
@@ -180,12 +156,20 @@
         const sectorNews = await fetchSectorNews(sector);
         const sectorSummary = await summarizeNews(
           sectorNews,
-          `${sector} sector`
+          `${sector} sector`,
+          OPENAI_API_KEY
         );
-        const sectorSentiment = await analyzeSentiment(sectorSummary);
-        const stockNews = await fetchNews(ticker);
-        const stockSummary = await summarizeNews(stockNews, "stock-specific");
-        const sentiment = await analyzeSentiment(stockSummary);
+        const sectorSentiment = await analyzeSentiment(
+          sectorSummary,
+          OPENAI_API_KEY
+        );
+        const stockNews = await fetchNews(ticker, API_KEY);
+        const stockSummary = await summarizeNews(
+          stockNews,
+          "stock-specific",
+          OPENAI_API_KEY
+        );
+        const sentiment = await analyzeSentiment(stockSummary, OPENAI_API_KEY);
 
         const score = computeScore({
           peRatio: stockData.peRatio || 0,
