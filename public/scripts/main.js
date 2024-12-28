@@ -20,6 +20,8 @@
         await remoteConfig.fetchAndActivate();
         const API_KEY = remoteConfig.getValue("api_finnhub").asString();
 
+        console.log(API_KEY)
+
         if (!API_KEY) {
           throw new Error("API keys not available in Remote Config.");
         }
