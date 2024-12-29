@@ -1,14 +1,6 @@
+// /api/stocks.js (on your Vercel server, for instance)
 const yahooFinance = require("yahoo-finance2").default;
 
-// Custom headers for Yahoo Finance requests
-const customHeaders = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-};
-
-// Utility function to safely parse numbers
 function toNumber(value) {
   const num = parseFloat(value);
   return isNaN(num) ? 0 : num;
@@ -17,7 +9,7 @@ function toNumber(value) {
 async function fetchYahooFinanceData(ticker) {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
-    const data = await yahooFinance.quote(ticker, { headers: customHeaders });
+    const data = await yahooFinance.quote(ticker);
 
     if (!data) {
       console.warn(`No Yahoo Finance data available for ${ticker}`);
@@ -33,7 +25,7 @@ async function fetchYahooFinanceData(ticker) {
       marketCap: toNumber(data.marketCap),
       peRatio: toNumber(data.trailingPE),
       pbRatio: toNumber(data.priceToBook),
-      dividendYield: toNumber(data.dividendYield) * 100, // Convert to percentage
+      dividendYield: toNumber(data.dividendYield) * 100,
       fiftyTwoWeekHigh: toNumber(data.fiftyTwoWeekHigh),
       fiftyTwoWeekLow: toNumber(data.fiftyTwoWeekLow),
       eps: toNumber(data.epsTrailingTwelveMonths),
@@ -50,22 +42,21 @@ const allowedOrigins = [
 ];
 
 module.exports = async (req, res) => {
-  // Set CORS if origin is allowed
+  // 1) CORS
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Vary", "Origin");
 
-  // Handle preflight (OPTIONS)
+  // 2) Handle preflight
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // Only allow POST
+  // 3) Only POST allowed
   if (req.method !== "POST") {
     return res
       .status(405)
@@ -73,30 +64,39 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // The client should send { "ticker": { code, sector } }
+    // 4) Expect { ticker: { code, sector } } in the request body
     const { ticker } = req.body;
 
-    // Validate input
+    // 4a) Validate input
     if (!ticker || !ticker.code) {
-      return res.status(400).json({
-        success: false,
-        error: "Missing or invalid 'ticker' object in request body",
-      });
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing or invalid 'ticker' in body" });
     }
 
-    // Fetch from Yahoo
+    // 5) Fetch Yahoo data for that one ticker
     const yahooData = await fetchYahooFinanceData(ticker.code);
+    if (!yahooData) {
+      // If we got no data back, let's still respond with success=false or a data:null
+      return res
+        .status(200)
+        .json({
+          success: true,
+          data: { code: ticker.code, sector: ticker.sector, yahooData: null },
+        });
+    }
 
-    // Return the combined response
-    const responseData = {
-      code: ticker.code,
-      sector: ticker.sector,
-      yahooData,
-    };
-
-    res.status(200).json({ success: true, data: responseData });
+    // 6) Send back the combined data
+    return res.status(200).json({
+      success: true,
+      data: {
+        code: ticker.code,
+        sector: ticker.sector,
+        yahooData,
+      },
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };

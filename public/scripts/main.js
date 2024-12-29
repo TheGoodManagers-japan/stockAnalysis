@@ -70,6 +70,7 @@ window.scan = {
 
         // 1) Fetch Yahoo data from the server
         const result = await fetchSingleStockData(tickerObj);
+        console.log("Server result:", result);
         if (!result.success) {
           console.error("Error fetching stock analysis:", result.error);
           continue; // skip this ticker if an error occurred
