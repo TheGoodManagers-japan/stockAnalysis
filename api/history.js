@@ -34,31 +34,28 @@ async function fetchHistoricalData(ticker) {
 
 // API handler for historical data
 module.exports = async (req, res) => {
-  // Add CORS headers to every response
-  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com"); // Replace with your frontend domain
+  // Always set CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com");
+  // or res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle preflight OPTIONS request
+  // Return early for OPTIONS preflight
   if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
+  // Normal logic from here on
   const { ticker } = req.query;
-
   if (!ticker) {
-    res.status(400).json({ success: false, message: "Ticker is required" });
-    return;
+    return res
+      .status(400)
+      .json({ success: false, message: "Ticker is required" });
   }
 
   try {
-    const historicalData = await fetchHistoricalData(ticker);
-
-    res.status(200).json({
-      success: true,
-      data: historicalData,
-    });
+    const data = await fetchHistoricalData(ticker);
+    res.status(200).json({ success: true, data });
   } catch (error) {
     console.error("Error fetching historical data:", error.message);
     res.status(500).json({
@@ -67,3 +64,4 @@ module.exports = async (req, res) => {
     });
   }
 };
+
