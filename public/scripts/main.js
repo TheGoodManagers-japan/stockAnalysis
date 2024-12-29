@@ -2,7 +2,7 @@ import { analyzeStock } from "./trainandpredict.js";
 
 // ------------------------------------------
 // 1) Helper: stop-loss & target-price logic
-// ------------------------------------------
+// -----------------------------------------
 function calculateStopLossAndTarget(stock, predictions) {
   // Example approach: 5% below current price for stop-loss, 20% above for target
   const stopLoss = stock.currentPrice * 0.95;
