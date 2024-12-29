@@ -1,7 +1,3 @@
-const yahooFinance = require("yahoo-finance2").default;
-const tf = require("@tensorflow/tfjs");
-const Bottleneck = require("bottleneck");
-
 // Custom headers for Yahoo Finance requests
 const customHeaders = {
   "User-Agent":
@@ -10,6 +6,7 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
+// Initialize Bottleneck from the CDN
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
 // Fetch Historical Data (12 Months) using Yahoo Finance
@@ -21,8 +18,9 @@ async function fetchHistoricalData(ticker) {
 
     console.log(`Fetching historical data for ${ticker}...`);
 
+    // Use YahooFinance from the CDN
     const historicalData = await limiter.schedule(() =>
-      yahooFinance.chart(
+      YahooFinance.chart(
         ticker,
         {
           period1,
@@ -169,7 +167,7 @@ async function predictNext30Days(model, latestData) {
 }
 
 // Main Function to Call on Client Side
-export async function analyzeStock(ticker) {
+async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
 
@@ -182,8 +180,9 @@ export async function analyzeStock(ticker) {
     const predictions = await predictNext30Days(model, latestData);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
+    return predictions;
   } catch (error) {
     console.error(`Error analyzing stock for ${ticker}:`, error.message);
+    return [];
   }
 }
-
