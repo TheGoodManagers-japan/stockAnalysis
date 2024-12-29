@@ -5,6 +5,25 @@
       "firebase.json",
       "**/.*",
       "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "/scripts/**",
+        "headers": [
+          {
+            "key": "Access-Control-Allow-Origin",
+            "value": "https://thegoodmanagers.com"
+          },
+          {
+            "key": "Access-Control-Allow-Methods",
+            "value": "GET, OPTIONS"
+          },
+          {
+            "key": "Access-Control-Allow-Headers",
+            "value": "Content-Type"
+          }
+        ]
+      }
     ]
   },
   "functions": [
