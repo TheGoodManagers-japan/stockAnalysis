@@ -1,7 +1,5 @@
 const yahooFinance = require("yahoo-finance2").default;
-const tf = require('@tensorflow/tfjs-core'); // For tensors and operations
-require('@tensorflow/tfjs-layers');         // For layers and models
-
+const tf = require("@tensorflow/tfjs-node");
 const Bottleneck = require("bottleneck");
 
 // Custom headers for Yahoo Finance requests
@@ -34,8 +32,12 @@ async function fetchHistoricalData(ticker) {
       )
     );
 
-    if (!historicalData || !historicalData.quotes || historicalData.quotes.length === 0) {
-      console.error('No data in response:', historicalData);
+    if (
+      !historicalData ||
+      !historicalData.quotes ||
+      historicalData.quotes.length === 0
+    ) {
+      console.error("No data in response:", historicalData);
       throw new Error(`No historical data available for ${ticker}`);
     }
 
@@ -46,11 +48,13 @@ async function fetchHistoricalData(ticker) {
       date: new Date(quote.date), // The date is already in a parseable format
     }));
   } catch (error) {
-    console.error(`Error fetching historical data for ${ticker}:`, error.message);
+    console.error(
+      `Error fetching historical data for ${ticker}:`,
+      error.message
+    );
     return [];
   }
 }
-
 
 // Prepare Data for Training
 function prepareData(data, sequenceLength = 30) {
@@ -140,7 +144,7 @@ async function predictNext30Days(model, latestData) {
   const predictions = [];
   let currentInput = latestData.map((item) => [
     normalize(item.price, minPrice, maxPrice),
-    normalize(item.volume, minPrice, maxPrice),
+    normalize(item.volume, Math.min(...volumes), Math.max(...volumes)),
   ]);
 
   for (let day = 0; day < 30; day++) {
