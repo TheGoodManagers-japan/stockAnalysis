@@ -1,5 +1,7 @@
 const yahooFinance = require("yahoo-finance2").default;
-const tf = require("@tensorflow/tfjs");
+const tf = require('@tensorflow/tfjs-core'); // For tensors and operations
+require('@tensorflow/tfjs-layers');         // For layers and models
+
 const Bottleneck = require("bottleneck");
 
 // Custom headers for Yahoo Finance requests
@@ -17,6 +19,7 @@ async function fetchHistoricalData(ticker) {
   try {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    const period1 = Math.floor(oneYearAgo.getTime() / 1000);
 
     console.log(`Fetching historical data for ${ticker}...`);
 
@@ -24,40 +27,30 @@ async function fetchHistoricalData(ticker) {
       yahooFinance.chart(
         ticker,
         {
-          period1: oneYearAgo,
+          period1,
           interval: "1d", // Specify daily intervals
         },
         { headers: customHeaders }
       )
     );
-    console.log("Historical data:", historicalData);
 
-
-    if (
-      !historicalData ||
-      !historicalData.result ||
-      historicalData.result.length === 0
-    ) {
+    if (!historicalData || !historicalData.quotes || historicalData.quotes.length === 0) {
+      console.error('No data in response:', historicalData);
       throw new Error(`No historical data available for ${ticker}`);
     }
 
     console.log(`Historical data for ${ticker} fetched successfully.`);
-
-    return historicalData.result[0].indicators.quote[0].close.map(
-      (price, index) => ({
-        price,
-        volume: historicalData.result[0].indicators.quote[0].volume[index],
-        date: new Date(historicalData.result[0].timestamp[index] * 1000), // Convert to milliseconds
-      })
-    );
+    return historicalData.quotes.map((quote) => ({
+      price: quote.close,
+      volume: quote.volume,
+      date: new Date(quote.date), // The date is already in a parseable format
+    }));
   } catch (error) {
-    console.error(
-      `Error fetching historical data for ${ticker}:`,
-      error.message
-    );
+    console.error(`Error fetching historical data for ${ticker}:`, error.message);
     return [];
   }
 }
+
 
 // Prepare Data for Training
 function prepareData(data, sequenceLength = 30) {
