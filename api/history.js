@@ -1,6 +1,17 @@
 const yahooFinance = require("yahoo-finance2").default;
 
 module.exports = async (req, res) => {
+  // Add CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com"); // Replace with your frontend domain or use '*' for all origins
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // Handle preflight OPTIONS request
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+
   const { ticker } = req.query;
 
   if (!ticker) {
@@ -11,7 +22,6 @@ module.exports = async (req, res) => {
   try {
     console.log(`Fetching historical data for ${ticker}...`);
 
-    // Fetch historical data (12 months)
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
     const period1 = Math.floor(oneYearAgo.getTime() / 1000);
@@ -32,9 +42,6 @@ module.exports = async (req, res) => {
       return;
     }
 
-    console.log(`Fetched historical data for ${ticker}.`);
-
-    // Prepare the response
     const data = historicalData.quotes.map((quote) => ({
       price: quote.close,
       volume: quote.volume,
