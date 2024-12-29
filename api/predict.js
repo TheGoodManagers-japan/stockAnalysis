@@ -30,6 +30,8 @@ async function fetchHistoricalData(ticker) {
         { headers: customHeaders }
       )
     );
+    console.log("Historical data:", historicalData);
+
 
     if (
       !historicalData ||
