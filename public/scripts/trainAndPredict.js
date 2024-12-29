@@ -1,4 +1,3 @@
-const yahooFinance = YahooFinance.default;
 
 // Custom headers for Yahoo Finance requests
 const customHeaders = {
