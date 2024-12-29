@@ -14,38 +14,25 @@ const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 // Fetch Historical Data (12 Months) using Yahoo Finance
 async function fetchHistoricalData(ticker) {
   try {
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const period1 = Math.floor(oneYearAgo.getTime() / 1000);
+    const response = await fetch(
+      `https://stock-analysis-4i8ooblxp-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`
+    ); // Adjust URL for deployment if needed
 
-    console.log(`Fetching historical data for ${ticker}...`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
 
-    // Use YahooFinance from the CDN
-    const historicalData = await limiter.schedule(() =>
-      YahooFinance.chart(
-        ticker,
-        {
-          period1,
-          interval: "1d", // Specify daily intervals
-        },
-        { headers: customHeaders }
-      )
-    );
+    const { data } = await response.json();
 
-    if (
-      !historicalData ||
-      !historicalData.quotes ||
-      historicalData.quotes.length === 0
-    ) {
-      console.error("No data in response:", historicalData);
-      throw new Error(`No historical data available for ${ticker}`);
+    if (!data || data.length === 0) {
+      console.error(`No historical data available for ${ticker}`);
+      return [];
     }
 
     console.log(`Historical data for ${ticker} fetched successfully.`);
-    return historicalData.quotes.map((quote) => ({
-      price: quote.close,
-      volume: quote.volume,
-      date: new Date(quote.date), // The date is already in a parseable format
+    return data.map((item) => ({
+      ...item,
+      date: new Date(item.date), // Convert raw date string to Date object
     }));
   } catch (error) {
     console.error(
@@ -55,6 +42,7 @@ async function fetchHistoricalData(ticker) {
     return [];
   }
 }
+
 
 // Prepare Data for Training
 function prepareData(data, sequenceLength = 30) {
