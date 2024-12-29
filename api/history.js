@@ -1,13 +1,5 @@
 const yahooFinance = require("yahoo-finance2").default;
 
-// Custom headers for Yahoo Finance requests
-const customHeaders = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-};
-
 // Fetch historical data for a ticker
 async function fetchHistoricalData(ticker) {
   try {
@@ -42,12 +34,12 @@ async function fetchHistoricalData(ticker) {
 
 // API handler for historical data
 module.exports = async (req, res) => {
-  // Add CORS headers to allow cross-origin requests
+  // Add CORS headers to every response
   res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com"); // Replace with your frontend domain
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle OPTIONS preflight request
+  // Handle preflight OPTIONS request
   if (req.method === "OPTIONS") {
     res.status(200).end();
     return;
@@ -63,7 +55,7 @@ module.exports = async (req, res) => {
   try {
     const historicalData = await fetchHistoricalData(ticker);
 
-    res.json({
+    res.status(200).json({
       success: true,
       data: historicalData,
     });

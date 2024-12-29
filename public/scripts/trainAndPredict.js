@@ -13,18 +13,29 @@ const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 // Fetch Historical Data (12 Months) using Yahoo Finance
 async function fetchHistoricalData(ticker) {
   try {
-    const response = await fetch(
-      `https://stock-analysis-4i8ooblxp-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`
-    ); // Adjust URL for deployment if needed
+    const apiUrl = `https://stock-analysis-4i8ooblxp-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
 
+    // Log the request URL for debugging
+    console.log(`Fetching historical data from: ${apiUrl}`);
+
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    // Check for HTTP errors
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
 
+    // Parse JSON response
     const { data } = await response.json();
 
+    // Check if data is empty or undefined
     if (!data || data.length === 0) {
-      console.error(`No historical data available for ${ticker}`);
+      console.warn(`No historical data available for ${ticker}.`);
       return [];
     }
 
@@ -34,13 +45,12 @@ async function fetchHistoricalData(ticker) {
       date: new Date(item.date), // Convert raw date string to Date object
     }));
   } catch (error) {
-    console.error(
-      `Error fetching historical data for ${ticker}:`,
-      error.message
-    );
+    // Improved error logging
+    console.error(`Error fetching historical data for ${ticker}:`, error);
     return [];
   }
 }
+
 
 
 // Prepare Data for Training
