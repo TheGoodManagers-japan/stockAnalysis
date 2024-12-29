@@ -1,5 +1,4 @@
 const yahooFinance = require("yahoo-finance2").default;
-const axios = require("axios");
 
 // Custom headers for Yahoo Finance requests
 const customHeaders = {
@@ -9,20 +8,12 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
-// Tickers and their sectors
-const tickers = [
-  { code: "4151.T", sector: "Pharmaceuticals" },
-  { code: "4502.T", sector: "Pharmaceuticals" },
-  { code: "9532.T", sector: "Gas" },
-];
-
 // Utility function to safely parse numbers
 function toNumber(value) {
   const num = parseFloat(value);
   return isNaN(num) ? 0 : num;
 }
 
-// Fetch stock data from Yahoo Finance with custom headers
 async function fetchYahooFinanceData(ticker) {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
@@ -59,30 +50,51 @@ const allowedOrigins = [
 ];
 
 module.exports = async (req, res) => {
+  // Set CORS if origin is allowed
   const origin = req.headers.origin;
-
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Vary", "Origin");
 
+  // Handle preflight (OPTIONS)
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  try {
-    const tickerData = await Promise.all(
-      tickers.map(async (ticker) => ({
-        code: ticker.code,
-        sector: ticker.sector,
-        data: await fetchYahooFinanceData(ticker.code),
-      }))
-    );
+  // Only allow POST
+  if (req.method !== "POST") {
+    return res
+      .status(405)
+      .json({ success: false, error: "Method not allowed" });
+  }
 
-    res.status(200).json({ success: true, data: tickerData });
+  try {
+    // The client should send { "ticker": { code, sector } }
+    const { ticker } = req.body;
+
+    // Validate input
+    if (!ticker || !ticker.code) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing or invalid 'ticker' object in request body",
+      });
+    }
+
+    // Fetch from Yahoo
+    const yahooData = await fetchYahooFinanceData(ticker.code);
+
+    // Return the combined response
+    const responseData = {
+      code: ticker.code,
+      sector: ticker.sector,
+      yahooData,
+    };
+
+    res.status(200).json({ success: true, data: responseData });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, error: error.message });
