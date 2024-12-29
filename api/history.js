@@ -33,35 +33,39 @@ async function fetchHistoricalData(ticker) {
 }
 
 // API handler for historical data
+// Allowed domains
+const allowedOrigins = [
+  "https://thegoodmanagers.com",
+  "https://www.thegoodmanagers.com",
+];
+
 module.exports = async (req, res) => {
-  // Always set CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com");
-  // or res.setHeader("Access-Control-Allow-Origin", "*");
+  // 1) Grab the incoming request’s origin
+  const origin = req.headers.origin;
+
+  // 2) If it’s in our list of allowed origins, set CORS headers dynamically
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  // 3) Other standard CORS headers
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  // (Optional) This ensures proxies & CDNs handle dynamic origins
+  // so that they don’t reuse cached responses across different origins.
+  res.setHeader("Vary", "Origin");
 
-  // Return early for OPTIONS preflight
+  // 4) Handle preflight (OPTIONS) requests
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // Normal logic from here on
-  const { ticker } = req.query;
-  if (!ticker) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Ticker is required" });
-  }
-
+  // ... your existing logic here ...
   try {
-    const data = await fetchHistoricalData(ticker);
-    res.status(200).json({ success: true, data });
+    // example: if you do something like fetch data, then return JSON
+    res.status(200).json({ success: true, message: "Hello, CORS!" });
   } catch (error) {
-    console.error("Error fetching historical data:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "An error occurred while fetching historical data",
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
-

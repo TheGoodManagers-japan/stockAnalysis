@@ -53,52 +53,38 @@ async function fetchYahooFinanceData(ticker) {
   }
 }
 
-// Main function to handle the API request
+const allowedOrigins = [
+  "https://thegoodmanagers.com",
+  "https://www.thegoodmanagers.com",
+];
+
 module.exports = async (req, res) => {
-  // Add CORS headers to allow cross-origin requests
-  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com"); // Replace with your frontend domain
+  // 1) Grab the incoming request’s origin
+  const origin = req.headers.origin;
+
+  // 2) If it’s in our list of allowed origins, set CORS headers dynamically
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  // 3) Other standard CORS headers
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle OPTIONS preflight request
+  // (Optional) This ensures proxies & CDNs handle dynamic origins
+  // so that they don’t reuse cached responses across different origins.
+  res.setHeader("Vary", "Origin");
+
+  // 4) Handle preflight (OPTIONS) requests
   if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
+  // ... your existing logic here ...
   try {
-    const sectorResults = [];
-
-    // Fetch data for each ticker
-    for (const { code, sector } of tickers) {
-      const data = await fetchYahooFinanceData(code);
-      if (data) {
-        sectorResults.push({
-          ticker: code,
-          sector,
-          ...data,
-        });
-      }
-    }
-
-    // Example metrics (you can calculate meaningful metrics here)
-    const sectorMetrics = {
-      averagePrice:
-        sectorResults.reduce((sum, stock) => sum + stock.currentPrice, 0) /
-        sectorResults.length,
-    };
-
-    // Send the response
-    res.json({
-      success: true,
-      data: sectorResults,
-      metrics: sectorMetrics,
-    });
+    // example: if you do something like fetch data, then return JSON
+    res.status(200).json({ success: true, message: "Hello, CORS!" });
   } catch (error) {
-    console.error("Error during stock scanning:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "An error occurred while scanning stocks.",
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
