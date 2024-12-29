@@ -22,33 +22,16 @@ function toNumber(value) {
   return isNaN(num) ? 0 : num;
 }
 
-// Utility function to calculate the median of an array
-function calculateMedian(arr) {
-  if (arr.length === 0) return 0;
-  const sorted = arr.slice().sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-
-  if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
-  } else {
-    return sorted[middle];
-  }
-}
-
 // Fetch stock data from Yahoo Finance with custom headers
 async function fetchYahooFinanceData(ticker) {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
-
-    // Fetch stock data using yahoo-finance2 with custom headers
     const data = await yahooFinance.quote(ticker, { headers: customHeaders });
 
     if (!data) {
       console.warn(`No Yahoo Finance data available for ${ticker}`);
       return null;
     }
-
-    console.log(`Fetched Yahoo Finance data for ${ticker}:`, data);
 
     return {
       currentPrice: toNumber(data.regularMarketPrice),
@@ -70,50 +53,42 @@ async function fetchYahooFinanceData(ticker) {
   }
 }
 
-// Compute stock score with additional metrics
-function computeScore(data) {
-  const {
-    peRatio,
-    pbRatio,
-    dividendYield,
-    currentPrice,
-    highPrice,
-    lowPrice,
-    fiftyTwoWeekHigh,
-    fiftyTwoWeekLow,
-  } = data;
+// Main function to handle the API request
+module.exports = async (req, res) => {
+  // Add CORS headers to allow cross-origin requests
+  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com"); // Replace with your frontend domain
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Weighted scoring based on various metrics
-  return (
-    0.3 * (1 / (peRatio || 1)) + // Lower PE ratio is better
-    0.2 * (1 / (pbRatio || 1)) + // Lower PB ratio is better
-    0.2 * (dividendYield || 0) + // Higher dividend yield is better
-    0.2 * ((fiftyTwoWeekHigh - fiftyTwoWeekLow) / (currentPrice || 1)) + // Volatility over the year
-    0.1 * ((highPrice - lowPrice) / (currentPrice || 1)) // Daily volatility
-  );
-}
-
-// Calculate stop-loss and target price
-function calculateStopLossAndTarget(data) {
-  const { currentPrice, highPrice, lowPrice } = data;
-
-  if (currentPrice <= 0 || highPrice <= 0 || lowPrice <= 0) {
-    return { stopLoss: 0, targetPrice: 0 };
+  // Handle OPTIONS preflight request
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
   }
 
-  const stopLoss = currentPrice * 0.9; // 10% below current price
-
-  const targetPrice = currentPrice * 1.15; // Target price as 15% above current price
-
-  return {
-    stopLoss: Math.max(stopLoss, lowPrice * 0.95), // At least 5% below recent low
-    targetPrice,
-  };
-}
-
-module.exports = async (req, res) => {
   try {
-    const { sectorResults, sectorMetrics } = await scanStocks();
+    const sectorResults = [];
+
+    // Fetch data for each ticker
+    for (const { code, sector } of tickers) {
+      const data = await fetchYahooFinanceData(code);
+      if (data) {
+        sectorResults.push({
+          ticker: code,
+          sector,
+          ...data,
+        });
+      }
+    }
+
+    // Example metrics (you can calculate meaningful metrics here)
+    const sectorMetrics = {
+      averagePrice:
+        sectorResults.reduce((sum, stock) => sum + stock.currentPrice, 0) /
+        sectorResults.length,
+    };
+
+    // Send the response
     res.json({
       success: true,
       data: sectorResults,
