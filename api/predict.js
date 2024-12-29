@@ -110,19 +110,19 @@ async function trainModel(ticker, data) {
 
   const model = tf.sequential();
   model.add(
-    tf.layers.dense({
+    tf.layers.lstm({
       units: 64,
       inputShape: [sequenceLength, 2],
-      activation: "relu",
+      returnSequences: false,
     })
   );
   model.add(tf.layers.dropout({ rate: 0.2 }));
-  model.add(tf.layers.dense({ units: 1 }));
+  model.add(tf.layers.dense({ units: 1 })); // Output shape matches outputTensor
   model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
 
   console.log(`Training model for ${ticker}...`);
   await model.fit(inputTensor, outputTensor, {
-    epochs: 50, // Reduced epochs for faster training
+    epochs: 50,
     batchSize: 32,
     validationSplit: 0.2,
   });
@@ -130,6 +130,7 @@ async function trainModel(ticker, data) {
   console.log(`Model training completed for ${ticker}.`);
   return model;
 }
+
 
 // Predict the Next 30 Days
 async function predictNext30Days(model, latestData) {
