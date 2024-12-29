@@ -167,7 +167,7 @@ async function predictNext30Days(model, latestData) {
 }
 
 // Main Function to Call on Client Side
-async function analyzeStock(ticker) {
+export async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
 
