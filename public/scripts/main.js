@@ -70,38 +70,35 @@ function determineRisk(stock) {
 }
 
 function computeScore(stock, predictions) {
-  // Weights for each metric
   const weights = {
-    growthPotential: 0.6, // Emphasize growth potential
-    valuation: 0.2, // Valuation metrics
-    marketStability: 0.1, // Volatility and stability
-    dividendBenefit: 0.05, // Dividend yield
-    historicalPerformance: 0.05, // 52-week performance
+    growthPotential: 0.5, // Adjusted weight
+    valuation: 0.25, // Slightly increased
+    marketStability: 0.15, // Stability matters more
+    dividendBenefit: 0.05, // Capped influence of dividends
+    historicalPerformance: 0.05, // Historical weight unchanged
   };
 
   // Calculate Growth Potential
-  const prediction = predictions[29]; // 30-day target prediction
+  const prediction = predictions[29];
   const growthPotential = Math.max(
     0,
-    (prediction - stock.currentPrice) / stock.currentPrice
+    Math.min((prediction - stock.currentPrice) / stock.currentPrice, 0.5) // Cap at 50% growth
   );
 
   // Evaluate Valuation
   let valuationScore = 1;
-  if (stock.peRatio < 15) valuationScore *= 1.1; // Undervalued
-  if (stock.peRatio > 30) valuationScore *= 0.9; // Overvalued
-  if (stock.pbRatio < 1) valuationScore *= 1.2; // Undervalued on PB
-  if (stock.pbRatio > 3) valuationScore *= 0.8; // Overvalued on PB
+  if (stock.peRatio < 15) valuationScore *= 1.1;
+  if (stock.peRatio > 30) valuationScore *= 0.9;
+  if (stock.pbRatio < 1) valuationScore *= 1.2;
+  if (stock.pbRatio > 3) valuationScore *= 0.8;
 
   // Assess Market Stability
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
-  let stabilityScore = 1 - Math.min(volatility, 1); // High volatility penalized
-  if (stock.marketCap > 5e11) stabilityScore *= 1.1; // Large-cap stability
-  if (stock.marketCap < 1e11) stabilityScore *= 0.9; // Small-cap instability
+  const stabilityScore = 1 - Math.min(volatility, 0.5); // Cap penalty at 50%
 
   // Factor in Dividend Benefit
-  const dividendBenefit = Math.min(stock.dividendYield, 0.05); // Cap at 5%
+  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05); // Normalize dividend yield
 
   // Analyze Historical Performance
   const historicalPerformance =
@@ -116,9 +113,9 @@ function computeScore(stock, predictions) {
     dividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // Normalize score between 0 and 1
-  return Math.min(Math.max(rawScore, 0), 1);
+  return Math.min(Math.max(rawScore, 0), 1); // Normalize between 0 and 1
 }
+
 
 
 
@@ -154,7 +151,17 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       // (A) Define the tickers on the client side
-      const tickers = [{ code: "4151.T", sector: "Pharmaceuticals" }];
+      const tickers = [
+        { code: "4151.T", sector: "Pharmaceuticals" },
+        { code: "4502.T", sector: "Pharmaceuticals" },
+        { code: "4503.T", sector: "Pharmaceuticals" },
+        { code: "4506.T", sector: "Pharmaceuticals" },
+        { code: "4507.T", sector: "Pharmaceuticals" },
+        { code: "4519.T", sector: "Pharmaceuticals" },
+        { code: "4523.T", sector: "Pharmaceuticals" },
+        { code: "4568.T", sector: "Pharmaceuticals" },
+        { code: "4578.T", sector: "Pharmaceuticals" },
+      ];
 
       // (B) We'll accumulate final refined stocks by sector
       const groupedBySector = {};
