@@ -1,25 +1,30 @@
 const yahooFinance = require("yahoo-finance2").default;
 
-// Fetch historical data for a ticker
 async function fetchHistoricalData(ticker) {
   try {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const period1 = Math.floor(oneYearAgo.getTime() / 1000);
+    const today = new Date();
 
     console.log(`Fetching historical data for ticker: ${ticker}`);
+
     const data = await yahooFinance.chart(ticker, {
-      period1,
+      period1: oneYearAgo,
+      period2: today,
       interval: "1d",
     });
+
+    // Uncomment this to see the full shape of the returned object
+    // console.log(JSON.stringify(data, null, 2));
 
     if (!data || !data.quotes || data.quotes.length === 0) {
       console.warn(`No historical data available for ticker: ${ticker}`);
       return [];
     }
 
+    // Log out the "quotes" array to see if it contains what you expect
+    console.log(data.quotes);
 
-    console.log(data);
     return data.quotes.map((quote) => ({
       date: quote.date,
       price: quote.close,
@@ -33,6 +38,12 @@ async function fetchHistoricalData(ticker) {
     throw new Error("Failed to fetch historical data");
   }
 }
+
+(async () => {
+  // Test it
+  const result = await fetchHistoricalData("9532.T");
+  console.log("Result:", result);
+})();
 
 // API handler for historical data
 // Allowed domains
@@ -53,7 +64,7 @@ module.exports = async (req, res) => {
   // 3) Other standard CORS headers
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  
+
   // (Optional) This ensures proxies & CDNs handle dynamic origins
   // so that they don’t reuse cached responses across different origins.
   res.setHeader("Vary", "Origin");
