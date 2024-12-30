@@ -7,9 +7,9 @@ function calculateStopLossAndTarget(stock, prediction) {
   // Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
   const riskMultipliers = {
-    low: { stopLossFactor: 0.8, targetBoost: 0.95 },
-    medium: { stopLossFactor: 1, targetBoost: 1 },
-    high: { stopLossFactor: 1.2, targetBoost: 1.05 },
+    low: { stopLossFactor: 0.85, targetBoost: 0.95 },
+    medium: { stopLossFactor: 0.9, targetBoost: 1 },
+    high: { stopLossFactor: 1, targetBoost: 1.05 },
   };
   const riskFactor = riskMultipliers[riskTolerance];
 
@@ -35,14 +35,11 @@ function calculateStopLossAndTarget(stock, prediction) {
   const dividendBoost = 1 + Math.min(stock.dividendYield, 0.03); // Cap at 3%
   targetPrice *= dividendBoost * riskFactor.targetBoost;
 
-  // Stop-Loss Calculation
-  const stopLossBase = Math.max(
-    stock.currentPrice * 0.9,
-    stock.lowPrice * 1.05,
-    stock.fiftyTwoWeekLow * 1.1,
-    stock.prevClosePrice * 0.95
-  );
-  const stopLoss = stopLossBase * riskFactor.stopLossFactor;
+  // Improved Stop-Loss Calculation
+  const stopLossBuffer = stock.currentPrice * 0.08; // 8% buffer from current price
+  const weightedLow =
+    (stock.lowPrice * 0.6 + stock.fiftyTwoWeekLow * 0.4) * 1.05; // Blend recent low and 52-week low
+  const stopLoss = Math.max(weightedLow, stock.currentPrice - stopLossBuffer);
 
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
@@ -50,6 +47,7 @@ function calculateStopLossAndTarget(stock, prediction) {
     riskTolerance,
   };
 }
+
 
 
 
