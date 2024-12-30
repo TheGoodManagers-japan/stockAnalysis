@@ -7,35 +7,33 @@ function calculateStopLossAndTarget(stock, prediction) {
   // Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
   const riskMultipliers = {
-    low: { stopLossFactor: 0.8, targetBoost: 0.9 },
+    low: { stopLossFactor: 0.8, targetBoost: 0.95 },
     medium: { stopLossFactor: 1, targetBoost: 1 },
-    high: { stopLossFactor: 1.2, targetBoost: 1.1 },
+    high: { stopLossFactor: 1.2, targetBoost: 1.05 },
   };
   const riskFactor = riskMultipliers[riskTolerance];
 
-  // Volatility and Confidence
+  // Volatility-Based Cap (e.g., 10% daily volatility -> 30% cap in 30 days)
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatilityFactor = priceRange / stock.currentPrice;
-  const confidenceWeight = Math.max(0.5, 1 - volatilityFactor);
+  const maxGrowth = stock.currentPrice * Math.min(volatilityFactor * 3, 0.3);
 
-  // Metrics-Based Target Price (Adjusted for 30-Day Prediction)
-  const metricsTarget = Math.max(
-    stock.currentPrice * 1.05, // Assume moderate growth
-    stock.fiftyTwoWeekHigh * 0.95,
-    stock.currentPrice + priceRange * 1.1,
-    stock.currentPrice + stock.eps * 10
+  // Predicted Price Adjustment
+  const adjustedPrediction = Math.min(
+    prediction,
+    stock.currentPrice + maxGrowth
   );
 
-  // PE and PB Adjustment
-  let adjustedTarget = metricsTarget;
-  if (stock.peRatio < 15) adjustedTarget *= 0.95; // Undervalued
-  if (stock.peRatio > 30) adjustedTarget *= 1.1; // Overvalued
-  if (stock.pbRatio < 1) adjustedTarget *= 1.05; // Undervalued on PB
+  // Confidence Weighted Target Price
+  const confidenceWeight = 0.7; // Assuming 70% confidence in the prediction model
+  const metricsTarget = stock.currentPrice * 1.1; // A conservative 10% metrics-based growth
+  let targetPrice =
+    adjustedPrediction * confidenceWeight +
+    metricsTarget * (1 - confidenceWeight);
 
-  // Final Target Price Calculation
-  const targetPrice =
-    adjustedTarget * confidenceWeight +
-    prediction * (1 - confidenceWeight) * riskFactor.targetBoost;
+  // Modest Dividend and Risk Adjustments
+  const dividendBoost = 1 + Math.min(stock.dividendYield, 0.03); // Cap at 3%
+  targetPrice *= dividendBoost * riskFactor.targetBoost;
 
   // Stop-Loss Calculation
   const stopLossBase = Math.max(
@@ -52,6 +50,7 @@ function calculateStopLossAndTarget(stock, prediction) {
     riskTolerance,
   };
 }
+
 
 
 
