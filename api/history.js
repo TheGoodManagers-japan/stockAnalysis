@@ -39,11 +39,6 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-(async () => {
-  // Test it
-  const result = await fetchHistoricalData("9532.T");
-  console.log("Result:", result);
-})();
 
 // API handler for historical data
 // Allowed domains
