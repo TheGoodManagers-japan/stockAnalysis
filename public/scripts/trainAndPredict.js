@@ -13,15 +13,15 @@ const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 // Fetch Historical Data (12 Months) using Yahoo Finance
 async function fetchHistoricalData(ticker) {
   try {
-    const apiUrl = `https://stock-analysis-4i8ooblxp-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
-
+    const apiUrl = `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
+    
     // Log the request URL for debugging
     console.log(`Fetching historical data from: ${apiUrl}`);
 
     const response = await fetch(apiUrl, {
-      method: "GET",
+      method: 'GET',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
       },
     });
 
