@@ -24,7 +24,7 @@ async function fetchHistoricalData(ticker) {
       },
     });
 
-    console.log(`Response status: ${response.status}`);
+    console.log(`Response: ${response}`);
     const result = await response.json(); // Parse JSON response
     console.log(`Response body:`, result);
 
