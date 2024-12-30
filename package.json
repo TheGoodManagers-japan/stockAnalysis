@@ -12,6 +12,7 @@
     "axios": "^1.7.9",
     "body-parser": "^1.20.3",
     "bottleneck": "^2.19.5",
+    "cheerio": "^1.0.0",
     "express": "^4.21.2",
     "firebase": "^9.6.1",
     "puppeteer": "^23.11.1",

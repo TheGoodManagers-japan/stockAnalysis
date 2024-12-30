@@ -123,6 +123,35 @@ async function fetchSingleStockData(tickerObj) {
   }
 }
 
+async function getSentiments(ticker, openaikey) {
+  const response = await fetch(
+    "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/scrapt",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker: tickerObj, openaiApiKey: openaikey }), // sending one ticker
+    }
+  );
+
+  if (!response.ok) {
+    const errorDetails = await response.text(); // Get response body for additional context
+    throw new Error(
+      `HTTP error! Status: ${response.status}, Details: ${errorDetails}`
+    );
+  }
+
+  // Expecting server to return a JSON object like: { success: true, data: {...} }
+  const data = await response.json();
+
+  // Validate the response structure
+  if (!data || typeof data !== "object" || !data.success) {
+    throw new Error(
+      "Unexpected response structure or missing 'success' field."
+    );
+  }
+
+  return data; // Return the parsed response
+} 
 
 
 
@@ -182,7 +211,7 @@ window.scan = {
         console.log(`Fetching sentiment scores for ${stock.ticker}`);
         try {
           // Fetch news articles and their sentiments
-          const news = await scrapeYahooFinanceNews(stock.ticker, openaikey);
+          const news = await getSentiments(stock.ticker, openaikey);
 
           // Check if news articles are fetched
           if (!news || news.length === 0) {
@@ -281,156 +310,4 @@ window.scan = {
 
 
 
-
-async function fetchNewsLinks(ticker, totalPages = 1) {
-  const baseUrl = `https://finance.yahoo.co.jp/quote/${ticker}/news`;
-  const newsLinks = [];
-
-  for (let page = 1; page <= totalPages; page++) {
-    try {
-      const url = `${baseUrl}?page=${page}`;
-      console.log(`Fetching news list from: ${url}`);
-      const { data: html } = await axios.get(url);
-      const $ = cheerio.load(html);
-
-      // Extract article links and titles from the news list
-      $("#newslist a.NewsItem__link__KiSQ").each((i, el) => {
-        const href = $(el).attr("href");
-        const title = $(el).find("h3.NewsItem__heading__qWJ8").text().trim();
-        if (href && href.startsWith("https") && title) {
-          newsLinks.push({ ticker, url: href, title });
-        }
-      });
-    } catch (error) {
-      console.error(
-        `Error fetching news links from page ${page}:`,
-        error.message
-      );
-    }
-  }
-
-  console.log(`Total links fetched for ${ticker}: ${newsLinks.length}`);
-  return newsLinks;
-}
-
-async function fetchArticleContent(url) {
-  try {
-    // Fetch the HTML content of the article page
-    const { data: html } = await axios.get(url);
-    const $ = cheerio.load(html);
-
-    // Extract plain text from <div class="textArea__3DuB">
-    const contentDiv = $(".textArea__3DuB");
-
-    if (!contentDiv.length) {
-      console.warn(`No content found in the specified div for URL: ${url}`);
-      return null;
-    }
-
-    // Get all paragraphs and clean them up
-    const paragraphs = contentDiv
-      .find("p")
-      .map((i, el) => $(el).text().trim())
-      .get();
-    const articleText = paragraphs.join("\n\n"); // Join paragraphs for readability
-
-    return articleText || null;
-  } catch (error) {
-    console.error(`Error fetching article content from ${url}:`, error.message);
-    return null;
-  }
-}
-
-async function scrapeYahooFinanceNews(ticker, openaiApiKey) {
-  const totalPages = 3;
-  const allArticles = [];
-
-  // Step 1: Fetch news links from all pages
-  const newsLinks = await fetchNewsLinks(ticker, totalPages);
-
-  // Step 2: Visit each link and scrape the article content
-  for (const [index, { ticker, url, title }] of newsLinks.entries()) {
-    console.log(`Fetching article ${index + 1}/${newsLinks.length}: ${url}`);
-    const content = await fetchArticleContent(url);
-    if (content) {
-      allArticles.push({ ticker, url, title, content });
-    }
-  }
-
-  // Step 3: Perform sentiment analysis for each article
-  const articlesWithSentiment = [];
-  for (const article of allArticles) {
-    console.log(`Analyzing sentiment for article: ${article.title}`);
-    const sentimentScore = await analyzeSentiment(
-      [article.content],
-      openaiApiKey
-    );
-    if (sentimentScore && sentimentScore.length > 0) {
-      articlesWithSentiment.push({
-        ...article,
-        sentimentScore: sentimentScore[0], // Assume one score per article
-      });
-    } else {
-      console.warn(`Failed to get sentiment for article: ${article.title}`);
-    }
-  }
-
-  // Step 4: Output the results
-  console.log(
-    `\nTotal articles analyzed for ${ticker}: ${articlesWithSentiment.length}`
-  );
-  return articlesWithSentiment;
-}
-
-
-
-async function analyzeSentiment(contents, openaiApiKey) {
-  const url = "https://api.openai.com/v1/chat/completions";
-  const headers = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${openaiApiKey}`,
-  };
-
-  const results = [];
-
-  for (let i = 0; i < contents.length; i++) {
-    const { title, content, ticker, url: articleUrl } = contents[i];
-    console.log(
-      `Analyzing sentiment for article ${i + 1}/${contents.length}: ${title}`
-    );
-
-    const messages = [
-      {
-        role: "system",
-        content: `You are a sentiment analysis assistant. Analyze the sentiment of the following text and provide a sentiment score between 0 (very negative) and 1 (very positive). Respond with only the score.`,
-      },
-      {
-        role: "user",
-        content: `Analyze this text for sentiment: \n\n${content}`,
-      },
-    ];
-
-    const payload = {
-      model: "gpt-4o-mini", // Adjust the model as needed
-      messages,
-      max_tokens: 100,
-    };
-
-    try {
-      const response = await axios.post(url, payload, { headers });
-      const sentimentScore = parseFloat(
-        response.data.choices[0].message.content.trim()
-      );
-
-      console.log(`Sentiment for "${title}": ${sentimentScore}`);
-
-      results.push({ ticker, url: articleUrl, title, sentimentScore });
-    } catch (error) {
-      console.error(`Error analyzing sentiment for "${title}":`, error.message);
-      results.push({ ticker, url: articleUrl, title, sentimentScore: null });
-    }
-  }
-
-  return results;
-}
 
