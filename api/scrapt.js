@@ -123,24 +123,25 @@ const allowedOrigins = [
 ];
 
 module.exports = async (req, res) => {
+  // 1) CORS
   const origin = req.headers.origin;
-
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Vary", "Origin");
 
+  // 2) Handle preflight
   if (req.method === "OPTIONS") {
-    return res.status(200).end(); // Handle preflight requests
+    return res.status(200).end();
   }
 
+  // 3) Only POST allowed
   if (req.method !== "POST") {
-    return res.status(405).json({
-      success: false,
-      message: "Method Not Allowed. Use POST for this endpoint.",
-    });
+    return res
+      .status(405)
+      .json({ success: false, error: "Method not allowed" });
   }
 
   try {
