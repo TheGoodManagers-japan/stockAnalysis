@@ -1,8 +1,5 @@
 import { analyzeStock } from "./trainandpredict.js";
 
-// ------------------------------------------
-// 1) Helper: stop-loss & target-price logic
-// -----------------------------------------
 function calculateStopLossAndTarget(stock, prediction) {
   // Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
@@ -35,11 +32,16 @@ function calculateStopLossAndTarget(stock, prediction) {
   const dividendBoost = 1 + Math.min(stock.dividendYield, 0.03); // Cap at 3%
   targetPrice *= dividendBoost * riskFactor.targetBoost;
 
-  // Improved Stop-Loss Calculation
-  const stopLossBuffer = stock.currentPrice * 0.08; // 8% buffer from current price
-  const weightedLow =
-    (stock.lowPrice * 0.6 + stock.fiftyTwoWeekLow * 0.4) * 1.05; // Blend recent low and 52-week low
-  const stopLoss = Math.max(weightedLow, stock.currentPrice - stopLossBuffer);
+  // Stop-Loss Calculation
+  const bufferPercentage = 0.05; // 5% below the current price
+  const bufferPrice = stock.currentPrice * (1 - bufferPercentage);
+
+  const historicalLow = Math.max(
+    stock.lowPrice * 1.02, // Slight buffer above recent low
+    stock.fiftyTwoWeekLow * 1.05 // Slight buffer above 52-week low
+  );
+
+  const stopLoss = Math.min(bufferPrice, historicalLow);
 
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
