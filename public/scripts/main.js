@@ -18,9 +18,24 @@ function calculateStopLossAndTarget(stock, prediction) {
   const volatilityFactor = priceRange / stock.currentPrice;
   const confidenceWeight = Math.max(0.5, 1 - volatilityFactor);
 
-  // Price Gap Analysis
-  const priceGap =
-    (stock.openPrice - stock.prevClosePrice) / stock.prevClosePrice;
+  // Metrics-Based Target Price (Adjusted for 30-Day Prediction)
+  const metricsTarget = Math.max(
+    stock.currentPrice * 1.05, // Assume moderate growth
+    stock.fiftyTwoWeekHigh * 0.95,
+    stock.currentPrice + priceRange * 1.1,
+    stock.currentPrice + stock.eps * 10
+  );
+
+  // PE and PB Adjustment
+  let adjustedTarget = metricsTarget;
+  if (stock.peRatio < 15) adjustedTarget *= 0.95; // Undervalued
+  if (stock.peRatio > 30) adjustedTarget *= 1.1; // Overvalued
+  if (stock.pbRatio < 1) adjustedTarget *= 1.05; // Undervalued on PB
+
+  // Final Target Price Calculation
+  const targetPrice =
+    adjustedTarget * confidenceWeight +
+    prediction * (1 - confidenceWeight) * riskFactor.targetBoost;
 
   // Stop-Loss Calculation
   const stopLossBase = Math.max(
@@ -29,40 +44,15 @@ function calculateStopLossAndTarget(stock, prediction) {
     stock.fiftyTwoWeekLow * 1.1,
     stock.prevClosePrice * 0.95
   );
-  let stopLoss = stopLossBase * riskFactor.stopLossFactor;
-  if (priceGap < -0.02) stopLoss *= 0.95;
+  const stopLoss = stopLossBase * riskFactor.stopLossFactor;
 
-  // Metrics-Based Target Price
-  const metricsTarget = Math.max(
-    stock.currentPrice * 1.2,
-    stock.fiftyTwoWeekHigh * 0.95,
-    stock.currentPrice + priceRange * 1.1,
-    stock.currentPrice + stock.eps * 10
-  );
-
-  // PE and PB Adjustment
-  let adjustedTarget = metricsTarget;
-  if (stock.peRatio < 15) adjustedTarget *= 0.95;
-  if (stock.peRatio > 30) adjustedTarget *= 1.1;
-  if (stock.pbRatio < 1) adjustedTarget *= 1.05;
-
-  // Weighted Target Price with Risk
-  let targetPrice =
-    adjustedTarget * confidenceWeight +
-    prediction * (1 - confidenceWeight) * riskFactor.targetBoost;
-  if (priceGap > 0.02) targetPrice *= 1.05;
-
-  // Adjust for Dividend
-  const dividendBoost = 1 + Math.min(stock.dividendYield, 0.05); // Cap at 5%
-  targetPrice *= dividendBoost;
-
-  // Final Results
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
     targetPrice: parseFloat(targetPrice.toFixed(2)),
     riskTolerance,
   };
 }
+
 
 
 function determineRisk(stock) {
@@ -81,17 +71,17 @@ function determineRisk(stock) {
 }
 
 function computeScore(stock, predictions) {
-  // Weights for each metric (adjust these as needed)
+  // Weights for each metric
   const weights = {
-    growthPotential: 0.4, // Growth potential based on predictions
-    valuation: 0.25, // Based on PE and PB ratios
-    marketStability: 0.2, // Based on volatility and market cap
-    dividendBenefit: 0.1, // Higher for dividend-yielding stocks
-    historicalPerformance: 0.05, // Based on 52-week high/low analysis
+    growthPotential: 0.6, // Emphasize growth potential
+    valuation: 0.2, // Valuation metrics
+    marketStability: 0.1, // Volatility and stability
+    dividendBenefit: 0.05, // Dividend yield
+    historicalPerformance: 0.05, // 52-week performance
   };
 
   // Calculate Growth Potential
-  const prediction = predictions[29]; // Use the 30th prediction
+  const prediction = predictions[29]; // 30-day target prediction
   const growthPotential = Math.max(
     0,
     (prediction - stock.currentPrice) / stock.currentPrice
@@ -107,7 +97,7 @@ function computeScore(stock, predictions) {
   // Assess Market Stability
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
-  let stabilityScore = 1 - Math.min(volatility, 1); // Higher volatility reduces stability
+  let stabilityScore = 1 - Math.min(volatility, 1); // High volatility penalized
   if (stock.marketCap > 5e11) stabilityScore *= 1.1; // Large-cap stability
   if (stock.marketCap < 1e11) stabilityScore *= 0.9; // Small-cap instability
 
@@ -119,8 +109,8 @@ function computeScore(stock, predictions) {
     (stock.currentPrice - stock.fiftyTwoWeekLow) /
     (stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow);
 
-  // Calculate Weighted Score
-  const totalScore =
+  // Weighted Score
+  const rawScore =
     growthPotential * weights.growthPotential +
     valuationScore * weights.valuation +
     stabilityScore * weights.marketStability +
@@ -128,8 +118,9 @@ function computeScore(stock, predictions) {
     historicalPerformance * weights.historicalPerformance;
 
   // Normalize score between 0 and 1
-  return Math.min(Math.max(totalScore / 2, 0), 1); // Adjust the divisor (2) as needed for scaling
+  return Math.min(Math.max(rawScore, 0), 1);
 }
+
 
 
 
