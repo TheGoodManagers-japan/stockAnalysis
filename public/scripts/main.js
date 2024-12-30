@@ -149,42 +149,9 @@ async function getSentimentScore(stockSymbol, apiKey) {
 }
 
 
-
-// ------------------------------------------
-// 4) The main function to fetch & analyze
-// ------------------------------------------
-// Attach to `window.scan` so you can call window.scan.fetchStockAnalysis() in the browser
 window.scan = {
   async fetchStockAnalysis(finnhubApiKey) {
     try {
-      // Helper function to fetch sentiment score from Finnhub
-      async function getSentimentScore(stockSymbol, apiKey) {
-        try {
-          const url = `https://finnhub.io/api/v1/news-sentiment?symbol=${stockSymbol}&token=${apiKey}`;
-          const response = await fetch(url);
-
-          if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-          }
-
-          const data = await response.json();
-          if (
-            !data.sentiment ||
-            typeof data.sentiment.bullishPercent !== "number"
-          ) {
-            throw new Error("Invalid sentiment data from Finnhub.");
-          }
-
-          return data.sentiment.bullishPercent; // Return sentiment score (0 to 1)
-        } catch (error) {
-          console.error(
-            `Error fetching sentiment for ${stockSymbol}:`,
-            error.message
-          );
-          throw error; // Propagate the error to stop processing
-        }
-      }
-
       // (A) Define the tickers on the client side
       const tickers = [{ code: "4151.T", sector: "Pharmaceuticals" }];
 
@@ -234,9 +201,15 @@ window.scan = {
           eps: yahooData.eps,
         };
 
-        // 4) Fetch sentiment score from Finnhub
+        // 4) Fetch sentiment score using the provided helper function
         console.log(`Fetching sentiment score for ${stock.ticker}`);
         const sentiment = await getSentimentScore(stock.ticker, finnhubApiKey);
+        if (sentiment === null) {
+          console.error(
+            `Failed to fetch sentiment for ${stock.ticker}. Aborting calculation.`
+          );
+          throw new Error("Sentiment score fetching failed.");
+        }
 
         // 5) Run your ML/predictive analysis
         console.log(`Analyzing stock: ${stock.ticker}`);
@@ -249,7 +222,7 @@ window.scan = {
         }
 
         // 6) Merge predictions data
-        const prediction = predictions[0]; // Use the first prediction (as there's no past predictions)
+        const prediction = predictions[0]; // Use the first prediction
         stock.predictions = predictions;
         stock.predictedGrowth =
           (prediction - stock.currentPrice) / stock.currentPrice;
@@ -290,4 +263,3 @@ window.scan = {
     }
   },
 };
-
