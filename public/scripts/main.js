@@ -48,13 +48,12 @@ function calculateStopLossAndTarget(stock, prediction) {
 
   // Weighted Target Price with Risk
   let targetPrice =
-    (adjustedTarget * confidenceWeight + prediction * (1 - confidenceWeight)) *
-    riskFactor.targetBoost;
+    adjustedTarget * confidenceWeight +
+    prediction * (1 - confidenceWeight) * riskFactor.targetBoost;
   if (priceGap > 0.02) targetPrice *= 1.05;
 
   // Adjust for Dividend
-  const dividendBoost =
-    stock.dividendYield > 0.03 ? 1 + stock.dividendYield : 1;
+  const dividendBoost = 1 + Math.min(stock.dividendYield, 0.05); // Cap at 5%
   targetPrice *= dividendBoost;
 
   // Final Results
@@ -64,6 +63,7 @@ function calculateStopLossAndTarget(stock, prediction) {
     riskTolerance,
   };
 }
+
 
 function determineRisk(stock) {
   // Calculate volatility
@@ -112,7 +112,7 @@ function computeScore(stock, predictions) {
   if (stock.marketCap < 1e11) stabilityScore *= 0.9; // Small-cap instability
 
   // Factor in Dividend Benefit
-  const dividendBenefit = stock.dividendYield > 0.03 ? stock.dividendYield : 0;
+  const dividendBenefit = Math.min(stock.dividendYield, 0.05); // Cap at 5%
 
   // Analyze Historical Performance
   const historicalPerformance =
@@ -127,8 +127,10 @@ function computeScore(stock, predictions) {
     dividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  return parseFloat((totalScore * 100).toFixed(2)); // Scale score to a percentage
+  // Normalize score between 0 and 1
+  return Math.min(Math.max(totalScore / 2, 0), 1); // Adjust the divisor (2) as needed for scaling
 }
+
 
 
 // ------------------------------------------
