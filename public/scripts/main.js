@@ -123,7 +123,7 @@ async function fetchSingleStockData(tickerObj) {
   }
 }
 
-async function getSentiments(ticker, openaikey) {
+async function getSentiments(tickerObj, openaikey) {
   const response = await fetch(
     "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/scrapt",
     {
