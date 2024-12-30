@@ -56,8 +56,6 @@ window.scan = {
       // You can modify or dynamically get these from somewhere else
       const tickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
-        { code: "4502.T", sector: "Pharmaceuticals" },
-        { code: "9532.T", sector: "Gas" },
       ];
 
       // (B) We'll accumulate final refined stocks by sector
