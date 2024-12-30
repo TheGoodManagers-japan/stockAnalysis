@@ -86,6 +86,7 @@ module.exports = async (req, res) => {
     }
 
     // Return the fetched data
+    console.log(`HERE: ${data}`);
     res.status(200).json({ success: true, data });
   } catch (error) {
     console.error("Error in API handler:", error.message);
