@@ -18,6 +18,8 @@ async function fetchHistoricalData(ticker) {
       return [];
     }
 
+
+    console.log(data);
     return data.quotes.map((quote) => ({
       date: quote.date,
       price: quote.close,
