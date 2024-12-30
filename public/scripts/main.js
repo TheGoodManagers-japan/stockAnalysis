@@ -222,7 +222,7 @@ window.scan = {
         }
 
         // 6) Merge predictions data
-        const prediction = predictions[0]; // Use the first prediction
+        const prediction = predictions[29]; // Use the first prediction
         stock.predictions = predictions;
         stock.predictedGrowth =
           (prediction - stock.currentPrice) / stock.currentPrice;
