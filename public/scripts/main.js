@@ -1,52 +1,53 @@
 import { analyzeStock } from "./trainandpredict.js";
 
+
 function calculateStopLossAndTarget(stock, prediction) {
-  // Determine Risk Tolerance
-  const riskTolerance = determineRisk(stock);
-  const riskMultipliers = {
-    low: { stopLossFactor: 0.85, targetBoost: 0.95 },
-    medium: { stopLossFactor: 0.9, targetBoost: 1 },
-    high: { stopLossFactor: 1, targetBoost: 1.05 },
-  };
-  const riskFactor = riskMultipliers[riskTolerance];
-
-  // Volatility-Based Cap (e.g., 10% daily volatility -> 30% cap in 30 days)
+  // ATR-based Volatility Adjustment (Mock ATR Calculation for Example)
   const priceRange = stock.highPrice - stock.lowPrice;
-  const volatilityFactor = priceRange / stock.currentPrice;
-  const maxGrowth = stock.currentPrice * Math.min(volatilityFactor * 3, 0.3);
+  const atr = priceRange / 14; // Simplified ATR (replace with actual ATR calculation if available)
 
-  // Predicted Price Adjustment
-  const adjustedPrediction = Math.min(
-    prediction,
-    stock.currentPrice + maxGrowth
+  // Dynamic Stop-Loss Buffer (1.5x ATR or 5-10% buffer)
+  const atrBuffer = stock.currentPrice - 1.5 * atr;
+  const percentageBuffer = stock.currentPrice * 0.1; // 10% default buffer
+  const bufferPrice = Math.max(
+    atrBuffer,
+    stock.currentPrice - percentageBuffer
   );
 
-  // Confidence Weighted Target Price
-  const confidenceWeight = 0.7; // Assuming 70% confidence in the prediction model
-  const metricsTarget = stock.currentPrice * 1.1; // A conservative 10% metrics-based growth
-  let targetPrice =
-    adjustedPrediction * confidenceWeight +
-    metricsTarget * (1 - confidenceWeight);
-
-  // Modest Dividend and Risk Adjustments
-  const dividendBoost = 1 + Math.min(stock.dividendYield, 0.03); // Cap at 3%
-  targetPrice *= dividendBoost * riskFactor.targetBoost;
-
-  // Stop-Loss Calculation
-  const bufferPercentage = 0.05; // 5% below the current price
-  const bufferPrice = stock.currentPrice * (1 - bufferPercentage);
-
+  // Incorporate Historical Lows
   const historicalLow = Math.max(
     stock.lowPrice * 1.02, // Slight buffer above recent low
     stock.fiftyTwoWeekLow * 1.05 // Slight buffer above 52-week low
   );
 
-  const stopLoss = Math.min(bufferPrice, historicalLow);
+  // Final Stop-Loss Calculation
+  const stopLoss = Math.max(bufferPrice, historicalLow);
+
+  // Predicted Growth and Target Price Adjustment
+  const growthPotential = Math.max(
+    (prediction - stock.currentPrice) / stock.currentPrice,
+    -0.1 // Cap negative growth at -10%
+  );
+
+  let targetPrice = stock.currentPrice;
+  if (growthPotential >= 0) {
+    // Positive Growth: Base on prediction and metrics
+    const confidenceWeight = 0.7;
+    const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5); // Conservative growth estimate
+    targetPrice =
+      prediction * confidenceWeight + metricsTarget * (1 - confidenceWeight);
+  } else {
+    // Negative Growth: Adjust downwards
+    targetPrice *= 1 + growthPotential;
+  }
+
+  // Final Adjustments
+  const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03); // Cap at 3%
+  targetPrice *= dividendBoost;
 
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
     targetPrice: parseFloat(targetPrice.toFixed(2)),
-    riskTolerance,
   };
 }
 
@@ -71,41 +72,34 @@ function determineRisk(stock) {
 
 function computeScore(stock, predictions) {
   const weights = {
-    growthPotential: 0.5, // Adjusted weight
-    valuation: 0.25, // Slightly increased
-    marketStability: 0.15, // Stability matters more
-    dividendBenefit: 0.05, // Capped influence of dividends
-    historicalPerformance: 0.05, // Historical weight unchanged
+    growthPotential: 0.4,
+    valuation: 0.3,
+    marketStability: 0.2,
+    dividendBenefit: 0.05,
+    historicalPerformance: 0.05,
   };
 
-  // Calculate Growth Potential
   const prediction = predictions[29];
   const growthPotential = Math.max(
     0,
-    Math.min((prediction - stock.currentPrice) / stock.currentPrice, 0.5) // Cap at 50% growth
+    Math.min((prediction - stock.currentPrice) / stock.currentPrice, 0.5) // Cap growth at 50%
   );
 
-  // Evaluate Valuation
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
   if (stock.peRatio > 30) valuationScore *= 0.9;
   if (stock.pbRatio < 1) valuationScore *= 1.2;
   if (stock.pbRatio > 3) valuationScore *= 0.8;
 
-  // Assess Market Stability
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
-  const stabilityScore = 1 - Math.min(volatility, 0.5); // Cap penalty at 50%
+  const stabilityScore = 1 - Math.min(volatility, 0.5);
 
-  // Factor in Dividend Benefit
-  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05); // Normalize dividend yield
-
-  // Analyze Historical Performance
+  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
   const historicalPerformance =
     (stock.currentPrice - stock.fiftyTwoWeekLow) /
     (stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow);
 
-  // Weighted Score
   const rawScore =
     growthPotential * weights.growthPotential +
     valuationScore * weights.valuation +
@@ -113,7 +107,7 @@ function computeScore(stock, predictions) {
     dividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  return Math.min(Math.max(rawScore, 0), 1); // Normalize between 0 and 1
+  return Math.min(Math.max(rawScore, 0), 1);
 }
 
 
