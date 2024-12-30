@@ -14,39 +14,37 @@ const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 async function fetchHistoricalData(ticker) {
   try {
     const apiUrl = `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
-    
-    // Log the request URL for debugging
+
     console.log(`Fetching historical data from: ${apiUrl}`);
 
     const response = await fetch(apiUrl, {
-      method: 'GET',
+      method: "GET",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
     });
 
+    console.log(`Response status: ${response.status}`);
+    const result = await response.json(); // Parse JSON response
+    console.log(`Response body:`, result);
+
     // Check for HTTP errors
-    console.log(`response :`, response);
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || `HTTP error! Status: ${response.status}`);
     }
 
-    // Parse JSON response
-    const { data } = await response.json();
-
     // Check if data is empty or undefined
-    if (!data || data.length === 0) {
+    if (!result.data || result.data.length === 0) {
       console.warn(`No historical data available for ${ticker}.`);
       return [];
     }
 
     console.log(`Historical data for ${ticker} fetched successfully.`);
-    return data.map((item) => ({
+    return result.data.map((item) => ({
       ...item,
       date: new Date(item.date), // Convert raw date string to Date object
     }));
   } catch (error) {
-    // Improved error logging
     console.error(`Error fetching historical data for ${ticker}:`, error);
     return [];
   }

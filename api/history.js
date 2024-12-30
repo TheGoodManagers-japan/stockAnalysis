@@ -60,20 +60,35 @@ module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // (Optional) This ensures proxies & CDNs handle dynamic origins
-  // so that they don’t reuse cached responses across different origins.
-  res.setHeader("Vary", "Origin");
-
   // 4) Handle preflight (OPTIONS) requests
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // ... your existing logic here ...
+  // Fetch historical data
   try {
-    // example: if you do something like fetch data, then return JSON
-    res.status(200).json({ success: true, message: "Hello, CORS!" });
+    const { ticker } = req.query; // Ensure `ticker` is provided in the request query
+    if (!ticker) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Ticker is required" });
+    }
+
+    const data = await fetchHistoricalData(ticker); // Use your fetchHistoricalData function
+
+    if (!data || data.length === 0) {
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: `No historical data available for ${ticker}`,
+        });
+    }
+
+    // Return the fetched data
+    res.status(200).json({ success: true, data });
   } catch (error) {
+    console.error("Error in API handler:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 };
