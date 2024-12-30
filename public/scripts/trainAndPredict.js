@@ -26,6 +26,7 @@ async function fetchHistoricalData(ticker) {
     });
 
     // Check for HTTP errors
+    console.log(`response :`, response);
     if (!response.ok) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
