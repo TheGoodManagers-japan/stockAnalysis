@@ -107,6 +107,8 @@ window.scan = {
         // 4) Run your ML/predictive analysis
         console.log(`Analyzing stock: ${stock.ticker}`);
         const predictions = await analyzeStock(stock.ticker);
+        console.log(`predictions :`, predictions);
+
 
         // 5) Merge predictions data
         stock.predictions = predictions;
