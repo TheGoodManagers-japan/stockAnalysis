@@ -31,71 +31,44 @@ function calculateStopLossAndTarget(stock, prediction) {
   const priceRange = stock.highPrice - stock.lowPrice;
   const atr = priceRange / 14;
 
-  // 3) Dynamic buffer: choose whichever is bigger:
-  //    - 1.5 x ATR
-  //    - 5% of current price
-  //    (Lower than 10% if it's only for a few weeks.)
+  // 3) Dynamic buffer
   const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
 
   // 4) Tentative rawStopLoss
   let rawStopLoss = stock.currentPrice - dynamicBuffer;
 
-  /*******************************************************
-   * 5) "Historical Floor" logic
-   *    - If you want the stop to never go below either:
-   *      (dailyLow minus a small negative buffer)
-   *      or (fiftyTwoWeekLow minus a small negative buffer),
-   *    - We might do something like:
-   *******************************************************/
-  // Slightly below daily low
-  const dailyLowFloor = stock.lowPrice * 0.995; // e.g. 0.5% below daily low
-  // Slightly below 52-week low
+  // 5) Historical Floor logic
+  const dailyLowFloor = stock.lowPrice * 0.995;
   const yearLowFloor = stock.fiftyTwoWeekLow * 0.995;
-  // We'll pick whichever is higher (i.e. the "less deep" floor)
   let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
-
-  // If that "floor" is above the currentPrice, clamp it
   if (historicalFloor > stock.currentPrice) {
     historicalFloor = stock.currentPrice * 0.98;
-    // i.e. let's keep it just below current price
   }
 
   // 6) Combine rawStopLoss with historicalFloor
-  //    We don't want to go *lower* than historicalFloor:
   rawStopLoss = Math.max(rawStopLoss, historicalFloor);
 
-  /*******************************************************
-   * 7) If we also want a short-term max Stop-Loss:
-   *    e.g., don't risk more than 8% from currentPrice:
-   *******************************************************/
-  const maxStopLossPercent = 0.08;
-  const maxStopLossPrice = stock.currentPrice * (1 - maxStopLossPercent);
+  // 7) Short-term max stop-loss (clamp to max 8% below current)
+  const maxStopLossPrice = stock.currentPrice * (1 - 0.08);
   if (rawStopLoss < maxStopLossPrice) {
     rawStopLoss = maxStopLossPrice;
   }
 
-  /*******************************************************
-   * 8) Final clamp: ensure we don't exceed the current price.
-   *    If rawStopLoss somehow ended up above currentPrice,
-   *    set it to 1% below currentPrice, for example.
-   *******************************************************/
+  // 8) Final clamp: ensure not above currentPrice
   if (rawStopLoss >= stock.currentPrice) {
     rawStopLoss = stock.currentPrice * 0.99;
   }
 
-  // At this point, rawStopLoss should be below current price.
   const stopLoss = parseFloat(rawStopLoss.toFixed(2));
 
-  /*******************************************************
-   * 9) Target Price Calculation
-   *******************************************************/
+  // 9) Target Price Calculation
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
-  // For example, cap negative growth at -10%
+  // Example: cap negative growth at -10%
   const growthPotential = Math.max(rawGrowth, -0.1);
 
   let targetPrice;
   if (growthPotential >= 0) {
-    // Weighted average approach
+    // Weighted approach
     const confidenceWeight = 0.7;
     const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5);
     targetPrice =
@@ -117,11 +90,10 @@ function calculateStopLossAndTarget(stock, prediction) {
 }
 
 
-
 /***********************************************
- * 3) COMPUTE SCORE
+ * COMPUTE SCORE - using the computed targetPrice
  ***********************************************/
-function computeScore(stock, predictions) {
+function computeScore(stock) {
   // Weights for different factors
   const weights = {
     growthPotential: 0.4,
@@ -131,56 +103,49 @@ function computeScore(stock, predictions) {
     historicalPerformance: 0.05,
   };
 
-  // 30-day prediction
-  const prediction = predictions[29];
+  /***********************************************
+   * a) Growth Potential (based on computed target)
+   ***********************************************/
+  let growthPotential =
+    (stock.targetPrice - stock.currentPrice) / stock.currentPrice;
 
-  // Calculate growthPotential first 
-  // (cap it between 0% and 50% for scoring):
-  let growthPotential = (prediction - stock.currentPrice) / stock.currentPrice;
+  // If negative, penalize more heavily (example: multiply by 0.5).
   if (growthPotential < 0) {
-    // If negative, penalize more than just flooring to 0
-    // but let's do that in two stages:
-    // 1) Multiply by 0.5 to reduce the negative impact
     growthPotential *= 0.5;
   }
 
-  // Next, we clamp to [–∞, 0.5], then floor if you want no negative in final:
+  // Clamp max to +50%
   growthPotential = Math.min(growthPotential, 0.5);
-  // If you do NOT want negative growth to be zeroed out, skip max(0, ...).
-  // If you do want negative growth to be zeroed, then:
-  // growthPotential = Math.max(growthPotential, 0);
 
-  /*********************************************
-   * a) Valuation Score
-   *********************************************/
+  /***********************************************
+   * b) Valuation Score
+   ***********************************************/
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
   if (stock.peRatio > 30) valuationScore *= 0.9;
   if (stock.pbRatio < 1) valuationScore *= 1.2;
   if (stock.pbRatio > 3) valuationScore *= 0.8;
-  
-  // Optionally clamp valuationScore so it doesn’t get too big/small:
-  // valuationScore = Math.max(0, Math.min(valuationScore, 2));
+  // optionally clamp min/max, e.g. [0.5, 2], etc.
 
-  /*********************************************
-   * b) Market Stability
-   *********************************************/
+  /***********************************************
+   * c) Market Stability
+   ***********************************************/
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
-  const stabilityScore = 1 - Math.min(volatility, 0.5); 
-  // Higher volatility => lower stabilityScore.
+  // Higher volatility => lower stabilityScore
+  const stabilityScore = 1 - Math.min(volatility, 0.5);
 
-  /*********************************************
-   * c) Dividend & Historical Perf
-   *********************************************/
+  /***********************************************
+   * d) Dividend & Historical Performance
+   ***********************************************/
   const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
-  const historicalPerformance = 
+  const historicalPerformance =
     (stock.currentPrice - stock.fiftyTwoWeekLow) /
     (stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow);
 
-  /*********************************************
-   * d) Combine All for Raw Score
-   *********************************************/
+  /***********************************************
+   * e) Combine All for Raw Score
+   ***********************************************/
   const rawScore =
     growthPotential * weights.growthPotential +
     valuationScore * weights.valuation +
@@ -199,40 +164,15 @@ function computeScore(stock, predictions) {
 
 
 
+
 // ------------------------------------------
 // 3) Function to POST a single ticker to /api/stocks
 // ------------------------------------------
-async function fetchSingleStockData(tickerObj) {
-  try {
-    const response = await fetch(
-      "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/stocks",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: tickerObj }), // sending one ticker
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-
-    // Server should return { success: true, data: { code, sector, yahooData: {...} } }
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Fetch Error:", error.message);
-    return { success: false, error: error.message };
-  }
-}
-
 window.scan = {
   async fetchStockAnalysis() {
     try {
       // (A) Define the tickers on the client side
-      const tickers = [
-        { code: "6479.T", sector: "Electric Machinery" },
-      ];
+      const tickers = [{ code: "6479.T", sector: "Electric Machinery" }];
 
       // (B) We'll accumulate final refined stocks by sector
       const groupedBySector = {};
@@ -245,7 +185,7 @@ window.scan = {
         const result = await fetchSingleStockData(tickerObj);
         if (!result.success) {
           console.error("Error fetching stock analysis:", result.error);
-          throw new Error("Failed to fetch Yahoo data."); // Abort processing for this stock
+          throw new Error("Failed to fetch Yahoo data.");
         }
 
         // 2) Deconstruct the server response
@@ -290,13 +230,11 @@ window.scan = {
           throw new Error("Failed to generate predictions.");
         }
 
-        // 5) Merge predictions data
+        // 5) Merge predictions data (optional if you need them later)
         const prediction = predictions[29]; // Use the 30th prediction
         stock.predictions = predictions;
-        stock.predictedGrowth =
-          (prediction - stock.currentPrice) / stock.currentPrice;
 
-        // 6) Calculate stop loss & target price
+        // 6) Calculate stop loss & target price FIRST
         const { stopLoss, targetPrice } = calculateStopLossAndTarget(
           stock,
           prediction
@@ -307,12 +245,12 @@ window.scan = {
           );
           throw new Error("Stop loss or target price calculation failed.");
         }
-
         stock.stopLoss = stopLoss;
         stock.targetPrice = targetPrice;
 
-        // 7) Compute your "score"
-        stock.score = computeScore(stock, predictions);
+        // 7) Now compute your "score" using the new approach
+        //    (which relies on stock.targetPrice)
+        stock.score = computeScore(stock);
 
         // 8) Add this refined stock to the grouping by sector
         if (!groupedBySector[stock.sector]) {
@@ -327,7 +265,8 @@ window.scan = {
       console.log("\nFinal grouped data by sector:", groupedBySector);
     } catch (error) {
       console.error("Error in fetchStockAnalysis:", error.message);
-      throw new Error("Analysis aborted due to errors."); // Stop processing entirely
+      throw new Error("Analysis aborted due to errors.");
     }
   },
 };
+
