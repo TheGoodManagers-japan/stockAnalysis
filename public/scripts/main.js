@@ -17,10 +17,6 @@ function determineRisk(stock) {
   return riskLevel;
 }
 
-/**
- * Example: Stop-loss logic that ensures we don't place the stop
- * too far below the current price (for a short-term trade).
- */
 function calculateStopLossAndTarget(stock, prediction) {
   // 1) Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
@@ -35,50 +31,68 @@ function calculateStopLossAndTarget(stock, prediction) {
   const priceRange = stock.highPrice - stock.lowPrice;
   const atr = priceRange / 14;
 
-  // 3) Dynamic buffer: pick whichever is bigger (1.5*ATR or 5%).
-  //    Because you have a short holding period, we reduce from 10% => 5%.
+  // 3) Dynamic buffer: choose whichever is bigger:
+  //    - 1.5 x ATR
+  //    - 5% of current price
+  //    (Lower than 10% if it's only for a few weeks.)
   const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
 
-  // 4) Raw Stop-Loss
+  // 4) Tentative rawStopLoss
   let rawStopLoss = stock.currentPrice - dynamicBuffer;
 
-  // 5) "Historical Low" logic:
-  //    If historicalLow is above the computed rawStopLoss, clamp it up.
-  //    But also ensure we don't push the stop above current price.
-  const dailyLowWithBuffer = stock.lowPrice * 1.02;
-  const yearLowWithBuffer = stock.fiftyTwoWeekLow * 1.05;
-  let historicalLow = Math.max(dailyLowWithBuffer, yearLowWithBuffer);
+  /*******************************************************
+   * 5) "Historical Floor" logic
+   *    - If you want the stop to never go below either:
+   *      (dailyLow minus a small negative buffer)
+   *      or (fiftyTwoWeekLow minus a small negative buffer),
+   *    - We might do something like:
+   *******************************************************/
+  // Slightly below daily low
+  const dailyLowFloor = stock.lowPrice * 0.995; // e.g. 0.5% below daily low
+  // Slightly below 52-week low
+  const yearLowFloor = stock.fiftyTwoWeekLow * 0.995;
+  // We'll pick whichever is higher (i.e. the "less deep" floor)
+  let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
 
-  // In some cases, historicalLow might be above currentPrice.
-  // We clamp it to avoid an invalid stop-loss above currentPrice.
-  if (historicalLow > stock.currentPrice) {
-    historicalLow = stock.currentPrice;
+  // If that "floor" is above the currentPrice, clamp it
+  if (historicalFloor > stock.currentPrice) {
+    historicalFloor = stock.currentPrice * 0.98;
+    // i.e. let's keep it just below current price
   }
 
-  // Now pick whichever is higher: rawStopLoss or historicalLow
-  let stopLoss = Math.max(rawStopLoss, historicalLow);
+  // 6) Combine rawStopLoss with historicalFloor
+  //    We don't want to go *lower* than historicalFloor:
+  rawStopLoss = Math.max(rawStopLoss, historicalFloor);
 
-  // 6) **Short-term Max Stop-Loss**:
-  //    If your maximum allowed drop is e.g., 8% of the current price:
-  const maxStopLossPercent = 0.08; // 8%
+  /*******************************************************
+   * 7) If we also want a short-term max Stop-Loss:
+   *    e.g., don't risk more than 8% from currentPrice:
+   *******************************************************/
+  const maxStopLossPercent = 0.08;
   const maxStopLossPrice = stock.currentPrice * (1 - maxStopLossPercent);
-
-  // If the computed stopLoss is *lower* than that threshold, clamp it up.
-  if (stopLoss < maxStopLossPrice) {
-    stopLoss = maxStopLossPrice;
+  if (rawStopLoss < maxStopLossPrice) {
+    rawStopLoss = maxStopLossPrice;
   }
 
-  // If, for some weird reason, it's above currentPrice, clamp it
-  if (stopLoss > stock.currentPrice) {
-    stopLoss = stock.currentPrice * 0.99;
+  /*******************************************************
+   * 8) Final clamp: ensure we don't exceed the current price.
+   *    If rawStopLoss somehow ended up above currentPrice,
+   *    set it to 1% below currentPrice, for example.
+   *******************************************************/
+  if (rawStopLoss >= stock.currentPrice) {
+    rawStopLoss = stock.currentPrice * 0.99;
   }
 
-  // 7) Growth Potential
+  // At this point, rawStopLoss should be below current price.
+  const stopLoss = parseFloat(rawStopLoss.toFixed(2));
+
+  /*******************************************************
+   * 9) Target Price Calculation
+   *******************************************************/
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
-  // Cap negative growth at -10% (example).
+  // For example, cap negative growth at -10%
   const growthPotential = Math.max(rawGrowth, -0.1);
 
-  // 8) Target Price
   let targetPrice;
   if (growthPotential >= 0) {
     // Weighted average approach
@@ -91,17 +105,17 @@ function calculateStopLossAndTarget(stock, prediction) {
     targetPrice = stock.currentPrice * (1 + growthPotential);
   }
 
-  // 9) Dividend Boost & Risk Boost
+  // Dividend & Risk Factor
   const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03);
   targetPrice *= dividendBoost * riskFactor.targetBoost;
 
-  // 10) Return final (two decimals)
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
     targetPrice: parseFloat(targetPrice.toFixed(2)),
     riskTolerance,
   };
 }
+
 
 
 /***********************************************
