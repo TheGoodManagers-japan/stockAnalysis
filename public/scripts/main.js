@@ -90,6 +90,7 @@ function calculateStopLossAndTarget(stock, prediction) {
 }
 
 
+
 /***********************************************
  * COMPUTE SCORE - using the computed targetPrice
  ***********************************************/
@@ -165,9 +166,34 @@ function computeScore(stock) {
 
 
 
+
 // ------------------------------------------
 // 3) Function to POST a single ticker to /api/stocks
 // ------------------------------------------
+async function fetchSingleStockData(tickerObj) {
+  try {
+    const response = await fetch(
+      "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/stocks",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: tickerObj }), // sending one ticker
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    // Server should return { success: true, data: { code, sector, yahooData: {...} } }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Fetch Error:", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 window.scan = {
   async fetchStockAnalysis() {
     try {
@@ -269,4 +295,3 @@ window.scan = {
     }
   },
 };
-
