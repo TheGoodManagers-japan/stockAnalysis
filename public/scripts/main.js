@@ -5,113 +5,104 @@ import { analyzeStock } from "./trainandpredict.js";
  * 1) DETERMINE RISK
  ***********************************************/
 function determineRisk(stock) {
-  // Calculate volatility
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
 
-  // Classify based on volatility and market cap
   let riskLevel = "medium";
   if (volatility > 0.5 || stock.marketCap < 1e11) {
-    riskLevel = "high"; // High risk for volatile or small-cap stocks
+    riskLevel = "high";
   } else if (volatility < 0.2 && stock.marketCap > 5e11) {
-    riskLevel = "low"; // Low risk for stable, large-cap stocks
+    riskLevel = "low";
   }
   return riskLevel;
 }
 
-/***********************************************
- * 2) CALCULATE STOP-LOSS AND TARGET
- ***********************************************/
+/**
+ * Example: Stop-loss logic that ensures we don't place the stop
+ * too far below the current price (for a short-term trade).
+ */
 function calculateStopLossAndTarget(stock, prediction) {
-  // Determine Risk Tolerance
+  // 1) Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
   const riskMultipliers = {
     low: { stopLossFactor: 0.85, targetBoost: 0.95 },
-    medium: { stopLossFactor: 0.9, targetBoost: 1 },
-    high: { stopLossFactor: 1, targetBoost: 1.05 },
+    medium: { stopLossFactor: 0.9, targetBoost: 1.0 },
+    high: { stopLossFactor: 1.0, targetBoost: 1.05 },
   };
   const riskFactor = riskMultipliers[riskTolerance];
 
-  /*********************************************
-   * a) ATR Calculation (Mock/Simplified)
-   *********************************************/
+  // 2) ATR (simplified)
   const priceRange = stock.highPrice - stock.lowPrice;
-  // Normally, ATR is computed over multiple days,
-  // but here is a simplified approach:
   const atr = priceRange / 14;
 
-  /*********************************************
-   * b) Dynamic Stop-Loss (using a buffer)
-   *********************************************/
-  // Instead of computing separate 'atrBuffer' and 'percentageBuffer' 
-  // and then mixing them in a confusing way, 
-  // we calculate a single dynamic buffer:
-  const dynamicBuffer = Math.max(
-    1.5 * atr,            // 1.5 x ATR
-    0.1 * stock.currentPrice // 10% buffer
-  );
+  // 3) Dynamic buffer: pick whichever is bigger (1.5*ATR or 5%).
+  //    Because you have a short holding period, we reduce from 10% => 5%.
+  const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
 
-  // Tentative raw stop-loss
+  // 4) Raw Stop-Loss
   let rawStopLoss = stock.currentPrice - dynamicBuffer;
 
-  // Slight buffer above the recent low or 52-week low
-  const historicalLow = Math.max(
-    stock.lowPrice * 1.02,      // Slight buffer above recent low
-    stock.fiftyTwoWeekLow * 1.05 // Slight buffer above 52-week low
-  );
+  // 5) "Historical Low" logic:
+  //    If historicalLow is above the computed rawStopLoss, clamp it up.
+  //    But also ensure we don't push the stop above current price.
+  const dailyLowWithBuffer = stock.lowPrice * 1.02;
+  const yearLowWithBuffer = stock.fiftyTwoWeekLow * 1.05;
+  let historicalLow = Math.max(dailyLowWithBuffer, yearLowWithBuffer);
 
-  // Decide how to incorporate the historical low. 
-  // If we never want the stop-loss to go BELOW historicalLow:
+  // In some cases, historicalLow might be above currentPrice.
+  // We clamp it to avoid an invalid stop-loss above currentPrice.
+  if (historicalLow > stock.currentPrice) {
+    historicalLow = stock.currentPrice;
+  }
+
+  // Now pick whichever is higher: rawStopLoss or historicalLow
   let stopLoss = Math.max(rawStopLoss, historicalLow);
 
-  // Ensure non-negative (in case the computed stop-loss is < 0 for small stocks)
-  stopLoss = Math.max(stopLoss, 0);
+  // 6) **Short-term Max Stop-Loss**:
+  //    If your maximum allowed drop is e.g., 8% of the current price:
+  const maxStopLossPercent = 0.08; // 8%
+  const maxStopLossPrice = stock.currentPrice * (1 - maxStopLossPercent);
 
-  /*********************************************
-   * c) Predicted Growth & Target Price
-   *********************************************/
-  // Growth potential: difference between prediction & currentPrice 
-  // as a % of currentPrice
-  // We cap negative growth at -10% in this example.
+  // If the computed stopLoss is *lower* than that threshold, clamp it up.
+  if (stopLoss < maxStopLossPrice) {
+    stopLoss = maxStopLossPrice;
+  }
+
+  // If, for some weird reason, it's above currentPrice, clamp it
+  if (stopLoss > stock.currentPrice) {
+    stopLoss = stock.currentPrice * 0.99;
+  }
+
+  // 7) Growth Potential
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
+  // Cap negative growth at -10% (example).
   const growthPotential = Math.max(rawGrowth, -0.1);
 
-  // Start with currentPrice as a base
-  let targetPrice = stock.currentPrice;
-
+  // 8) Target Price
+  let targetPrice;
   if (growthPotential >= 0) {
-    // For positive growth: Weighted approach
+    // Weighted average approach
     const confidenceWeight = 0.7;
-    const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5); 
-    // Weighted average of prediction & metricsTarget
+    const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5);
     targetPrice =
-      prediction * confidenceWeight + 
-      metricsTarget * (1 - confidenceWeight);
+      prediction * confidenceWeight + metricsTarget * (1 - confidenceWeight);
   } else {
-    // For negative growth: reduce target
-    // If growthPotential = -0.1, this is effectively 90% of current price
+    // Negative => reduce from current price
     targetPrice = stock.currentPrice * (1 + growthPotential);
   }
 
-  /*********************************************
-   * d) Final Adjustments: Dividend & Risk Factor
-   *********************************************/
-  // Apply a small boost based on dividend yield (capped at 3%)
+  // 9) Dividend Boost & Risk Boost
   const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03);
+  targetPrice *= dividendBoost * riskFactor.targetBoost;
 
-  // NOTE: If you want riskier stocks to have a smaller target,
-  // you could invert the high-risk factor. However, 
-  // currently your code does this:
-  //   targetPrice *= riskFactor.targetBoost
-  targetPrice *= (dividendBoost * riskFactor.targetBoost);
-
-  // Convert results to two decimals
+  // 10) Return final (two decimals)
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
     targetPrice: parseFloat(targetPrice.toFixed(2)),
-    riskTolerance
+    riskTolerance,
   };
 }
+
 
 /***********************************************
  * 3) COMPUTE SCORE
@@ -227,10 +218,6 @@ window.scan = {
       // (A) Define the tickers on the client side
       const tickers = [
         { code: "6479.T", sector: "Electric Machinery" },
-        { code: "6501.T", sector: "Electric Machinery" },
-        { code: "6503.T", sector: "Electric Machinery" },
-        { code: "6504.T", sector: "Electric Machinery" },
-        { code: "6506.T", sector: "Electric Machinery" },
       ];
 
       // (B) We'll accumulate final refined stocks by sector
