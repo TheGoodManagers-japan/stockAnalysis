@@ -95,7 +95,7 @@ function calculateStopLossAndTarget(stock, prediction) {
  * COMPUTE SCORE - using the computed targetPrice
  ***********************************************/
 function computeScore(stock) {
-  // Weights for different factors
+  // Weights
   const weights = {
     growthPotential: 0.4,
     valuation: 0.3,
@@ -104,49 +104,39 @@ function computeScore(stock) {
     historicalPerformance: 0.05,
   };
 
-  /***********************************************
-   * a) Growth Potential (based on computed target)
-   ***********************************************/
+  // Growth Potential
   let growthPotential =
     (stock.targetPrice - stock.currentPrice) / stock.currentPrice;
 
-  // If negative, penalize more heavily (example: multiply by 0.5).
+  // If negative => entire score = 0 (hard rule)
   if (growthPotential < 0) {
-    growthPotential *= 0.5;
+    return 0;
   }
 
-  // Clamp max to +50%
-  growthPotential = Math.min(growthPotential, 0.5);
+  // If not negative, proceed
+  growthPotential = Math.min(growthPotential, 0.5); // clamp
 
-  /***********************************************
-   * b) Valuation Score
-   ***********************************************/
+  // Valuation
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
   if (stock.peRatio > 30) valuationScore *= 0.9;
   if (stock.pbRatio < 1) valuationScore *= 1.2;
   if (stock.pbRatio > 3) valuationScore *= 0.8;
-  // optionally clamp min/max, e.g. [0.5, 2], etc.
 
-  /***********************************************
-   * c) Market Stability
-   ***********************************************/
+  // Market Stability
   const priceRange = stock.highPrice - stock.lowPrice;
   const volatility = priceRange / stock.currentPrice;
-  // Higher volatility => lower stabilityScore
   const stabilityScore = 1 - Math.min(volatility, 0.5);
 
-  /***********************************************
-   * d) Dividend & Historical Performance
-   ***********************************************/
+  // Dividend
   const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
+
+  // Historical Performance
   const historicalPerformance =
     (stock.currentPrice - stock.fiftyTwoWeekLow) /
     (stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow);
 
-  /***********************************************
-   * e) Combine All for Raw Score
-   ***********************************************/
+  // Weighted Sum
   const rawScore =
     growthPotential * weights.growthPotential +
     valuationScore * weights.valuation +
@@ -154,11 +144,11 @@ function computeScore(stock) {
     dividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // Finally clamp rawScore between 0 and 1
+  // Clamp [0..1]
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
-
   return finalScore;
 }
+
 
 
 
@@ -198,7 +188,12 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       // (A) Define the tickers on the client side
-      const tickers = [{ code: "6479.T", sector: "Electric Machinery" }];
+      const tickers = [
+        { code: "7201.T", sector: "Automobiles & Auto parts" },
+        { code: "7202.T", sector: "Automobiles & Auto parts" },
+        { code: "7203.T", sector: "Automobiles & Auto parts" },
+        { code: "7205.T", sector: "Automobiles & Auto parts" },
+      ];
 
       // (B) We'll accumulate final refined stocks by sector
       const groupedBySector = {};
