@@ -189,10 +189,16 @@ window.scan = {
     try {
       // (A) Define the tickers on the client side
       const tickers = [
-        { code: "7201.T", sector: "Automobiles & Auto parts" },
-        { code: "7202.T", sector: "Automobiles & Auto parts" },
-        { code: "7203.T", sector: "Automobiles & Auto parts" },
-        { code: "7205.T", sector: "Automobiles & Auto parts" },
+        { code: "7974.T", sector: "Services" },
+        { code: "9602.T", sector: "Services" },
+        { code: "9735.T", sector: "Services" },
+        { code: "9766.T", sector: "Services" },
+        { code: "1605.T", sector: "Mining" },
+        { code: "3401.T", sector: "Textiles & Apparel" },
+        { code: "3402.T", sector: "Textiles & Apparel" },
+        { code: "3861.T", sector: "Pulp & Paper" },
+        { code: "3405.T", sector: "Chemicals" },
+        { code: "3407.T", sector: "Chemicals" },
       ];
 
       // (B) We'll accumulate final refined stocks by sector
