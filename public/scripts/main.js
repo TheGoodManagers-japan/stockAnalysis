@@ -188,155 +188,118 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       // (A) Define the tickers on the client side
-      const tickers = [
-        { code: "7974.T", sector: "Services" },
-      ];
+      const tickers = [{ code: "7974.T", sector: "Services" }];
 
-      // (B) Initialize lists for outputs
-      const sectors = [];
-      const tickersList = [];
-      const currentPrices = [];
-      const highPrices = [];
-      const lowPrices = [];
-      const openPrices = [];
-      const prevClosePrices = [];
-      const marketCaps = [];
-      const peRatios = [];
-      const pbRatios = [];
-      const dividendYields = [];
-      const fiftyTwoWeekHighs = [];
-      const fiftyTwoWeekLows = [];
-      const epsList = [];
-      const predictionsList = [];
-      const stopLosses = [];
-      const targetPrices = [];
-      const scores = [];
-
-      // (C) Loop through each ticker, fetch data, run analysis
+      // (B) Loop through each ticker, fetch data, run analysis
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
-        // 1) Fetch Yahoo data from the server
-        const result = await fetchSingleStockData(tickerObj);
-        if (!result.success) {
-          console.error("Error fetching stock analysis:", result.error);
-          throw new Error("Failed to fetch Yahoo data.");
-        }
+        try {
+          // 1) Fetch Yahoo data from the server
+          const result = await fetchSingleStockData(tickerObj);
+          if (!result.success) {
+            console.error("Error fetching stock analysis:", result.error);
+            throw new Error("Failed to fetch Yahoo data.");
+          }
 
-        // 2) Deconstruct the server response
-        const { code, sector, yahooData } = result.data;
-        if (
-          !yahooData ||
-          !yahooData.currentPrice ||
-          !yahooData.highPrice ||
-          !yahooData.lowPrice
-        ) {
-          console.error(
-            `Incomplete Yahoo data for ${code}. Aborting calculation.`
+          // 2) Deconstruct the server response
+          const { code, sector, yahooData } = result.data;
+          if (
+            !yahooData ||
+            !yahooData.currentPrice ||
+            !yahooData.highPrice ||
+            !yahooData.lowPrice
+          ) {
+            console.error(
+              `Incomplete Yahoo data for ${code}. Aborting calculation.`
+            );
+            throw new Error("Critical Yahoo data is missing.");
+          }
+
+          // 3) Build a local 'stock' object with all fields you need
+          const stock = {
+            ticker: code,
+            sector,
+            currentPrice: yahooData.currentPrice,
+            highPrice: yahooData.highPrice,
+            lowPrice: yahooData.lowPrice,
+            openPrice: yahooData.openPrice,
+            prevClosePrice: yahooData.prevClosePrice,
+            marketCap: yahooData.marketCap,
+            peRatio: yahooData.peRatio,
+            pbRatio: yahooData.pbRatio,
+            dividendYield: yahooData.dividendYield,
+            fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+            fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+            eps: yahooData.eps,
+          };
+
+          // 4) Run your ML/predictive analysis
+          console.log(`Analyzing stock: ${stock.ticker}`);
+          const predictions = await analyzeStock(stock.ticker);
+          if (!predictions || predictions.length <= 29) {
+            console.error(
+              `Insufficient predictions available for ${stock.ticker}. Aborting calculation.`
+            );
+            throw new Error("Failed to generate sufficient predictions.");
+          }
+
+          // Extract the 29th prediction
+          const prediction = predictions[29];
+          stock.predictions = predictions;
+
+          // 5) Calculate stop loss & target price
+          const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+            stock,
+            prediction
           );
-          throw new Error("Critical Yahoo data is missing.");
-        }
+          if (stopLoss === null || targetPrice === null) {
+            console.error(
+              `Failed to calculate stop loss or target price for ${stock.ticker}.`
+            );
+            throw new Error("Stop loss or target price calculation failed.");
+          }
+          stock.stopLoss = stopLoss;
+          stock.targetPrice = targetPrice;
 
-        // Add to the full list of sectors
-        sectors.push(sector);
+          // 6) Compute score
+          stock.score = computeScore(stock);
 
-        // 3) Build a local 'stock' object with all fields you need
-        const stock = {
-          ticker: code,
-          sector,
-          currentPrice: yahooData.currentPrice,
-          highPrice: yahooData.highPrice,
-          lowPrice: yahooData.lowPrice,
-          openPrice: yahooData.openPrice,
-          prevClosePrice: yahooData.prevClosePrice,
-          marketCap: yahooData.marketCap,
-          peRatio: yahooData.peRatio,
-          pbRatio: yahooData.pbRatio,
-          dividendYield: yahooData.dividendYield,
-          fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-          eps: yahooData.eps,
-        };
+          // 7) Send the processed ticker's data to Bubble
+          bubble_fn_result({
+            outputlist1: [stock.ticker],
+            outputlist2: [stock.sector],
+            outputlist3: [stock.currentPrice],
+            outputlist4: [stock.highPrice],
+            outputlist5: [stock.lowPrice],
+            outputlist6: [stock.openPrice],
+            outputlist7: [stock.prevClosePrice],
+            outputlist8: [stock.marketCap],
+            outputlist9: [stock.peRatio],
+            outputlist10: [stock.pbRatio],
+            outputlist11: [stock.dividendYield],
+            outputlist12: [stock.fiftyTwoWeekHigh],
+            outputlist13: [stock.fiftyTwoWeekLow],
+            outputlist14: [stock.eps],
+            outputlist15: [prediction],
+            outputlist16: [stock.stopLoss],
+            outputlist17: [stock.targetPrice],
+            outputlist18: [stock.score],
+          });
 
-        // 4) Run your ML/predictive analysis
-        console.log(`Analyzing stock: ${stock.ticker}`);
-        const predictions = await analyzeStock(stock.ticker);
-        if (!predictions || predictions.length <= 29) {
+
+          console.log(`Ticker ${stock.ticker} data sent to Bubble.`);
+        } catch (error) {
           console.error(
-            `Insufficient predictions available for ${stock.ticker}. Aborting calculation.`
+            `Error processing ticker ${tickerObj.code}:`,
+            error.message
           );
-          throw new Error("Failed to generate sufficient predictions.");
         }
-
-        // Extract the 29th prediction
-        const prediction = predictions[29];
-        stock.predictions = predictions;
-
-        // 5) Calculate stop loss & target price
-        const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-          stock,
-          prediction
-        );
-        if (stopLoss === null || targetPrice === null) {
-          console.error(
-            `Failed to calculate stop loss or target price for ${stock.ticker}.`
-          );
-          throw new Error("Stop loss or target price calculation failed.");
-        }
-        stock.stopLoss = stopLoss;
-        stock.targetPrice = targetPrice;
-
-        // 6) Compute score
-        stock.score = computeScore(stock);
-
-        // 7) Add stock data to respective lists
-        tickersList.push(stock.ticker);
-        currentPrices.push(stock.currentPrice);
-        highPrices.push(stock.highPrice);
-        lowPrices.push(stock.lowPrice);
-        openPrices.push(stock.openPrice);
-        prevClosePrices.push(stock.prevClosePrice);
-        marketCaps.push(stock.marketCap);
-        peRatios.push(stock.peRatio);
-        pbRatios.push(stock.pbRatio);
-        dividendYields.push(stock.dividendYield);
-        fiftyTwoWeekHighs.push(stock.fiftyTwoWeekHigh);
-        fiftyTwoWeekLows.push(stock.fiftyTwoWeekLow);
-        epsList.push(stock.eps);
-        predictionsList.push(prediction); // Only the 29th prediction is sent
-        stopLosses.push(stock.stopLoss);
-        targetPrices.push(stock.targetPrice);
-        scores.push(stock.score);
-
-        console.log(`Updated stock data for ${stock.ticker}:`, stock);
       }
-
-      // (D) Send data to Bubble
-      bubble_fn_result({
-        outputlist1: sectors, // All sectors in order of stocks
-        outputlist2: tickersList,
-        outputlist3: currentPrices,
-        outputlist4: highPrices,
-        outputlist5: lowPrices,
-        outputlist6: openPrices,
-        outputlist7: prevClosePrices,
-        outputlist8: marketCaps,
-        outputlist9: peRatios,
-        outputlist10: pbRatios,
-        outputlist11: dividendYields,
-        outputlist12: fiftyTwoWeekHighs,
-        outputlist13: fiftyTwoWeekLows,
-        outputlist14: epsList,
-        outputlist15: predictionsList, // Only the 29th prediction
-        outputlist16: stopLosses,
-        outputlist17: targetPrices,
-        outputlist18: scores,
-      });
-
-      console.log("\nData sent to Bubble successfully.");
     } catch (error) {
       console.error("Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
     }
   },
 };
+
