@@ -50,25 +50,24 @@ async function fetchHistoricalData(ticker) {
 }
 
 /**
- * Prepare Data for Training (Price-Only)
- * --------------------------------------
- * 1) We create sequences of length `sequenceLength` of *only* price.
- * 2) The next day's price is our 'output'.
- * 3) We normalize price between [0..1].
- * 4) Returns { inputTensor, outputTensor, minPrice, maxPrice }.
+ * Prepare Data for Training (Price and Volume)
+ * --------------------------------------------
+ * 1) We create sequences of length `sequenceLength` with both price and volume.
+ * 2) The next day's price is our 'output.'
+ * 3) Normalize price and volume independently.
+ * 4) Returns { inputTensor, outputTensor, minMaxData }.
  */
-function prepareData(data, sequenceLength = 30) {
+function prepareDataWithVolume(data, sequenceLength = 30) {
   const inputs = [];
   const outputs = [];
 
   // Build sequences
   for (let i = 0; i < data.length - sequenceLength; i++) {
-    // The input sequence is just the 'price' for the last 30 days
-    const inputSequence = data
-      .slice(i, i + sequenceLength)
-      .map((item) => item.price);
+    const inputSequence = data.slice(i, i + sequenceLength).map((item) => ({
+      price: item.price,
+      volume: item.volume,
+    }));
 
-    // Next day price is the "label"
     const output = data[i + sequenceLength].price;
 
     inputs.push(inputSequence);
@@ -77,29 +76,34 @@ function prepareData(data, sequenceLength = 30) {
 
   // Compute min/max for normalization
   const prices = data.map((item) => item.price);
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
+  const volumes = data.map((item) => item.volume);
+  const minMaxData = {
+    minPrice: Math.min(...prices),
+    maxPrice: Math.max(...prices),
+    minVolume: Math.min(...volumes),
+    maxVolume: Math.max(...volumes),
+  };
 
   // Normalize helper
   const normalize = (value, min, max) => (value - min) / (max - min);
 
   // Normalize all sequences
   const normalizedInputs = inputs.map((seq) =>
-    seq.map((price) => normalize(price, minPrice, maxPrice))
+    seq.map(({ price, volume }) => [
+      normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
+      normalize(volume, minMaxData.minVolume, maxVolume),
+    ])
   );
   const normalizedOutputs = outputs.map((price) =>
-    normalize(price, minPrice, maxPrice)
+    normalize(price, minMaxData.minPrice, minMaxData.maxPrice)
   );
 
   // Create Tensors
-  // inputTensor shape => [numSamples, sequenceLength, 1]
-  const inputArray = normalizedInputs.map(
-    (seq) => seq.map((price) => [price]) // wrap each price in []
-  );
-  const inputTensor = tf.tensor3d(inputArray, [
-    inputArray.length,
+  // inputTensor shape => [numSamples, sequenceLength, 2] (2 features: price, volume)
+  const inputTensor = tf.tensor3d(normalizedInputs, [
+    normalizedInputs.length,
     sequenceLength,
-    1,
+    2,
   ]);
 
   // outputTensor shape => [numSamples, 1]
@@ -108,17 +112,17 @@ function prepareData(data, sequenceLength = 30) {
     1,
   ]);
 
-  return { inputTensor, outputTensor, minPrice, maxPrice };
+  return { inputTensor, outputTensor, minMaxData };
 }
 
 /**
- * Train the Model (Price-Only)
- * ----------------------------
- * Builds a single LSTM layer with 64 units, dropout, then a dense(1).
+ * Train the Model (Price and Volume)
+ * -----------------------------------
+ * Builds a model with 64 LSTM units, dropout, and dense layers.
  */
-async function trainModel(data) {
+async function trainModelWithVolume(data) {
   const sequenceLength = 30;
-  const { inputTensor, outputTensor, minPrice, maxPrice } = prepareData(
+  const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(
     data,
     sequenceLength
   );
@@ -127,7 +131,7 @@ async function trainModel(data) {
   model.add(
     tf.layers.lstm({
       units: 64,
-      inputShape: [sequenceLength, 1],
+      inputShape: [sequenceLength, 2], // 2 features: price and volume
       returnSequences: false,
     })
   );
@@ -143,46 +147,49 @@ async function trainModel(data) {
   });
   console.log(`Model training completed.`);
 
-  // Return model + min/max so we can denormalize later
-  return { model, minPrice, maxPrice };
+  // Return model + minMaxData for denormalization
+  return { model, minMaxData };
 }
 
 /**
- * Predict the Next 30 Days (Price-Only)
- * -------------------------------------
- * 1) We take the last 30 prices as the input window.
- * 2) Predict *one day* out => denormalize => push to predictions.
- * 3) Slide the window forward by removing the oldest price & adding the new predicted price.
- * 4) Repeat 30 times to get 30 future predictions.
+ * Predict the Next 30 Days (Price and Volume)
+ * --------------------------------------------
+ * 1) Use both price and volume in the input window.
+ * 2) Predict the next day's price, denormalize, and push to predictions.
+ * 3) Slide the window forward by removing the oldest price & volume and adding the new predicted price with the last volume.
  */
-async function predictNext30Days(modelObj, latestData) {
-  const { model, minPrice, maxPrice } = modelObj;
+async function predictNext30DaysWithVolume(modelObj, latestData) {
+  const { model, minMaxData } = modelObj;
+  const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
 
-  const prices = latestData.map((item) => item.price);
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
-  // Build the initial input from the last 30 real prices
-  let currentInput = prices.map((price) =>
-    normalize(price, minPrice, maxPrice)
-  );
+  // Prepare the initial input from the last 30 days of prices and volumes
+  let currentInput = latestData.map((item) => [
+    normalize(item.price, minPrice, maxPrice),
+    normalize(item.volume, minVolume, maxVolume),
+  ]);
 
   const predictions = [];
   for (let day = 0; day < 30; day++) {
-    // Shape = [1, 30, 1] for the LSTM
-    const inputTensor = tf.tensor3d([currentInput.map((p) => [p])], [1, 30, 1]);
+    // Shape = [1, 30, 2] for the LSTM
+    const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
 
-    // Single predicted normalized price
+    // Predict the next normalized price
     const [predictedNormPrice] = model.predict(inputTensor).dataSync();
 
-    // Denormalize
+    // Denormalize the predicted price
     const predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
     predictions.push(predictedPrice);
 
-    // Shift the input window: drop oldest, add new predicted
+    // Shift the input window: drop the oldest, add the new predicted price with the last volume
     currentInput = [
       ...currentInput.slice(1),
-      normalize(predictedPrice, minPrice, maxPrice),
+      [
+        normalize(predictedPrice, minPrice, maxPrice),
+        currentInput[currentInput.length - 1][1], // Keep the last volume
+      ],
     ];
   }
 
@@ -192,12 +199,12 @@ async function predictNext30Days(modelObj, latestData) {
 
 /**
  * Main Function to Call on Client Side
- * ------------------------------------
- * 1) Fetch historical data,
- * 2) Train the LSTM model,
+ * -------------------------------------
+ * 1) Fetch historical data (including volume),
+ * 2) Train the LSTM model with price and volume,
  * 3) Predict the next 30 days *price only*.
  */
-export async function analyzeStock(ticker) {
+export async function analyzeStockWithVolume(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
 
@@ -206,13 +213,13 @@ export async function analyzeStock(ticker) {
     }
 
     // 1) Train model
-    const modelObj = await trainModel(historicalData);
+    const modelObj = await trainModelWithVolume(historicalData);
 
     // 2) Take last 30 days as input
     const latestData = historicalData.slice(-30);
 
     // 3) Predict next 30 days
-    const predictions = await predictNext30Days(modelObj, latestData);
+    const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
     return predictions;
