@@ -76,12 +76,12 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
 
   // Compute min/max for normalization
   const prices = data.map((item) => item.price);
-  const volumes = data.map((item) => item.volume);
+  const volumes = data.map((item) => item.volume); // Added maxVolume definition
   const minMaxData = {
     minPrice: Math.min(...prices),
     maxPrice: Math.max(...prices),
     minVolume: Math.min(...volumes),
-    maxVolume: Math.max(...volumes),
+    maxVolume: Math.max(...volumes), // Define maxVolume correctly
   };
 
   // Normalize helper
@@ -91,7 +91,7 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
   const normalizedInputs = inputs.map((seq) =>
     seq.map(({ price, volume }) => [
       normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
-      normalize(volume, minMaxData.minVolume, maxVolume),
+      normalize(volume, minMaxData.minVolume, minMaxData.maxVolume), // Proper normalization of volume
     ])
   );
   const normalizedOutputs = outputs.map((price) =>
@@ -99,14 +99,12 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
   );
 
   // Create Tensors
-  // inputTensor shape => [numSamples, sequenceLength, 2] (2 features: price, volume)
   const inputTensor = tf.tensor3d(normalizedInputs, [
     normalizedInputs.length,
     sequenceLength,
-    2,
+    2, // Two features: price and volume
   ]);
 
-  // outputTensor shape => [numSamples, 1]
   const outputTensor = tf.tensor2d(normalizedOutputs, [
     normalizedOutputs.length,
     1,
