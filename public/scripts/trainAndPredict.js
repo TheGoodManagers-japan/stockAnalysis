@@ -204,7 +204,7 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
  * 2) Train the LSTM model with price and volume,
  * 3) Predict the next 30 days *price only*.
  */
-export async function analyzeStockWithVolume(ticker) {
+export async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
 
