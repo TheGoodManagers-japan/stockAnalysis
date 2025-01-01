@@ -189,14 +189,6 @@ window.scan = {
     try {
       // (A) Define the tickers on the client side
       const tickers = [
-        { code: "4502.T", sector: "Pharmaceuticals" },
-        { code: "4503.T", sector: "Pharmaceuticals" },
-        { code: "4506.T", sector: "Pharmaceuticals" },
-        { code: "4507.T", sector: "Pharmaceuticals" },
-        { code: "4519.T", sector: "Pharmaceuticals" },
-        { code: "4523.T", sector: "Pharmaceuticals" },
-        { code: "4568.T", sector: "Pharmaceuticals" },
-        { code: "4578.T", sector: "Pharmaceuticals" },
         { code: "6479.T", sector: "Electric Machinery" },
         { code: "6501.T", sector: "Electric Machinery" },
         { code: "6503.T", sector: "Electric Machinery" },
