@@ -1,5 +1,4 @@
-
-// Custom headers for Yahoo Finance requestss
+// Custom headers for Yahoo Finance requests (not strictly necessary here)
 const customHeaders = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -50,47 +49,60 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-
-
-// Prepare Data for Training
+/**
+ * Prepare Data for Training (Price-Only)
+ * --------------------------------------
+ * 1) We create sequences of length `sequenceLength` of *only* price.
+ * 2) The next day's price is our 'output'.
+ * 3) We normalize price between [0..1].
+ * 4) Returns { inputTensor, outputTensor, minPrice, maxPrice }.
+ */
 function prepareData(data, sequenceLength = 30) {
   const inputs = [];
   const outputs = [];
 
+  // Build sequences
   for (let i = 0; i < data.length - sequenceLength; i++) {
+    // The input sequence is just the 'price' for the last 30 days
     const inputSequence = data
       .slice(i, i + sequenceLength)
-      .map((item) => [item.price, item.volume]);
+      .map((item) => item.price);
+
+    // Next day price is the "label"
     const output = data[i + sequenceLength].price;
+
     inputs.push(inputSequence);
     outputs.push(output);
   }
 
+  // Compute min/max for normalization
   const prices = data.map((item) => item.price);
-  const volumes = data.map((item) => item.volume);
-
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
-  const minVolume = Math.min(...volumes);
-  const maxVolume = Math.max(...volumes);
 
+  // Normalize helper
   const normalize = (value, min, max) => (value - min) / (max - min);
 
+  // Normalize all sequences
   const normalizedInputs = inputs.map((seq) =>
-    seq.map(([price, volume]) => [
-      normalize(price, minPrice, maxPrice),
-      normalize(volume, minVolume, maxVolume),
-    ])
+    seq.map((price) => normalize(price, minPrice, maxPrice))
   );
   const normalizedOutputs = outputs.map((price) =>
     normalize(price, minPrice, maxPrice)
   );
 
-  const inputTensor = tf.tensor3d(normalizedInputs, [
-    normalizedInputs.length,
+  // Create Tensors
+  // inputTensor shape => [numSamples, sequenceLength, 1]
+  const inputArray = normalizedInputs.map(
+    (seq) => seq.map((price) => [price]) // wrap each price in []
+  );
+  const inputTensor = tf.tensor3d(inputArray, [
+    inputArray.length,
     sequenceLength,
-    2,
+    1,
   ]);
+
+  // outputTensor shape => [numSamples, 1]
   const outputTensor = tf.tensor2d(normalizedOutputs, [
     normalizedOutputs.length,
     1,
@@ -99,21 +111,28 @@ function prepareData(data, sequenceLength = 30) {
   return { inputTensor, outputTensor, minPrice, maxPrice };
 }
 
-// Train the Model
+/**
+ * Train the Model (Price-Only)
+ * ----------------------------
+ * Builds a single LSTM layer with 64 units, dropout, then a dense(1).
+ */
 async function trainModel(data) {
   const sequenceLength = 30;
-  const { inputTensor, outputTensor } = prepareData(data, sequenceLength);
+  const { inputTensor, outputTensor, minPrice, maxPrice } = prepareData(
+    data,
+    sequenceLength
+  );
 
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
       units: 64,
-      inputShape: [sequenceLength, 2],
+      inputShape: [sequenceLength, 1],
       returnSequences: false,
     })
   );
   model.add(tf.layers.dropout({ rate: 0.2 }));
-  model.add(tf.layers.dense({ units: 1 })); // Output shape matches outputTensor
+  model.add(tf.layers.dense({ units: 1 })); // Output is a single price
   model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
 
   console.log(`Training model...`);
@@ -122,41 +141,48 @@ async function trainModel(data) {
     batchSize: 32,
     validationSplit: 0.2,
   });
-
   console.log(`Model training completed.`);
-  return model;
+
+  // Return model + min/max so we can denormalize later
+  return { model, minPrice, maxPrice };
 }
 
-// Predict the Next 30 Days
-async function predictNext30Days(model, latestData) {
-  const prices = latestData.map((item) => item.price);
-  const volumes = latestData.map((item) => item.volume);
+/**
+ * Predict the Next 30 Days (Price-Only)
+ * -------------------------------------
+ * 1) We take the last 30 prices as the input window.
+ * 2) Predict *one day* out => denormalize => push to predictions.
+ * 3) Slide the window forward by removing the oldest price & adding the new predicted price.
+ * 4) Repeat 30 times to get 30 future predictions.
+ */
+async function predictNext30Days(modelObj, latestData) {
+  const { model, minPrice, maxPrice } = modelObj;
 
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
+  const prices = latestData.map((item) => item.price);
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
+  // Build the initial input from the last 30 real prices
+  let currentInput = prices.map((price) =>
+    normalize(price, minPrice, maxPrice)
+  );
+
   const predictions = [];
-  let currentInput = latestData.map((item) => [
-    normalize(item.price, minPrice, maxPrice),
-    normalize(item.volume, Math.min(...volumes), Math.max(...volumes)),
-  ]);
-
   for (let day = 0; day < 30; day++) {
-    const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
-    const predictedNormalizedPrice = model.predict(inputTensor).dataSync()[0];
-    const predictedPrice = denormalize(
-      predictedNormalizedPrice,
-      minPrice,
-      maxPrice
-    );
+    // Shape = [1, 30, 1] for the LSTM
+    const inputTensor = tf.tensor3d([currentInput.map((p) => [p])], [1, 30, 1]);
 
+    // Single predicted normalized price
+    const [predictedNormPrice] = model.predict(inputTensor).dataSync();
+
+    // Denormalize
+    const predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
     predictions.push(predictedPrice);
 
+    // Shift the input window: drop oldest, add new predicted
     currentInput = [
       ...currentInput.slice(1),
-      [normalize(predictedPrice, minPrice, maxPrice), 0],
+      normalize(predictedPrice, minPrice, maxPrice),
     ];
   }
 
@@ -164,7 +190,13 @@ async function predictNext30Days(model, latestData) {
   return predictions;
 }
 
-// Main Function to Call on Client Side
+/**
+ * Main Function to Call on Client Side
+ * ------------------------------------
+ * 1) Fetch historical data,
+ * 2) Train the LSTM model,
+ * 3) Predict the next 30 days *price only*.
+ */
 export async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
@@ -173,9 +205,14 @@ export async function analyzeStock(ticker) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    const model = await trainModel(historicalData);
+    // 1) Train model
+    const modelObj = await trainModel(historicalData);
+
+    // 2) Take last 30 days as input
     const latestData = historicalData.slice(-30);
-    const predictions = await predictNext30Days(model, latestData);
+
+    // 3) Predict next 30 days
+    const predictions = await predictNext30Days(modelObj, latestData);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
     return predictions;

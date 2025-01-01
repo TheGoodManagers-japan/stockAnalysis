@@ -191,8 +191,6 @@ window.scan = {
       const tickers = [
         { code: "7974.T", sector: "Services" },
         { code: "9602.T", sector: "Services" },
-        { code: "9735.T", sector: "Services" },
-        { code: "9766.T", sector: "Services" },
         { code: "1605.T", sector: "Mining" },
         { code: "3401.T", sector: "Textiles & Apparel" },
         { code: "3402.T", sector: "Textiles & Apparel" },
@@ -201,8 +199,25 @@ window.scan = {
         { code: "3407.T", sector: "Chemicals" },
       ];
 
-      // (B) We'll accumulate final refined stocks by sector
-      const groupedBySector = {};
+      // (B) Initialize lists for outputs
+      const sectors = [];
+      const tickersList = [];
+      const currentPrices = [];
+      const highPrices = [];
+      const lowPrices = [];
+      const openPrices = [];
+      const prevClosePrices = [];
+      const marketCaps = [];
+      const peRatios = [];
+      const pbRatios = [];
+      const dividendYields = [];
+      const fiftyTwoWeekHighs = [];
+      const fiftyTwoWeekLows = [];
+      const epsList = [];
+      const predictionsList = [];
+      const stopLosses = [];
+      const targetPrices = [];
+      const scores = [];
 
       // (C) Loop through each ticker, fetch data, run analysis
       for (const tickerObj of tickers) {
@@ -229,6 +244,9 @@ window.scan = {
           throw new Error("Critical Yahoo data is missing.");
         }
 
+        // Add to the full list of sectors
+        sectors.push(sector);
+
         // 3) Build a local 'stock' object with all fields you need
         const stock = {
           ticker: code,
@@ -250,18 +268,18 @@ window.scan = {
         // 4) Run your ML/predictive analysis
         console.log(`Analyzing stock: ${stock.ticker}`);
         const predictions = await analyzeStock(stock.ticker);
-        if (!predictions || predictions.length === 0) {
+        if (!predictions || predictions.length <= 29) {
           console.error(
-            `No predictions available for ${stock.ticker}. Aborting calculation.`
+            `Insufficient predictions available for ${stock.ticker}. Aborting calculation.`
           );
-          throw new Error("Failed to generate predictions.");
+          throw new Error("Failed to generate sufficient predictions.");
         }
 
-        // 5) Merge predictions data (optional if you need them later)
-        const prediction = predictions[29]; // Use the 30th prediction
+        // Extract the 29th prediction
+        const prediction = predictions[29];
         stock.predictions = predictions;
 
-        // 6) Calculate stop loss & target price FIRST
+        // 5) Calculate stop loss & target price
         const { stopLoss, targetPrice } = calculateStopLossAndTarget(
           stock,
           prediction
@@ -275,21 +293,54 @@ window.scan = {
         stock.stopLoss = stopLoss;
         stock.targetPrice = targetPrice;
 
-        // 7) Now compute your "score" using the new approach
-        //    (which relies on stock.targetPrice)
+        // 6) Compute score
         stock.score = computeScore(stock);
 
-        // 8) Add this refined stock to the grouping by sector
-        if (!groupedBySector[stock.sector]) {
-          groupedBySector[stock.sector] = [];
-        }
-        groupedBySector[stock.sector].push(stock);
+        // 7) Add stock data to respective lists
+        tickersList.push(stock.ticker);
+        currentPrices.push(stock.currentPrice);
+        highPrices.push(stock.highPrice);
+        lowPrices.push(stock.lowPrice);
+        openPrices.push(stock.openPrice);
+        prevClosePrices.push(stock.prevClosePrice);
+        marketCaps.push(stock.marketCap);
+        peRatios.push(stock.peRatio);
+        pbRatios.push(stock.pbRatio);
+        dividendYields.push(stock.dividendYield);
+        fiftyTwoWeekHighs.push(stock.fiftyTwoWeekHigh);
+        fiftyTwoWeekLows.push(stock.fiftyTwoWeekLow);
+        epsList.push(stock.eps);
+        predictionsList.push(prediction); // Only the 29th prediction is sent
+        stopLosses.push(stock.stopLoss);
+        targetPrices.push(stock.targetPrice);
+        scores.push(stock.score);
 
         console.log(`Updated stock data for ${stock.ticker}:`, stock);
       }
 
-      // (D) Finally, log the grouped data so you see everything
-      console.log("\nFinal grouped data by sector:", groupedBySector);
+      // (D) Send data to Bubble
+      bubble_fn_result({
+        outputlist1: sectors, // All sectors in order of stocks
+        outputlist2: tickersList,
+        outputlist3: currentPrices,
+        outputlist4: highPrices,
+        outputlist5: lowPrices,
+        outputlist6: openPrices,
+        outputlist7: prevClosePrices,
+        outputlist8: marketCaps,
+        outputlist9: peRatios,
+        outputlist10: pbRatios,
+        outputlist11: dividendYields,
+        outputlist12: fiftyTwoWeekHighs,
+        outputlist13: fiftyTwoWeekLows,
+        outputlist14: epsList,
+        outputlist15: predictionsList, // Only the 29th prediction
+        outputlist16: stopLosses,
+        outputlist17: targetPrices,
+        outputlist18: scores,
+      });
+
+      console.log("\nData sent to Bubble successfully.");
     } catch (error) {
       console.error("Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
