@@ -94,60 +94,93 @@ function calculateStopLossAndTarget(stock, prediction) {
 /***********************************************
  * COMPUTE SCORE - using the computed targetPrice
  ***********************************************/
-function computeScore(stock) {
-  // Weights
+function computeScore(stock, sector) {
+  // Refined Weights
   const weights = {
-    growthPotential: 0.4,
-    valuation: 0.3,
-    marketStability: 0.2,
-    dividendBenefit: 0.05,
-    historicalPerformance: 0.05,
+    valuation: 0.35,
+    marketStability: 0.25,
+    dividendBenefit: 0.2,
+    historicalPerformance: 0.2,
   };
 
-  // Growth Potential
-  let growthPotential =
-    (stock.targetPrice - stock.currentPrice) / stock.currentPrice;
+  // Sector-Based Adjustments
+  const sectorMultipliers = {
+    Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    "Electric Machinery": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Automobiles: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    "Precision Instruments": { valuation: 1.0, stability: 1.1, dividend: 1.0 },
+    Communications: { valuation: 0.9, stability: 1.1, dividend: 1.1 },
+    Banking: { valuation: 1.3, stability: 0.8, dividend: 1.2 },
+    "Other Financial Services": {
+      valuation: 1.2,
+      stability: 0.9,
+      dividend: 1.1,
+    },
+    Securities: { valuation: 1.0, stability: 0.8, dividend: 1.2 },
+    Insurance: { valuation: 1.1, stability: 0.9, dividend: 1.3 },
+    Fishery: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Foods: { valuation: 1.0, stability: 1.2, dividend: 1.2 },
+    Retail: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Services: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Mining: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    Chemicals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    "Electric Power": { valuation: 1.0, stability: 1.2, dividend: 1.3 },
+    Gas: { valuation: 1.0, stability: 1.2, dividend: 1.3 },
+    // Add more sectors and adjustments as needed
+  };
 
-  // If negative => entire score = 0 (hard rule)
-  if (growthPotential < 0) {
-    return 0;
-  }
+  // Default multipliers for sectors not explicitly listed
+  const sectorMultiplier = sectorMultipliers[sector] || {
+    valuation: 1.0,
+    stability: 1.0,
+    dividend: 1.0,
+  };
 
-  // If not negative, proceed
-  growthPotential = Math.min(growthPotential, 0.5); // clamp
-
-  // Valuation
+  // 1. Valuation Score (Encourages low P/E and P/B ratios)
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
-  if (stock.peRatio > 30) valuationScore *= 0.9;
-  if (stock.pbRatio < 1) valuationScore *= 1.2;
-  if (stock.pbRatio > 3) valuationScore *= 0.8;
+  else if (stock.peRatio >= 15 && stock.peRatio <= 25)
+    valuationScore *= 1; // Neutral range
+  else valuationScore *= 0.8; // Penalize high P/E ratios
 
-  // Market Stability
+  if (stock.pbRatio < 1) valuationScore *= 1.2; // Very favorable
+  else if (stock.pbRatio >= 1 && stock.pbRatio <= 3)
+    valuationScore *= 1; // Neutral range
+  else valuationScore *= 0.8; // Penalize high P/B ratios
+
+  valuationScore *= sectorMultiplier.valuation; // Apply sector adjustment
+
+  // Scale to [0.5, 1.2] for better distribution
+  valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
+
+  // 2. Market Stability (Encourages lower volatility)
   const priceRange = stock.highPrice - stock.lowPrice;
-  const volatility = priceRange / stock.currentPrice;
-  const stabilityScore = 1 - Math.min(volatility, 0.5);
+  const volatility = priceRange / stock.currentPrice; // Relative volatility
+  const stabilityScore = Math.max(1 - volatility, 0.5); // Higher stability = closer to 1; clamp at 0.5
+  const adjustedStabilityScore = stabilityScore * sectorMultiplier.stability;
 
-  // Dividend
-  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
+  // 3. Dividend Benefit (Rewards higher yields, capped at 5%)
+  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05); // Normalize to a max of 5%
+  const adjustedDividendBenefit = dividendBenefit * sectorMultiplier.dividend;
 
-  // Historical Performance
-  const historicalPerformance =
-    (stock.currentPrice - stock.fiftyTwoWeekLow) /
-    (stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow);
+  // 4. Historical Performance (Encourages stocks closer to their highs)
+  const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
+  const positionInRange = (stock.currentPrice - stock.fiftyTwoWeekLow) / range; // Closer to 1 is better
+  const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1); // Clamp between 0 and 1
 
-  // Weighted Sum
+  // Weighted Sum of Scores
   const rawScore =
-    growthPotential * weights.growthPotential +
     valuationScore * weights.valuation +
-    stabilityScore * weights.marketStability +
-    dividendBenefit * weights.dividendBenefit +
+    adjustedStabilityScore * weights.marketStability +
+    adjustedDividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // Clamp [0..1]
+  // Clamp final score between 0 and 1
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
+
   return finalScore;
 }
+
 
 
 
@@ -276,7 +309,7 @@ window.scan = {
             100; // Express as percentage
 
           // 7) Compute score
-          stock.score = computeScore(stock);
+          stock.score = computeScore(stock, stock.sector);
 
           // 8) Send the processed ticker's data to Bubble
           bubble_fn_result({
