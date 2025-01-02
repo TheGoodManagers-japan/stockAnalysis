@@ -123,18 +123,29 @@ function computeScore(stock, sector) {
     Retail: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
     Services: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
     Mining: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    "Textiles & Apparel": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    "Pulp & Paper": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
     Chemicals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    Petroleum: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    Rubber: { valuation: 1.0, stability: 0.9, dividend: 1.0 },
+    "Glass & Ceramics": { valuation: 1.0, stability: 0.9, dividend: 1.0 },
+    Steel: { valuation: 1.1, stability: 0.8, dividend: 1.0 },
+    "Nonferrous Metals": { valuation: 1.0, stability: 0.8, dividend: 1.0 },
+    "Trading Companies": { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Construction: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Machinery: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Shipbuilding: { valuation: 1.2, stability: 0.7, dividend: 0.9 },
+    "Other Manufacturing": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    "Real Estate": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    "Railway & Bus": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
+    "Land Transport": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
+    "Marine Transport": { valuation: 1.1, stability: 0.8, dividend: 1.0 },
+    "Air Transport": { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    Warehousing: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
     "Electric Power": { valuation: 1.0, stability: 1.2, dividend: 1.3 },
     Gas: { valuation: 1.0, stability: 1.2, dividend: 1.3 },
-    // Add more sectors and adjustments as needed
   };
 
-  // Default multipliers for sectors not explicitly listed
-  const sectorMultiplier = sectorMultipliers[sector] || {
-    valuation: 1.0,
-    stability: 1.0,
-    dividend: 1.0,
-  };
 
   // 1. Valuation Score (Encourages low P/E and P/B ratios)
   let valuationScore = 1;
