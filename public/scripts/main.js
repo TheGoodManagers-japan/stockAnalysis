@@ -146,6 +146,12 @@ function computeScore(stock, sector) {
     Gas: { valuation: 1.0, stability: 1.2, dividend: 1.3 },
   };
 
+  const sectorMultiplier = sectorMultipliers[sector] || {
+    valuation: 1.0,
+    stability: 1.0,
+    dividend: 1.0,
+  };
+
 
   // 1. Valuation Score (Encourages low P/E and P/B ratios)
   let valuationScore = 1;
