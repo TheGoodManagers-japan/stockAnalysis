@@ -467,6 +467,7 @@ window.scan = {
         { code: "9532.T", sector: "Gas" },
       ];
 
+
       // (B) Loop through each ticker, fetch data, run analysis
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
@@ -547,7 +548,16 @@ window.scan = {
           // 7) Compute score
           stock.score = computeScore(stock, stock.sector);
 
-          // 8) Send the processed ticker's data to Bubble
+          // 8) Calculate the final weighted score
+          const weights = {
+            metrics: 0.7, // 70% weight to metrics score
+            growth: 0.3,  // 30% weight to growth potential
+          };
+          const finalScore =
+            weights.metrics * stock.score +
+            weights.growth * (growthPotential / 100); // Convert growth to a decimal
+
+          // 9) Send the processed ticker's data to Bubble
           bubble_fn_result({
             outputlist1: [stock.ticker],
             outputlist2: [stock.sector],
@@ -568,6 +578,7 @@ window.scan = {
             outputlist17: [stock.targetPrice],
             outputlist18: [stock.score],
             outputlist19: [growthPotential.toFixed(2)], // Growth Potential as a percentage
+            outputlist20: [finalScore.toFixed(2)],     // Final Weighted Score
           });
 
           console.log(`Ticker ${stock.ticker} data sent to Bubble.`);
