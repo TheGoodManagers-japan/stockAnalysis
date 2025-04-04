@@ -78,66 +78,82 @@ function determineRisk(stock) {
  * 2) CALCULATE STOP LOSS & TARGET (Revised)
  ***********************************************/
 function calculateStopLossAndTarget(stock, prediction) {
+  console.log(`\n📊 Calculating Stop Loss & Target for ${stock.ticker}`);
+
   // 1) Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
+  console.log(`🛡️ Risk Tolerance: ${riskTolerance}`);
+  
   const riskMultipliers = {
     low: { stopLossFactor: 0.85, targetBoost: 0.95 },
     medium: { stopLossFactor: 0.9, targetBoost: 1.0 },
     high: { stopLossFactor: 1.0, targetBoost: 1.05 },
   };
   const riskFactor = riskMultipliers[riskTolerance];
+  console.log("📐 Risk Factor:", riskFactor);
 
   // 2) Calculate a more accurate ATR
   const atr = calculateATR(stock.historicalData, 14);
+  console.log("📈 ATR (14-day):", atr);
 
-  // 3) Dynamic buffer (combination of ATR-based buffer and a fallback)
+  // 3) Dynamic buffer (ATR or fallback)
   const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
+  console.log("🧮 Dynamic Buffer:", dynamicBuffer);
 
   // 4) Tentative rawStopLoss
   let rawStopLoss = stock.currentPrice - dynamicBuffer;
+  console.log("🔧 Initial rawStopLoss:", rawStopLoss);
 
   // 5) Historical Floor logic
   const dailyLowFloor = stock.lowPrice * 0.995;
   const yearLowFloor = stock.fiftyTwoWeekLow * 0.995;
   let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
   if (historicalFloor > stock.currentPrice) {
-    // Safety check if floor is above currentPrice
     historicalFloor = stock.currentPrice * 0.98;
+    console.log("⚠️ Adjusted historicalFloor (was above current price):", historicalFloor);
   }
   rawStopLoss = Math.max(rawStopLoss, historicalFloor);
+  console.log("🧱 Floor-adjusted rawStopLoss:", rawStopLoss);
 
-  // 6) Clamp: short-term max stop-loss (e.g., 8% below current)
+  // 6) Clamp: short-term max stop-loss
   const maxStopLossPrice = stock.currentPrice * (1 - 0.08);
   if (rawStopLoss < maxStopLossPrice) {
     rawStopLoss = maxStopLossPrice;
+    console.log("📉 Clamped to 8% max loss:", rawStopLoss);
   }
 
-  // 7) Ensure not above currentPrice
+  // 7) Ensure stop loss is below currentPrice
   if (rawStopLoss >= stock.currentPrice) {
     rawStopLoss = stock.currentPrice * 0.99;
+    console.log("🔒 Stop loss was >= current price. Adjusted to:", rawStopLoss);
   }
+
   const stopLoss = parseFloat(rawStopLoss.toFixed(2));
+  console.log("✅ Final Stop Loss:", stopLoss);
 
   // 8) Target Price Calculation
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
-  // Example cap on negative growth at -10%
-  const growthPotential = Math.max(rawGrowth, -0.1);
+  const growthPotential = Math.max(rawGrowth, -0.1); // Cap downside
+  console.log("📊 Growth Potential:", (growthPotential * 100).toFixed(2) + "%");
 
   let targetPrice;
   if (growthPotential >= 0) {
-    // Weighted approach
     const confidenceWeight = 0.7;
     const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5);
     targetPrice =
       prediction * confidenceWeight + metricsTarget * (1 - confidenceWeight);
+    console.log("🎯 Positive growth — blended target price:", targetPrice);
   } else {
-    // Negative => reduce from current price
     targetPrice = stock.currentPrice * (1 + growthPotential);
+    console.log("📉 Negative growth — reduced target price:", targetPrice);
   }
 
-  // 9) Dividend & Risk Factor
+  // 9) Apply Dividend & Risk Boost
   const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03);
   targetPrice *= dividendBoost * riskFactor.targetBoost;
+  console.log("💰 Dividend Boost:", dividendBoost);
+  console.log("🚀 Risk-Adjusted Target Boost:", riskFactor.targetBoost);
+  console.log("✅ Final Target Price:", parseFloat(targetPrice.toFixed(2)));
 
   return {
     stopLoss: parseFloat(stopLoss.toFixed(2)),
@@ -145,6 +161,7 @@ function calculateStopLossAndTarget(stock, prediction) {
     riskTolerance,
   };
 }
+
 
 /***********************************************
  * 3) COMPUTE SCORE (Optional Improvements)
