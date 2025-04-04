@@ -49,7 +49,6 @@ function calculateATR(historicalData, period = 14) {
 
   // Simple moving average of the last `period` true ranges
   let atrSum = 0;
-  // We focus on the last `period` entries in trueRanges
   for (let i = trueRanges.length - period; i < trueRanges.length; i++) {
     atrSum += trueRanges[i];
   }
@@ -61,10 +60,8 @@ function calculateATR(historicalData, period = 14) {
  * 1) DETERMINE RISK (Revised)
  ***********************************************/
 function determineRisk(stock) {
-  // Here, we rely on stock.historicalData to compute daily volatility
   const volatility = calculateHistoricalVolatility(stock.historicalData);
 
-  // Example thresholds: adjust to your preference
   let riskLevel = "medium";
   if (volatility > 0.02 || stock.marketCap < 1e11) {
     riskLevel = "high";
@@ -83,7 +80,7 @@ function calculateStopLossAndTarget(stock, prediction) {
   // 1) Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
   console.log(`🛡️ Risk Tolerance: ${riskTolerance}`);
-  
+
   const riskMultipliers = {
     low: { stopLossFactor: 0.85, targetBoost: 0.95 },
     medium: { stopLossFactor: 0.9, targetBoost: 1.0 },
@@ -92,12 +89,12 @@ function calculateStopLossAndTarget(stock, prediction) {
   const riskFactor = riskMultipliers[riskTolerance];
   console.log("📐 Risk Factor:", riskFactor);
 
-  // 2) Calculate a more accurate ATR'
+  // 2) Calculate ATR
   console.log(`Historical data ${stock.historicalData}`);
   const atr = calculateATR(stock.historicalData, 14);
   console.log("📈 ATR (14-day):", atr);
 
-  // 3) Dynamic buffer (ATR or fallback)
+  // 3) Dynamic buffer
   const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
   console.log("🧮 Dynamic Buffer:", dynamicBuffer);
 
@@ -111,19 +108,22 @@ function calculateStopLossAndTarget(stock, prediction) {
   let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
   if (historicalFloor > stock.currentPrice) {
     historicalFloor = stock.currentPrice * 0.98;
-    console.log("⚠️ Adjusted historicalFloor (was above current price):", historicalFloor);
+    console.log(
+      "⚠️ Adjusted historicalFloor (was above current price):",
+      historicalFloor
+    );
   }
   rawStopLoss = Math.max(rawStopLoss, historicalFloor);
   console.log("🧱 Floor-adjusted rawStopLoss:", rawStopLoss);
 
-  // 6) Clamp: short-term max stop-loss
+  // 6) Clamp: short-term max stop-loss (8%)
   const maxStopLossPrice = stock.currentPrice * (1 - 0.08);
   if (rawStopLoss < maxStopLossPrice) {
     rawStopLoss = maxStopLossPrice;
     console.log("📉 Clamped to 8% max loss:", rawStopLoss);
   }
 
-  // 7) Ensure stop loss is below currentPrice
+  // 7) Ensure not above currentPrice
   if (rawStopLoss >= stock.currentPrice) {
     rawStopLoss = stock.currentPrice * 0.99;
     console.log("🔒 Stop loss was >= current price. Adjusted to:", rawStopLoss);
@@ -134,7 +134,7 @@ function calculateStopLossAndTarget(stock, prediction) {
 
   // 8) Target Price Calculation
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
-  const growthPotential = Math.max(rawGrowth, -0.1); // Cap downside
+  const growthPotential = Math.max(rawGrowth, -0.1);
   console.log("📊 Growth Potential:", (growthPotential * 100).toFixed(2) + "%");
 
   let targetPrice;
@@ -163,12 +163,10 @@ function calculateStopLossAndTarget(stock, prediction) {
   };
 }
 
-
 /***********************************************
  * 3) COMPUTE SCORE (Optional Improvements)
  ***********************************************/
 function computeScore(stock, sector) {
-  // Refined Weights
   const weights = {
     valuation: 0.35,
     marketStability: 0.25,
@@ -176,7 +174,6 @@ function computeScore(stock, sector) {
     historicalPerformance: 0.2,
   };
 
-  // Sector-Based Adjustments (same as your original)
   const sectorMultipliers = {
     Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
     "Electric Machinery": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
@@ -225,11 +222,11 @@ function computeScore(stock, sector) {
     dividend: 1.0,
   };
 
-  // 1. Valuation Score (Encourages low P/E and P/B ratios)
+  // 1) Valuation Score
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
   else if (stock.peRatio >= 15 && stock.peRatio <= 25) valuationScore *= 1;
-  else valuationScore *= 0.8; // Penalize high P/E ratios
+  else valuationScore *= 0.8;
 
   if (stock.pbRatio < 1) valuationScore *= 1.2;
   else if (stock.pbRatio >= 1 && stock.pbRatio <= 3) valuationScore *= 1;
@@ -238,41 +235,37 @@ function computeScore(stock, sector) {
   valuationScore *= sectorMultiplier.valuation;
   valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
 
-  // 2. Market Stability (Encourages lower volatility)
-  // Using historical volatility again:
+  // 2) Market Stability (volatility)
   const volatility = calculateHistoricalVolatility(stock.historicalData);
-  // Let's map it so that if volatility is 0 => stability=1, if volatility > 3% => stability=0.5
-  const maxVol = 0.03; // 3% daily as a reference
+  const maxVol = 0.03;
   const stabilityRaw = 1 - Math.min(volatility / maxVol, 1);
-  // This produces a range [0..1]. Let's shift it so the minimum is 0.5
-  const stabilityScore = 0.5 + 0.5 * stabilityRaw; // => [0.5..1]
+  const stabilityScore = 0.5 + 0.5 * stabilityRaw;
   const adjustedStabilityScore = stabilityScore * sectorMultiplier.stability;
 
-  // 3. Dividend Benefit (Rewards higher yields, capped at 5%)
+  // 3) Dividend Benefit
   const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
   const adjustedDividendBenefit = dividendBenefit * sectorMultiplier.dividend;
 
-  // 4. Historical Performance
+  // 4) Historical Performance
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
   const positionInRange =
-    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0; // fallback if range=0
+    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0;
   const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1);
 
-  // Weighted Sum of Scores
+  // Weighted Sum
   const rawScore =
     valuationScore * weights.valuation +
     adjustedStabilityScore * weights.marketStability +
     adjustedDividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // Clamp final score to [0..1]
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
 
   return finalScore;
 }
 
 /***********************************************
- * 4) FETCH SINGLE STOCK DATA (Unchanged)
+ * 4) FETCH SINGLE STOCK DATA
  ***********************************************/
 async function fetchSingleStockData(tickerObj) {
   try {
@@ -281,7 +274,7 @@ async function fetchSingleStockData(tickerObj) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: tickerObj }), // sending one ticker
+        body: JSON.stringify({ ticker: tickerObj }),
       }
     );
 
@@ -299,7 +292,7 @@ async function fetchSingleStockData(tickerObj) {
 }
 
 /***********************************************
- * 5) FETCH HISTORICAL DATA (Your Existing Method)
+ * 5) FETCH HISTORICAL DATA
  ***********************************************/
 async function fetchHistoricalData(ticker) {
   try {
@@ -308,13 +301,11 @@ async function fetchHistoricalData(ticker) {
 
     const response = await fetch(apiUrl, {
       method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
     });
 
     console.log(`Response: ${response}`);
-    const result = await response.json(); // Parse JSON response
+    const result = await response.json();
     console.log(`Response body:`, result);
 
     if (!response.ok || !result.success) {
@@ -327,11 +318,10 @@ async function fetchHistoricalData(ticker) {
     }
 
     console.log(`Historical data for ${ticker} fetched successfully.`);
-    // Ensure we have the fields we need (close, high, low, etc.)
     return result.data.map((item) => ({
       ...item,
       date: new Date(item.date),
-      // item.close, item.high, item.low, item.volume, etc. expected
+      // e.g. { close, high, low, volume } expected
     }));
   } catch (error) {
     console.error(`Error fetching historical data for ${ticker}:`, error);
@@ -346,237 +336,238 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       const tickers = [
-{code:"4151.T",sector:"Pharmaceuticals"},
-{code:"4502.T",sector:"Pharmaceuticals"},
-{code:"4503.T",sector:"Pharmaceuticals"},
-{code:"4506.T",sector:"Pharmaceuticals"},
-{code:"4507.T",sector:"Pharmaceuticals"},
-{code:"4519.T",sector:"Pharmaceuticals"},
-{code:"4523.T",sector:"Pharmaceuticals"},
-{code:"4568.T",sector:"Pharmaceuticals"},
-{code:"4578.T",sector:"Pharmaceuticals"},
-{code:"6479.T",sector:"Electric Machinery"},
-{code:"6501.T",sector:"Electric Machinery"},
-{code:"6503.T",sector:"Electric Machinery"},
-{code:"6504.T",sector:"Electric Machinery"},
-{code:"6506.T",sector:"Electric Machinery"},
-{code:"6526.T",sector:"Electric Machinery"},
-{code:"6594.T",sector:"Electric Machinery"},
-{code:"6645.T",sector:"Electric Machinery"},
-{code:"6674.T",sector:"Electric Machinery"},
-{code:"6701.T",sector:"Electric Machinery"},
-{code:"6702.T",sector:"Electric Machinery"},
-{code:"6723.T",sector:"Electric Machinery"},
-{code:"6724.T",sector:"Electric Machinery"},
-{code:"6752.T",sector:"Electric Machinery"},
-{code:"6753.T",sector:"Electric Machinery"},
-{code:"6758.T",sector:"Electric Machinery"},
-{code:"6762.T",sector:"Electric Machinery"},
-{code:"6770.T",sector:"Electric Machinery"},
-{code:"6841.T",sector:"Electric Machinery"},
-{code:"6857.T",sector:"Electric Machinery"},
-{code:"6861.T",sector:"Electric Machinery"},
-{code:"6902.T",sector:"Electric Machinery"},
-{code:"6920.T",sector:"Electric Machinery"},
-{code:"6952.T",sector:"Electric Machinery"},
-{code:"6954.T",sector:"Electric Machinery"},
-{code:"6971.T",sector:"Electric Machinery"},
-{code:"6976.T",sector:"Electric Machinery"},
-{code:"6981.T",sector:"Electric Machinery"},
-{code:"7735.T",sector:"Electric Machinery"},
-{code:"7751.T",sector:"Electric Machinery"},
-{code:"7752.T",sector:"Electric Machinery"},
-{code:"8035.T",sector:"Electric Machinery"},
-{code:"7201.T",sector:"Automobiles & Auto parts"},
-{code:"7202.T",sector:"Automobiles & Auto parts"},
-{code:"7203.T",sector:"Automobiles & Auto parts"},
-{code:"7205.T",sector:"Automobiles & Auto parts"},
-{code:"7211.T",sector:"Automobiles & Auto parts"},
-{code:"7261.T",sector:"Automobiles & Auto parts"},
-{code:"7267.T",sector:"Automobiles & Auto parts"},
-{code:"7269.T",sector:"Automobiles & Auto parts"},
-{code:"7270.T",sector:"Automobiles & Auto parts"},
-{code:"7272.T",sector:"Automobiles & Auto parts"},
-{code:"4543.T",sector:"Precision Instruments"},
-{code:"4902.T",sector:"Precision Instruments"},
-{code:"6146.T",sector:"Precision Instruments"},
-{code:"7731.T",sector:"Precision Instruments"},
-{code:"7733.T",sector:"Precision Instruments"},
-{code:"7741.T",sector:"Precision Instruments"},
-{code:"7762.T",sector:"Precision Instruments"},
-{code:"9432.T",sector:"Communications"},
-{code:"9433.T",sector:"Communications"},
-{code:"9434.T",sector:"Communications"},
-{code:"9613.T",sector:"Communications"},
-{code:"9984.T",sector:"Communications"},
-{code:"5831.T",sector:"Banking"},
-{code:"7186.T",sector:"Banking"},
-{code:"8304.T",sector:"Banking"},
-{code:"8306.T",sector:"Banking"},
-{code:"8308.T",sector:"Banking"},
-{code:"8309.T",sector:"Banking"},
-{code:"8316.T",sector:"Banking"},
-{code:"8331.T",sector:"Banking"},
-{code:"8354.T",sector:"Banking"},
-{code:"8411.T",sector:"Banking"},
-{code:"8253.T",sector:"Other Financial Services"},
-{code:"8591.T",sector:"Other Financial Services"},
-{code:"8697.T",sector:"Other Financial Services"},
-{code:"8601.T",sector:"Securities"},
-{code:"8604.T",sector:"Securities"},
-{code:"8630.T",sector:"Insurance"},
-{code:"8725.T",sector:"Insurance"},
-{code:"8750.T",sector:"Insurance"},
-{code:"8766.T",sector:"Insurance"},
-{code:"8795.T",sector:"Insurance"},
-{code:"1332.T",sector:"Fishery"},
-{code:"2002.T",sector:"Foods"},
-{code:"2269.T",sector:"Foods"},
-{code:"2282.T",sector:"Foods"},
-{code:"2501.T",sector:"Foods"},
-{code:"2502.T",sector:"Foods"},
-{code:"2503.T",sector:"Foods"},
-{code:"2801.T",sector:"Foods"},
-{code:"2802.T",sector:"Foods"},
-{code:"2871.T",sector:"Foods"},
-{code:"2914.T",sector:"Foods"},
-{code:"3086.T",sector:"Retail"},
-{code:"3092.T",sector:"Retail"},
-{code:"3099.T",sector:"Retail"},
-{code:"3382.T",sector:"Retail"},
-{code:"7453.T",sector:"Retail"},
-{code:"8233.T",sector:"Retail"},
-{code:"8252.T",sector:"Retail"},
-{code:"8267.T",sector:"Retail"},
-{code:"9843.T",sector:"Retail"},
-{code:"9983.T",sector:"Retail"},
-{code:"2413.T",sector:"Services"},
-{code:"2432.T",sector:"Services"},
-{code:"3659.T",sector:"Services"},
-{code:"4307.T",sector:"Services"},
-{code:"4324.T",sector:"Services"},
-{code:"4385.T",sector:"Services"},
-{code:"4661.T",sector:"Services"},
-{code:"4689.T",sector:"Services"},
-{code:"4704.T",sector:"Services"},
-{code:"4751.T",sector:"Services"},
-{code:"4755.T",sector:"Services"},
-{code:"6098.T",sector:"Services"},
-{code:"6178.T",sector:"Services"},
-{code:"7974.T",sector:"Services"},
-{code:"9602.T",sector:"Services"},
-{code:"9735.T",sector:"Services"},
-{code:"9766.T",sector:"Services"},
-{code:"1605.T",sector:"Mining"},
-{code:"3401.T",sector:"Textiles & Apparel"},
-{code:"3402.T",sector:"Textiles & Apparel"},
-{code:"3861.T",sector:"Pulp & Paper"},
-{code:"3405.T",sector:"Chemicals"},
-{code:"3407.T",sector:"Chemicals"},
-{code:"4004.T",sector:"Chemicals"},
-{code:"4005.T",sector:"Chemicals"},
-{code:"4021.T",sector:"Chemicals"},
-{code:"4042.T",sector:"Chemicals"},
-{code:"4043.T",sector:"Chemicals"},
-{code:"4061.T",sector:"Chemicals"},
-{code:"4063.T",sector:"Chemicals"},
-{code:"4183.T",sector:"Chemicals"},
-{code:"4188.T",sector:"Chemicals"},
-{code:"4208.T",sector:"Chemicals"},
-{code:"4452.T",sector:"Chemicals"},
-{code:"4901.T",sector:"Chemicals"},
-{code:"4911.T",sector:"Chemicals"},
-{code:"6988.T",sector:"Chemicals"},
-{code:"5019.T",sector:"Petroleum"},
-{code:"5020.T",sector:"Petroleum"},
-{code:"5101.T",sector:"Rubber"},
-{code:"5108.T",sector:"Rubber"},
-{code:"5201.T",sector:"Glass & Ceramics"},
-{code:"5214.T",sector:"Glass & Ceramics"},
-{code:"5233.T",sector:"Glass & Ceramics"},
-{code:"5301.T",sector:"Glass & Ceramics"},
-{code:"5332.T",sector:"Glass & Ceramics"},
-{code:"5333.T",sector:"Glass & Ceramics"},
-{code:"5401.T",sector:"Steel"},
-{code:"5406.T",sector:"Steel"},
-{code:"5411.T",sector:"Steel"},
-{code:"3436.T",sector:"Nonferrous Metals"},
-{code:"5706.T",sector:"Nonferrous Metals"},
-{code:"5711.T",sector:"Nonferrous Metals"},
-{code:"5713.T",sector:"Nonferrous Metals"},
-{code:"5714.T",sector:"Nonferrous Metals"},
-{code:"5801.T",sector:"Nonferrous Metals"},
-{code:"5802.T",sector:"Nonferrous Metals"},
-{code:"5803.T",sector:"Nonferrous Metals"},
-{code:"2768.T",sector:"Trading Companies"},
-{code:"8001.T",sector:"Trading Companies"},
-{code:"8002.T",sector:"Trading Companies"},
-{code:"8015.T",sector:"Trading Companies"},
-{code:"8031.T",sector:"Trading Companies"},
-{code:"8053.T",sector:"Trading Companies"},
-{code:"8058.T",sector:"Trading Companies"},
-{code:"1721.T",sector:"Construction"},
-{code:"1801.T",sector:"Construction"},
-{code:"1802.T",sector:"Construction"},
-{code:"1803.T",sector:"Construction"},
-{code:"1808.T",sector:"Construction"},
-{code:"1812.T",sector:"Construction"},
-{code:"1925.T",sector:"Construction"},
-{code:"1928.T",sector:"Construction"},
-{code:"1963.T",sector:"Construction"},
-{code:"5631.T",sector:"Machinery"},
-{code:"6103.T",sector:"Machinery"},
-{code:"6113.T",sector:"Machinery"},
-{code:"6273.T",sector:"Machinery"},
-{code:"6301.T",sector:"Machinery"},
-{code:"6302.T",sector:"Machinery"},
-{code:"6305.T",sector:"Machinery"},
-{code:"6326.T",sector:"Machinery"},
-{code:"6361.T",sector:"Machinery"},
-{code:"6367.T",sector:"Machinery"},
-{code:"6471.T",sector:"Machinery"},
-{code:"6472.T",sector:"Machinery"},
-{code:"6473.T",sector:"Machinery"},
-{code:"7004.T",sector:"Machinery"},
-{code:"7011.T",sector:"Machinery"},
-{code:"7013.T",sector:"Machinery"},
-{code:"7012.T",sector:"Shipbuilding"},
-{code:"7832.T",sector:"Other Manufacturing"},
-{code:"7911.T",sector:"Other Manufacturing"},
-{code:"7912.T",sector:"Other Manufacturing"},
-{code:"7951.T",sector:"Other Manufacturing"},
-{code:"3289.T",sector:"Real Estate"},
-{code:"8801.T",sector:"Real Estate"},
-{code:"8802.T",sector:"Real Estate"},
-{code:"8804.T",sector:"Real Estate"},
-{code:"8830.T",sector:"Real Estate"},
-{code:"9001.T",sector:"Railway & Bus"},
-{code:"9005.T",sector:"Railway & Bus"},
-{code:"9007.T",sector:"Railway & Bus"},
-{code:"9008.T",sector:"Railway & Bus"},
-{code:"9009.T",sector:"Railway & Bus"},
-{code:"9020.T",sector:"Railway & Bus"},
-{code:"9021.T",sector:"Railway & Bus"},
-{code:"9022.T",sector:"Railway & Bus"},
-{code:"9064.T",sector:"Land Transport"},
-{code:"9147.T",sector:"Land Transport"},
-{code:"9101.T",sector:"Marine Transport"},
-{code:"9104.T",sector:"Marine Transport"},
-{code:"9107.T",sector:"Marine Transport"},
-{code:"9201.T",sector:"Air Transport"},
-{code:"9202.T",sector:"Air Transport"},
-{code:"9301.T",sector:"Warehousing"},
-{code:"9501.T",sector:"Electric Power"},
-{code:"9502.T",sector:"Electric Power"},
-{code:"9503.T",sector:"Electric Power"},
-{code:"9531.T",sector:"Gas"},
-{code:"9532.T",sector:"Gas"}
-]
+        { code: "4151.T", sector: "Pharmaceuticals" },
+        { code: "4502.T", sector: "Pharmaceuticals" },
+        { code: "4503.T", sector: "Pharmaceuticals" },
+        { code: "4506.T", sector: "Pharmaceuticals" },
+        { code: "4507.T", sector: "Pharmaceuticals" },
+        { code: "4519.T", sector: "Pharmaceuticals" },
+        { code: "4523.T", sector: "Pharmaceuticals" },
+        { code: "4568.T", sector: "Pharmaceuticals" },
+        { code: "4578.T", sector: "Pharmaceuticals" },
+        { code: "6479.T", sector: "Electric Machinery" },
+        { code: "6501.T", sector: "Electric Machinery" },
+        { code: "6503.T", sector: "Electric Machinery" },
+        { code: "6504.T", sector: "Electric Machinery" },
+        { code: "6506.T", sector: "Electric Machinery" },
+        { code: "6526.T", sector: "Electric Machinery" },
+        { code: "6594.T", sector: "Electric Machinery" },
+        { code: "6645.T", sector: "Electric Machinery" },
+        { code: "6674.T", sector: "Electric Machinery" },
+        { code: "6701.T", sector: "Electric Machinery" },
+        { code: "6702.T", sector: "Electric Machinery" },
+        { code: "6723.T", sector: "Electric Machinery" },
+        { code: "6724.T", sector: "Electric Machinery" },
+        { code: "6752.T", sector: "Electric Machinery" },
+        { code: "6753.T", sector: "Electric Machinery" },
+        { code: "6758.T", sector: "Electric Machinery" },
+        { code: "6762.T", sector: "Electric Machinery" },
+        { code: "6770.T", sector: "Electric Machinery" },
+        { code: "6841.T", sector: "Electric Machinery" },
+        { code: "6857.T", sector: "Electric Machinery" },
+        { code: "6861.T", sector: "Electric Machinery" },
+        { code: "6902.T", sector: "Electric Machinery" },
+        { code: "6920.T", sector: "Electric Machinery" },
+        { code: "6952.T", sector: "Electric Machinery" },
+        { code: "6954.T", sector: "Electric Machinery" },
+        { code: "6971.T", sector: "Electric Machinery" },
+        { code: "6976.T", sector: "Electric Machinery" },
+        { code: "6981.T", sector: "Electric Machinery" },
+        { code: "7735.T", sector: "Electric Machinery" },
+        { code: "7751.T", sector: "Electric Machinery" },
+        { code: "7752.T", sector: "Electric Machinery" },
+        { code: "8035.T", sector: "Electric Machinery" },
+        { code: "7201.T", sector: "Automobiles & Auto parts" },
+        { code: "7202.T", sector: "Automobiles & Auto parts" },
+        { code: "7203.T", sector: "Automobiles & Auto parts" },
+        { code: "7205.T", sector: "Automobiles & Auto parts" },
+        { code: "7211.T", sector: "Automobiles & Auto parts" },
+        { code: "7261.T", sector: "Automobiles & Auto parts" },
+        { code: "7267.T", sector: "Automobiles & Auto parts" },
+        { code: "7269.T", sector: "Automobiles & Auto parts" },
+        { code: "7270.T", sector: "Automobiles & Auto parts" },
+        { code: "7272.T", sector: "Automobiles & Auto parts" },
+        { code: "4543.T", sector: "Precision Instruments" },
+        { code: "4902.T", sector: "Precision Instruments" },
+        { code: "6146.T", sector: "Precision Instruments" },
+        { code: "7731.T", sector: "Precision Instruments" },
+        { code: "7733.T", sector: "Precision Instruments" },
+        { code: "7741.T", sector: "Precision Instruments" },
+        { code: "7762.T", sector: "Precision Instruments" },
+        { code: "9432.T", sector: "Communications" },
+        { code: "9433.T", sector: "Communications" },
+        { code: "9434.T", sector: "Communications" },
+        { code: "9613.T", sector: "Communications" },
+        { code: "9984.T", sector: "Communications" },
+        { code: "5831.T", sector: "Banking" },
+        { code: "7186.T", sector: "Banking" },
+        { code: "8304.T", sector: "Banking" },
+        { code: "8306.T", sector: "Banking" },
+        { code: "8308.T", sector: "Banking" },
+        { code: "8309.T", sector: "Banking" },
+        { code: "8316.T", sector: "Banking" },
+        { code: "8331.T", sector: "Banking" },
+        { code: "8354.T", sector: "Banking" },
+        { code: "8411.T", sector: "Banking" },
+        { code: "8253.T", sector: "Other Financial Services" },
+        { code: "8591.T", sector: "Other Financial Services" },
+        { code: "8697.T", sector: "Other Financial Services" },
+        { code: "8601.T", sector: "Securities" },
+        { code: "8604.T", sector: "Securities" },
+        { code: "8630.T", sector: "Insurance" },
+        { code: "8725.T", sector: "Insurance" },
+        { code: "8750.T", sector: "Insurance" },
+        { code: "8766.T", sector: "Insurance" },
+        { code: "8795.T", sector: "Insurance" },
+        { code: "1332.T", sector: "Fishery" },
+        { code: "2002.T", sector: "Foods" },
+        { code: "2269.T", sector: "Foods" },
+        { code: "2282.T", sector: "Foods" },
+        { code: "2501.T", sector: "Foods" },
+        { code: "2502.T", sector: "Foods" },
+        { code: "2503.T", sector: "Foods" },
+        { code: "2801.T", sector: "Foods" },
+        { code: "2802.T", sector: "Foods" },
+        { code: "2871.T", sector: "Foods" },
+        { code: "2914.T", sector: "Foods" },
+        { code: "3086.T", sector: "Retail" },
+        { code: "3092.T", sector: "Retail" },
+        { code: "3099.T", sector: "Retail" },
+        { code: "3382.T", sector: "Retail" },
+        { code: "7453.T", sector: "Retail" },
+        { code: "8233.T", sector: "Retail" },
+        { code: "8252.T", sector: "Retail" },
+        { code: "8267.T", sector: "Retail" },
+        { code: "9843.T", sector: "Retail" },
+        { code: "9983.T", sector: "Retail" },
+        { code: "2413.T", sector: "Services" },
+        { code: "2432.T", sector: "Services" },
+        { code: "3659.T", sector: "Services" },
+        { code: "4307.T", sector: "Services" },
+        { code: "4324.T", sector: "Services" },
+        { code: "4385.T", sector: "Services" },
+        { code: "4661.T", sector: "Services" },
+        { code: "4689.T", sector: "Services" },
+        { code: "4704.T", sector: "Services" },
+        { code: "4751.T", sector: "Services" },
+        { code: "4755.T", sector: "Services" },
+        { code: "6098.T", sector: "Services" },
+        { code: "6178.T", sector: "Services" },
+        { code: "7974.T", sector: "Services" },
+        { code: "9602.T", sector: "Services" },
+        { code: "9735.T", sector: "Services" },
+        { code: "9766.T", sector: "Services" },
+        { code: "1605.T", sector: "Mining" },
+        { code: "3401.T", sector: "Textiles & Apparel" },
+        { code: "3402.T", sector: "Textiles & Apparel" },
+        { code: "3861.T", sector: "Pulp & Paper" },
+        { code: "3405.T", sector: "Chemicals" },
+        { code: "3407.T", sector: "Chemicals" },
+        { code: "4004.T", sector: "Chemicals" },
+        { code: "4005.T", sector: "Chemicals" },
+        { code: "4021.T", sector: "Chemicals" },
+        { code: "4042.T", sector: "Chemicals" },
+        { code: "4043.T", sector: "Chemicals" },
+        { code: "4061.T", sector: "Chemicals" },
+        { code: "4063.T", sector: "Chemicals" },
+        { code: "4183.T", sector: "Chemicals" },
+        { code: "4188.T", sector: "Chemicals" },
+        { code: "4208.T", sector: "Chemicals" },
+        { code: "4452.T", sector: "Chemicals" },
+        { code: "4901.T", sector: "Chemicals" },
+        { code: "4911.T", sector: "Chemicals" },
+        { code: "6988.T", sector: "Chemicals" },
+        { code: "5019.T", sector: "Petroleum" },
+        { code: "5020.T", sector: "Petroleum" },
+        { code: "5101.T", sector: "Rubber" },
+        { code: "5108.T", sector: "Rubber" },
+        { code: "5201.T", sector: "Glass & Ceramics" },
+        { code: "5214.T", sector: "Glass & Ceramics" },
+        { code: "5233.T", sector: "Glass & Ceramics" },
+        { code: "5301.T", sector: "Glass & Ceramics" },
+        { code: "5332.T", sector: "Glass & Ceramics" },
+        { code: "5333.T", sector: "Glass & Ceramics" },
+        { code: "5401.T", sector: "Steel" },
+        { code: "5406.T", sector: "Steel" },
+        { code: "5411.T", sector: "Steel" },
+        { code: "3436.T", sector: "Nonferrous Metals" },
+        { code: "5706.T", sector: "Nonferrous Metals" },
+        { code: "5711.T", sector: "Nonferrous Metals" },
+        { code: "5713.T", sector: "Nonferrous Metals" },
+        { code: "5714.T", sector: "Nonferrous Metals" },
+        { code: "5801.T", sector: "Nonferrous Metals" },
+        { code: "5802.T", sector: "Nonferrous Metals" },
+        { code: "5803.T", sector: "Nonferrous Metals" },
+        { code: "2768.T", sector: "Trading Companies" },
+        { code: "8001.T", sector: "Trading Companies" },
+        { code: "8002.T", sector: "Trading Companies" },
+        { code: "8015.T", sector: "Trading Companies" },
+        { code: "8031.T", sector: "Trading Companies" },
+        { code: "8053.T", sector: "Trading Companies" },
+        { code: "8058.T", sector: "Trading Companies" },
+        { code: "1721.T", sector: "Construction" },
+        { code: "1801.T", sector: "Construction" },
+        { code: "1802.T", sector: "Construction" },
+        { code: "1803.T", sector: "Construction" },
+        { code: "1808.T", sector: "Construction" },
+        { code: "1812.T", sector: "Construction" },
+        { code: "1925.T", sector: "Construction" },
+        { code: "1928.T", sector: "Construction" },
+        { code: "1963.T", sector: "Construction" },
+        { code: "5631.T", sector: "Machinery" },
+        { code: "6103.T", sector: "Machinery" },
+        { code: "6113.T", sector: "Machinery" },
+        { code: "6273.T", sector: "Machinery" },
+        { code: "6301.T", sector: "Machinery" },
+        { code: "6302.T", sector: "Machinery" },
+        { code: "6305.T", sector: "Machinery" },
+        { code: "6326.T", sector: "Machinery" },
+        { code: "6361.T", sector: "Machinery" },
+        { code: "6367.T", sector: "Machinery" },
+        { code: "6471.T", sector: "Machinery" },
+        { code: "6472.T", sector: "Machinery" },
+        { code: "6473.T", sector: "Machinery" },
+        { code: "7004.T", sector: "Machinery" },
+        { code: "7011.T", sector: "Machinery" },
+        { code: "7013.T", sector: "Machinery" },
+        { code: "7012.T", sector: "Shipbuilding" },
+        { code: "7832.T", sector: "Other Manufacturing" },
+        { code: "7911.T", sector: "Other Manufacturing" },
+        { code: "7912.T", sector: "Other Manufacturing" },
+        { code: "7951.T", sector: "Other Manufacturing" },
+        { code: "3289.T", sector: "Real Estate" },
+        { code: "8801.T", sector: "Real Estate" },
+        { code: "8802.T", sector: "Real Estate" },
+        { code: "8804.T", sector: "Real Estate" },
+        { code: "8830.T", sector: "Real Estate" },
+        { code: "9001.T", sector: "Railway & Bus" },
+        { code: "9005.T", sector: "Railway & Bus" },
+        { code: "9007.T", sector: "Railway & Bus" },
+        { code: "9008.T", sector: "Railway & Bus" },
+        { code: "9009.T", sector: "Railway & Bus" },
+        { code: "9020.T", sector: "Railway & Bus" },
+        { code: "9021.T", sector: "Railway & Bus" },
+        { code: "9022.T", sector: "Railway & Bus" },
+        { code: "9064.T", sector: "Land Transport" },
+        { code: "9147.T", sector: "Land Transport" },
+        { code: "9101.T", sector: "Marine Transport" },
+        { code: "9104.T", sector: "Marine Transport" },
+        { code: "9107.T", sector: "Marine Transport" },
+        { code: "9201.T", sector: "Air Transport" },
+        { code: "9202.T", sector: "Air Transport" },
+        { code: "9301.T", sector: "Warehousing" },
+        { code: "9501.T", sector: "Electric Power" },
+        { code: "9502.T", sector: "Electric Power" },
+        { code: "9503.T", sector: "Electric Power" },
+        { code: "9531.T", sector: "Gas" },
+        { code: "9532.T", sector: "Gas" },
+      ];
 
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
         try {
+          // 1) Fetch Yahoo data
           const result = await fetchSingleStockData(tickerObj);
           if (!result.success) {
             console.error("Error fetching stock analysis:", result.error);
@@ -596,6 +587,7 @@ window.scan = {
             throw new Error("Critical Yahoo data is missing.");
           }
 
+          // 2) Build stock object
           const stock = {
             ticker: code,
             sector,
@@ -613,9 +605,11 @@ window.scan = {
             eps: yahooData.eps,
           };
 
+          // 3) Fetch historical data for ATR/volatility
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || [];
 
+          // 4) Analyze with ML for next 30 days
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
@@ -625,9 +619,11 @@ window.scan = {
             throw new Error("Failed to generate sufficient predictions.");
           }
 
+          // 5) Use the 30th day (index 29)
           const prediction = predictions[29];
           stock.predictions = predictions;
 
+          // 6) Calculate Stop Loss & Target
           const { stopLoss, targetPrice } = calculateStopLossAndTarget(
             stock,
             prediction
@@ -638,16 +634,18 @@ window.scan = {
             );
             throw new Error("Stop loss or target price calculation failed.");
           }
-
           stock.stopLoss = stopLoss;
           stock.targetPrice = targetPrice;
 
+          // 7) Compute growth potential
           const growthPotential =
             ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
             100;
 
+          // 8) Compute fundamental/technical score
           stock.score = computeScore(stock, stock.sector);
 
+          // 9) Combine them => finalScore
           const weights = { metrics: 0.7, growth: 0.3 };
           const finalScore =
             weights.metrics * stock.score +
@@ -657,7 +655,7 @@ window.scan = {
           stock.growthPotential = parseFloat(growthPotential.toFixed(2));
           stock.finalScore = parseFloat(finalScore.toFixed(2));
 
-          // ✅ Send stock with Bubble key format
+          // 10) Send data in Bubble key format
           const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
@@ -696,8 +694,6 @@ window.scan = {
     }
   },
 };
-
-
 
 /***********************************************
  * 7) SCAN CURRENT PRICE (Unchanged)
@@ -753,12 +749,11 @@ window.scanCurrentPrice = {
 };
 
 /***********************************************
- * 8) TRAIN & PREDICT (Your existing code)
+ * 8) TRAIN & PREDICT (With DAILY Clamping)
  ***********************************************/
-// As provided in your "trainandpredict.js" or wherever you keep it.
-// Keeping it here for completeness:
 
-// Custom headers, if needed
+// If you want daily clamping, swap out predictNext30DaysWithVolume with the code below.
+
 const customHeaders = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -766,13 +761,8 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
-// Initialize Bottleneck from the CDN
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
-/**
- * Prepare Data for Training (Price and Volume)
- * (Same logic as you had before)
- */
 function prepareDataWithVolume(data, sequenceLength = 30) {
   const inputs = [];
   const outputs = [];
@@ -821,9 +811,6 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
   return { inputTensor, outputTensor, minMaxData };
 }
 
-/**
- * Train the Model (Price and Volume)
- */
 async function trainModelWithVolume(data) {
   const sequenceLength = 30;
   const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(
@@ -855,7 +842,10 @@ async function trainModelWithVolume(data) {
 }
 
 /**
- * Predict the Next 30 Days (Price and Volume)
+ * PREDICT THE NEXT 30 DAYS (DAILY CLAMP)
+ * ---------------------------------------
+ * This approach clamps daily changes to ±6% from the previous day's price.
+ * Adjust the percentage to your preference.
  */
 async function predictNext30DaysWithVolume(modelObj, latestData) {
   const { model, minMaxData } = modelObj;
@@ -864,6 +854,9 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
+  // We'll start from the last real close in 'latestData'
+  const lastRealClose = latestData[latestData.length - 1].close;
+
   // Prepare the initial input
   let currentInput = latestData.map((item) => [
     normalize(item.price, minPrice, maxPrice),
@@ -871,46 +864,56 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
   ]);
 
   const predictions = [];
+  let prevDayPrice = lastRealClose; // used for daily clamp
+
   for (let day = 0; day < 30; day++) {
     const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
     const [predictedNormPrice] = model.predict(inputTensor).dataSync();
-    const predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
+    let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
+
+    // DAILY CLAMP EXAMPLE: ±6% from previous day
+    const maxUpside = prevDayPrice * 1.06;
+    const maxDownside = prevDayPrice * 0.94;
+    if (predictedPrice > maxUpside) {
+      predictedPrice = maxUpside;
+    } else if (predictedPrice < maxDownside) {
+      predictedPrice = maxDownside;
+    }
+
     predictions.push(predictedPrice);
 
-    // Shift window: drop the oldest, add new predicted with last volume
+    // Slide the window for next day
     currentInput = [
       ...currentInput.slice(1),
       [
         normalize(predictedPrice, minPrice, maxPrice),
-        // keep the same volume as the last day
         currentInput[currentInput.length - 1][1],
       ],
     ];
+    prevDayPrice = predictedPrice; // update for tomorrow's clamp
   }
 
-  console.log(`Predicted prices for the next 30 days:`, predictions);
+  console.log(
+    `Predicted prices (daily-clamped) for the next 30 days:`,
+    predictions
+  );
   return predictions;
 }
 
-/**
- * Main Function to Analyze a Single Ticker
- */
 export async function analyzeStock(ticker) {
   try {
-    // fetchHistoricalData is the function above
     const historicalData = await fetchHistoricalData(ticker);
 
     if (historicalData.length < 30) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    // 1) Train model
     const modelObj = await trainModelWithVolume(historicalData);
 
-    // 2) Last 30 days as input
+    // Use the last 30 real days as input
     const latestData = historicalData.slice(-30);
 
-    // 3) Predict next 30 days
+    // Predict 30 days with daily clamp
     const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
