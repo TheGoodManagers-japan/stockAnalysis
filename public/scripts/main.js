@@ -92,7 +92,8 @@ function calculateStopLossAndTarget(stock, prediction) {
   const riskFactor = riskMultipliers[riskTolerance];
   console.log("📐 Risk Factor:", riskFactor);
 
-  // 2) Calculate a more accurate ATR
+  // 2) Calculate a more accurate ATR'
+  console.log(`Historical data ${stock.historicalData}`);
   const atr = calculateATR(stock.historicalData, 14);
   console.log("📈 ATR (14-day):", atr);
 
