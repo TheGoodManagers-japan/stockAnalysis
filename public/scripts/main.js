@@ -327,28 +327,21 @@ async function fetchHistoricalData(ticker) {
 window.scan = {
   async fetchStockAnalysis() {
     try {
-      // (A) Define the tickers on the client side
       const tickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
         // Add more tickers if you wish
       ];
 
-      // ✅ Collect all processed stocks here
-      const allStocks = [];
-
-      // (B) Loop through each ticker
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
         try {
-          // 1) Fetch Yahoo data (current stats)
           const result = await fetchSingleStockData(tickerObj);
           if (!result.success) {
             console.error("Error fetching stock analysis:", result.error);
             throw new Error("Failed to fetch Yahoo data.");
           }
 
-          // 2) Deconstruct the server response
           const { code, sector, yahooData } = result.data;
           if (
             !yahooData ||
@@ -362,7 +355,6 @@ window.scan = {
             throw new Error("Critical Yahoo data is missing.");
           }
 
-          // 3) Build a local 'stock' object with all fields you need
           const stock = {
             ticker: code,
             sector,
@@ -380,11 +372,9 @@ window.scan = {
             eps: yahooData.eps,
           };
 
-          // 3b) Fetch Historical Data for ATR & Volatility
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || [];
 
-          // 4) Run ML/predictive analysis (30-day predictions)
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
@@ -394,11 +384,9 @@ window.scan = {
             throw new Error("Failed to generate sufficient predictions.");
           }
 
-          // Extract the 29th prediction
           const prediction = predictions[29];
           stock.predictions = predictions;
 
-          // 5) Calculate stop loss & target price
           const { stopLoss, targetPrice } = calculateStopLossAndTarget(
             stock,
             prediction
@@ -409,30 +397,27 @@ window.scan = {
             );
             throw new Error("Stop loss or target price calculation failed.");
           }
+
           stock.stopLoss = stopLoss;
           stock.targetPrice = targetPrice;
 
-          // 6) Compute growth potential
           const growthPotential =
             ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
             100;
 
-          // 7) Compute score
           stock.score = computeScore(stock, stock.sector);
 
-          // 8) Final weighted score
           const weights = { metrics: 0.7, growth: 0.3 };
           const finalScore =
             weights.metrics * stock.score +
             weights.growth * (growthPotential / 100);
 
-          // 9) Attach calculated fields
           stock.prediction = prediction;
           stock.growthPotential = parseFloat(growthPotential.toFixed(2));
           stock.finalScore = parseFloat(finalScore.toFixed(2));
 
-          // ✅ Push to final output array
-          allStocks.push({
+          // ✅ Send stock with Bubble key format
+          const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
             _api_c2_currentPrice: stock.currentPrice,
@@ -453,9 +438,10 @@ window.scan = {
             _api_c2_score: stock.score,
             _api_c2_growthPotential: stock.growthPotential,
             _api_c2_finalScore: stock.finalScore,
-          });
+          };
 
-          console.log(`✅ Processed ${stock.ticker}`);
+          console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+          bubble_fn_result(stockObject);
         } catch (error) {
           console.error(
             `❌ Error processing ticker ${tickerObj.code}:`,
@@ -463,16 +449,13 @@ window.scan = {
           );
         }
       }
-
-      // ✅ Final: send everything at once
-      console.log("📤 Sending all stock data to Bubble:", allStocks);
-      bubble_fn_result(allStocks);
     } catch (error) {
       console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
     }
   },
 };
+
 
 
 /***********************************************
