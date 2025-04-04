@@ -39,7 +39,6 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-
 // API handler for historical data
 // Allowed domains
 const allowedOrigins = [
@@ -77,12 +76,10 @@ module.exports = async (req, res) => {
     const data = await fetchHistoricalData(ticker); // Use your fetchHistoricalData function
 
     if (!data || data.length === 0) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: `No historical data available for ${ticker}`,
-        });
+      return res.status(404).json({
+        success: false,
+        message: `No historical data available for ${ticker}`,
+      });
     }
 
     // Return the fetched data

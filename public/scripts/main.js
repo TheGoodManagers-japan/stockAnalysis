@@ -1,22 +1,82 @@
-import { analyzeStock } from "./trainandpredict.js";
+/***********************************************
+ * 0) HELPER FUNCTIONS FOR VOLATILITY & ATR
+ ***********************************************/
+/**
+ * Calculate the standard deviation of daily log returns.
+ * @param {Array} historicalData - array of daily objects [{ date, open, high, low, close, ...}, ...].
+ * @returns {number} stdDev - the standard deviation of daily log returns.
+ */
+function calculateHistoricalVolatility(historicalData) {
+  if (!historicalData || historicalData.length < 2) return 0;
 
+  const logReturns = [];
+  for (let i = 1; i < historicalData.length; i++) {
+    const prevClose = historicalData[i - 1].close;
+    const currClose = historicalData[i].close;
+    if (prevClose > 0 && currClose > 0) {
+      logReturns.push(Math.log(currClose / prevClose));
+    }
+  }
+
+  const mean =
+    logReturns.reduce((acc, val) => acc + val, 0) / (logReturns.length || 1);
+  const variance =
+    logReturns.reduce((acc, val) => acc + (val - mean) ** 2, 0) /
+    (logReturns.length || 1);
+
+  return Math.sqrt(variance);
+}
+
+/**
+ * Calculate a more accurate ATR (Average True Range) over a given period (default 14 days).
+ * @param {Array} historicalData - array of daily data: [{ high, low, close }, ...].
+ * @param {number} period
+ */
+function calculateATR(historicalData, period = 14) {
+  if (!historicalData || historicalData.length < period + 1) return 0;
+
+  const trueRanges = [];
+  for (let i = 1; i < historicalData.length; i++) {
+    const { high, low, close } = historicalData[i];
+    const prevClose = historicalData[i - 1].close;
+
+    const range1 = high - low;
+    const range2 = Math.abs(high - prevClose);
+    const range3 = Math.abs(low - prevClose);
+
+    trueRanges.push(Math.max(range1, range2, range3));
+  }
+
+  // Simple moving average of the last `period` true ranges
+  let atrSum = 0;
+  // We focus on the last `period` entries in trueRanges
+  for (let i = trueRanges.length - period; i < trueRanges.length; i++) {
+    atrSum += trueRanges[i];
+  }
+  const atr = atrSum / period;
+  return atr;
+}
 
 /***********************************************
- * 1) DETERMINE RISK
+ * 1) DETERMINE RISK (Revised)
  ***********************************************/
 function determineRisk(stock) {
-  const priceRange = stock.highPrice - stock.lowPrice;
-  const volatility = priceRange / stock.currentPrice;
+  // Here, we rely on stock.historicalData to compute daily volatility
+  const volatility = calculateHistoricalVolatility(stock.historicalData);
 
+  // Example thresholds: adjust to your preference
   let riskLevel = "medium";
-  if (volatility > 0.5 || stock.marketCap < 1e11) {
+  if (volatility > 0.02 || stock.marketCap < 1e11) {
     riskLevel = "high";
-  } else if (volatility < 0.2 && stock.marketCap > 5e11) {
+  } else if (volatility < 0.01 && stock.marketCap > 5e11) {
     riskLevel = "low";
   }
   return riskLevel;
 }
 
+/***********************************************
+ * 2) CALCULATE STOP LOSS & TARGET (Revised)
+ ***********************************************/
 function calculateStopLossAndTarget(stock, prediction) {
   // 1) Determine Risk Tolerance
   const riskTolerance = determineRisk(stock);
@@ -27,11 +87,10 @@ function calculateStopLossAndTarget(stock, prediction) {
   };
   const riskFactor = riskMultipliers[riskTolerance];
 
-  // 2) ATR (simplified)
-  const priceRange = stock.highPrice - stock.lowPrice;
-  const atr = priceRange / 14;
+  // 2) Calculate a more accurate ATR
+  const atr = calculateATR(stock.historicalData, 14);
 
-  // 3) Dynamic buffer
+  // 3) Dynamic buffer (combination of ATR-based buffer and a fallback)
   const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
 
   // 4) Tentative rawStopLoss
@@ -42,28 +101,26 @@ function calculateStopLossAndTarget(stock, prediction) {
   const yearLowFloor = stock.fiftyTwoWeekLow * 0.995;
   let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
   if (historicalFloor > stock.currentPrice) {
+    // Safety check if floor is above currentPrice
     historicalFloor = stock.currentPrice * 0.98;
   }
-
-  // 6) Combine rawStopLoss with historicalFloor
   rawStopLoss = Math.max(rawStopLoss, historicalFloor);
 
-  // 7) Short-term max stop-loss (clamp to max 8% below current)
+  // 6) Clamp: short-term max stop-loss (e.g., 8% below current)
   const maxStopLossPrice = stock.currentPrice * (1 - 0.08);
   if (rawStopLoss < maxStopLossPrice) {
     rawStopLoss = maxStopLossPrice;
   }
 
-  // 8) Final clamp: ensure not above currentPrice
+  // 7) Ensure not above currentPrice
   if (rawStopLoss >= stock.currentPrice) {
     rawStopLoss = stock.currentPrice * 0.99;
   }
-
   const stopLoss = parseFloat(rawStopLoss.toFixed(2));
 
-  // 9) Target Price Calculation
+  // 8) Target Price Calculation
   const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
-  // Example: cap negative growth at -10%
+  // Example cap on negative growth at -10%
   const growthPotential = Math.max(rawGrowth, -0.1);
 
   let targetPrice;
@@ -78,7 +135,7 @@ function calculateStopLossAndTarget(stock, prediction) {
     targetPrice = stock.currentPrice * (1 + growthPotential);
   }
 
-  // Dividend & Risk Factor
+  // 9) Dividend & Risk Factor
   const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03);
   targetPrice *= dividendBoost * riskFactor.targetBoost;
 
@@ -89,10 +146,8 @@ function calculateStopLossAndTarget(stock, prediction) {
   };
 }
 
-
-
 /***********************************************
- * COMPUTE SCORE - using the computed targetPrice
+ * 3) COMPUTE SCORE (Optional Improvements)
  ***********************************************/
 function computeScore(stock, sector) {
   // Refined Weights
@@ -103,7 +158,7 @@ function computeScore(stock, sector) {
     historicalPerformance: 0.2,
   };
 
-  // Sector-Based Adjustments
+  // Sector-Based Adjustments (same as your original)
   const sectorMultipliers = {
     Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
     "Electric Machinery": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
@@ -152,38 +207,38 @@ function computeScore(stock, sector) {
     dividend: 1.0,
   };
 
-
   // 1. Valuation Score (Encourages low P/E and P/B ratios)
   let valuationScore = 1;
   if (stock.peRatio < 15) valuationScore *= 1.1;
-  else if (stock.peRatio >= 15 && stock.peRatio <= 25)
-    valuationScore *= 1; // Neutral range
+  else if (stock.peRatio >= 15 && stock.peRatio <= 25) valuationScore *= 1;
   else valuationScore *= 0.8; // Penalize high P/E ratios
 
-  if (stock.pbRatio < 1) valuationScore *= 1.2; // Very favorable
-  else if (stock.pbRatio >= 1 && stock.pbRatio <= 3)
-    valuationScore *= 1; // Neutral range
-  else valuationScore *= 0.8; // Penalize high P/B ratios
+  if (stock.pbRatio < 1) valuationScore *= 1.2;
+  else if (stock.pbRatio >= 1 && stock.pbRatio <= 3) valuationScore *= 1;
+  else valuationScore *= 0.8;
 
-  valuationScore *= sectorMultiplier.valuation; // Apply sector adjustment
-
-  // Scale to [0.5, 1.2] for better distribution
+  valuationScore *= sectorMultiplier.valuation;
   valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
 
   // 2. Market Stability (Encourages lower volatility)
-  const priceRange = stock.highPrice - stock.lowPrice;
-  const volatility = priceRange / stock.currentPrice; // Relative volatility
-  const stabilityScore = Math.max(1 - volatility, 0.5); // Higher stability = closer to 1; clamp at 0.5
+  // Using historical volatility again:
+  const volatility = calculateHistoricalVolatility(stock.historicalData);
+  // Let's map it so that if volatility is 0 => stability=1, if volatility > 3% => stability=0.5
+  const maxVol = 0.03; // 3% daily as a reference
+  const stabilityRaw = 1 - Math.min(volatility / maxVol, 1);
+  // This produces a range [0..1]. Let's shift it so the minimum is 0.5
+  const stabilityScore = 0.5 + 0.5 * stabilityRaw; // => [0.5..1]
   const adjustedStabilityScore = stabilityScore * sectorMultiplier.stability;
 
   // 3. Dividend Benefit (Rewards higher yields, capped at 5%)
-  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05); // Normalize to a max of 5%
+  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
   const adjustedDividendBenefit = dividendBenefit * sectorMultiplier.dividend;
 
-  // 4. Historical Performance (Encourages stocks closer to their highs)
+  // 4. Historical Performance
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
-  const positionInRange = (stock.currentPrice - stock.fiftyTwoWeekLow) / range; // Closer to 1 is better
-  const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1); // Clamp between 0 and 1
+  const positionInRange =
+    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0; // fallback if range=0
+  const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1);
 
   // Weighted Sum of Scores
   const rawScore =
@@ -192,24 +247,15 @@ function computeScore(stock, sector) {
     adjustedDividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // Clamp final score between 0 and 1
+  // Clamp final score to [0..1]
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
 
   return finalScore;
 }
 
-
-
-
-
-
-
-
-
-
-// ------------------------------------------
-// 3) Function to POST a single ticker to /api/stocks
-// ------------------------------------------
+/***********************************************
+ * 4) FETCH SINGLE STOCK DATA (Unchanged)
+ ***********************************************/
 async function fetchSingleStockData(tickerObj) {
   try {
     const response = await fetch(
@@ -225,9 +271,8 @@ async function fetchSingleStockData(tickerObj) {
       throw new Error(`HTTP error! Status: ${response.status}`);
     }
 
-    // Server should return { success: true, data: { code, sector, yahooData: {...} } }
     const data = await response.json();
-    console.log("data :",data)
+    console.log("data :", data);
     return data;
   } catch (error) {
     console.error("Fetch Error:", error.message);
@@ -235,22 +280,65 @@ async function fetchSingleStockData(tickerObj) {
   }
 }
 
+/***********************************************
+ * 5) FETCH HISTORICAL DATA (Your Existing Method)
+ ***********************************************/
+async function fetchHistoricalData(ticker) {
+  try {
+    const apiUrl = `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
+    console.log(`Fetching historical data from: ${apiUrl}`);
+
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    console.log(`Response: ${response}`);
+    const result = await response.json(); // Parse JSON response
+    console.log(`Response body:`, result);
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || `HTTP error! Status: ${response.status}`);
+    }
+
+    if (!result.data || result.data.length === 0) {
+      console.warn(`No historical data available for ${ticker}.`);
+      return [];
+    }
+
+    console.log(`Historical data for ${ticker} fetched successfully.`);
+    // Ensure we have the fields we need (close, high, low, etc.)
+    return result.data.map((item) => ({
+      ...item,
+      date: new Date(item.date),
+      // item.close, item.high, item.low, item.volume, etc. expected
+    }));
+  } catch (error) {
+    console.error(`Error fetching historical data for ${ticker}:`, error);
+    return [];
+  }
+}
+
+/***********************************************
+ * 6) SCAN LOGIC (Main Workflow)
+ ***********************************************/
 window.scan = {
   async fetchStockAnalysis() {
     try {
       // (A) Define the tickers on the client side
       const tickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
-        
+        // Add more tickers if you wish
       ];
 
-
-      // (B) Loop through each ticker, fetch data, run analysis
+      // (B) Loop through each ticker
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
         try {
-          // 1) Fetch Yahoo data from the server
+          // 1) Fetch Yahoo data (current stats)
           const result = await fetchSingleStockData(tickerObj);
           if (!result.success) {
             console.error("Error fetching stock analysis:", result.error);
@@ -289,7 +377,17 @@ window.scan = {
             eps: yahooData.eps,
           };
 
-          // 4) Run your ML/predictive analysis
+          // 3b) Fetch Historical Data for ATR & Volatility
+          const historicalData = await fetchHistoricalData(stock.ticker);
+          // If none found, we'll skip the improved ATR logic
+          if (historicalData && historicalData.length > 0) {
+            stock.historicalData = historicalData;
+          } else {
+            // fallback if no data => empty array
+            stock.historicalData = [];
+          }
+
+          // 4) Run your ML/predictive analysis (30-day predictions)
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
@@ -327,14 +425,14 @@ window.scan = {
 
           // 8) Calculate the final weighted score
           const weights = {
-            metrics: 0.7, // 70% weight to metrics score
-            growth: 0.3,  // 30% weight to growth potential
+            metrics: 0.7, // 70% weight to metrics
+            growth: 0.3, // 30% weight to growth
           };
           const finalScore =
             weights.metrics * stock.score +
-            weights.growth * (growthPotential / 100); // Convert growth to a decimal
+            weights.growth * (growthPotential / 100);
 
-          // 9) Send the processed ticker's data to Bubble
+          // 9) Send processed data to Bubble (or wherever)
           bubble_fn_result({
             outputlist1: [stock.ticker],
             outputlist2: [stock.sector],
@@ -354,8 +452,8 @@ window.scan = {
             outputlist16: [stock.stopLoss],
             outputlist17: [stock.targetPrice],
             outputlist18: [stock.score],
-            outputlist19: [growthPotential.toFixed(2)], // Growth Potential as a percentage
-            outputlist20: [finalScore.toFixed(2)],     // Final Weighted Score
+            outputlist19: [growthPotential.toFixed(2)], // percentage
+            outputlist20: [finalScore.toFixed(2)], // final score
           });
 
           console.log(`Ticker ${stock.ticker} data sent to Bubble.`);
@@ -373,28 +471,24 @@ window.scan = {
   },
 };
 
-
-
+/***********************************************
+ * 7) SCAN CURRENT PRICE (Unchanged)
+ ***********************************************/
 window.scanCurrentPrice = {
   async fetchCurrentPrices(tickers) {
     try {
-      // (A) Initialize output lists
-      const outputlist1 = []; // Tickers
-      const outputlist2 = []; // Current Prices
+      const outputlist1 = [];
+      const outputlist2 = [];
 
-      // (B) Loop through each ticker, fetch data, and prepare the outputs
       for (const ticker of tickers) {
         console.log(`\n--- Fetching current price for ${ticker} ---`);
-
         try {
-          // Fetch Yahoo data from the server
           const result = await fetchSingleStockData({ code: ticker });
           if (!result.success) {
             console.error("Error fetching stock data:", result.error);
             throw new Error("Failed to fetch Yahoo data.");
           }
 
-          // Deconstruct the server response
           const { code, yahooData } = result.data;
           if (!yahooData || !yahooData.currentPrice) {
             console.error(
@@ -403,9 +497,8 @@ window.scanCurrentPrice = {
             continue;
           }
 
-          // Add to the output lists
-          outputlist1.push(code); // Ticker
-          outputlist2.push(yahooData.currentPrice); // Current Price
+          outputlist1.push(code);
+          outputlist2.push(yahooData.currentPrice);
 
           console.log(
             `Ticker ${code}: Current Price fetched: ${yahooData.currentPrice}`
@@ -415,10 +508,9 @@ window.scanCurrentPrice = {
         }
       }
 
-      // (C) Send the final outputs to Bubble
       bubble_fn_currentPrice({
-        outputlist1: outputlist1,
-        outputlist2: outputlist2,
+        outputlist1,
+        outputlist2,
       });
 
       console.log("\nFinal output lists sent to Bubble:", {
@@ -431,3 +523,172 @@ window.scanCurrentPrice = {
     }
   },
 };
+
+/***********************************************
+ * 8) TRAIN & PREDICT (Your existing code)
+ ***********************************************/
+// As provided in your "trainandpredict.js" or wherever you keep it.
+// Keeping it here for completeness:
+
+// Custom headers, if needed
+const customHeaders = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+};
+
+// Initialize Bottleneck from the CDN
+const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
+
+/**
+ * Prepare Data for Training (Price and Volume)
+ * (Same logic as you had before)
+ */
+function prepareDataWithVolume(data, sequenceLength = 30) {
+  const inputs = [];
+  const outputs = [];
+
+  for (let i = 0; i < data.length - sequenceLength; i++) {
+    const inputSequence = data.slice(i, i + sequenceLength).map((item) => ({
+      price: item.price,
+      volume: item.volume,
+    }));
+    const output = data[i + sequenceLength].price;
+    inputs.push(inputSequence);
+    outputs.push(output);
+  }
+
+  const prices = data.map((item) => item.price);
+  const volumes = data.map((item) => item.volume);
+  const minMaxData = {
+    minPrice: Math.min(...prices),
+    maxPrice: Math.max(...prices),
+    minVolume: Math.min(...volumes),
+    maxVolume: Math.max(...volumes),
+  };
+
+  const normalize = (value, min, max) => (value - min) / (max - min);
+
+  const normalizedInputs = inputs.map((seq) =>
+    seq.map(({ price, volume }) => [
+      normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
+      normalize(volume, minMaxData.minVolume, minMaxData.maxVolume),
+    ])
+  );
+  const normalizedOutputs = outputs.map((price) =>
+    normalize(price, minMaxData.minPrice, minMaxData.maxPrice)
+  );
+
+  const inputTensor = tf.tensor3d(normalizedInputs, [
+    normalizedInputs.length,
+    sequenceLength,
+    2,
+  ]);
+  const outputTensor = tf.tensor2d(normalizedOutputs, [
+    normalizedOutputs.length,
+    1,
+  ]);
+
+  return { inputTensor, outputTensor, minMaxData };
+}
+
+/**
+ * Train the Model (Price and Volume)
+ */
+async function trainModelWithVolume(data) {
+  const sequenceLength = 30;
+  const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(
+    data,
+    sequenceLength
+  );
+
+  const model = tf.sequential();
+  model.add(
+    tf.layers.lstm({
+      units: 64,
+      inputShape: [sequenceLength, 2],
+      returnSequences: false,
+    })
+  );
+  model.add(tf.layers.dropout({ rate: 0.2 }));
+  model.add(tf.layers.dense({ units: 1 }));
+  model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
+
+  console.log(`Training model...`);
+  await model.fit(inputTensor, outputTensor, {
+    epochs: 50,
+    batchSize: 32,
+    validationSplit: 0.2,
+  });
+  console.log(`Model training completed.`);
+
+  return { model, minMaxData };
+}
+
+/**
+ * Predict the Next 30 Days (Price and Volume)
+ */
+async function predictNext30DaysWithVolume(modelObj, latestData) {
+  const { model, minMaxData } = modelObj;
+  const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
+
+  const normalize = (value, min, max) => (value - min) / (max - min);
+  const denormalize = (value, min, max) => value * (max - min) + min;
+
+  // Prepare the initial input
+  let currentInput = latestData.map((item) => [
+    normalize(item.price, minPrice, maxPrice),
+    normalize(item.volume, minVolume, maxVolume),
+  ]);
+
+  const predictions = [];
+  for (let day = 0; day < 30; day++) {
+    const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
+    const [predictedNormPrice] = model.predict(inputTensor).dataSync();
+    const predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
+    predictions.push(predictedPrice);
+
+    // Shift window: drop the oldest, add new predicted with last volume
+    currentInput = [
+      ...currentInput.slice(1),
+      [
+        normalize(predictedPrice, minPrice, maxPrice),
+        // keep the same volume as the last day
+        currentInput[currentInput.length - 1][1],
+      ],
+    ];
+  }
+
+  console.log(`Predicted prices for the next 30 days:`, predictions);
+  return predictions;
+}
+
+/**
+ * Main Function to Analyze a Single Ticker
+ */
+export async function analyzeStock(ticker) {
+  try {
+    // fetchHistoricalData is the function above
+    const historicalData = await fetchHistoricalData(ticker);
+
+    if (historicalData.length < 30) {
+      throw new Error(`Not enough data to train the model for ${ticker}.`);
+    }
+
+    // 1) Train model
+    const modelObj = await trainModelWithVolume(historicalData);
+
+    // 2) Last 30 days as input
+    const latestData = historicalData.slice(-30);
+
+    // 3) Predict next 30 days
+    const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
+
+    console.log(`Predicted prices for ${ticker}:`, predictions);
+    return predictions;
+  } catch (error) {
+    console.error(`Error analyzing stock for ${ticker}:`, error.message);
+    return [];
+  }
+}
