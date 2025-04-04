@@ -333,6 +333,9 @@ window.scan = {
         // Add more tickers if you wish
       ];
 
+      // ✅ Collect all processed stocks here
+      const allStocks = [];
+
       // (B) Loop through each ticker
       for (const tickerObj of tickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
@@ -379,20 +382,14 @@ window.scan = {
 
           // 3b) Fetch Historical Data for ATR & Volatility
           const historicalData = await fetchHistoricalData(stock.ticker);
-          // If none found, we'll skip the improved ATR logic
-          if (historicalData && historicalData.length > 0) {
-            stock.historicalData = historicalData;
-          } else {
-            // fallback if no data => empty array
-            stock.historicalData = [];
-          }
+          stock.historicalData = historicalData || [];
 
-          // 4) Run your ML/predictive analysis (30-day predictions)
+          // 4) Run ML/predictive analysis (30-day predictions)
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
             console.error(
-              `Insufficient predictions available for ${stock.ticker}. Aborting calculation.`
+              `Insufficient predictions for ${stock.ticker}. Aborting.`
             );
             throw new Error("Failed to generate sufficient predictions.");
           }
@@ -418,58 +415,65 @@ window.scan = {
           // 6) Compute growth potential
           const growthPotential =
             ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
-            100; // Express as percentage
+            100;
 
           // 7) Compute score
           stock.score = computeScore(stock, stock.sector);
 
-          // 8) Calculate the final weighted score
-          const weights = {
-            metrics: 0.7, // 70% weight to metrics
-            growth: 0.3, // 30% weight to growth
-          };
+          // 8) Final weighted score
+          const weights = { metrics: 0.7, growth: 0.3 };
           const finalScore =
             weights.metrics * stock.score +
             weights.growth * (growthPotential / 100);
 
-          // 9) Send processed data to Bubble (or wherever)
-          bubble_fn_result({
-            outputlist1: [stock.ticker],
-            outputlist2: [stock.sector],
-            outputlist3: [stock.currentPrice],
-            outputlist4: [stock.highPrice],
-            outputlist5: [stock.lowPrice],
-            outputlist6: [stock.openPrice],
-            outputlist7: [stock.prevClosePrice],
-            outputlist8: [stock.marketCap],
-            outputlist9: [stock.peRatio],
-            outputlist10: [stock.pbRatio],
-            outputlist11: [stock.dividendYield],
-            outputlist12: [stock.fiftyTwoWeekHigh],
-            outputlist13: [stock.fiftyTwoWeekLow],
-            outputlist14: [stock.eps],
-            outputlist15: [prediction],
-            outputlist16: [stock.stopLoss],
-            outputlist17: [stock.targetPrice],
-            outputlist18: [stock.score],
-            outputlist19: [growthPotential.toFixed(2)], // percentage
-            outputlist20: [finalScore.toFixed(2)], // final score
+          // 9) Attach calculated fields
+          stock.prediction = prediction;
+          stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+          stock.finalScore = parseFloat(finalScore.toFixed(2));
+
+          // ✅ Push to final output array
+          allStocks.push({
+            _api_c2_ticker: stock.ticker,
+            _api_c2_sector: stock.sector,
+            _api_c2_currentPrice: stock.currentPrice,
+            _api_c2_highPrice: stock.highPrice,
+            _api_c2_lowPrice: stock.lowPrice,
+            _api_c2_openPrice: stock.openPrice,
+            _api_c2_prevClosePrice: stock.prevClosePrice,
+            _api_c2_marketCap: stock.marketCap,
+            _api_c2_peRatio: stock.peRatio,
+            _api_c2_pbRatio: stock.pbRatio,
+            _api_c2_dividendYield: stock.dividendYield,
+            _api_c2_fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+            _api_c2_fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+            _api_c2_eps: stock.eps,
+            _api_c2_prediction: stock.prediction,
+            _api_c2_stopLoss: stock.stopLoss,
+            _api_c2_targetPrice: stock.targetPrice,
+            _api_c2_score: stock.score,
+            _api_c2_growthPotential: stock.growthPotential,
+            _api_c2_finalScore: stock.finalScore,
           });
 
-          console.log(`Ticker ${stock.ticker} data sent to Bubble.`);
+          console.log(`✅ Processed ${stock.ticker}`);
         } catch (error) {
           console.error(
-            `Error processing ticker ${tickerObj.code}:`,
+            `❌ Error processing ticker ${tickerObj.code}:`,
             error.message
           );
         }
       }
+
+      // ✅ Final: send everything at once
+      console.log("📤 Sending all stock data to Bubble:", allStocks);
+      bubble_fn_result(allStocks);
     } catch (error) {
-      console.error("Error in fetchStockAnalysis:", error.message);
+      console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
     }
   },
 };
+
 
 /***********************************************
  * 7) SCAN CURRENT PRICE (Unchanged)
