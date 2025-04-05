@@ -761,14 +761,23 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
+// Throttling requests (if needed)
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
+/**
+ * Prepares data for training by creating sequences of price and volume.
+ * Uses min-max normalization on both price and volume.
+ * @param {Array} data - Array of objects with properties {price, volume}
+ * @param {number} sequenceLength - Number of time steps per input sequence (default: 30)
+ * @returns {Object} { inputTensor, outputTensor, minMaxData }
+ */
 function prepareDataWithVolume(data, sequenceLength = 30) {
   const inputs = [];
   const outputs = [];
 
+  // Create sequences of input data and corresponding output values
   for (let i = 0; i < data.length - sequenceLength; i++) {
-    const inputSequence = data.slice(i, i + sequenceLength).map((item) => ({
+    const inputSequence = data.slice(i, i + sequenceLength).map(item => ({
       price: item.price,
       volume: item.volume,
     }));
@@ -777,8 +786,9 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
     outputs.push(output);
   }
 
-  const prices = data.map((item) => item.price);
-  const volumes = data.map((item) => item.volume);
+  // Calculate normalization parameters
+  const prices = data.map(item => item.price);
+  const volumes = data.map(item => item.volume);
   const minMaxData = {
     minPrice: Math.min(...prices),
     maxPrice: Math.max(...prices),
@@ -788,13 +798,14 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
 
   const normalize = (value, min, max) => (value - min) / (max - min);
 
-  const normalizedInputs = inputs.map((seq) =>
+  // Normalize input sequences and outputs
+  const normalizedInputs = inputs.map(seq =>
     seq.map(({ price, volume }) => [
       normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
       normalize(volume, minMaxData.minVolume, minMaxData.maxVolume),
     ])
   );
-  const normalizedOutputs = outputs.map((price) =>
+  const normalizedOutputs = outputs.map(price =>
     normalize(price, minMaxData.minPrice, minMaxData.maxPrice)
   );
 
@@ -811,6 +822,11 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
   return { inputTensor, outputTensor, minMaxData };
 }
 
+/**
+ * Trains an LSTM model using historical price and volume data.
+ * @param {Array} data - Array of objects with properties {price, volume}
+ * @returns {Object} { model, minMaxData } - Trained model and normalization parameters.
+ */
 async function trainModelWithVolume(data) {
   const sequenceLength = 30;
   const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(
@@ -818,6 +834,7 @@ async function trainModelWithVolume(data) {
     sequenceLength
   );
 
+  // Build the LSTM model
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
@@ -831,10 +848,18 @@ async function trainModelWithVolume(data) {
   model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
 
   console.log(`Training model...`);
+  
+  // Use early stopping to avoid overfitting
+  const earlyStopping = tf.callbacks.earlyStopping({
+    monitor: "val_loss",
+    patience: 5,
+  });
+
   await model.fit(inputTensor, outputTensor, {
     epochs: 50,
     batchSize: 32,
     validationSplit: 0.2,
+    callbacks: [earlyStopping],
   });
   console.log(`Model training completed.`);
 
@@ -842,38 +867,40 @@ async function trainModelWithVolume(data) {
 }
 
 /**
- * PREDICT THE NEXT 30 DAYS (DAILY CLAMP)
- * ---------------------------------------
- * This approach clamps daily changes to ±6% from the previous day's price.
- * Adjust the percentage to your preference.
+ * Predicts the next 30 days of prices using the trained model.
+ * Applies a configurable daily clamp to prevent unrealistic growth.
+ *
+ * @param {Object} modelObj - Contains the trained model and normalization parameters.
+ * @param {Array} latestData - Array of objects with properties {price, volume}
+ * @param {number} clampPercentage - Daily clamp percentage (default: 0.06 for 6%)
+ * @returns {Array} predictions - Predicted prices for the next 30 days.
  */
-async function predictNext30DaysWithVolume(modelObj, latestData) {
+async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.06) {
   const { model, minMaxData } = modelObj;
   const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
-
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
-  // We'll start from the last real close in 'latestData'
-  const lastRealClose = latestData[latestData.length - 1].close;
+  // Use the last known price from the data as the starting point
+  const lastKnownPrice = latestData[latestData.length - 1].price;
 
-  // Prepare the initial input
-  let currentInput = latestData.map((item) => [
+  // Prepare the initial input using normalized price and volume
+  let currentInput = latestData.map(item => [
     normalize(item.price, minPrice, maxPrice),
     normalize(item.volume, minVolume, maxVolume),
   ]);
 
   const predictions = [];
-  let prevDayPrice = lastRealClose; // used for daily clamp
+  let prevDayPrice = lastKnownPrice;
 
   for (let day = 0; day < 30; day++) {
     const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
-    const [predictedNormPrice] = model.predict(inputTensor).dataSync();
+    const predictedNormPrice = model.predict(inputTensor).dataSync()[0];
     let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
 
-    // DAILY CLAMP EXAMPLE: ±6% from previous day
-    const maxUpside = prevDayPrice * 1.06;
-    const maxDownside = prevDayPrice * 0.94;
+    // Clamp prediction to within ±clampPercentage of the previous day’s price
+    const maxUpside = prevDayPrice * (1 + clampPercentage);
+    const maxDownside = prevDayPrice * (1 - clampPercentage);
     if (predictedPrice > maxUpside) {
       predictedPrice = maxUpside;
     } else if (predictedPrice < maxDownside) {
@@ -882,7 +909,8 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
 
     predictions.push(predictedPrice);
 
-    // Slide the window for next day
+    // Update the input window by discarding the oldest day and adding the new prediction.
+    // For volume, we keep the last known volume as a placeholder.
     currentInput = [
       ...currentInput.slice(1),
       [
@@ -890,15 +918,13 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
         currentInput[currentInput.length - 1][1],
       ],
     ];
-    prevDayPrice = predictedPrice; // update for tomorrow's clamp
+    prevDayPrice = predictedPrice;
   }
 
-  console.log(
-    `Predicted prices (daily-clamped) for the next 30 days:`,
-    predictions
-  );
+  console.log("Predicted prices for the next 30 days:", predictions);
   return predictions;
 }
+
 
 export async function analyzeStock(ticker) {
   try {
