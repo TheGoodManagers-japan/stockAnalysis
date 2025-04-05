@@ -873,17 +873,17 @@ async function trainModelWithVolume(data) {
  *
  * @param {Object} modelObj - Contains the trained model and normalization parameters.
  * @param {Array} latestData - Array of objects with properties {price, volume}
- * @param {number} clampPercentage - Default daily clamp percentage (default: 0.06 for 6%)
- * @param {number} smoothingFactor - Weight for smoothing predictions (default: 0.5)
+ * @param {number} clampPercentage - Default daily clamp percentage (default: 0.03 for 3%)
+ * @param {number} smoothingFactor - Weight for smoothing predictions (default: 0.4)
  * @returns {Array} predictions - Predicted prices for the next 30 days.
  */
-async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.06, smoothingFactor = 0.5) {
+async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.03, smoothingFactor = 0.4) {
   const { model, minMaxData } = modelObj;
   const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
-  // Use the last known price from the data as the starting point
+  // Use the last known price as the starting point
   const lastKnownPrice = latestData[latestData.length - 1].price;
 
   // Prepare the initial input using normalized price and volume
@@ -926,7 +926,6 @@ async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage
     predictions.push(smoothedPrice);
 
     // Update the input window by discarding the oldest day and adding the new prediction.
-    // For volume, we keep the last known normalized volume as a placeholder.
     currentInput = [
       ...currentInput.slice(1),
       [
