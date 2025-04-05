@@ -1,20 +1,23 @@
 const yahooFinance = require("yahoo-finance2").default;
 
-async function fetchHistoricalData(ticker) {
+async function fetchHistoricalData(ticker, years = 3) {
   try {
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+    // Calculate the start date by subtracting the desired number of years from today.
+    const startDate = new Date();
+    startDate.setFullYear(startDate.getFullYear() - years);
     const today = new Date();
 
-    console.log(`Fetching historical data for ticker: ${ticker}`);
+    console.log(
+      `Fetching historical data for ticker: ${ticker} from ${startDate.toISOString()} to ${today.toISOString()}`
+    );
 
     const data = await yahooFinance.chart(ticker, {
-      period1: oneYearAgo,
+      period1: startDate,
       period2: today,
       interval: "1d",
     });
 
-    // Uncomment this to see the full shape of the returned object
+    // Uncomment the following line to inspect the full shape of the returned object
     // console.log(JSON.stringify(data, null, 2));
 
     if (!data || !data.quotes || data.quotes.length === 0) {
@@ -22,7 +25,7 @@ async function fetchHistoricalData(ticker) {
       return [];
     }
 
-    // Log out the "quotes" array to see if it contains what you expect
+    // Log the "quotes" array to check if it contains what you expect
     console.log(data.quotes);
 
     return data.quotes.map((quote) => ({
@@ -44,7 +47,6 @@ async function fetchHistoricalData(ticker) {
 }
 
 // API handler for historical data
-// Allowed domains
 const allowedOrigins = [
   "https://thegoodmanagers.com",
   "https://www.thegoodmanagers.com",
@@ -68,16 +70,20 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // Fetch historical data
   try {
-    const { ticker } = req.query; // Ensure `ticker` is provided in the request query
+    // Extract ticker and optional years parameter from query.
+    const { ticker, years } = req.query;
     if (!ticker) {
       return res
         .status(400)
         .json({ success: false, message: "Ticker is required" });
     }
 
-    const data = await fetchHistoricalData(ticker); // Use your fetchHistoricalData function
+    // Parse years, defaulting to 3 if not provided.
+    const numYears = years ? parseInt(years, 10) : 3;
+
+    // Fetch historical data for the extended period.
+    const data = await fetchHistoricalData(ticker, numYears);
 
     if (!data || data.length === 0) {
       return res.status(404).json({
@@ -86,8 +92,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Return the fetched data
-    console.log(`HERE: ${data}`);
+    console.log(
+      `Fetched historical data for ${ticker} over ${numYears} years.`
+    );
     res.status(200).json({ success: true, data });
   } catch (error) {
     console.error("Error in API handler:", error.message);

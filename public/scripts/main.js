@@ -605,29 +605,25 @@ window.scan = {
             eps: yahooData.eps,
           };
 
-          // 3) Fetch historical data for ATR/volatility
-          const historicalData = await fetchHistoricalData(stock.ticker);
-          stock.historicalData = historicalData || [];
+        const historicalData = await fetchHistoricalData(stock.ticker);
+        stock.historicalData = historicalData || [];
 
-          // 4) Analyze with ML for next 30 days
-          console.log(`Analyzing stock: ${stock.ticker}`);
-          const predictions = await analyzeStock(stock.ticker);
-          if (!predictions || predictions.length <= 29) {
-            console.error(
-              `Insufficient predictions for ${stock.ticker}. Aborting.`
-            );
-            throw new Error("Failed to generate sufficient predictions.");
-          }
-
-          // 5) Use the 30th day (index 29)
-          const prediction = predictions[29];
-          stock.predictions = predictions;
-
-          // 6) Calculate Stop Loss & Target
-          const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-            stock,
-            prediction
+        // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+        console.log(`Analyzing stock: ${stock.ticker}`);
+        const prediction = await analyzeStock(stock.ticker, historicalData);
+        if (prediction == null) {
+          console.error(
+            `Failed to generate prediction for ${stock.ticker}. Aborting.`
           );
+          throw new Error("Failed to generate prediction.");
+        }
+        stock.prediction = prediction;
+
+        // 5) Calculate Stop Loss & Target
+        const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+          stock,
+          prediction
+        );
           if (stopLoss === null || targetPrice === null) {
             console.error(
               `Failed to calculate stop loss or target price for ${stock.ticker}.`
@@ -761,110 +757,136 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
-// If you need Bottleneck for throttling (optional)
-// const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
+/**
+ * Helper function to compute the 7-day Simple Moving Average (SMA).
+ */
+function computeSMA(prices, window) {
+  const sma = [];
+  for (let i = 0; i < prices.length; i++) {
+    const start = Math.max(0, i - window + 1);
+    const subset = prices.slice(start, i + 1);
+    const avg = subset.reduce((sum, p) => sum + p, 0) / subset.length;
+    sma.push(avg);
+  }
+  return sma;
+}
 
 /**
- * 1) PREPARE DATA: compute daily returns from (price, volume)
+ * Helper function to compute daily return.
  */
+function computeDailyReturn(prices) {
+  const returns = [0]; // For the first day, set return as 0.
+  for (let i = 1; i < prices.length; i++) {
+    returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+  }
+  return returns;
+}
+
 /**
- * Prepares data using z‑score normalization instead of min‑max.
+ * Prepares training data for direct 30-day ahead price prediction.
+ * Each training sample consists of a 30-day sequence of [price, volume, SMA, dailyReturn] (normalized)
+ * and a target: the price 30 days after the end of the sequence.
  */
-function prepareDataWithReturns(data, sequenceLength = 30) {
-  if (data.length < sequenceLength + 1) {
-    throw new Error(`Not enough data to create sequences of length ${sequenceLength}.`);
+function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap = 30) {
+  if (data.length < sequenceLength + predictionGap) {
+    throw new Error(`Not enough data to create sequences for prediction.`);
   }
 
-  // 1) Compute daily returns
-  const returns = [];
-  for (let i = 1; i < data.length; i++) {
-    const prevP = data[i - 1].price;
-    const currP = data[i].price;
-    const ret = (prevP > 0) ? (currP - prevP) / prevP : 0;
-    returns.push(ret);
-  }
-  // Shift volumes by 1 day to align with returns
-  const volumes = data.slice(1).map(item => item.volume);
+  // Extract prices and volumes from data (assumed in chronological order)
+  const prices = data.map(item => item.price);
+  const volumes = data.map(item => item.volume);
+  
+  // Compute additional metrics: 7-day SMA and daily return.
+  const sma7 = computeSMA(prices, 7);
+  const dailyReturn = computeDailyReturn(prices);
 
-  // 2) Build sequences
+  // Compute normalization parameters for price using the training portion.
+  const trainPrices = prices.slice(0, prices.length - predictionGap);
+  const meanPrice = trainPrices.reduce((sum, p) => sum + p, 0) / trainPrices.length;
+  const stdPrice = Math.sqrt(
+    trainPrices.reduce((sum, p) => sum + Math.pow(p - meanPrice, 2), 0) / trainPrices.length
+  );
+
+  // Compute normalization parameters for volume using all data.
+  const meanVolume = volumes.reduce((sum, v) => sum + v, 0) / volumes.length;
+  const stdVolume = Math.sqrt(
+    volumes.reduce((sum, v) => sum + Math.pow(v - meanVolume, 2), 0) / volumes.length
+  );
+  
+  // Compute normalization parameters for SMA using the training portion.
+  const trainSMA = sma7.slice(0, sma7.length - predictionGap);
+  const meanSMA = trainSMA.reduce((sum, v) => sum + v, 0) / trainSMA.length;
+  const stdSMA = Math.sqrt(
+    trainSMA.reduce((sum, v) => sum + Math.pow(v - meanSMA, 2), 0) / trainSMA.length
+  );
+  
+  // Compute normalization parameters for daily return using the training portion.
+  const trainReturn = dailyReturn.slice(0, dailyReturn.length - predictionGap);
+  const meanReturn = trainReturn.reduce((sum, r) => sum + r, 0) / trainReturn.length;
+  const stdReturn = Math.sqrt(
+    trainReturn.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / trainReturn.length
+  );
+  
+  // Helper normalization function (z‑score)
+  const normalize = (val, mean, std) => (val - mean) / (std || 1);
+
   const inputs = [];
   const outputs = [];
-  for (let i = 0; i < returns.length - sequenceLength; i++) {
-    const returnSeq = returns.slice(i, i + sequenceLength);
-    const volumeSeq = volumes.slice(i, i + sequenceLength);
-    const nextDayReturn = returns[i + sequenceLength]; // label
 
-    const seq = returnSeq.map((ret, idx) => ({
-      ret,
-      vol: volumeSeq[idx],
-    }));
+  // Create training samples.
+  // For each index i, the input is the normalized sequence from i to i+sequenceLength-1,
+  // and the output is the normalized price at i+sequenceLength+predictionGap-1.
+  for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
+    const seq = [];
+    for (let j = 0; j < sequenceLength; j++) {
+      seq.push([
+        normalize(prices[i + j], meanPrice, stdPrice),
+        normalize(volumes[i + j], meanVolume, stdVolume),
+        normalize(sma7[i + j], meanSMA, stdSMA),
+        normalize(dailyReturn[i + j], meanReturn, stdReturn)
+      ]);
+    }
     inputs.push(seq);
-    outputs.push(nextDayReturn);
+
+    // Target price is at position i + sequenceLength + predictionGap - 1
+    const targetPrice = prices[i + sequenceLength + predictionGap - 1];
+    outputs.push(normalize(targetPrice, meanPrice, stdPrice));
   }
 
-  // 3) Compute mean and standard deviation for normalization
-  const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const stdReturn = Math.sqrt(returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / returns.length);
-  const meanVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-  const stdVolume = Math.sqrt(volumes.reduce((sum, v) => sum + Math.pow(v - meanVolume, 2), 0) / volumes.length);
+  // Convert inputs and outputs to tensors.
+  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 4]);
+  const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
 
-  const normalize = (val, mean, std) => {
-    return (val - mean) / (std || 1);
-  };
-
-  // 4) Normalize sequences using z‑score normalization
-  const normalizedInputs = inputs.map(seq =>
-    seq.map(({ ret, vol }) => [
-      normalize(ret, meanReturn, stdReturn),
-      normalize(vol, meanVolume, stdVolume),
-    ])
-  );
-  const normalizedOutputs = outputs.map(r => normalize(r, meanReturn, stdReturn));
-
-  // 5) Convert to Tensors
-  const inputTensor = tf.tensor3d(normalizedInputs, [
-    normalizedInputs.length,
-    sequenceLength,
-    2,
-  ]);
-  const outputTensor = tf.tensor2d(normalizedOutputs, [
-    normalizedOutputs.length,
-    1,
-  ]);
-
-  // 6) Save meta info (mean and std for both returns and volumes)
-  const lastKnownPrice = data[data.length - 1].price;
   const meta = {
-    meanReturn,
-    stdReturn,
+    meanPrice,
+    stdPrice,
     meanVolume,
     stdVolume,
-    lastKnownPrice,
+    meanSMA,
+    stdSMA,
+    meanReturn,
+    stdReturn,
+    // Save the last known price from the data for reference.
+    lastKnownPrice: prices[prices.length - 1]
   };
 
   return { inputTensor, outputTensor, meta };
 }
 
 /**
- * Trains the model on daily returns with an updated LSTM architecture.
+ * Trains a model to directly predict the stock price 30 days ahead.
  */
-async function trainModelOnReturns(data) {
+async function trainModelFor30DayAheadPrice(data) {
   const sequenceLength = 30;
-  const { inputTensor, outputTensor, meta } = prepareDataWithReturns(data, sequenceLength);
+  const predictionGap = 30;
+  const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(data, sequenceLength, predictionGap);
 
-  // Build LSTM with two layers for improved learning capacity
+  // Build a simple LSTM model with updated input shape (30 days x 4 features).
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
       units: 64,
-      inputShape: [sequenceLength, 2],
-      returnSequences: true,
-    })
-  );
-  model.add(tf.layers.dropout({ rate: 0.2 }));
-  model.add(
-    tf.layers.lstm({
-      units: 32,
+      inputShape: [sequenceLength, 4],
       returnSequences: false,
     })
   );
@@ -872,7 +894,7 @@ async function trainModelOnReturns(data) {
   model.add(tf.layers.dense({ units: 1 }));
   model.compile({ optimizer: tf.train.adam(), loss: 'meanSquaredError' });
 
-  console.log('Training model on daily returns...');
+  console.log('Training model for 30-day ahead price prediction with additional features...');
   const earlyStopping = tf.callbacks.earlyStopping({
     monitor: 'val_loss',
     patience: 5,
@@ -884,111 +906,74 @@ async function trainModelOnReturns(data) {
     validationSplit: 0.2,
     callbacks: [earlyStopping],
   });
-  console.log('Model training completed (returns).');
+  console.log('Training completed.');
 
   return { model, meta };
 }
 
 /**
- * Predicts the next 30 days of prices using the updated z‑score normalization.
+ * Predicts the stock price 30 days ahead using the trained model.
+ * The model uses the most recent 30 days of [price, volume, SMA, dailyReturn] data.
  */
-/**
- * Predicts the next 30 days of prices using daily return predictions
- * with a stricter clamping to reduce compounded errors.
- */
-/**
- * Predicts the next 30 days of prices using daily return predictions
- * with extra damping and stricter clamping to reduce compounded errors.
- */
-async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
+async function predict30DayAheadPrice(modelObj, data) {
   const { model, meta } = modelObj;
-  const { meanReturn, stdReturn, meanVolume, stdVolume } = meta;
+  const { meanPrice, stdPrice, meanVolume, stdVolume, meanSMA, stdSMA, meanReturn, stdReturn } = meta;
   const sequenceLength = 30;
 
-  // Calculate historical daily returns
-  const allReturns = [];
-  for (let i = 1; i < data.length; i++) {
-    const prevP = data[i - 1].price;
-    const currP = data[i].price;
-    const ret = prevP > 0 ? (currP - prevP) / prevP : 0;
-    allReturns.push(ret);
-  }
-  const allVolumes = data.slice(1).map(d => d.volume);
+  // Use the last 30 days from the data.
+  const recentData = data.slice(-sequenceLength);
+  const recentPrices = recentData.map(item => item.price);
+  const recentVolumes = recentData.map(item => item.volume);
+  
+  // Compute SMA and daily return for recent prices.
+  const smaRecent = computeSMA(recentPrices, 7);
+  const returnRecent = computeDailyReturn(recentPrices);
 
-  // Use the last 30 days as the starting window
-  let currentReturnWindow = allReturns.slice(-sequenceLength);
-  let currentVolumeWindow = allVolumes.slice(-sequenceLength);
+  const normSeq = recentData.map((item, idx) => [
+    (item.price - meanPrice) / (stdPrice || 1),
+    (item.volume - meanVolume) / (stdVolume || 1),
+    (smaRecent[idx] - meanSMA) / (stdSMA || 1),
+    (returnRecent[idx] - meanReturn) / (stdReturn || 1)
+  ]);
 
-  // Most recent known price
-  let lastPrice = data[data.length - 1].price;
-  const predictions = [];
-
-  // Stricter clamp: maximum daily return of 0.25%
-  const maxDailyMove = 0.0025;
-  // Damping factor to further reduce predicted returns
-  const dampingFactor = 0.8;
-
-  for (let day = 0; day < daysToPredict; day++) {
-    // Build normalized window using z-score normalization
-    const normWindow = currentReturnWindow.map((ret, i) => {
-      const vol = currentVolumeWindow[i];
-      const nRet = (ret - meanReturn) / (stdReturn || 1);
-      const nVol = (vol - meanVolume) / (stdVolume || 1);
-      return [nRet, nVol];
-    });
-
-    const inputTensor = tf.tensor3d([normWindow], [1, sequenceLength, 2]);
-    const predNormReturn = model.predict(inputTensor).dataSync()[0];
-    // Invert z-score normalization to get the predicted return
-    let predReturn = predNormReturn * stdReturn + meanReturn;
-
-    // Apply damping factor
-    predReturn *= dampingFactor;
-
-    // Clamp the predicted return to ±maxDailyMove to reduce extreme compounding effects
-    predReturn = Math.max(Math.min(predReturn, maxDailyMove), -maxDailyMove);
-
-    // Compute next day's price
-    const nextPrice = lastPrice * (1 + predReturn);
-    predictions.push(nextPrice);
-
-    // Update the prediction window
-    currentReturnWindow = [...currentReturnWindow.slice(1), predReturn];
-    currentVolumeWindow = [
-      ...currentVolumeWindow.slice(1),
-      currentVolumeWindow[currentVolumeWindow.length - 1],
-    ];
-
-    lastPrice = nextPrice;
-  }
-
-  return predictions;
+  const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 4]);
+  // Model predicts a normalized price.
+  const predNormPrice = model.predict(inputTensor).dataSync()[0];
+  // Inverse transform to get the actual predicted price.
+  const predictedPrice = predNormPrice * stdPrice + meanPrice;
+  return predictedPrice;
 }
 
-
-
 /**
- * Main orchestration: fetch data, train, and predict.
+ * Main orchestration function.
+ * It assumes that fetchHistoricalData(ticker) returns an array of objects
+ * in the form { price, volume } in chronological order.
+ * The function uses extended historical data for training and then predicts the price 30 days ahead
+ * using the most recent 30 days.
  */
 export async function analyzeStock(ticker) {
   try {
-    // Ensure you have implemented fetchHistoricalData(ticker) to return an array of { price, volume } in chronological order.
+    // Fetch extended historical data (e.g., 3 years by default)
     const historicalData = await fetchHistoricalData(ticker);
 
-    if (historicalData.length < 31) {
+    // Ensure we have enough data (for instance, at least one year)
+    if (historicalData.length < 365) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    // Train LSTM on daily returns
-    const modelObj = await trainModelOnReturns(historicalData);
+    // Train the model on the extended historical data.
+    const modelObj = await trainModelFor30DayAheadPrice(historicalData);
 
-    // Predict the next 30 days of absolute prices
-    const predictions = await predictNext30DaysReturns(modelObj, historicalData, 30);
+    // Predict the stock price 30 days from now using the last 30 days.
+    const predictedPrice = await predict30DayAheadPrice(
+      modelObj,
+      historicalData
+    );
 
-    console.log(`Predicted prices for ${ticker}:`, predictions);
-    return predictions;
+    console.log(`Predicted 30-day ahead price for ${ticker}:`, predictedPrice);
+    return predictedPrice;
   } catch (error) {
     console.error(`Error analyzing stock for ${ticker}:`, error.message);
-    return [];
+    return null;
   }
 }
