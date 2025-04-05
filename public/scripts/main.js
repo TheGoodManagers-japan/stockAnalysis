@@ -767,6 +767,9 @@ const customHeaders = {
 /**
  * 1) PREPARE DATA: compute daily returns from (price, volume)
  */
+/**
+ * Prepares data using z‑score normalization instead of min‑max.
+ */
 function prepareDataWithReturns(data, sequenceLength = 30) {
   if (data.length < sequenceLength + 1) {
     throw new Error(`Not enough data to create sequences of length ${sequenceLength}.`);
@@ -780,7 +783,7 @@ function prepareDataWithReturns(data, sequenceLength = 30) {
     const ret = (prevP > 0) ? (currP - prevP) / prevP : 0;
     returns.push(ret);
   }
-  // shift volumes by 1 day to align with those returns
+  // Shift volumes by 1 day to align with returns
   const volumes = data.slice(1).map(item => item.volume);
 
   // 2) Build sequences
@@ -799,27 +802,24 @@ function prepareDataWithReturns(data, sequenceLength = 30) {
     outputs.push(nextDayReturn);
   }
 
-  // 3) min/max for normalization
-  const minReturn = Math.min(...returns);
-  const maxReturn = Math.max(...returns);
-  const minVolume = Math.min(...volumes);
-  const maxVolume = Math.max(...volumes);
+  // 3) Compute mean and standard deviation for normalization
+  const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const stdReturn = Math.sqrt(returns.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / returns.length);
+  const meanVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+  const stdVolume = Math.sqrt(volumes.reduce((sum, v) => sum + Math.pow(v - meanVolume, 2), 0) / volumes.length);
 
-  const normalize = (val, min, max) => {
-    if (max === min) return 0.0; 
-    return (val - min) / (max - min);
+  const normalize = (val, mean, std) => {
+    return (val - mean) / (std || 1);
   };
 
-  // 4) Normalize sequences
+  // 4) Normalize sequences using z‑score normalization
   const normalizedInputs = inputs.map(seq =>
     seq.map(({ ret, vol }) => [
-      normalize(ret, minReturn, maxReturn),
-      normalize(vol, minVolume, maxVolume),
+      normalize(ret, meanReturn, stdReturn),
+      normalize(vol, meanVolume, stdVolume),
     ])
   );
-  const normalizedOutputs = outputs.map(r =>
-    normalize(r, minReturn, maxReturn)
-  );
+  const normalizedOutputs = outputs.map(r => normalize(r, meanReturn, stdReturn));
 
   // 5) Convert to Tensors
   const inputTensor = tf.tensor3d(normalizedInputs, [
@@ -832,13 +832,13 @@ function prepareDataWithReturns(data, sequenceLength = 30) {
     1,
   ]);
 
-  // 6) Save meta info
+  // 6) Save meta info (mean and std for both returns and volumes)
   const lastKnownPrice = data[data.length - 1].price;
   const meta = {
-    minReturn,
-    maxReturn,
-    minVolume,
-    maxVolume,
+    meanReturn,
+    stdReturn,
+    meanVolume,
+    stdVolume,
     lastKnownPrice,
   };
 
@@ -846,18 +846,25 @@ function prepareDataWithReturns(data, sequenceLength = 30) {
 }
 
 /**
- * 2) TRAIN MODEL ON DAILY RETURNS + VOLUME
+ * Trains the model on daily returns with an updated LSTM architecture.
  */
 async function trainModelOnReturns(data) {
   const sequenceLength = 30;
   const { inputTensor, outputTensor, meta } = prepareDataWithReturns(data, sequenceLength);
 
-  // Build LSTM
+  // Build LSTM with two layers for improved learning capacity
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
       units: 64,
       inputShape: [sequenceLength, 2],
+      returnSequences: true,
+    })
+  );
+  model.add(tf.layers.dropout({ rate: 0.2 }));
+  model.add(
+    tf.layers.lstm({
+      units: 32,
       returnSequences: false,
     })
   );
@@ -883,11 +890,11 @@ async function trainModelOnReturns(data) {
 }
 
 /**
- * 3) PREDICT NEXT 30 DAYS OF PRICES (via daily returns)
+ * Predicts the next 30 days of prices using the updated z‑score normalization.
  */
 async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   const { model, meta } = modelObj;
-  const { minReturn, maxReturn, minVolume, maxVolume } = meta;
+  const { meanReturn, stdReturn, meanVolume, stdVolume } = meta;
   const sequenceLength = 30;
 
   const allReturns = [];
@@ -899,36 +906,37 @@ async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   }
   const allVolumes = data.slice(1).map((d) => d.volume);
 
-  // last 30-day window
+  // Last 30-day window
   let currentReturnWindow = allReturns.slice(-sequenceLength);
   let currentVolumeWindow = allVolumes.slice(-sequenceLength);
 
-  // last known price
+  // Last known price
   let lastPrice = data[data.length - 1].price;
   const predictions = [];
 
   for (let day = 0; day < daysToPredict; day++) {
-    // Build normalized window
+    // Build normalized window using z‑score normalization
     const normWindow = currentReturnWindow.map((ret, i) => {
       const vol = currentVolumeWindow[i];
-      const nRet = (ret - minReturn) / (maxReturn - minReturn || 1);
-      const nVol = (vol - minVolume) / (maxVolume - minVolume || 1);
+      const nRet = (ret - meanReturn) / (stdReturn || 1);
+      const nVol = (vol - meanVolume) / (stdVolume || 1);
       return [nRet, nVol];
     });
 
     const inputTensor = tf.tensor3d([normWindow], [1, sequenceLength, 2]);
     const predNormReturn = model.predict(inputTensor).dataSync()[0];
-    let predReturn = predNormReturn * (maxReturn - minReturn) + minReturn;
+    // Inverse transform the predicted return
+    let predReturn = predNormReturn * stdReturn + meanReturn;
 
-    // *** CLAMP daily return to ±0.5% ***
+    // Clamp daily return to ±0.5%
     if (predReturn > 0.005) predReturn = 0.005;
     if (predReturn < -0.005) predReturn = -0.005;
 
-    // Convert to price
+    // Convert predicted return to next day price
     const nextPrice = lastPrice * (1 + predReturn);
     predictions.push(nextPrice);
 
-    // Shift the window
+    // Update the window by shifting and appending the predicted return.
     currentReturnWindow = [...currentReturnWindow.slice(1), predReturn];
     currentVolumeWindow = [
       ...currentVolumeWindow.slice(1),
@@ -941,14 +949,12 @@ async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   return predictions;
 }
 
-
 /**
- * 4) Main orchestration: fetch data, train, predict
+ * Main orchestration: fetch data, train, and predict.
  */
 export async function analyzeStock(ticker) {
   try {
-    // You must implement fetchHistoricalData(ticker) somewhere,
-    // returning an array of { price, volume } in chronological order
+    // Ensure you have implemented fetchHistoricalData(ticker) to return an array of { price, volume } in chronological order.
     const historicalData = await fetchHistoricalData(ticker);
 
     if (historicalData.length < 31) {
@@ -958,7 +964,7 @@ export async function analyzeStock(ticker) {
     // Train LSTM on daily returns
     const modelObj = await trainModelOnReturns(historicalData);
 
-    // Predict next 30 days of absolute prices
+    // Predict the next 30 days of absolute prices
     const predictions = await predictNext30DaysReturns(modelObj, historicalData, 30);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
