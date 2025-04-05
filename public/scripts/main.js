@@ -799,24 +799,28 @@ function winsorizeArray(arr, lowerP = 0.05, upperP = 0.95) {
   return { winsorized: arr.map(x => winsorizeVal(x, lower, upper)), lower, upper };
 }
 
-function computeSMA(prices, window) {
+/**
+ * Compute simple moving average over an array.
+ */
+function computeSMA(arr, window) {
   const sma = [];
-  for (let i = 0; i < prices.length; i++) {
+  for (let i = 0; i < arr.length; i++) {
     const start = Math.max(0, i - window + 1);
-    const subset = prices.slice(start, i + 1);
-    const avg = subset.reduce((sum, p) => sum + p, 0) / subset.length;
+    const subset = arr.slice(start, i + 1);
+    const avg = subset.reduce((sum, v) => sum + v, 0) / subset.length;
     sma.push(avg);
   }
   return sma;
 }
 
 /**
- * Helper function to compute daily return.
+ * Compute daily log return.
+ * For log prices, daily return = log(p[i]) - log(p[i-1])
  */
-function computeDailyReturn(prices) {
-  const returns = [0]; // For the first day, set return as 0.
-  for (let i = 1; i < prices.length; i++) {
-    returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
+function computeDailyLogReturn(logPrices) {
+  const returns = [0]; // First day return set to 0.
+  for (let i = 1; i < logPrices.length; i++) {
+    returns.push(logPrices[i] - logPrices[i - 1]);
   }
   return returns;
 }
@@ -836,8 +840,9 @@ function customHuberLoss(delta = 1.0) {
 
 /**
  * Prepares training data for direct 30-day ahead price prediction.
- * Each training sample consists of a 30-day sequence of [price, volume, SMA, dailyReturn] (robustly normalized)
- * and a target: the price 30 days after the end of the sequence.
+ * The model now works with log prices. Each training sample consists of a 30-day sequence of:
+ * [logPrice, volume, SMA_logPrice, dailyLogReturn] (robustly normalized),
+ * and a target: the logPrice 30 days after the end of the sequence.
  */
 function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap = 30) {
   if (data.length < sequenceLength + predictionGap) {
@@ -848,25 +853,28 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const prices = data.map(item => item.price);
   const volumes = data.map(item => item.volume);
   
-  // Compute additional metrics.
-  const sma7 = computeSMA(prices, 7);
-  const dailyReturn = computeDailyReturn(prices);
+  // Convert prices to log scale.
+  const logPrices = prices.map(p => Math.log(p));
+  
+  // Compute additional features on log scale.
+  const sma7 = computeSMA(logPrices, 7);
+  const dailyLogReturn = computeDailyLogReturn(logPrices);
 
-  // Use training portion to compute robust parameters.
-  const trainPricesRaw = prices.slice(0, prices.length - predictionGap);
+  // Use training portion (excluding prediction gap) to compute robust parameters for logPrices.
+  const trainLogPricesRaw = logPrices.slice(0, logPrices.length - predictionGap);
   const trainVolumesRaw = volumes.slice(0, volumes.length - predictionGap);
-  const trainSMARaw = sma7.slice(0, sma7.length - predictionGap);
-  const trainReturnRaw = dailyReturn.slice(0, dailyReturn.length - predictionGap);
+  const trainSMA_raw = sma7.slice(0, sma7.length - predictionGap);
+  const trainReturnRaw = dailyLogReturn.slice(0, dailyLogReturn.length - predictionGap);
 
   // Winsorize each feature.
-  const { winsorized: trainPrices, lower: lowerPrice, upper: upperPrice } = winsorizeArray(trainPricesRaw);
+  const { winsorized: trainLogPrices, lower: lowerLogPrice, upper: upperLogPrice } = winsorizeArray(trainLogPricesRaw);
   const { winsorized: trainVolumes, lower: lowerVolume, upper: upperVolume } = winsorizeArray(trainVolumesRaw);
-  const { winsorized: trainSMA, lower: lowerSMA, upper: upperSMA } = winsorizeArray(trainSMARaw);
+  const { winsorized: trainSMA, lower: lowerSMA, upper: upperSMA } = winsorizeArray(trainSMA_raw);
   const { winsorized: trainReturn, lower: lowerReturn, upper: upperReturn } = winsorizeArray(trainReturnRaw);
 
   // Compute robust statistics on winsorized training data.
-  const medianPrice = computeMedian(trainPrices);
-  const iqrPrice = computeIQR(trainPrices);
+  const medianLogPrice = computeMedian(trainLogPrices);
+  const iqrLogPrice = computeIQR(trainLogPrices);
   const medianVolume = computeMedian(trainVolumes);
   const iqrVolume = computeIQR(trainVolumes);
   const medianSMA = computeMedian(trainSMA);
@@ -874,37 +882,38 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const medianReturn = computeMedian(trainReturn);
   const iqrReturn = computeIQR(trainReturn);
 
-  // Store winsorization bounds in meta.
+  // Store winsorization bounds.
   const metaBounds = {
-    price: { lower: lowerPrice, upper: upperPrice },
+    logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
     volume: { lower: lowerVolume, upper: upperVolume },
     sma: { lower: lowerSMA, upper: upperSMA },
     return: { lower: lowerReturn, upper: upperReturn }
   };
 
-  // Helper normalization function: first winsorize, then robust normalize.
+  // Helper normalization function: winsorize first, then robust normalize.
   const normalize = (val, median, iqr, lower, upper) =>
     (winsorizeVal(val, lower, upper) - median) / (iqr || 1);
 
   const inputs = [];
   const outputs = [];
 
-  // Create training samples.
+  // Build training sequences.
   for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
     const seq = [];
     for (let j = 0; j < sequenceLength; j++) {
+      // Use logPrice for the price feature.
       seq.push([
-        normalize(prices[i + j], medianPrice, iqrPrice, lowerPrice, upperPrice),
+        normalize(Math.log(prices[i + j]), medianLogPrice, iqrLogPrice, lowerLogPrice, upperLogPrice),
         normalize(volumes[i + j], medianVolume, iqrVolume, lowerVolume, upperVolume),
         normalize(sma7[i + j], medianSMA, iqrSMA, lowerSMA, upperSMA),
-        normalize(dailyReturn[i + j], medianReturn, iqrReturn, lowerReturn, upperReturn)
+        normalize(dailyLogReturn[i + j], medianReturn, iqrReturn, lowerReturn, upperReturn)
       ]);
     }
     inputs.push(seq);
 
-    // Target price.
-    const targetPrice = prices[i + sequenceLength + predictionGap - 1];
-    outputs.push(normalize(targetPrice, medianPrice, iqrPrice, lowerPrice, upperPrice));
+    // Target: logPrice 30 days after sequence end.
+    const targetLogPrice = Math.log(prices[i + sequenceLength + predictionGap - 1]);
+    outputs.push(normalize(targetLogPrice, medianLogPrice, iqrLogPrice, lowerLogPrice, upperLogPrice));
   }
 
   // Convert inputs and outputs to tensors.
@@ -912,8 +921,8 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
 
   const meta = {
-    medianPrice,
-    iqrPrice,
+    medianLogPrice,
+    iqrLogPrice,
     medianVolume,
     iqrVolume,
     medianSMA,
@@ -921,6 +930,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     medianReturn,
     iqrReturn,
     bounds: metaBounds,
+    // Save the last known actual price.
     lastKnownPrice: prices[prices.length - 1]
   };
 
@@ -928,14 +938,13 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
 }
 
 /**
- * Trains a model to directly predict the stock price 30 days ahead.
+ * Trains a model to predict the logPrice 30 days ahead.
  */
 async function trainModelFor30DayAheadPrice(data) {
   const sequenceLength = 30;
   const predictionGap = 30;
   const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(data, sequenceLength, predictionGap);
 
-  // Build a simple LSTM model.
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
@@ -949,10 +958,9 @@ async function trainModelFor30DayAheadPrice(data) {
   model.add(tf.layers.dropout({ rate: 0.2 }));
   model.add(tf.layers.dense({ units: 1 }));
 
-  // Use the custom Huber loss.
   model.compile({ optimizer: tf.train.adam(), loss: customHuberLoss(1.0) });
 
-  console.log('Training model for 30-day ahead price prediction with robust preprocessing...');
+  console.log('Training model for 30-day ahead log-price prediction with robust preprocessing...');
   const earlyStopping = tf.callbacks.earlyStopping({
     monitor: 'val_loss',
     patience: 5,
@@ -971,30 +979,36 @@ async function trainModelFor30DayAheadPrice(data) {
 
 /**
  * Predicts the stock price 30 days ahead using the trained model.
- * Applies the same winsorization and robust normalization before prediction.
+ * Applies the same winsorization and robust normalization on log-prices.
  */
 async function predict30DayAheadPrice(modelObj, data) {
   const { model, meta } = modelObj;
-  const { medianPrice, iqrPrice, medianVolume, iqrVolume, medianSMA, iqrSMA, medianReturn, iqrReturn, bounds, lastKnownPrice } = meta;
+  const { medianLogPrice, iqrLogPrice, medianVolume, iqrVolume, medianSMA, iqrSMA, medianReturn, iqrReturn, bounds, lastKnownPrice } = meta;
   const sequenceLength = 30;
 
-  // Use the last 30 days.
+  // Extract recent data.
   const recentData = data.slice(-sequenceLength);
   const recentPrices = recentData.map(item => item.price);
   const recentVolumes = recentData.map(item => item.volume);
-  const smaRecent = computeSMA(recentPrices, 7);
-  const returnRecent = computeDailyReturn(recentPrices);
+  
+  // Compute logPrices, SMA, and daily log return for recent data.
+  const recentLogPrices = recentPrices.map(p => Math.log(p));
+  const smaRecent = computeSMA(recentLogPrices, 7);
+  const returnRecent = computeDailyLogReturn(recentLogPrices);
 
   const normSeq = recentData.map((item, idx) => [
-    (winsorizeVal(item.price, bounds.price.lower, bounds.price.upper) - medianPrice) / (iqrPrice || 1),
+    (winsorizeVal(Math.log(item.price), bounds.logPrice.lower, bounds.logPrice.upper) - medianLogPrice) / (iqrLogPrice || 1),
     (winsorizeVal(item.volume, bounds.volume.lower, bounds.volume.upper) - medianVolume) / (iqrVolume || 1),
     (winsorizeVal(smaRecent[idx], bounds.sma.lower, bounds.sma.upper) - medianSMA) / (iqrSMA || 1),
     (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) - medianReturn) / (iqrReturn || 1)
   ]);
 
   const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 4]);
-  const predNormPrice = model.predict(inputTensor).dataSync()[0];
-  let predictedPrice = predNormPrice * iqrPrice + medianPrice;
+  const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
+
+  // Inverse transformation: get predicted log-price, then exponentiate.
+  const predictedLogPrice = predNormLogPrice * iqrLogPrice + medianLogPrice;
+  const predictedPrice = Math.exp(predictedLogPrice);
 
   return predictedPrice;
 }
