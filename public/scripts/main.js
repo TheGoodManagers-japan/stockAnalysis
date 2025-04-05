@@ -760,6 +760,33 @@ const customHeaders = {
 /**
  * Helper function to compute the 7-day Simple Moving Average (SMA).
  */
+/**
+ * Helper functions for robust statistics.
+ */
+function computeMedian(arr) {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function computePercentile(arr, p) {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = p * (sorted.length - 1);
+  if (Number.isInteger(idx)) {
+    return sorted[idx];
+  } else {
+    const lower = sorted[Math.floor(idx)];
+    const upper = sorted[Math.ceil(idx)];
+    return lower + (upper - lower) * (idx - Math.floor(idx));
+  }
+}
+
+function computeIQR(arr) {
+  const q1 = computePercentile(arr, 0.25);
+  const q3 = computePercentile(arr, 0.75);
+  return q3 - q1;
+}
+
 function computeSMA(prices, window) {
   const sma = [];
   for (let i = 0; i < prices.length; i++) {
@@ -784,7 +811,7 @@ function computeDailyReturn(prices) {
 
 /**
  * Prepares training data for direct 30-day ahead price prediction.
- * Each training sample consists of a 30-day sequence of [price, volume, SMA, dailyReturn] (normalized)
+ * Each training sample consists of a 30-day sequence of [price, volume, SMA, dailyReturn] (normalized robustly)
  * and a target: the price 30 days after the end of the sequence.
  */
 function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap = 30) {
@@ -800,35 +827,24 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const sma7 = computeSMA(prices, 7);
   const dailyReturn = computeDailyReturn(prices);
 
-  // Compute normalization parameters for price using the training portion.
+  // Use the training portion to compute robust normalization parameters.
   const trainPrices = prices.slice(0, prices.length - predictionGap);
-  const meanPrice = trainPrices.reduce((sum, p) => sum + p, 0) / trainPrices.length;
-  const stdPrice = Math.sqrt(
-    trainPrices.reduce((sum, p) => sum + Math.pow(p - meanPrice, 2), 0) / trainPrices.length
-  );
+  const medianPrice = computeMedian(trainPrices);
+  const iqrPrice = computeIQR(trainPrices);
 
-  // Compute normalization parameters for volume using all data.
-  const meanVolume = volumes.reduce((sum, v) => sum + v, 0) / volumes.length;
-  const stdVolume = Math.sqrt(
-    volumes.reduce((sum, v) => sum + Math.pow(v - meanVolume, 2), 0) / volumes.length
-  );
+  const medianVolume = computeMedian(volumes);
+  const iqrVolume = computeIQR(volumes);
   
-  // Compute normalization parameters for SMA using the training portion.
   const trainSMA = sma7.slice(0, sma7.length - predictionGap);
-  const meanSMA = trainSMA.reduce((sum, v) => sum + v, 0) / trainSMA.length;
-  const stdSMA = Math.sqrt(
-    trainSMA.reduce((sum, v) => sum + Math.pow(v - meanSMA, 2), 0) / trainSMA.length
-  );
+  const medianSMA = computeMedian(trainSMA);
+  const iqrSMA = computeIQR(trainSMA);
   
-  // Compute normalization parameters for daily return using the training portion.
   const trainReturn = dailyReturn.slice(0, dailyReturn.length - predictionGap);
-  const meanReturn = trainReturn.reduce((sum, r) => sum + r, 0) / trainReturn.length;
-  const stdReturn = Math.sqrt(
-    trainReturn.reduce((sum, r) => sum + Math.pow(r - meanReturn, 2), 0) / trainReturn.length
-  );
+  const medianReturn = computeMedian(trainReturn);
+  const iqrReturn = computeIQR(trainReturn);
   
-  // Helper normalization function (z‑score)
-  const normalize = (val, mean, std) => (val - mean) / (std || 1);
+  // Helper normalization function (robust z‑score using median and IQR)
+  const normalize = (val, median, iqr) => (val - median) / (iqr || 1);
 
   const inputs = [];
   const outputs = [];
@@ -840,17 +856,17 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     const seq = [];
     for (let j = 0; j < sequenceLength; j++) {
       seq.push([
-        normalize(prices[i + j], meanPrice, stdPrice),
-        normalize(volumes[i + j], meanVolume, stdVolume),
-        normalize(sma7[i + j], meanSMA, stdSMA),
-        normalize(dailyReturn[i + j], meanReturn, stdReturn)
+        normalize(prices[i + j], medianPrice, iqrPrice),
+        normalize(volumes[i + j], medianVolume, iqrVolume),
+        normalize(sma7[i + j], medianSMA, iqrSMA),
+        normalize(dailyReturn[i + j], medianReturn, iqrReturn)
       ]);
     }
     inputs.push(seq);
 
     // Target price is at position i + sequenceLength + predictionGap - 1
     const targetPrice = prices[i + sequenceLength + predictionGap - 1];
-    outputs.push(normalize(targetPrice, meanPrice, stdPrice));
+    outputs.push(normalize(targetPrice, medianPrice, iqrPrice));
   }
 
   // Convert inputs and outputs to tensors.
@@ -858,14 +874,14 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
 
   const meta = {
-    meanPrice,
-    stdPrice,
-    meanVolume,
-    stdVolume,
-    meanSMA,
-    stdSMA,
-    meanReturn,
-    stdReturn,
+    medianPrice,
+    iqrPrice,
+    medianVolume,
+    iqrVolume,
+    medianSMA,
+    iqrSMA,
+    medianReturn,
+    iqrReturn,
     // Save the last known price from the data for reference.
     lastKnownPrice: prices[prices.length - 1]
   };
@@ -888,6 +904,9 @@ async function trainModelFor30DayAheadPrice(data) {
       units: 64,
       inputShape: [sequenceLength, 4],
       returnSequences: false,
+      // Add L2 regularization to reduce overfitting.
+      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
     })
   );
   model.add(tf.layers.dropout({ rate: 0.2 }));
@@ -917,7 +936,7 @@ async function trainModelFor30DayAheadPrice(data) {
  */
 async function predict30DayAheadPrice(modelObj, data) {
   const { model, meta } = modelObj;
-  const { meanPrice, stdPrice, meanVolume, stdVolume, meanSMA, stdSMA, meanReturn, stdReturn } = meta;
+  const { medianPrice, iqrPrice, medianVolume, iqrVolume, medianSMA, iqrSMA, medianReturn, iqrReturn, lastKnownPrice } = meta;
   const sequenceLength = 30;
 
   // Use the last 30 days from the data.
@@ -930,17 +949,27 @@ async function predict30DayAheadPrice(modelObj, data) {
   const returnRecent = computeDailyReturn(recentPrices);
 
   const normSeq = recentData.map((item, idx) => [
-    (item.price - meanPrice) / (stdPrice || 1),
-    (item.volume - meanVolume) / (stdVolume || 1),
-    (smaRecent[idx] - meanSMA) / (stdSMA || 1),
-    (returnRecent[idx] - meanReturn) / (stdReturn || 1)
+    (item.price - medianPrice) / (iqrPrice || 1),
+    (item.volume - medianVolume) / (iqrVolume || 1),
+    (smaRecent[idx] - medianSMA) / (iqrSMA || 1),
+    (returnRecent[idx] - medianReturn) / (iqrReturn || 1)
   ]);
 
   const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 4]);
   // Model predicts a normalized price.
   const predNormPrice = model.predict(inputTensor).dataSync()[0];
   // Inverse transform to get the actual predicted price.
-  const predictedPrice = predNormPrice * stdPrice + meanPrice;
+  let predictedPrice = predNormPrice * iqrPrice + medianPrice;
+
+  // Optional: You may still apply a mild clip here if desired,
+  // but the robust normalization should already mitigate extreme values.
+  // For example, to allow at most a 10% change:
+  // const maxAllowedReturn = 0.1;
+  // predictedPrice = Math.min(
+  //   Math.max(predictedPrice, lastKnownPrice * (1 - maxAllowedReturn)),
+  //   lastKnownPrice * (1 + maxAllowedReturn)
+  // );
+  
   return predictedPrice;
 }
 
@@ -953,8 +982,6 @@ async function predict30DayAheadPrice(modelObj, data) {
  */
 export async function analyzeStock(ticker, historicalData) {
   try {
-    
-
     // Ensure we have enough data (for instance, at least one year)
     if (historicalData.length < 365) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
@@ -964,10 +991,7 @@ export async function analyzeStock(ticker, historicalData) {
     const modelObj = await trainModelFor30DayAheadPrice(historicalData);
 
     // Predict the stock price 30 days from now using the last 30 days.
-    const predictedPrice = await predict30DayAheadPrice(
-      modelObj,
-      historicalData
-    );
+    const predictedPrice = await predict30DayAheadPrice(modelObj, historicalData);
 
     console.log(`Predicted 30-day ahead price for ${ticker}:`, predictedPrice);
     return predictedPrice;
