@@ -868,14 +868,16 @@ async function trainModelWithVolume(data) {
 
 /**
  * Predicts the next 30 days of prices using the trained model.
- * Applies a configurable daily clamp to prevent unrealistic growth.
+ * Applies a dynamic daily clamp based on historical volatility
+ * and smooths predictions to avoid unrealistic jumps.
  *
  * @param {Object} modelObj - Contains the trained model and normalization parameters.
  * @param {Array} latestData - Array of objects with properties {price, volume}
- * @param {number} clampPercentage - Daily clamp percentage (default: 0.06 for 6%)
+ * @param {number} clampPercentage - Default daily clamp percentage (default: 0.06 for 6%)
+ * @param {number} smoothingFactor - Weight for smoothing predictions (default: 0.5)
  * @returns {Array} predictions - Predicted prices for the next 30 days.
  */
-async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.06) {
+async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.06, smoothingFactor = 0.5) {
   const { model, minMaxData } = modelObj;
   const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
   const normalize = (value, min, max) => (value - min) / (max - min);
@@ -890,6 +892,18 @@ async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage
     normalize(item.volume, minVolume, maxVolume),
   ]);
 
+  // Calculate historical volatility based on absolute daily percentage changes
+  let pctChanges = [];
+  for (let i = 1; i < latestData.length; i++) {
+    const change = (latestData[i].price - latestData[i - 1].price) / latestData[i - 1].price;
+    pctChanges.push(Math.abs(change));
+  }
+  const avgVolatility = pctChanges.reduce((acc, val) => acc + val, 0) / pctChanges.length;
+  
+  // Use a dynamic clamp: the smaller of clampPercentage and 1.5 * average volatility
+  const dynamicClamp = Math.min(clampPercentage, avgVolatility * 1.5);
+  console.log(`Using dynamic clamp percentage: ${dynamicClamp.toFixed(4)} based on average volatility: ${avgVolatility.toFixed(4)}`);
+
   const predictions = [];
   let prevDayPrice = lastKnownPrice;
 
@@ -898,32 +912,35 @@ async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage
     const predictedNormPrice = model.predict(inputTensor).dataSync()[0];
     let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
 
-    // Clamp prediction to within ±clampPercentage of the previous day’s price
-    const maxUpside = prevDayPrice * (1 + clampPercentage);
-    const maxDownside = prevDayPrice * (1 - clampPercentage);
+    // Clamp prediction to within ±dynamicClamp of the previous day’s price
+    const maxUpside = prevDayPrice * (1 + dynamicClamp);
+    const maxDownside = prevDayPrice * (1 - dynamicClamp);
     if (predictedPrice > maxUpside) {
       predictedPrice = maxUpside;
     } else if (predictedPrice < maxDownside) {
       predictedPrice = maxDownside;
     }
 
-    predictions.push(predictedPrice);
+    // Smooth the prediction by blending it with the previous day’s price
+    const smoothedPrice = prevDayPrice * (1 - smoothingFactor) + predictedPrice * smoothingFactor;
+    predictions.push(smoothedPrice);
 
     // Update the input window by discarding the oldest day and adding the new prediction.
-    // For volume, we keep the last known volume as a placeholder.
+    // For volume, we keep the last known normalized volume as a placeholder.
     currentInput = [
       ...currentInput.slice(1),
       [
-        normalize(predictedPrice, minPrice, maxPrice),
+        normalize(smoothedPrice, minPrice, maxPrice),
         currentInput[currentInput.length - 1][1],
       ],
     ];
-    prevDayPrice = predictedPrice;
+    prevDayPrice = smoothedPrice;
   }
 
   console.log("Predicted prices for the next 30 days:", predictions);
   return predictions;
 }
+
 
 
 export async function analyzeStock(ticker) {
