@@ -761,54 +761,67 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 
-// Throttling requests (if needed)
-const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
+// If you need Bottleneck for throttling (optional)
+// const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
 /**
- * Prepares data for training by creating sequences of price and volume.
- * Uses min-max normalization on both price and volume.
- * @param {Array} data - Array of objects with {price, volume}
- * @param {number} sequenceLength - Number of time steps (default: 30)
- * @returns {Object} { inputTensor, outputTensor, minMaxData }
+ * 1) PREPARE DATA: compute daily returns from (price, volume)
  */
-function prepareDataWithVolume(data, sequenceLength = 30) {
-  const inputs = [];
-  const outputs = [];
-
-  for (let i = 0; i < data.length - sequenceLength; i++) {
-    const inputSequence = data.slice(i, i + sequenceLength).map(item => ({
-      price: item.price,
-      volume: item.volume
-    }));
-    const output = data[i + sequenceLength].price;
-    inputs.push(inputSequence);
-    outputs.push(output);
+function prepareDataWithReturns(data, sequenceLength = 30) {
+  if (data.length < sequenceLength + 1) {
+    throw new Error(`Not enough data to create sequences of length ${sequenceLength}.`);
   }
 
-  const prices = data.map(item => item.price);
-  const volumes = data.map(item => item.volume);
+  // 1) Compute daily returns
+  const returns = [];
+  for (let i = 1; i < data.length; i++) {
+    const prevP = data[i - 1].price;
+    const currP = data[i].price;
+    const ret = (prevP > 0) ? (currP - prevP) / prevP : 0;
+    returns.push(ret);
+  }
+  // shift volumes by 1 day to align with those returns
+  const volumes = data.slice(1).map(item => item.volume);
 
-  const minMaxData = {
-    minPrice: Math.min(...prices),
-    maxPrice: Math.max(...prices),
-    minVolume: Math.min(...volumes),
-    maxVolume: Math.max(...volumes),
+  // 2) Build sequences
+  const inputs = [];
+  const outputs = [];
+  for (let i = 0; i < returns.length - sequenceLength; i++) {
+    const returnSeq = returns.slice(i, i + sequenceLength);
+    const volumeSeq = volumes.slice(i, i + sequenceLength);
+    const nextDayReturn = returns[i + sequenceLength]; // label
+
+    const seq = returnSeq.map((ret, idx) => ({
+      ret,
+      vol: volumeSeq[idx],
+    }));
+    inputs.push(seq);
+    outputs.push(nextDayReturn);
+  }
+
+  // 3) min/max for normalization
+  const minReturn = Math.min(...returns);
+  const maxReturn = Math.max(...returns);
+  const minVolume = Math.min(...volumes);
+  const maxVolume = Math.max(...volumes);
+
+  const normalize = (val, min, max) => {
+    if (max === min) return 0.0; 
+    return (val - min) / (max - min);
   };
 
-  const normalize = (value, min, max) => (value - min) / (max - min);
-
-  // Normalize inputs
+  // 4) Normalize sequences
   const normalizedInputs = inputs.map(seq =>
-    seq.map(({ price, volume }) => [
-      normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
-      normalize(volume, minMaxData.minVolume, minMaxData.maxVolume),
+    seq.map(({ ret, vol }) => [
+      normalize(ret, minReturn, maxReturn),
+      normalize(vol, minVolume, maxVolume),
     ])
   );
-  // Normalize outputs (just next day’s price)
-  const normalizedOutputs = outputs.map(price =>
-    normalize(price, minMaxData.minPrice, minMaxData.maxPrice)
+  const normalizedOutputs = outputs.map(r =>
+    normalize(r, minReturn, maxReturn)
   );
 
+  // 5) Convert to Tensors
   const inputTensor = tf.tensor3d(normalizedInputs, [
     normalizedInputs.length,
     sequenceLength,
@@ -819,19 +832,27 @@ function prepareDataWithVolume(data, sequenceLength = 30) {
     1,
   ]);
 
-  return { inputTensor, outputTensor, minMaxData };
+  // 6) Save meta info
+  const lastKnownPrice = data[data.length - 1].price;
+  const meta = {
+    minReturn,
+    maxReturn,
+    minVolume,
+    maxVolume,
+    lastKnownPrice,
+  };
+
+  return { inputTensor, outputTensor, meta };
 }
 
 /**
- * Trains an LSTM model using historical price and volume data.
- * @param {Array} data - Array of {price, volume}
- * @returns {Object} { model, minMaxData }
+ * 2) TRAIN MODEL ON DAILY RETURNS + VOLUME
  */
-async function trainModelWithVolume(data) {
+async function trainModelOnReturns(data) {
   const sequenceLength = 30;
-  const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(data, sequenceLength);
+  const { inputTensor, outputTensor, meta } = prepareDataWithReturns(data, sequenceLength);
 
-  // Build LSTM model
+  // Build LSTM
   const model = tf.sequential();
   model.add(
     tf.layers.lstm({
@@ -842,11 +863,11 @@ async function trainModelWithVolume(data) {
   );
   model.add(tf.layers.dropout({ rate: 0.2 }));
   model.add(tf.layers.dense({ units: 1 }));
-  model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
+  model.compile({ optimizer: tf.train.adam(), loss: 'meanSquaredError' });
 
-  console.log("Training model...");
+  console.log('Training model on daily returns...');
   const earlyStopping = tf.callbacks.earlyStopping({
-    monitor: "val_loss",
+    monitor: 'val_loss',
     patience: 5,
   });
 
@@ -856,139 +877,106 @@ async function trainModelWithVolume(data) {
     validationSplit: 0.2,
     callbacks: [earlyStopping],
   });
-  console.log("Model training completed.");
+  console.log('Model training completed (returns).');
 
-  return { model, minMaxData };
+  return { model, meta };
 }
 
 /**
- * Predicts the next 30 days of prices using the trained model.
- * Enforces daily clamp, total clamp, and smoothing to reduce unrealistic growth.
- *
- * @param {Object} modelObj - { model, minMaxData }
- * @param {Array} latestData - last 30 days of { price, volume }
- * @param {number} clampPercentage - default daily clamp (1% here)
- * @param {number} totalClampLimit - max total gain/loss (6% here)
- * @param {number} smoothingFactor - weight for smoothing daily predictions (0.6 here)
- * @returns {Array} predictions - predicted prices for the next 30 days
+ * 3) PREDICT NEXT 30 DAYS OF PRICES (via daily returns)
  */
-async function predictNext30DaysWithVolume(
-  modelObj,
-  latestData,
-  clampPercentage = 0.01,  // 1% daily clamp
-  totalClampLimit = 0.06,  // ±6% overall
-  smoothingFactor = 0.6
-) {
-  const { model, minMaxData } = modelObj;
-  const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
-  const normalize = (value, min, max) => (value - min) / (max - min);
-  const denormalize = (value, min, max) => value * (max - min) + min;
+async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
+  const { model, meta } = modelObj;
+  const {
+    minReturn,
+    maxReturn,
+    minVolume,
+    maxVolume
+  } = meta;
 
-  // Last known price from the input data
-  const lastKnownPrice = latestData[latestData.length - 1].price;
-
-  // Create input window
-  let currentInput = latestData.map(item => [
-    normalize(item.price, minPrice, maxPrice),
-    normalize(item.volume, minVolume, maxVolume),
-  ]);
-
-  // Compute average daily volatility
-  const pctChanges = [];
-  for (let i = 1; i < latestData.length; i++) {
-    const prevPrice = latestData[i - 1].price;
-    const currPrice = latestData[i].price;
-    if (prevPrice > 0) {
-      pctChanges.push(Math.abs((currPrice - prevPrice) / prevPrice));
-    }
+  const sequenceLength = 30;
+  if (data.length < sequenceLength + 1) {
+    throw new Error('Not enough data to form a 30-day window for returns.');
   }
-  const avgVolatility =
-    pctChanges.reduce((acc, val) => acc + val, 0) / pctChanges.length || 0;
 
-  // Compute standard deviation for daily clamp
-  const squaredDiffs = pctChanges.map(x => (x - avgVolatility) ** 2);
-  const stdDev =
-    Math.sqrt(squaredDiffs.reduce((a, b) => a + b, 0) / (pctChanges.length || 1));
+  // Build daily returns for the existing data
+  const allReturns = [];
+  for (let i = 1; i < data.length; i++) {
+    const prevP = data[i - 1].price;
+    const currP = data[i].price;
+    const ret = (prevP > 0) ? (currP - prevP) / prevP : 0;
+    allReturns.push(ret);
+  }
+  const allVolumes = data.slice(1).map(d => d.volume);
 
-  // Determine the final daily clamp (per ticker)
-  const clampFromVol = stdDev * 2.5; // for example, 2.5 * stdDev
-  const dynamicClamp = Math.min(clampPercentage, clampFromVol);
-  console.log(`Using daily clamp: ${dynamicClamp.toFixed(4)}, (stdDev=${stdDev.toFixed(4)})`);
+  // Last 30 days window
+  let currentReturnWindow = allReturns.slice(-sequenceLength);
+  let currentVolumeWindow = allVolumes.slice(-sequenceLength);
 
-  // Prepare for total clamp
-  const startPrice = lastKnownPrice;
-  const maxAbsoluteUpside = startPrice * (1 + totalClampLimit);
-  const maxAbsoluteDownside = startPrice * (1 - totalClampLimit);
+  // The last known price in the historical data
+  let lastPrice = data[data.length - 1].price;
 
-  const predictions = [];
-  let prevDayPrice = lastKnownPrice;
+  const predictedPrices = [];
 
-  for (let day = 0; day < 30; day++) {
-    // 1) Model Predict
-    const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
-    const predictedNormPrice = model.predict(inputTensor).dataSync()[0];
-    let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
+  for (let day = 0; day < daysToPredict; day++) {
+    // a) Build normalized window [30, 2]
+    const normWindow = currentReturnWindow.map((ret, i) => {
+      const vol = currentVolumeWindow[i];
+      const nRet = (ret - minReturn) / ((maxReturn - minReturn) || 1);
+      const nVol = (vol - minVolume) / ((maxVolume - minVolume) || 1);
+      return [nRet, nVol];
+    });
 
-    // 2) Daily clamp (±dynamicClamp from yesterday)
-    const maxUpside = prevDayPrice * (1 + dynamicClamp);
-    const maxDownside = prevDayPrice * (1 - dynamicClamp);
-    if (predictedPrice > maxUpside) {
-      predictedPrice = maxUpside;
-    } else if (predictedPrice < maxDownside) {
-      predictedPrice = maxDownside;
-    }
+    // b) Tensor shape [1, 30, 2]
+    const inputTensor = tf.tensor3d([normWindow], [1, sequenceLength, 2]);
 
-    // 3) Total clamp (± totalClampLimit from the startPrice)
-    if (predictedPrice > maxAbsoluteUpside) {
-      predictedPrice = maxAbsoluteUpside;
-    } else if (predictedPrice < maxAbsoluteDownside) {
-      predictedPrice = maxAbsoluteDownside;
-    }
+    // c) Predict next day's *return* (normalized)
+    const predNormReturn = model.predict(inputTensor).dataSync()[0];
 
-    // OPTIONAL: Add a small random jitter to avoid identical outputs
-    // predictedPrice *= (1 + (Math.random() - 0.5) * 0.0005); 
-    // e.g. ±0.05% noise
+    // d) Denormalize
+    let predReturn = predNormReturn * (maxReturn - minReturn) + minReturn;
 
-    // 4) Smooth the daily price
-    const smoothedPrice =
-      prevDayPrice * (1 - smoothingFactor) + predictedPrice * smoothingFactor;
+    // OPTIONAL: clamp daily return if you want
+    // if (predReturn > 0.03) predReturn = 0.03;
+    // if (predReturn < -0.03) predReturn = -0.03;
 
-    predictions.push(smoothedPrice);
+    // e) Convert that return to a price
+    const nextPrice = lastPrice * (1 + predReturn);
+    predictedPrices.push(nextPrice);
 
-    // 5) Update input window
-    currentInput = [
-      ...currentInput.slice(1),
-      [
-        normalize(smoothedPrice, minPrice, maxPrice),
-        // Keep volume the same or adjust with some logic
-        currentInput[currentInput.length - 1][1],
-      ],
+    // f) Shift windows
+    currentReturnWindow = [...currentReturnWindow.slice(1), predReturn];
+    // for volume, either reuse the last day’s volume or model separately
+    currentVolumeWindow = [
+      ...currentVolumeWindow.slice(1),
+      currentVolumeWindow[currentVolumeWindow.length - 1],
     ];
-    prevDayPrice = smoothedPrice;
+
+    // g) Update lastPrice
+    lastPrice = nextPrice;
   }
 
-  console.log("Predicted prices (30 days):", predictions);
-  return predictions;
+  return predictedPrices;
 }
 
-
-
-
+/**
+ * 4) Main orchestration: fetch data, train, predict
+ */
 export async function analyzeStock(ticker) {
   try {
+    // You must implement fetchHistoricalData(ticker) somewhere,
+    // returning an array of { price, volume } in chronological order
     const historicalData = await fetchHistoricalData(ticker);
 
-    if (historicalData.length < 30) {
+    if (historicalData.length < 31) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    const modelObj = await trainModelWithVolume(historicalData);
+    // Train LSTM on daily returns
+    const modelObj = await trainModelOnReturns(historicalData);
 
-    // Use the last 30 real days as input
-    const latestData = historicalData.slice(-30);
-
-    // Predict 30 days with daily clamp
-    const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
+    // Predict next 30 days of absolute prices
+    const predictions = await predictNext30DaysReturns(modelObj, historicalData, 30);
 
     console.log(`Predicted prices for ${ticker}:`, predictions);
     return predictions;
