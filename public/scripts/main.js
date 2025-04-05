@@ -896,12 +896,16 @@ async function trainModelOnReturns(data) {
  * Predicts the next 30 days of prices using daily return predictions
  * with a stricter clamping to reduce compounded errors.
  */
+/**
+ * Predicts the next 30 days of prices using daily return predictions
+ * with extra damping and stricter clamping to reduce compounded errors.
+ */
 async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   const { model, meta } = modelObj;
   const { meanReturn, stdReturn, meanVolume, stdVolume } = meta;
   const sequenceLength = 30;
 
-  // Compute historical daily returns and volumes (aligned by one day)
+  // Calculate historical daily returns
   const allReturns = [];
   for (let i = 1; i < data.length; i++) {
     const prevP = data[i - 1].price;
@@ -915,15 +919,17 @@ async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   let currentReturnWindow = allReturns.slice(-sequenceLength);
   let currentVolumeWindow = allVolumes.slice(-sequenceLength);
 
-  // Start with the most recent known price
+  // Most recent known price
   let lastPrice = data[data.length - 1].price;
   const predictions = [];
 
-  // Lower the maximum daily allowed return to 0.3%
-  const maxDailyMove = 0.003;
+  // Stricter clamp: maximum daily return of 0.25%
+  const maxDailyMove = 0.0025;
+  // Damping factor to further reduce predicted returns
+  const dampingFactor = 0.8;
 
   for (let day = 0; day < daysToPredict; day++) {
-    // Build a normalized window using z‑score normalization
+    // Build normalized window using z-score normalization
     const normWindow = currentReturnWindow.map((ret, i) => {
       const vol = currentVolumeWindow[i];
       const nRet = (ret - meanReturn) / (stdReturn || 1);
@@ -933,16 +939,20 @@ async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
 
     const inputTensor = tf.tensor3d([normWindow], [1, sequenceLength, 2]);
     const predNormReturn = model.predict(inputTensor).dataSync()[0];
+    // Invert z-score normalization to get the predicted return
     let predReturn = predNormReturn * stdReturn + meanReturn;
 
-    // Clamp the predicted return to ±maxDailyMove to control compounding errors
+    // Apply damping factor
+    predReturn *= dampingFactor;
+
+    // Clamp the predicted return to ±maxDailyMove to reduce extreme compounding effects
     predReturn = Math.max(Math.min(predReturn, maxDailyMove), -maxDailyMove);
 
-    // Convert the predicted return to a new price
+    // Compute next day's price
     const nextPrice = lastPrice * (1 + predReturn);
     predictions.push(nextPrice);
 
-    // Shift the window to include the new predicted return
+    // Update the prediction window
     currentReturnWindow = [...currentReturnWindow.slice(1), predReturn];
     currentVolumeWindow = [
       ...currentVolumeWindow.slice(1),
@@ -954,6 +964,7 @@ async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
 
   return predictions;
 }
+
 
 
 /**
