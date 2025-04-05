@@ -887,77 +887,60 @@ async function trainModelOnReturns(data) {
  */
 async function predictNext30DaysReturns(modelObj, data, daysToPredict = 30) {
   const { model, meta } = modelObj;
-  const {
-    minReturn,
-    maxReturn,
-    minVolume,
-    maxVolume
-  } = meta;
-
+  const { minReturn, maxReturn, minVolume, maxVolume } = meta;
   const sequenceLength = 30;
-  if (data.length < sequenceLength + 1) {
-    throw new Error('Not enough data to form a 30-day window for returns.');
-  }
 
-  // Build daily returns for the existing data
   const allReturns = [];
   for (let i = 1; i < data.length; i++) {
     const prevP = data[i - 1].price;
     const currP = data[i].price;
-    const ret = (prevP > 0) ? (currP - prevP) / prevP : 0;
+    const ret = prevP > 0 ? (currP - prevP) / prevP : 0;
     allReturns.push(ret);
   }
-  const allVolumes = data.slice(1).map(d => d.volume);
+  const allVolumes = data.slice(1).map((d) => d.volume);
 
-  // Last 30 days window
+  // last 30-day window
   let currentReturnWindow = allReturns.slice(-sequenceLength);
   let currentVolumeWindow = allVolumes.slice(-sequenceLength);
 
-  // The last known price in the historical data
+  // last known price
   let lastPrice = data[data.length - 1].price;
-
-  const predictedPrices = [];
+  const predictions = [];
 
   for (let day = 0; day < daysToPredict; day++) {
-    // a) Build normalized window [30, 2]
+    // Build normalized window
     const normWindow = currentReturnWindow.map((ret, i) => {
       const vol = currentVolumeWindow[i];
-      const nRet = (ret - minReturn) / ((maxReturn - minReturn) || 1);
-      const nVol = (vol - minVolume) / ((maxVolume - minVolume) || 1);
+      const nRet = (ret - minReturn) / (maxReturn - minReturn || 1);
+      const nVol = (vol - minVolume) / (maxVolume - minVolume || 1);
       return [nRet, nVol];
     });
 
-    // b) Tensor shape [1, 30, 2]
     const inputTensor = tf.tensor3d([normWindow], [1, sequenceLength, 2]);
-
-    // c) Predict next day's *return* (normalized)
     const predNormReturn = model.predict(inputTensor).dataSync()[0];
-
-    // d) Denormalize
     let predReturn = predNormReturn * (maxReturn - minReturn) + minReturn;
 
-    // OPTIONAL: clamp daily return if you want
-    // if (predReturn > 0.03) predReturn = 0.03;
-    // if (predReturn < -0.03) predReturn = -0.03;
+    // *** CLAMP daily return to ±0.5% ***
+    if (predReturn > 0.005) predReturn = 0.005;
+    if (predReturn < -0.005) predReturn = -0.005;
 
-    // e) Convert that return to a price
+    // Convert to price
     const nextPrice = lastPrice * (1 + predReturn);
-    predictedPrices.push(nextPrice);
+    predictions.push(nextPrice);
 
-    // f) Shift windows
+    // Shift the window
     currentReturnWindow = [...currentReturnWindow.slice(1), predReturn];
-    // for volume, either reuse the last day’s volume or model separately
     currentVolumeWindow = [
       ...currentVolumeWindow.slice(1),
       currentVolumeWindow[currentVolumeWindow.length - 1],
     ];
 
-    // g) Update lastPrice
     lastPrice = nextPrice;
   }
 
-  return predictedPrices;
+  return predictions;
 }
+
 
 /**
  * 4) Main orchestration: fetch data, train, predict
