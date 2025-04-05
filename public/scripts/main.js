@@ -951,10 +951,9 @@ async function predict30DayAheadPrice(modelObj, data) {
  * The function uses extended historical data for training and then predicts the price 30 days ahead
  * using the most recent 30 days.
  */
-export async function analyzeStock(ticker) {
+export async function analyzeStock(ticker, historicalData) {
   try {
-    // Fetch extended historical data (e.g., 3 years by default)
-    const historicalData = await fetchHistoricalData(ticker);
+    
 
     // Ensure we have enough data (for instance, at least one year)
     if (historicalData.length < 365) {
