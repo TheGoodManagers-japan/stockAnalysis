@@ -1,228 +1,11 @@
 /***********************************************
- * 0) SECTOR RULES (Customize these per sector)
+ * 0) HELPER FUNCTIONS FOR VOLATILITY & ATR
  ***********************************************/
-const sectorRules = {
-  Pharmaceuticals: {
-    peBounds: { low: 12, mid: 25 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.025,
-  },
-  "Electric Machinery": {
-    peBounds: { low: 10, mid: 20 },
-    pbBounds: { low: 1, mid: 4 },
-    maxDiv: 0.04,
-    maxVol: 0.03,
-  },
-  "Automobiles & Auto parts": {
-    peBounds: { low: 8, mid: 15 },
-    pbBounds: { low: 0.8, mid: 2.5 },
-    maxDiv: 0.06,
-    maxVol: 0.04,
-  },
-  "Precision Instruments": {
-    peBounds: { low: 12, mid: 25 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.03,
-    maxVol: 0.025,
-  },
-  Communications: {
-    peBounds: { low: 15, mid: 30 },
-    pbBounds: { low: 1, mid: 5 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Banking: {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.6, mid: 2 },
-    maxDiv: 0.07,
-    maxVol: 0.025,
-  },
-  "Other Financial Services": {
-    peBounds: { low: 7, mid: 20 },
-    pbBounds: { low: 0.8, mid: 3 },
-    maxDiv: 0.06,
-    maxVol: 0.03,
-  },
-  Securities: {
-    peBounds: { low: 7, mid: 20 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.06,
-    maxVol: 0.035,
-  },
-  Insurance: {
-    peBounds: { low: 6, mid: 15 },
-    pbBounds: { low: 0.8, mid: 2.5 },
-    maxDiv: 0.08,
-    maxVol: 0.025,
-  },
-  Fishery: {
-    peBounds: { low: 10, mid: 20 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Foods: {
-    peBounds: { low: 10, mid: 25 },
-    pbBounds: { low: 1, mid: 4 },
-    maxDiv: 0.06,
-    maxVol: 0.025,
-  },
-  Retail: {
-    peBounds: { low: 10, mid: 25 },
-    pbBounds: { low: 1, mid: 4 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Services: {
-    peBounds: { low: 15, mid: 35 },
-    pbBounds: { low: 1, mid: 5 },
-    maxDiv: 0.03,
-    maxVol: 0.03,
-  },
-  Mining: {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.8, mid: 2 },
-    maxDiv: 0.04,
-    maxVol: 0.05,
-  },
-  "Textiles & Apparel": {
-    peBounds: { low: 8, mid: 20 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  "Pulp & Paper": {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Chemicals: {
-    peBounds: { low: 10, mid: 25 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.04,
-    maxVol: 0.035,
-  },
-  Petroleum: {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.8, mid: 2 },
-    maxDiv: 0.06,
-    maxVol: 0.04,
-  },
-  Rubber: {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 0.8, mid: 2.5 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  "Glass & Ceramics": {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 0.8, mid: 2.5 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Steel: {
-    peBounds: { low: 5, mid: 12 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.04,
-    maxVol: 0.05,
-  },
-  "Nonferrous Metals": {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.03,
-    maxVol: 0.06,
-  },
-  "Trading Companies": {
-    peBounds: { low: 8, mid: 20 },
-    pbBounds: { low: 0.8, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Construction: {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-  Machinery: {
-    peBounds: { low: 10, mid: 20 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.04,
-    maxVol: 0.03,
-  },
-  Shipbuilding: {
-    peBounds: { low: 5, mid: 12 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.03,
-    maxVol: 0.05,
-  },
-  "Other Manufacturing": {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.04,
-    maxVol: 0.03,
-  },
-  "Real Estate": {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.06,
-    maxVol: 0.03,
-  },
-  "Railway & Bus": {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.025,
-  },
-  "Land Transport": {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.025,
-  },
-  "Marine Transport": {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.07,
-    maxVol: 0.05,
-  },
-  "Air Transport": {
-    peBounds: { low: 6, mid: 20 },
-    pbBounds: { low: 0.8, mid: 3 },
-    maxDiv: 0.03,
-    maxVol: 0.05,
-  },
-  Warehousing: {
-    peBounds: { low: 8, mid: 18 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.04,
-    maxVol: 0.03,
-  },
-  "Electric Power": {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.08,
-    maxVol: 0.02,
-  },
-  Gas: {
-    peBounds: { low: 5, mid: 15 },
-    pbBounds: { low: 0.5, mid: 2 },
-    maxDiv: 0.08,
-    maxVol: 0.02,
-  },
-  default: {
-    peBounds: { low: 10, mid: 20 },
-    pbBounds: { low: 1, mid: 3 },
-    maxDiv: 0.05,
-    maxVol: 0.03,
-  },
-};
-
-/***********************************************
- * 1) HELPER FUNCTIONS: VOLATILITY, ATR, RISK
- ***********************************************/
+/**
+ * Calculate the standard deviation of daily log returns.
+ * @param {Array} historicalData - array of daily objects [{ date, open, high, low, close, ...}, ...].
+ * @returns {number} stdDev - the standard deviation of daily log returns.
+ */
 function calculateHistoricalVolatility(historicalData) {
   if (!historicalData || historicalData.length < 2) return 0;
 
@@ -244,6 +27,11 @@ function calculateHistoricalVolatility(historicalData) {
   return Math.sqrt(variance);
 }
 
+/**
+ * Calculate a more accurate ATR (Average True Range) over a given period (default 14 days).
+ * @param {Array} historicalData - array of daily data: [{ high, low, close }, ...].
+ * @param {number} period
+ */
 function calculateATR(historicalData, period = 14) {
   if (!historicalData || historicalData.length < period + 1) return 0;
 
@@ -259,15 +47,21 @@ function calculateATR(historicalData, period = 14) {
     trueRanges.push(Math.max(range1, range2, range3));
   }
 
+  // Simple moving average of the last `period` true ranges
   let atrSum = 0;
   for (let i = trueRanges.length - period; i < trueRanges.length; i++) {
     atrSum += trueRanges[i];
   }
-  return atrSum / period;
+  const atr = atrSum / period;
+  return atr;
 }
 
+/***********************************************
+ * 1) DETERMINE RISK (Revised)
+ ***********************************************/
 function determineRisk(stock) {
   const volatility = calculateHistoricalVolatility(stock.historicalData);
+
   let riskLevel = "medium";
   if (volatility > 0.02 || stock.marketCap < 1e11) {
     riskLevel = "high";
@@ -278,20 +72,101 @@ function determineRisk(stock) {
 }
 
 /***********************************************
- * 2) STOP LOSS & TARGET (same as your code)
+ * 2) CALCULATE STOP LOSS & TARGET (Revised)
  ***********************************************/
 function calculateStopLossAndTarget(stock, prediction) {
-  // Your existing logic for dynamic buffer, floor logic, clamps, final stopLoss & targetPrice
-  // ...
-  return { stopLoss, targetPrice, riskTolerance };
+  console.log(`\n📊 Calculating Stop Loss & Target for ${stock.ticker}`);
+
+  // 1) Determine Risk Tolerance
+  const riskTolerance = determineRisk(stock);
+  console.log(`🛡️ Risk Tolerance: ${riskTolerance}`);
+
+  const riskMultipliers = {
+    low: { stopLossFactor: 0.85, targetBoost: 0.95 },
+    medium: { stopLossFactor: 0.9, targetBoost: 1.0 },
+    high: { stopLossFactor: 1.0, targetBoost: 1.05 },
+  };
+  const riskFactor = riskMultipliers[riskTolerance];
+  console.log("📐 Risk Factor:", riskFactor);
+
+  // 2) Calculate ATR
+  console.log(`Historical data ${stock.historicalData}`);
+  const atr = calculateATR(stock.historicalData, 14);
+  console.log("📈 ATR (14-day):", atr);
+
+  // 3) Dynamic buffer
+  const dynamicBuffer = Math.max(1.5 * atr, 0.05 * stock.currentPrice);
+  console.log("🧮 Dynamic Buffer:", dynamicBuffer);
+
+  // 4) Tentative rawStopLoss
+  let rawStopLoss = stock.currentPrice - dynamicBuffer;
+  console.log("🔧 Initial rawStopLoss:", rawStopLoss);
+
+  // 5) Historical Floor logic
+  const dailyLowFloor = stock.lowPrice * 0.995;
+  const yearLowFloor = stock.fiftyTwoWeekLow * 0.995;
+  let historicalFloor = Math.max(dailyLowFloor, yearLowFloor);
+  if (historicalFloor > stock.currentPrice) {
+    historicalFloor = stock.currentPrice * 0.98;
+    console.log(
+      "⚠️ Adjusted historicalFloor (was above current price):",
+      historicalFloor
+    );
+  }
+  rawStopLoss = Math.max(rawStopLoss, historicalFloor);
+  console.log("🧱 Floor-adjusted rawStopLoss:", rawStopLoss);
+
+  // 6) Clamp: short-term max stop-loss (8%)
+  const maxStopLossPrice = stock.currentPrice * (1 - 0.08);
+  if (rawStopLoss < maxStopLossPrice) {
+    rawStopLoss = maxStopLossPrice;
+    console.log("📉 Clamped to 8% max loss:", rawStopLoss);
+  }
+
+  // 7) Ensure not above currentPrice
+  if (rawStopLoss >= stock.currentPrice) {
+    rawStopLoss = stock.currentPrice * 0.99;
+    console.log("🔒 Stop loss was >= current price. Adjusted to:", rawStopLoss);
+  }
+
+  const stopLoss = parseFloat(rawStopLoss.toFixed(2));
+  console.log("✅ Final Stop Loss:", stopLoss);
+
+  // 8) Target Price Calculation
+  const rawGrowth = (prediction - stock.currentPrice) / stock.currentPrice;
+  const growthPotential = Math.max(rawGrowth, -0.1);
+  console.log("📊 Growth Potential:", (growthPotential * 100).toFixed(2) + "%");
+
+  let targetPrice;
+  if (growthPotential >= 0) {
+    const confidenceWeight = 0.7;
+    const metricsTarget = stock.currentPrice * (1 + growthPotential * 0.5);
+    targetPrice =
+      prediction * confidenceWeight + metricsTarget * (1 - confidenceWeight);
+    console.log("🎯 Positive growth — blended target price:", targetPrice);
+  } else {
+    targetPrice = stock.currentPrice * (1 + growthPotential);
+    console.log("📉 Negative growth — reduced target price:", targetPrice);
+  }
+
+  // 9) Apply Dividend & Risk Boost
+  const dividendBoost = 1 + Math.min(stock.dividendYield / 100, 0.03);
+  targetPrice *= dividendBoost * riskFactor.targetBoost;
+  console.log("💰 Dividend Boost:", dividendBoost);
+  console.log("🚀 Risk-Adjusted Target Boost:", riskFactor.targetBoost);
+  console.log("✅ Final Target Price:", parseFloat(targetPrice.toFixed(2)));
+
+  return {
+    stopLoss: parseFloat(stopLoss.toFixed(2)),
+    targetPrice: parseFloat(targetPrice.toFixed(2)),
+    riskTolerance,
+  };
 }
 
 /***********************************************
- * 3) SECTOR-AWARE COMPUTE SCORE
+ * 3) COMPUTE SCORE (Optional Improvements)
  ***********************************************/
 function computeScore(stock, sector) {
-  const rules = sectorRules[sector] || sectorRules.default;
-
   const weights = {
     valuation: 0.35,
     marketStability: 0.25,
@@ -299,59 +174,98 @@ function computeScore(stock, sector) {
     historicalPerformance: 0.2,
   };
 
-  // A) Valuation
-  let valuationScore = 1.0;
-  if (stock.peRatio < rules.peBounds.low) {
-    valuationScore *= 1.2;
-  } else if (stock.peRatio <= rules.peBounds.mid) {
-    valuationScore *= 1.0;
-  } else {
-    valuationScore *= 0.8;
-  }
+  const sectorMultipliers = {
+    Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    "Electric Machinery": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Automobiles: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    "Precision Instruments": { valuation: 1.0, stability: 1.1, dividend: 1.0 },
+    Communications: { valuation: 0.9, stability: 1.1, dividend: 1.1 },
+    Banking: { valuation: 1.3, stability: 0.8, dividend: 1.2 },
+    "Other Financial Services": {
+      valuation: 1.2,
+      stability: 0.9,
+      dividend: 1.1,
+    },
+    Securities: { valuation: 1.0, stability: 0.8, dividend: 1.2 },
+    Insurance: { valuation: 1.1, stability: 0.9, dividend: 1.3 },
+    Fishery: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Foods: { valuation: 1.0, stability: 1.2, dividend: 1.2 },
+    Retail: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Services: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Mining: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    "Textiles & Apparel": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    "Pulp & Paper": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    Chemicals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    Petroleum: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    Rubber: { valuation: 1.0, stability: 0.9, dividend: 1.0 },
+    "Glass & Ceramics": { valuation: 1.0, stability: 0.9, dividend: 1.0 },
+    Steel: { valuation: 1.1, stability: 0.8, dividend: 1.0 },
+    "Nonferrous Metals": { valuation: 1.0, stability: 0.8, dividend: 1.0 },
+    "Trading Companies": { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Construction: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    Machinery: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
+    Shipbuilding: { valuation: 1.2, stability: 0.7, dividend: 0.9 },
+    "Other Manufacturing": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    "Real Estate": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
+    "Railway & Bus": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
+    "Land Transport": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
+    "Marine Transport": { valuation: 1.1, stability: 0.8, dividend: 1.0 },
+    "Air Transport": { valuation: 1.2, stability: 0.8, dividend: 0.9 },
+    Warehousing: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
+    "Electric Power": { valuation: 1.0, stability: 1.2, dividend: 1.3 },
+    Gas: { valuation: 1.0, stability: 1.2, dividend: 1.3 },
+  };
 
-  if (stock.pbRatio < rules.pbBounds.low) {
-    valuationScore *= 1.2;
-  } else if (stock.pbRatio <= rules.pbBounds.mid) {
-    valuationScore *= 1.0;
-  } else {
-    valuationScore *= 0.8;
-  }
+  const sectorMultiplier = sectorMultipliers[sector] || {
+    valuation: 1.0,
+    stability: 1.0,
+    dividend: 1.0,
+  };
 
+  // 1) Valuation Score
+  let valuationScore = 1;
+  if (stock.peRatio < 15) valuationScore *= 1.1;
+  else if (stock.peRatio >= 15 && stock.peRatio <= 25) valuationScore *= 1;
+  else valuationScore *= 0.8;
+
+  if (stock.pbRatio < 1) valuationScore *= 1.2;
+  else if (stock.pbRatio >= 1 && stock.pbRatio <= 3) valuationScore *= 1;
+  else valuationScore *= 0.8;
+
+  valuationScore *= sectorMultiplier.valuation;
   valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
 
-  // B) Market Stability
+  // 2) Market Stability (volatility)
   const volatility = calculateHistoricalVolatility(stock.historicalData);
-  const ratio = Math.min(volatility / rules.maxVol, 1.0);
-  const stabilityRaw = 1.0 - ratio;
-  const stabilityScore = 0.5 + 0.5 * stabilityRaw; // => [0.5..1.0]
+  const maxVol = 0.03;
+  const stabilityRaw = 1 - Math.min(volatility / maxVol, 1);
+  const stabilityScore = 0.5 + 0.5 * stabilityRaw;
+  const adjustedStabilityScore = stabilityScore * sectorMultiplier.stability;
 
-  // C) Dividend
-  const rawDividend = (stock.dividendYield || 0) / 100;
-  const cappedDividend = Math.min(rawDividend, rules.maxDiv);
-  const dividendBenefit = cappedDividend;
+  // 3) Dividend Benefit
+  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
+  const adjustedDividendBenefit = dividendBenefit * sectorMultiplier.dividend;
 
-  // D) Historical Performance
+  // 4) Historical Performance
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
-  let historicalPerformance = 0;
-  if (range > 0) {
-    historicalPerformance =
-      (stock.currentPrice - stock.fiftyTwoWeekLow) / range;
-  }
-  historicalPerformance = Math.min(Math.max(historicalPerformance, 0), 1);
+  const positionInRange =
+    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0;
+  const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1);
 
-  // Weighted sum => finalScore
+  // Weighted Sum
   const rawScore =
     valuationScore * weights.valuation +
-    stabilityScore * weights.marketStability +
-    dividendBenefit * weights.dividendBenefit +
+    adjustedStabilityScore * weights.marketStability +
+    adjustedDividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
+
   return finalScore;
 }
 
 /***********************************************
- * 4) FETCH SINGLE STOCK DATA (INLINE!)
+ * 4) FETCH SINGLE STOCK DATA
  ***********************************************/
 async function fetchSingleStockData(tickerObj) {
   try {
@@ -369,8 +283,8 @@ async function fetchSingleStockData(tickerObj) {
     }
 
     const data = await response.json();
-    console.log("data:", data);
-    return data; // { success: true, data: {...} }
+    console.log("data :", data);
+    return data;
   } catch (error) {
     console.error("Fetch Error:", error.message);
     return { success: false, error: error.message };
@@ -407,7 +321,7 @@ async function fetchHistoricalData(ticker) {
     return result.data.map((item) => ({
       ...item,
       date: new Date(item.date),
-      // item.high, item.low, item.close, item.volume, etc.
+      // e.g. { close, high, low, volume } expected
     }));
   } catch (error) {
     console.error(`Error fetching historical data for ${ticker}:`, error);
@@ -421,7 +335,6 @@ async function fetchHistoricalData(ticker) {
 window.scan = {
   async fetchStockAnalysis() {
     try {
-      // Your array of tickers { code, sector } goes here
       const tickers = [
 {code:"4151.T",sector:"Pharmaceuticals"},
 {code:"4502.T",sector:"Pharmaceuticals"},
@@ -692,11 +605,11 @@ window.scan = {
             eps: yahooData.eps,
           };
 
-          // 3) Fetch historical data
+          // 3) Fetch historical data for ATR/volatility
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || [];
 
-          // 4) Run ML for next 30 days
+          // 4) Analyze with ML for next 30 days
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
@@ -706,11 +619,11 @@ window.scan = {
             throw new Error("Failed to generate sufficient predictions.");
           }
 
-          // 5) Use day #30
+          // 5) Use the 30th day (index 29)
           const prediction = predictions[29];
           stock.predictions = predictions;
 
-          // 6) Stop Loss & Target
+          // 6) Calculate Stop Loss & Target
           const { stopLoss, targetPrice } = calculateStopLossAndTarget(
             stock,
             prediction
@@ -724,15 +637,15 @@ window.scan = {
           stock.stopLoss = stopLoss;
           stock.targetPrice = targetPrice;
 
-          // 7) Growth potential
+          // 7) Compute growth potential
           const growthPotential =
             ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
             100;
 
-          // 8) Sector-aware scoring
+          // 8) Compute fundamental/technical score
           stock.score = computeScore(stock, stock.sector);
 
-          // 9) Final Weighted Score
+          // 9) Combine them => finalScore
           const weights = { metrics: 0.7, growth: 0.3 };
           const finalScore =
             weights.metrics * stock.score +
@@ -742,7 +655,7 @@ window.scan = {
           stock.growthPotential = parseFloat(growthPotential.toFixed(2));
           stock.finalScore = parseFloat(finalScore.toFixed(2));
 
-          // 10) Send to Bubble
+          // 10) Send data in Bubble key format
           const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
@@ -788,54 +701,221 @@ window.scan = {
 window.scanCurrentPrice = {
   async fetchCurrentPrices(tickers) {
     try {
-      // same logic as your version
+      const outputlist1 = [];
+      const outputlist2 = [];
+
+      for (const ticker of tickers) {
+        console.log(`\n--- Fetching current price for ${ticker} ---`);
+        try {
+          const result = await fetchSingleStockData({ code: ticker });
+          if (!result.success) {
+            console.error("Error fetching stock data:", result.error);
+            throw new Error("Failed to fetch Yahoo data.");
+          }
+
+          const { code, yahooData } = result.data;
+          if (!yahooData || !yahooData.currentPrice) {
+            console.error(
+              `Incomplete Yahoo data for ${code}. Skipping this ticker.`
+            );
+            continue;
+          }
+
+          outputlist1.push(code);
+          outputlist2.push(yahooData.currentPrice);
+
+          console.log(
+            `Ticker ${code}: Current Price fetched: ${yahooData.currentPrice}`
+          );
+        } catch (error) {
+          console.error(`Error processing ticker ${ticker}:`, error.message);
+        }
+      }
+
+      bubble_fn_currentPrice({
+        outputlist1,
+        outputlist2,
+      });
+
+      console.log("\nFinal output lists sent to Bubble:", {
+        outputlist1,
+        outputlist2,
+      });
     } catch (error) {
-      // ...
+      console.error("Error in fetchCurrentPrices:", error.message);
+      throw new Error("Process aborted due to errors.");
     }
   },
 };
 
 /***********************************************
- * 8) TRAIN & PREDICT
+ * 8) TRAIN & PREDICT (With DAILY Clamping)
  ***********************************************/
+
+// If you want daily clamping, swap out predictNext30DaysWithVolume with the code below.
+
 const customHeaders = {
-  "User-Agent": "...",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
   "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
 };
+
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
 function prepareDataWithVolume(data, sequenceLength = 30) {
-  // same as your code
+  const inputs = [];
+  const outputs = [];
+
+  for (let i = 0; i < data.length - sequenceLength; i++) {
+    const inputSequence = data.slice(i, i + sequenceLength).map((item) => ({
+      price: item.price,
+      volume: item.volume,
+    }));
+    const output = data[i + sequenceLength].price;
+    inputs.push(inputSequence);
+    outputs.push(output);
+  }
+
+  const prices = data.map((item) => item.price);
+  const volumes = data.map((item) => item.volume);
+  const minMaxData = {
+    minPrice: Math.min(...prices),
+    maxPrice: Math.max(...prices),
+    minVolume: Math.min(...volumes),
+    maxVolume: Math.max(...volumes),
+  };
+
+  const normalize = (value, min, max) => (value - min) / (max - min);
+
+  const normalizedInputs = inputs.map((seq) =>
+    seq.map(({ price, volume }) => [
+      normalize(price, minMaxData.minPrice, minMaxData.maxPrice),
+      normalize(volume, minMaxData.minVolume, minMaxData.maxVolume),
+    ])
+  );
+  const normalizedOutputs = outputs.map((price) =>
+    normalize(price, minMaxData.minPrice, minMaxData.maxPrice)
+  );
+
+  const inputTensor = tf.tensor3d(normalizedInputs, [
+    normalizedInputs.length,
+    sequenceLength,
+    2,
+  ]);
+  const outputTensor = tf.tensor2d(normalizedOutputs, [
+    normalizedOutputs.length,
+    1,
+  ]);
+
+  return { inputTensor, outputTensor, minMaxData };
 }
 
 async function trainModelWithVolume(data) {
-  // same as your code
-}
+  const sequenceLength = 30;
+  const { inputTensor, outputTensor, minMaxData } = prepareDataWithVolume(
+    data,
+    sequenceLength
+  );
 
-async function predictNext30DaysWithVolume(modelObj, latestData) {
-  // same as your code
+  const model = tf.sequential();
+  model.add(
+    tf.layers.lstm({
+      units: 64,
+      inputShape: [sequenceLength, 2],
+      returnSequences: false,
+    })
+  );
+  model.add(tf.layers.dropout({ rate: 0.2 }));
+  model.add(tf.layers.dense({ units: 1 }));
+  model.compile({ optimizer: tf.train.adam(), loss: "meanSquaredError" });
+
+  console.log(`Training model...`);
+  await model.fit(inputTensor, outputTensor, {
+    epochs: 50,
+    batchSize: 32,
+    validationSplit: 0.2,
+  });
+  console.log(`Model training completed.`);
+
+  return { model, minMaxData };
 }
 
 /**
- * MAIN Function to Analyze a Single Ticker
- * (train + predict)
+ * PREDICT THE NEXT 30 DAYS (DAILY CLAMP)
+ * ---------------------------------------
+ * This approach clamps daily changes to ±6% from the previous day's price.
+ * Adjust the percentage to your preference.
  */
+async function predictNext30DaysWithVolume(modelObj, latestData) {
+  const { model, minMaxData } = modelObj;
+  const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
+
+  const normalize = (value, min, max) => (value - min) / (max - min);
+  const denormalize = (value, min, max) => value * (max - min) + min;
+
+  // We'll start from the last real close in 'latestData'
+  const lastRealClose = latestData[latestData.length - 1].close;
+
+  // Prepare the initial input
+  let currentInput = latestData.map((item) => [
+    normalize(item.price, minPrice, maxPrice),
+    normalize(item.volume, minVolume, maxVolume),
+  ]);
+
+  const predictions = [];
+  let prevDayPrice = lastRealClose; // used for daily clamp
+
+  for (let day = 0; day < 30; day++) {
+    const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
+    const [predictedNormPrice] = model.predict(inputTensor).dataSync();
+    let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
+
+    // DAILY CLAMP EXAMPLE: ±6% from previous day
+    const maxUpside = prevDayPrice * 1.06;
+    const maxDownside = prevDayPrice * 0.94;
+    if (predictedPrice > maxUpside) {
+      predictedPrice = maxUpside;
+    } else if (predictedPrice < maxDownside) {
+      predictedPrice = maxDownside;
+    }
+
+    predictions.push(predictedPrice);
+
+    // Slide the window for next day
+    currentInput = [
+      ...currentInput.slice(1),
+      [
+        normalize(predictedPrice, minPrice, maxPrice),
+        currentInput[currentInput.length - 1][1],
+      ],
+    ];
+    prevDayPrice = predictedPrice; // update for tomorrow's clamp
+  }
+
+  console.log(
+    `Predicted prices (daily-clamped) for the next 30 days:`,
+    predictions
+  );
+  return predictions;
+}
+
 export async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
+
     if (historicalData.length < 30) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
-    // 1) Train
     const modelObj = await trainModelWithVolume(historicalData);
 
-    // 2) Last 30 days
+    // Use the last 30 real days as input
     const latestData = historicalData.slice(-30);
 
-    // 3) Predict next 30
+    // Predict 30 days with daily clamp
     const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
+
     console.log(`Predicted prices for ${ticker}:`, predictions);
     return predictions;
   } catch (error) {
