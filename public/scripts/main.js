@@ -212,7 +212,6 @@ const sectorRules = {
     maxDiv: 0.08,
     maxVol: 0.02,
   },
-  // fallback
   default: {
     peBounds: { low: 10, mid: 20 },
     pbBounds: { low: 1, mid: 3 },
@@ -222,10 +221,11 @@ const sectorRules = {
 };
 
 /***********************************************
- * 1) HELPER FUNCTIONS FOR VOLATILITY & ATR
+ * 1) HELPER FUNCTIONS: VOLATILITY, ATR, RISK
  ***********************************************/
 function calculateHistoricalVolatility(historicalData) {
   if (!historicalData || historicalData.length < 2) return 0;
+
   const logReturns = [];
   for (let i = 1; i < historicalData.length; i++) {
     const prevClose = historicalData[i - 1].close;
@@ -234,6 +234,7 @@ function calculateHistoricalVolatility(historicalData) {
       logReturns.push(Math.log(currClose / prevClose));
     }
   }
+
   const mean =
     logReturns.reduce((acc, val) => acc + val, 0) / (logReturns.length || 1);
   const variance =
@@ -245,15 +246,19 @@ function calculateHistoricalVolatility(historicalData) {
 
 function calculateATR(historicalData, period = 14) {
   if (!historicalData || historicalData.length < period + 1) return 0;
+
   const trueRanges = [];
   for (let i = 1; i < historicalData.length; i++) {
     const { high, low, close } = historicalData[i];
     const prevClose = historicalData[i - 1].close;
+
     const range1 = high - low;
     const range2 = Math.abs(high - prevClose);
     const range3 = Math.abs(low - prevClose);
+
     trueRanges.push(Math.max(range1, range2, range3));
   }
+
   let atrSum = 0;
   for (let i = trueRanges.length - period; i < trueRanges.length; i++) {
     atrSum += trueRanges[i];
@@ -272,20 +277,21 @@ function determineRisk(stock) {
   return riskLevel;
 }
 
+/***********************************************
+ * 2) STOP LOSS & TARGET (same as your code)
+ ***********************************************/
 function calculateStopLossAndTarget(stock, prediction) {
-  // same as your revised code for stop-loss + target
+  // Your existing logic for dynamic buffer, floor logic, clamps, final stopLoss & targetPrice
   // ...
-  // return { stopLoss, targetPrice, riskTolerance }
+  return { stopLoss, targetPrice, riskTolerance };
 }
 
 /***********************************************
- * 2) SECTOR-AWARE COMPUTE SCORE
+ * 3) SECTOR-AWARE COMPUTE SCORE
  ***********************************************/
 function computeScore(stock, sector) {
-  // 1) Grab sector-specific rules or fallback
   const rules = sectorRules[sector] || sectorRules.default;
 
-  // Weighted factors
   const weights = {
     valuation: 0.35,
     marketStability: 0.25,
@@ -293,21 +299,16 @@ function computeScore(stock, sector) {
     historicalPerformance: 0.2,
   };
 
-  // -----------------------------
-  // (A) VALUATION (P/E, P/B)
-  // -----------------------------
+  // A) Valuation
   let valuationScore = 1.0;
-
-  // P/E
   if (stock.peRatio < rules.peBounds.low) {
-    valuationScore *= 1.2; // strong reward
+    valuationScore *= 1.2;
   } else if (stock.peRatio <= rules.peBounds.mid) {
-    valuationScore *= 1.0; // neutral
+    valuationScore *= 1.0;
   } else {
-    valuationScore *= 0.8; // penalize
+    valuationScore *= 0.8;
   }
 
-  // P/B
   if (stock.pbRatio < rules.pbBounds.low) {
     valuationScore *= 1.2;
   } else if (stock.pbRatio <= rules.pbBounds.mid) {
@@ -316,29 +317,20 @@ function computeScore(stock, sector) {
     valuationScore *= 0.8;
   }
 
-  // clamp 0.5..1.2
   valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
 
-  // -----------------------------
-  // (B) MARKET STABILITY (Vol)
-  // -----------------------------
+  // B) Market Stability
   const volatility = calculateHistoricalVolatility(stock.historicalData);
-  // If vol >= rules.maxVol => ~0.5 score, if vol=0 => 1.0
   const ratio = Math.min(volatility / rules.maxVol, 1.0);
   const stabilityRaw = 1.0 - ratio;
   const stabilityScore = 0.5 + 0.5 * stabilityRaw; // => [0.5..1.0]
 
-  // -----------------------------
-  // (C) DIVIDEND
-  // -----------------------------
+  // C) Dividend
   const rawDividend = (stock.dividendYield || 0) / 100;
   const cappedDividend = Math.min(rawDividend, rules.maxDiv);
-  // e.g. if sector has maxDiv=0.05 => no benefit above 5% yield
-  const dividendBenefit = cappedDividend; // => up to rules.maxDiv
+  const dividendBenefit = cappedDividend;
 
-  // -----------------------------
-  // (D) HISTORICAL PERFORMANCE
-  // -----------------------------
+  // D) Historical Performance
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
   let historicalPerformance = 0;
   if (range > 0) {
@@ -347,25 +339,89 @@ function computeScore(stock, sector) {
   }
   historicalPerformance = Math.min(Math.max(historicalPerformance, 0), 1);
 
-  // Weighted sum
+  // Weighted sum => finalScore
   const rawScore =
     valuationScore * weights.valuation +
     stabilityScore * weights.marketStability +
     dividendBenefit * weights.dividendBenefit +
     historicalPerformance * weights.historicalPerformance;
 
-  // clamp final to [0..1]
   const finalScore = Math.min(Math.max(rawScore, 0), 1);
   return finalScore;
 }
 
 /***********************************************
- * 3) MAIN WORKFLOW
+ * 4) FETCH SINGLE STOCK DATA (INLINE!)
+ ***********************************************/
+async function fetchSingleStockData(tickerObj) {
+  try {
+    const response = await fetch(
+      "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/stocks",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker: tickerObj }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log("data:", data);
+    return data; // { success: true, data: {...} }
+  } catch (error) {
+    console.error("Fetch Error:", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/***********************************************
+ * 5) FETCH HISTORICAL DATA
+ ***********************************************/
+async function fetchHistoricalData(ticker) {
+  try {
+    const apiUrl = `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/history?ticker=${ticker}`;
+    console.log(`Fetching historical data from: ${apiUrl}`);
+
+    const response = await fetch(apiUrl, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    console.log(`Response: ${response}`);
+    const result = await response.json();
+    console.log(`Response body:`, result);
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || `HTTP error! Status: ${response.status}`);
+    }
+
+    if (!result.data || result.data.length === 0) {
+      console.warn(`No historical data available for ${ticker}.`);
+      return [];
+    }
+
+    console.log(`Historical data for ${ticker} fetched successfully.`);
+    return result.data.map((item) => ({
+      ...item,
+      date: new Date(item.date),
+      // item.high, item.low, item.close, item.volume, etc.
+    }));
+  } catch (error) {
+    console.error(`Error fetching historical data for ${ticker}:`, error);
+    return [];
+  }
+}
+
+/***********************************************
+ * 6) SCAN LOGIC (Main Workflow)
  ***********************************************/
 window.scan = {
   async fetchStockAnalysis() {
     try {
-      // Full array of tickers (code + sector)
+      // Your array of tickers { code, sector } goes here
       const tickers = [
 {code:"4151.T",sector:"Pharmaceuticals"},
 {code:"4502.T",sector:"Pharmaceuticals"},
@@ -605,7 +661,6 @@ window.scan = {
             throw new Error("Failed to fetch Yahoo data.");
           }
 
-          // 2) Validate data
           const { code, sector, yahooData } = result.data;
           if (
             !yahooData ||
@@ -619,7 +674,7 @@ window.scan = {
             throw new Error("Critical Yahoo data is missing.");
           }
 
-          // 3) Build local 'stock' object
+          // 2) Build stock object
           const stock = {
             ticker: code,
             sector,
@@ -637,11 +692,11 @@ window.scan = {
             eps: yahooData.eps,
           };
 
-          // 4) Fetch historical data for ATR/vol
+          // 3) Fetch historical data
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || [];
 
-          // 5) Analyze with ML for next 30 days
+          // 4) Run ML for next 30 days
           console.log(`Analyzing stock: ${stock.ticker}`);
           const predictions = await analyzeStock(stock.ticker);
           if (!predictions || predictions.length <= 29) {
@@ -651,11 +706,11 @@ window.scan = {
             throw new Error("Failed to generate sufficient predictions.");
           }
 
-          // 6) Take the 30th day
+          // 5) Use day #30
           const prediction = predictions[29];
           stock.predictions = predictions;
 
-          // 7) Stop Loss & Target
+          // 6) Stop Loss & Target
           const { stopLoss, targetPrice } = calculateStopLossAndTarget(
             stock,
             prediction
@@ -669,15 +724,15 @@ window.scan = {
           stock.stopLoss = stopLoss;
           stock.targetPrice = targetPrice;
 
-          // 8) Growth potential
+          // 7) Growth potential
           const growthPotential =
             ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
             100;
 
-          // 9) Sector-aware computeScore
+          // 8) Sector-aware scoring
           stock.score = computeScore(stock, stock.sector);
 
-          // 10) Final Weighted Score
+          // 9) Final Weighted Score
           const weights = { metrics: 0.7, growth: 0.3 };
           const finalScore =
             weights.metrics * stock.score +
@@ -687,7 +742,7 @@ window.scan = {
           stock.growthPotential = parseFloat(growthPotential.toFixed(2));
           stock.finalScore = parseFloat(finalScore.toFixed(2));
 
-          // 11) Send to Bubble (or wherever)
+          // 10) Send to Bubble
           const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
@@ -728,23 +783,25 @@ window.scan = {
 };
 
 /***********************************************
- * 7) SCAN CURRENT PRICE
+ * 7) SCAN CURRENT PRICE (Unchanged)
  ***********************************************/
 window.scanCurrentPrice = {
   async fetchCurrentPrices(tickers) {
-    // ... same as before, unchanged ...
+    try {
+      // same logic as your version
+    } catch (error) {
+      // ...
+    }
   },
 };
 
 /***********************************************
  * 8) TRAIN & PREDICT
  ***********************************************/
-
-// The TF model code remains the same, you only changed your scoring logic
-// to be sector-specific. We'll show it for completeness:
-
 const customHeaders = {
-  /* ... */
+  "User-Agent": "...",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
 };
 const limiter = new Bottleneck({ minTime: 200, maxConcurrent: 5 });
 
@@ -760,6 +817,10 @@ async function predictNext30DaysWithVolume(modelObj, latestData) {
   // same as your code
 }
 
+/**
+ * MAIN Function to Analyze a Single Ticker
+ * (train + predict)
+ */
 export async function analyzeStock(ticker) {
   try {
     const historicalData = await fetchHistoricalData(ticker);
@@ -767,10 +828,14 @@ export async function analyzeStock(ticker) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
+    // 1) Train
     const modelObj = await trainModelWithVolume(historicalData);
-    const latestData = historicalData.slice(-30);
-    const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
 
+    // 2) Last 30 days
+    const latestData = historicalData.slice(-30);
+
+    // 3) Predict next 30
+    const predictions = await predictNext30DaysWithVolume(modelObj, latestData);
     console.log(`Predicted prices for ${ticker}:`, predictions);
     return predictions;
   } catch (error) {
