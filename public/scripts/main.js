@@ -868,51 +868,72 @@ async function trainModelWithVolume(data) {
 
 /**
  * Predicts the next 30 days of prices using the trained model.
- * Applies a dynamic daily clamp based on historical volatility
- * and smooths predictions to avoid unrealistic jumps.
+ * Enforces:
+ *   1) Daily clamp (based on std dev or avg volatility).
+ *   2) Cumulative clamp (so total 30-day growth can't exceed a chosen limit).
+ *   3) Smoothing to avoid large day-to-day jumps.
  *
- * @param {Object} modelObj - Contains the trained model and normalization parameters.
- * @param {Array} latestData - Array of objects with properties {price, volume}
- * @param {number} clampPercentage - Default daily clamp percentage (default: 0.03 for 3%)
- * @param {number} smoothingFactor - Weight for smoothing predictions (default: 0.4)
- * @returns {Array} predictions - Predicted prices for the next 30 days.
+ * @param {Object} modelObj - { model, minMaxData } from training
+ * @param {Array} latestData - Array of { price, volume } up to the most recent day
+ * @param {number} clampPercentage - Default daily clamp percentage (e.g. 0.02 for 2%)
+ * @param {number} totalClampLimit - Maximum total gain/loss over 30 days (e.g. 0.10 for ±10%)
+ * @param {number} smoothingFactor - Weight for blending predictions with the previous day
+ * @returns {Array} predictions - Predicted prices for the next 30 days
  */
-async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage = 0.03, smoothingFactor = 0.4) {
+async function predictNext30DaysWithVolume(
+  modelObj,
+  latestData,
+  clampPercentage = 0.02,       // Try 2% instead of 3%
+  totalClampLimit = 0.10,      // ±10% total clamp over 30 days
+  smoothingFactor = 0.4
+) {
   const { model, minMaxData } = modelObj;
   const { minPrice, maxPrice, minVolume, maxVolume } = minMaxData;
   const normalize = (value, min, max) => (value - min) / (max - min);
   const denormalize = (value, min, max) => value * (max - min) + min;
 
-  // Use the last known price as the starting point
+  // Use the last known day’s price and create a 30-day window
   const lastKnownPrice = latestData[latestData.length - 1].price;
-
-  // Prepare the initial input using normalized price and volume
   let currentInput = latestData.map(item => [
     normalize(item.price, minPrice, maxPrice),
     normalize(item.volume, minVolume, maxVolume),
   ]);
 
-  // Calculate historical volatility based on absolute daily percentage changes
+  // Calculate daily percent changes for volatility
   let pctChanges = [];
   for (let i = 1; i < latestData.length; i++) {
-    const change = (latestData[i].price - latestData[i - 1].price) / latestData[i - 1].price;
-    pctChanges.push(Math.abs(change));
+    const prev = latestData[i - 1].price;
+    const curr = latestData[i].price;
+    pctChanges.push(Math.abs((curr - prev) / prev));
   }
-  const avgVolatility = pctChanges.reduce((acc, val) => acc + val, 0) / pctChanges.length;
-  
-  // Use a dynamic clamp: the smaller of clampPercentage and 1.5 * average volatility
-  const dynamicClamp = Math.min(clampPercentage, avgVolatility * 1.5);
-  console.log(`Using dynamic clamp percentage: ${dynamicClamp.toFixed(4)} based on average volatility: ${avgVolatility.toFixed(4)}`);
+  const avgVolatility = pctChanges.reduce((acc, val) => acc + val, 0) / pctChanges.length || 0;
+
+  // Optionally compute standard deviation for daily clamp
+  let squaredDiffs = [];
+  for (let i = 0; i < pctChanges.length; i++) {
+    squaredDiffs.push((pctChanges[i] - avgVolatility) ** 2);
+  }
+  const stdDev = Math.sqrt(
+    squaredDiffs.reduce((a, b) => a + b, 0) / (squaredDiffs.length || 1)
+  );
+
+  // Use whichever is smaller: clampPercentage or 2 x stdDev
+  const dynamicClamp = Math.min(clampPercentage, stdDev * 2);
+  console.log(`Using daily clamp: ${dynamicClamp.toFixed(4)}`);
+
+  // Prepare for cumulative clamp
+  const startPrice = lastKnownPrice;  // The reference for total growth limit
 
   const predictions = [];
   let prevDayPrice = lastKnownPrice;
 
   for (let day = 0; day < 30; day++) {
+    // 1) Model prediction
     const inputTensor = tf.tensor3d([currentInput], [1, 30, 2]);
     const predictedNormPrice = model.predict(inputTensor).dataSync()[0];
     let predictedPrice = denormalize(predictedNormPrice, minPrice, maxPrice);
 
-    // Clamp prediction to within ±dynamicClamp of the previous day’s price
+    // 2) Daily clamp: ensure day’s move from prevDayPrice is within ±dynamicClamp
     const maxUpside = prevDayPrice * (1 + dynamicClamp);
     const maxDownside = prevDayPrice * (1 - dynamicClamp);
     if (predictedPrice > maxUpside) {
@@ -921,15 +942,26 @@ async function predictNext30DaysWithVolume(modelObj, latestData, clampPercentage
       predictedPrice = maxDownside;
     }
 
-    // Smooth the prediction by blending it with the previous day’s price
-    const smoothedPrice = prevDayPrice * (1 - smoothingFactor) + predictedPrice * smoothingFactor;
+    // 3) Cumulative clamp: ensure we haven’t grown or dropped more than totalClampLimit from startPrice
+    const maxAbsoluteUpside = startPrice * (1 + totalClampLimit);
+    const maxAbsoluteDownside = startPrice * (1 - totalClampLimit);
+    if (predictedPrice > maxAbsoluteUpside) {
+      predictedPrice = maxAbsoluteUpside;
+    } else if (predictedPrice < maxAbsoluteDownside) {
+      predictedPrice = maxAbsoluteDownside;
+    }
+
+    // 4) Smooth the prediction by blending with the previous day’s price
+    const smoothedPrice =
+      prevDayPrice * (1 - smoothingFactor) + predictedPrice * smoothingFactor;
     predictions.push(smoothedPrice);
 
-    // Update the input window by discarding the oldest day and adding the new prediction.
+    // 5) Update the input window
     currentInput = [
       ...currentInput.slice(1),
       [
         normalize(smoothedPrice, minPrice, maxPrice),
+        // Keep volume the same as the last day’s volume (or adjust as you see fit)
         currentInput[currentInput.length - 1][1],
       ],
     ];
