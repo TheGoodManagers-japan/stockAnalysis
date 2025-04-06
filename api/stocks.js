@@ -5,15 +5,33 @@ function toNumber(value) {
   return isNaN(num) ? 0 : num;
 }
 
+function getDateYearsAgo(years) {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() - years);
+  return date;
+}
+
 async function fetchYahooFinanceData(ticker) {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
 
+    const now = new Date();
+    const oneYearAgo = getDateYearsAgo(1);
+    const fiveYearsAgo = getDateYearsAgo(5);
+
     const [quote, historicalPrices, dividendGrowth, summary] =
       await Promise.all([
         yahooFinance.quote(ticker),
-        yahooFinance.historical(ticker, { period1: "1y", interval: "1d" }),
-        yahooFinance.historical(ticker, { period1: "5y", events: "dividends" }),
+        yahooFinance.historical(ticker, {
+          period1: oneYearAgo,
+          period2: now,
+          interval: "1d",
+        }),
+        yahooFinance.historical(ticker, {
+          period1: fiveYearsAgo,
+          period2: now,
+          events: "dividends",
+        }),
         yahooFinance.quoteSummary(ticker, { modules: ["financialData"] }),
       ]);
 
@@ -167,7 +185,7 @@ async function fetchYahooFinanceData(ticker) {
       pbRatio: toNumber(quote.priceToBook),
       dividendYield: toNumber(quote.dividendYield) * 100,
       dividendGrowth5yr: toNumber(
-        dividendGrowth.length >= 2
+        dividendGrowth.length >= 2 && dividendGrowth[0].dividends
           ? ((dividendGrowth[dividendGrowth.length - 1].dividends -
               dividendGrowth[0].dividends) /
               dividendGrowth[0].dividends) *
