@@ -703,28 +703,50 @@ window.scan = {
           stock.finalScore = parseFloat(finalScore.toFixed(2));
 
           // 10) Send data in Bubble key format
-          const stockObject = {
-            _api_c2_ticker: stock.ticker,
-            _api_c2_sector: stock.sector,
-            _api_c2_currentPrice: stock.currentPrice,
-            _api_c2_highPrice: stock.highPrice,
-            _api_c2_lowPrice: stock.lowPrice,
-            _api_c2_openPrice: stock.openPrice,
-            _api_c2_prevClosePrice: stock.prevClosePrice,
-            _api_c2_marketCap: stock.marketCap,
-            _api_c2_peRatio: stock.peRatio,
-            _api_c2_pbRatio: stock.pbRatio,
-            _api_c2_dividendYield: stock.dividendYield,
-            _api_c2_fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-            _api_c2_fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-            _api_c2_eps: stock.eps,
-            _api_c2_prediction: stock.prediction,
-            _api_c2_stopLoss: stock.stopLoss,
-            _api_c2_targetPrice: stock.targetPrice,
-            _api_c2_score: stock.score,
-            _api_c2_growthPotential: stock.growthPotential,
-            _api_c2_finalScore: stock.finalScore,
-          };
+         const stockObject = {
+           _api_c2_ticker: stock.ticker,
+           _api_c2_sector: stock.sector,
+           _api_c2_currentPrice: stock.currentPrice,
+           _api_c2_highPrice: stock.highPrice,
+           _api_c2_lowPrice: stock.lowPrice,
+           _api_c2_openPrice: stock.openPrice,
+           _api_c2_prevClosePrice: stock.prevClosePrice,
+           _api_c2_marketCap: stock.marketCap,
+           _api_c2_peRatio: stock.peRatio,
+           _api_c2_pbRatio: stock.pbRatio,
+           _api_c2_dividendYield: stock.dividendYield,
+           _api_c2_dividendGrowth5yr: stock.dividendGrowth5yr,
+           _api_c2_fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+           _api_c2_fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+           _api_c2_epsTrailing: stock.epsTrailingTwelveMonths,
+           _api_c2_epsForward: stock.epsForward,
+           _api_c2_epsGrowthRate: stock.epsGrowthRate,
+           _api_c2_debtEquityRatio: stock.debtEquityRatio,
+           _api_c2_beta: stock.beta,
+           _api_c2_movingAverage50d: stock.movingAverage50d,
+           _api_c2_movingAverage200d: stock.movingAverage200d,
+
+           // 📈 Technical Indicators
+           _api_c2_rsi14: stock.rsi14,
+           _api_c2_macd: stock.macd,
+           _api_c2_macdSignal: stock.macdSignal,
+           _api_c2_bollingerMid: stock.bollingerMid,
+           _api_c2_bollingerUpper: stock.bollingerUpper,
+           _api_c2_bollingerLower: stock.bollingerLower,
+           _api_c2_stochasticK: stock.stochasticK,
+           _api_c2_stochasticD: stock.stochasticD,
+           _api_c2_obv: stock.obv,
+           _api_c2_atr14: stock.atr14,
+
+           // 🔮 Prediction & Strategy
+           _api_c2_prediction: stock.prediction,
+           _api_c2_stopLoss: stock.stopLoss,
+           _api_c2_targetPrice: stock.targetPrice,
+           _api_c2_growthPotential: stock.growthPotential,
+           _api_c2_score: stock.score,
+           _api_c2_finalScore: stock.finalScore,
+         };
+
 
           console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
           bubble_fn_result(stockObject);
