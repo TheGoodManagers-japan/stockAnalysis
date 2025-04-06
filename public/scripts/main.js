@@ -168,10 +168,12 @@ function calculateStopLossAndTarget(stock, prediction) {
  ***********************************************/
 function computeScore(stock, sector) {
   const weights = {
-    valuation: 0.35,
-    marketStability: 0.25,
-    dividendBenefit: 0.2,
-    historicalPerformance: 0.2,
+    valuation: 0.25,
+    marketStability: 0.2,
+    dividendBenefit: 0.15,
+    historicalPerformance: 0.15,
+    momentum: 0.15,
+    volatilityRisk: 0.1,
   };
 
   const sectorMultipliers = {
@@ -222,47 +224,74 @@ function computeScore(stock, sector) {
     dividend: 1.0,
   };
 
-  // 1) Valuation Score
-  let valuationScore = 1;
-  if (stock.peRatio < 15) valuationScore *= 1.1;
-  else if (stock.peRatio >= 15 && stock.peRatio <= 25) valuationScore *= 1;
-  else valuationScore *= 0.8;
+  // --- Valuation Score (PE & PB Ratios with refinement)
+  const peScore =
+    stock.peRatio > 0
+      ? Math.max(0, Math.min(1, (20 - stock.peRatio) / 20))
+      : 0.5;
+  const pbScore =
+    stock.pbRatio > 0
+      ? Math.max(0, Math.min(1, (2.5 - stock.pbRatio) / 2.5))
+      : 0.5;
+  let valuationScore = ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
 
-  if (stock.pbRatio < 1) valuationScore *= 1.2;
-  else if (stock.pbRatio >= 1 && stock.pbRatio <= 3) valuationScore *= 1;
-  else valuationScore *= 0.8;
-
-  valuationScore *= sectorMultiplier.valuation;
-  valuationScore = Math.min(Math.max(valuationScore, 0.5), 1.2);
-
-  // 2) Market Stability (volatility)
+  // --- Market Stability (Volatility + Beta combined)
   const volatility = calculateHistoricalVolatility(stock.historicalData);
-  const maxVol = 0.03;
-  const stabilityRaw = 1 - Math.min(volatility / maxVol, 1);
-  const stabilityScore = 0.5 + 0.5 * stabilityRaw;
-  const adjustedStabilityScore = stabilityScore * sectorMultiplier.stability;
+  const normalizedVol = Math.min(volatility / 0.05, 1);
+  const betaScore = stock.beta
+    ? Math.max(0, 1 - Math.abs(stock.beta - 1) / 1)
+    : 0.5;
+  const stabilityScore =
+    ((1 - normalizedVol) * 0.7 + betaScore * 0.3) * sectorMultiplier.stability;
 
-  // 3) Dividend Benefit
-  const dividendBenefit = Math.min(stock.dividendYield / 100, 0.05);
-  const adjustedDividendBenefit = dividendBenefit * sectorMultiplier.dividend;
+  // --- Dividend Benefit (Yield + Growth combined)
+  const dividendYieldScore = Math.min(stock.dividendYield / 5, 1);
+  const dividendGrowthScore = stock.dividendGrowth5yr
+    ? Math.min(stock.dividendGrowth5yr / 10, 1)
+    : 0.5;
+  const dividendScore =
+    (dividendYieldScore * 0.7 + dividendGrowthScore * 0.3) *
+    sectorMultiplier.dividend;
 
-  // 4) Historical Performance
+  // --- Historical Performance (Position in 52-week range)
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
-  const positionInRange =
-    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0;
-  const historicalPerformance = Math.min(Math.max(positionInRange, 0), 1);
+  const position =
+    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0.5;
+  const historicalPerformance = position;
 
-  // Weighted Sum
+  // --- Momentum Score (Enhanced RSI, MACD, Stochastic)
+  let momentumScore = 0;
+  if (stock.rsi14) {
+    momentumScore += (stock.rsi14 - 30) / 40; // Scaled between RSI 30-70
+  }
+  if (stock.macd && stock.macdSignal) {
+    momentumScore += stock.macd > stock.macdSignal ? 0.3 : 0;
+  }
+  if (stock.stochasticK) {
+    momentumScore += (stock.stochasticK / 100) * 0.3;
+  }
+  momentumScore = Math.min(momentumScore / 2, 1); // normalize
+
+  // --- Volatility Risk (Enhanced ATR & Bollinger bands check)
+  let volatilityRiskScore = 1;
+  const atrRatio = stock.atr14 / stock.currentPrice;
+  volatilityRiskScore -= atrRatio > 0.03 ? 0.2 : atrRatio > 0.015 ? 0.1 : 0;
+  if (stock.currentPrice > stock.bollingerUpper) volatilityRiskScore -= 0.1;
+  if (stock.currentPrice < stock.bollingerLower) volatilityRiskScore -= 0.1;
+  volatilityRiskScore = Math.max(volatilityRiskScore, 0.5);
+
+  // --- Final Weighted Score
   const rawScore =
     valuationScore * weights.valuation +
-    adjustedStabilityScore * weights.marketStability +
-    adjustedDividendBenefit * weights.dividendBenefit +
-    historicalPerformance * weights.historicalPerformance;
+    stabilityScore * weights.marketStability +
+    dividendScore * weights.dividendBenefit +
+    historicalPerformance * weights.historicalPerformance +
+    momentumScore * weights.momentum +
+    volatilityRiskScore * weights.volatilityRisk;
 
-  const finalScore = Math.min(Math.max(rawScore, 0), 1);
-
-  return finalScore;
+  return Math.min(Math.max(rawScore, 0), 1);
 }
+
 
 /***********************************************
  * 4) FETCH SINGLE STOCK DATA
@@ -564,46 +593,67 @@ window.scan = {
 ];
 
       for (const tickerObj of tickers) {
-        console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
+  console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
-        try {
-          // 1) Fetch Yahoo data
-          const result = await fetchSingleStockData(tickerObj);
-          if (!result.success) {
-            console.error("Error fetching stock analysis:", result.error);
-            throw new Error("Failed to fetch Yahoo data.");
-          }
+  try {
+    // 1) Fetch Yahoo data
+    const result = await fetchSingleStockData(tickerObj);
+    if (!result.success) {
+      console.error("Error fetching stock analysis:", result.error);
+      throw new Error("Failed to fetch Yahoo data.");
+    }
 
-          const { code, sector, yahooData } = result.data;
-          if (
-            !yahooData ||
-            !yahooData.currentPrice ||
-            !yahooData.highPrice ||
-            !yahooData.lowPrice
-          ) {
-            console.error(
-              `Incomplete Yahoo data for ${code}. Aborting calculation.`
-            );
-            throw new Error("Critical Yahoo data is missing.");
-          }
+    const { code, sector, yahooData } = result.data;
+    if (
+      !yahooData ||
+      !yahooData.currentPrice ||
+      !yahooData.highPrice ||
+      !yahooData.lowPrice
+    ) {
+      console.error(
+        `Incomplete Yahoo data for ${code}. Aborting calculation.`
+      );
+      throw new Error("Critical Yahoo data is missing.");
+    }
 
-          // 2) Build stock object
-          const stock = {
-            ticker: code,
-            sector,
-            currentPrice: yahooData.currentPrice,
-            highPrice: yahooData.highPrice,
-            lowPrice: yahooData.lowPrice,
-            openPrice: yahooData.openPrice,
-            prevClosePrice: yahooData.prevClosePrice,
-            marketCap: yahooData.marketCap,
-            peRatio: yahooData.peRatio,
-            pbRatio: yahooData.pbRatio,
-            dividendYield: yahooData.dividendYield,
-            fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-            fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-            eps: yahooData.eps,
-          };
+    // 2) Build stock object
+    const stock = {
+      ticker: code,
+      sector,
+      currentPrice: yahooData.currentPrice,
+      highPrice: yahooData.highPrice,
+      lowPrice: yahooData.lowPrice,
+      openPrice: yahooData.openPrice,
+      prevClosePrice: yahooData.prevClosePrice,
+      marketCap: yahooData.marketCap,
+      peRatio: yahooData.peRatio,
+      pbRatio: yahooData.pbRatio,
+      dividendYield: yahooData.dividendYield,
+      dividendGrowth5yr: yahooData.dividendGrowth5yr,
+      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+      epsForward: yahooData.epsForward,
+      epsGrowthRate: yahooData.epsGrowthRate,
+      debtEquityRatio: yahooData.debtEquityRatio,
+      beta: yahooData.beta,
+      movingAverage50d: yahooData.movingAverage50d,
+      movingAverage200d: yahooData.movingAverage200d,
+
+      // 📈 Technical indicators
+      rsi14: yahooData.rsi14,
+      macd: yahooData.macd,
+      macdSignal: yahooData.macdSignal,
+      bollingerMid: yahooData.bollingerMid,
+      bollingerUpper: yahooData.bollingerUpper,
+      bollingerLower: yahooData.bollingerLower,
+      stochasticK: yahooData.stochasticK,
+      stochasticD: yahooData.stochasticD,
+      obv: yahooData.obv,
+      atr14: yahooData.atr14,
+    };
+
+
 
         const historicalData = await fetchHistoricalData(stock.ticker);
         stock.historicalData = historicalData || [];
