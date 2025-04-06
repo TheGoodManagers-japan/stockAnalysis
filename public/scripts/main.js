@@ -604,6 +604,7 @@ window.scan = {
     }
 
     const { code, sector, yahooData } = result.data;
+    console.log("yahoo data:", yahooData)
     if (
       !yahooData ||
       !yahooData.currentPrice ||
