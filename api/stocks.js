@@ -13,7 +13,7 @@ async function fetchYahooFinanceData(ticker) {
       await Promise.all([
         yahooFinance.quote(ticker),
         yahooFinance.historical(ticker, { period1: "1y", interval: "1d" }),
-        yahooFinance.historical(ticker, { period1: "5y", events: "div" }),
+        yahooFinance.historical(ticker, { period1: "5y", events: "dividends" }),
         yahooFinance.quoteSummary(ticker, { modules: ["financialData"] }),
       ]);
 
