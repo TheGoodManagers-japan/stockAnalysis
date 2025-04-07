@@ -400,14 +400,16 @@ function getTechnicalSummaryLabel(stock) {
   if (isAboveMidBB) score += weights.bollinger;
   if (hasOBV) score += weights.obv;
 
-  // Final label thresholds using original label set
-  if (score >= 7 && isLowVolatility) return "Strong Bullish 📈";
-  if (score <= 1) return "Bearish 🟥";
-  if (score >= 5.5) return "Oversold 🟢"; // aligns with improving technicals
-  if (score >= 4) return "Possible Reversal 🟡";
-  if (score >= 2.5) return "Neutral ⚪️";
-  return "Weak Signal 🟠"; // fallback (not in original, optional)
+  // Max score is 8
+  // Relaxed scoring logic to avoid constant "Neutral" outputs
+  if (score >= 6) return "Strong Bullish 📈";
+  if (score >= 4.5) return "Oversold 🟢";
+  if (score >= 3.5) return "Possible Reversal 🟡";
+  if (score >= 2) return "Neutral ⚪️";
+  if (score >= 1) return "Weak Signal 🟠";
+  return "Bearish 🟥";
 }
+
 
 
 
