@@ -400,15 +400,15 @@ function getTechnicalSummaryLabel(stock) {
   if (isAboveMidBB) score += weights.bollinger;
   if (hasOBV) score += weights.obv;
 
-  // Max score is 8
-  // Relaxed scoring logic to avoid constant "Neutral" outputs
-  if (score >= 6) return "Strong Bullish 📈";
-  if (score >= 4.5) return "Oversold 🟢";
-  if (score >= 3.5) return "Possible Reversal 🟡";
+  // Adjusted thresholds — easier to trigger good signals
+  if (score >= 5.5) return "Strong Bullish 📈";
+  if (score >= 4) return "Oversold 🟢";
+  if (score >= 3) return "Possible Reversal 🟡";
   if (score >= 2) return "Neutral ⚪️";
   if (score >= 1) return "Weak Signal 🟠";
   return "Bearish 🟥";
 }
+
 
 
 
@@ -501,21 +501,26 @@ function getEntryTimingLabel(stock) {
 
   let score = 0;
 
+  // Positive signals
   if (strongClose) score += 2;
-  if (nearLow) score += 1;
-  if (nearHigh) score += 1;
+  if (nearLow) score += 1.5;
+  if (nearHigh) score += 1.5;
   if (!isVolatile) score += 1;
-  if (weakClose) score -= 2;
-  if (isVolatile) score -= 1;
 
+  // Negative signals
+  if (weakClose) score -= 1;
+  if (isVolatile) score -= 0.5;
+
+  // Final label thresholds (rebalanced)
   if (score >= 4) return "📈 Breakout – Good Entry Zone";
   if (score >= 3) return "🟢 Rebound Setup – Potential Entry";
-  if (score === 2) return "✅ Stable Strength – Worth Watching";
-  if (score <= -2) return "🔴 Volatile & Weak – Avoid Entry";
-  if (score < 0) return "⚠️ Weak Close – Wait for Confirmation";
+  if (score >= 2) return "✅ Stable Strength – Worth Watching";
+  if (score <= -1.5) return "🔴 Volatile & Weak – Avoid Entry";
+  if (score < 1) return "⚠️ Weak Close – Wait for Confirmation";
 
   return "⚪ Sideways / Neutral";
 }
+
 
 
 
