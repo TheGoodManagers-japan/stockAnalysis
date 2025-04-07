@@ -410,15 +410,21 @@ function getTechnicalSummaryLabel(stock) {
     currentPrice < bollingerMid &&
     !isHighVolatility &&
     hasOBV
-  ) {
+  ) 
+  
+  {
+    console.log(score);
     return "Bearish 🟥";
+    
   }
 
   if (priceNearUpper && isOverbought && isBearishMACD) {
+    console.log(score);
     return "Overbought 🔴";
   }
 
   if (priceNearLower && isOversold && isBullishMACD) {
+    console.log(score);
     return "Oversold 🟢";
   }
 
@@ -426,9 +432,10 @@ function getTechnicalSummaryLabel(stock) {
     (isBullishMACD && isBearishTrend && isBullishStochastic) ||
     (isOversold && isBullishMACD)
   ) {
+    console.log(score);
     return "Possible Reversal 🟡";
   }
-
+  console.log(score);
   return "Neutral ⚪️";
 }
 
