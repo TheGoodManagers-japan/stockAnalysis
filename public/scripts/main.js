@@ -373,31 +373,45 @@ function getTechnicalSummaryLabel(stock) {
     atr14,
   } = stock;
 
+  // Signal checks
   const isBullishTrend = movingAverage50d > movingAverage200d;
   const isBullishMACD = macd > macdSignal;
   const isBullishStochastic = stochasticK > stochasticD;
-  const hasOBV = obv > 0;
   const isStrongRSI = rsi14 > 50;
   const isAboveMidBB = currentPrice > bollingerMid;
+  const hasOBV = obv > 0;
   const isLowVolatility = atr14 <= currentPrice * 0.02;
 
-  // 📊 Scoring Logic
-  let score = 0;
-  if (isBullishTrend) score++;
-  if (isBullishMACD) score++;
-  if (isBullishStochastic) score++;
-  if (isStrongRSI) score++;
-  if (isAboveMidBB) score++;
-  if (hasOBV) score++;
+  // Weighted scoring system
+  const weights = {
+    trend: 2, // MA50 > MA200
+    macd: 1.5, // MACD > Signal
+    stochastic: 1, // Stoch K > D
+    rsi: 1.5, // RSI > 50
+    bollinger: 1, // Price > Mid BB
+    obv: 1, // Volume confirmation
+  };
 
-  // 🏷️ Pure Score-Based Label
-  if (score === 6 && isLowVolatility) return "Very Strong Bullish 💎";
-  if (score >= 5) return "Strong Bullish 📈";
-  if (score >= 3) return "Moderate Bullish 🟢";
-  if (score === 2) return "Mixed ⚪️";
-  if (score === 1) return "Weak Signal 🟠";
+  let score = 0;
+  if (isBullishTrend) score += weights.trend;
+  if (isBullishMACD) score += weights.macd;
+  if (isBullishStochastic) score += weights.stochastic;
+  if (isStrongRSI) score += weights.rsi;
+  if (isAboveMidBB) score += weights.bollinger;
+  if (hasOBV) score += weights.obv;
+
+  const maxScore = Object.values(weights).reduce((a, b) => a + b, 0); // 8
+
+  // Score thresholds (adjusted to weighted max = 8)
+  if (score >= 7 && isLowVolatility) return "Strong Bullish 📈";
+  if (score >= 5.5) return "Moderate Bullish 🟢";
+  if (score >= 4) return "Possible Reversal 🟡";
+  if (score >= 2.5) return "Neutral ⚪️";
+  if (score >= 1) return "Weak Signal 🟠";
   return "Bearish 🟥";
 }
+
+
 
 
 
@@ -413,55 +427,49 @@ function getAdvancedFundamentalRating(stock) {
   } = stock;
 
   let score = 0;
-  let isStrongGrowth = false;
-  let isStrongDividend = false;
 
-  // Growth
+  // 📈 Growth (Weight: 2)
   if (epsGrowthRate > 10 && epsForward > epsTrailingTwelveMonths) {
     score += 2;
-    isStrongGrowth = true;
   } else if (epsGrowthRate > 1) {
     score += 1;
   } else if (epsGrowthRate < 0) {
     score -= 2;
   }
 
-  // Dividend Yield
+  // 💵 Dividend Yield (Weight: 2)
   if (dividendYield >= 4) {
     score += 2;
-    isStrongDividend = true;
   } else if (dividendYield >= 1) {
     score += 1;
   } else if (dividendYield === 0) {
     score -= 1;
   }
 
-  // Dividend Growth
+  // 📈 Dividend Growth (Weight: 1)
   if (dividendGrowth5yr >= 5) {
     score += 1;
-    isStrongDividend = true;
   } else if (dividendGrowth5yr < 0) {
     score -= 1;
   }
 
-  // Debt
+  // 🧾 Debt (Weight: 1)
   if (debtEquityRatio < 0.5) {
     score += 1;
   } else if (debtEquityRatio > 1.5) {
     score -= 1;
   }
 
-  // 🧠 Final Classification
-  if (score >= 5 && isStrongGrowth && isStrongDividend)
-    return "🟢 Excellent Fundamentals 💎";
-  if (score >= 4 && isStrongGrowth) return "🟡 Solid Growth 📈";
-  if (score >= 4 && isStrongDividend) return "🟩 Strong Dividend Stock 💵";
-  if (score >= 2 && !isStrongGrowth && isStrongDividend)
-    return "🟧 Value Play (Low Growth) 🧱";
+  // 🧠 Label Based on Score (Max = 6, Min = -4)
+  if (score >= 6) return "🟢 Excellent Fundamentals 💎";
+  if (score >= 5) return "🟡 Strong Growth 📈 + Dividend 💵";
+  if (score >= 4) return "🟩 Solid Fundamentals ✅";
+  if (score >= 2) return "🟧 Decent Value Play 🧱";
   if (score >= 0) return "⚪ Neutral Fundamentals 🤔";
-  if (score === -1 || score === -2) return "🟠 Watchlist Stock 🧐";
-  return "🔴 Weak Fundamentals ⚠️";
+  if (score === -1 || score === -2) return "🟠 Weak – Monitor 🧐";
+  return "🔴 Poor Fundamentals ⚠️";
 }
+
 
 
 function getEntryTimingLabel(stock) {
@@ -503,27 +511,36 @@ function getEntryTimingLabel(stock) {
 
 
 
-
 function getValuationSummary(stock) {
   const { peRatio, pbRatio, beta, marketCap } = stock;
   let score = 0;
 
-  if (peRatio < 15) score += 1;
+  // 🧮 P/E Ratio (max 2)
+  if (peRatio > 0 && peRatio < 15) score += 2;
+  else if (peRatio >= 15 && peRatio <= 25) score += 1;
   else if (peRatio > 25) score -= 1;
 
-  if (pbRatio < 1) score += 1;
+  // 📘 P/B Ratio (max 2)
+  if (pbRatio > 0 && pbRatio < 1) score += 2;
+  else if (pbRatio >= 1 && pbRatio <= 3) score += 1;
   else if (pbRatio > 3) score -= 1;
 
+  // ⚖️ Beta (max 1)
   if (beta < 1) score += 1;
   else if (beta > 1.2) score -= 1;
 
-  if (marketCap < 300_000_000_000) score -= 1;
-  else if (marketCap > 1_000_000_000_000) score += 1;
+  // 💰 Market Cap (max 1)
+  if (marketCap >= 1_000_000_000_000) score += 1;
+  else if (marketCap < 300_000_000_000) score -= 1;
 
-  if (score >= 2) return "Undervalued 📉";
-  if (score <= -2) return "Expensive 🔴";
-  return "Fairly Priced ⚖️";
+  // 🏷️ Final Label (max score = 6)
+  if (score >= 5) return "Deep Value 💎";
+  if (score >= 3) return "Undervalued 📉";
+  if (score >= 1) return "Fairly Priced ⚖️";
+  return "Overpriced 🔴";
 }
+
+
 
 
 
