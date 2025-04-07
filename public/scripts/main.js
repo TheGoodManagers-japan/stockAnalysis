@@ -366,8 +366,6 @@ function getTechnicalSummaryLabel(stock) {
     rsi14,
     macd,
     macdSignal,
-    bollingerUpper,
-    bollingerLower,
     bollingerMid,
     stochasticK,
     stochasticD,
@@ -375,68 +373,30 @@ function getTechnicalSummaryLabel(stock) {
     atr14,
   } = stock;
 
-  const priceNearUpper = currentPrice >= bollingerUpper * 0.98;
-  const priceNearLower = currentPrice <= bollingerLower * 1.02;
-  const isOverbought = rsi14 >= 70 || stochasticK >= 80;
-  const isOversold = rsi14 <= 30 || stochasticK <= 20;
-  const isBullishMACD = macd > macdSignal;
-  const isBearishMACD = macd < macdSignal;
   const isBullishTrend = movingAverage50d > movingAverage200d;
-  const isBearishTrend = movingAverage50d < movingAverage200d;
+  const isBullishMACD = macd > macdSignal;
   const isBullishStochastic = stochasticK > stochasticD;
-  const isBearishStochastic = stochasticK < stochasticD;
-  const isHighVolatility = atr14 > currentPrice * 0.02;
   const hasOBV = obv > 0;
+  const isStrongRSI = rsi14 > 50;
+  const isAboveMidBB = currentPrice > bollingerMid;
+  const isLowVolatility = atr14 <= currentPrice * 0.02;
 
   // 📊 Scoring Logic
   let score = 0;
   if (isBullishTrend) score++;
   if (isBullishMACD) score++;
   if (isBullishStochastic) score++;
-  if (rsi14 > 50) score++;
-  if (currentPrice > bollingerMid) score++;
+  if (isStrongRSI) score++;
+  if (isAboveMidBB) score++;
   if (hasOBV) score++;
 
-  // 🔢 Label Selection Based on Score + Conditions
-  if (score >= 5 && !isHighVolatility) {
-    return "Strong Bullish 📈";
-  }
-
-  if (
-    isBearishTrend &&
-    isBearishMACD &&
-    isBearishStochastic &&
-    rsi14 < 50 &&
-    currentPrice < bollingerMid &&
-    !isHighVolatility &&
-    hasOBV
-  ) 
-  
-  {
-    console.log(score);
-    return "Bearish 🟥";
-    
-  }
-
-  if (priceNearUpper && isOverbought && isBearishMACD) {
-    console.log(score);
-    return "Overbought 🔴";
-  }
-
-  if (priceNearLower && isOversold && isBullishMACD) {
-    console.log(score);
-    return "Oversold 🟢";
-  }
-
-  if (
-    (isBullishMACD && isBearishTrend && isBullishStochastic) ||
-    (isOversold && isBullishMACD)
-  ) {
-    console.log(score);
-    return "Possible Reversal 🟡";
-  }
-  console.log(score);
-  return "Neutral ⚪️";
+  // 🏷️ Pure Score-Based Label
+  if (score === 6 && isLowVolatility) return "Very Strong Bullish 💎";
+  if (score >= 5) return "Strong Bullish 📈";
+  if (score >= 3) return "Moderate Bullish 🟢";
+  if (score === 2) return "Mixed ⚪️";
+  if (score === 1) return "Weak Signal 🟠";
+  return "Bearish 🟥";
 }
 
 
