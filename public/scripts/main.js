@@ -397,38 +397,37 @@ function getTechnicalSummaryLabel(stock) {
   };
 
   let score = 0;
+
   if (isBullishTrend) score += weights.trend;
   if (isBullishMACD) score += weights.macd;
   if (isBullishStochastic) score += weights.stochastic;
 
-  // RSI nuanced scoring
-  if (isStrongRSI) score += weights.rsi;
-  else if (isModerateRSI) score += weights.rsi * 0.5;
-
-  // Bollinger Band nuanced scoring
-  if (isStrongBB) score += weights.bollinger;
-  else if (isAboveMidBB) score += weights.bollinger * 0.5;
-
-  // Volatility adjustment
-  if (isLowVolatility && score >= 4) {
-    score += 0.5; // bonus for stable bullishness
-  } else if (!isLowVolatility && score < 2) {
-    score -= 0.5; // penalty for bearish volatility
+  if (isStrongRSI) {
+    score += weights.rsi;
+  } else if (isModerateRSI) {
+    score += weights.rsi * 0.5;
   }
 
-  // Thresholds for labels
-  if (score >= 6) return "Strong Bullish 📈";
-  if (score >= 4.5) return "Bullish Momentum 🟢";
-  if (score >= 3) return "Possible Reversal 🟡";
+  if (isStrongBB) {
+    score += weights.bollinger;
+  } else if (isAboveMidBB) {
+    score += weights.bollinger * 0.5;
+  }
+
+  if (isLowVolatility && score >= 4) {
+    score += 0.5;
+  } else if (!isLowVolatility && score < 2) {
+    score -= 0.5;
+  }
+
+  // 🎯 Final Labels
+  if (score >= 6.5) return "Strong Bullish 📈";
+  if (score >= 5) return "Oversold 🟢";
+  if (score >= 3.5) return "Possible Reversal 🟡";
   if (score >= 2) return "Neutral ⚪️";
   if (score >= 1) return "Weak Signal 🟠";
   return "Bearish 🟥";
 }
-
-
-
-
-
 
 
 
@@ -512,7 +511,6 @@ function getAdvancedFundamentalRating(stock) {
 
 function getEntryTimingLabel(stock) {
   const {
-    ticker,
     currentPrice,
     openPrice,
     highPrice,
@@ -531,61 +529,27 @@ function getEntryTimingLabel(stock) {
 
   let score = 0;
 
-  console.log(`\n📊 Entry Timing Debug: ${ticker || "Unknown"}`);
-  console.log({
-    currentPrice,
-    openPrice,
-    highPrice,
-    lowPrice,
-    prevClosePrice,
-    dailyRange,
-    isVolatile,
-    nearHigh,
-    nearLow,
-    strongClose,
-    weakClose,
-  });
+  // Strength indicators
+  if (strongClose) score += 2;
+  if (nearHigh) score += 1.5;
+  if (isVolatile && strongClose) score += 1;
+  if (!isVolatile) score += 0.5;
 
-  if (strongClose) {
-    score += 2;
-    console.log("✔️ Strong close → +2");
-  }
-  if (weakClose) {
-    score -= 1;
-    console.log("❌ Weak close → -1");
-  }
+  // Caution indicators
+  if (nearLow) score -= 0.5;
+  if (weakClose) score -= 1;
+  if (isVolatile && weakClose) score -= 1;
 
-  if (nearHigh) {
-    score += 1.5;
-    console.log("✔️ Near 52W High → +1.5");
-  }
-  if (nearLow) {
-    score -= 1;
-    console.log("⚠️ Near 52W Low (Caution) → -1");
-  }
-
-  if (isVolatile && strongClose) {
-    score += 1;
-    console.log("🚀 High volatility with strong close → +1");
-  } else if (isVolatile && weakClose) {
-    score -= 1;
-    console.log("❌ High volatility with weak close → -1");
-  } else if (!isVolatile) {
-    score += 0.5;
-    console.log("✔️ Low volatility → +0.5");
-  }
-
-  console.log("📉 Final Entry Score:", score);
-
-  // 🎯 ORIGINAL LABELS RESTORED:
-  if (score >= 3.5) return "📈 Breakout – Good Entry Zone";
-  if (score >= 2.5) return "🟢 Rebound Setup – Potential Entry";
-  if (score === 1.5) return "✅ Stable Strength – Worth Watching";
-  if (score <= -1.5) return "🔴 Volatile & Weak – Avoid Entry";
-  if (score < 1) return "⚠️ Weak Close – Wait for Confirmation";
-
-  return "⚪ Sideways / Neutral";
+  // 🏷️ Final Labels
+  if (score >= 4.5) return "📈 Breakout – Good Entry Zone";
+  if (score >= 3.5) return "🟢 Rebound Setup – Potential Entry";
+  if (score >= 2.5) return "✅ Stable Strength – Worth Watching";
+  if (score >= 1.5) return "⚪ Sideways / Neutral";
+  if (score >= 0) return "⚠️ Weak Close – Wait for Confirmation";
+  if (score >= -2) return "🔴 Volatile & Weak – Avoid Entry";
+  return "🚫 High Risk – Volatile & Weak";
 }
+
 
 
 
@@ -597,31 +561,36 @@ function getValuationSummary(stock) {
   const { peRatio, pbRatio, beta, marketCap } = stock;
   let score = 0;
 
-  // 🧮 P/E Ratio (improved)
-  if (peRatio > 0 && peRatio <= 12) score += 2;
-  else if (peRatio > 12 && peRatio <= 20) score += 1;
+  // 🧮 P/E Ratio
+  if (peRatio > 0 && peRatio <= 10) score += 2;
+  else if (peRatio > 10 && peRatio <= 18) score += 1;
   else if (peRatio > 30) score -= 2;
-  else if (peRatio > 20 && peRatio <= 30) score -= 1;
+  else if (peRatio > 18 && peRatio <= 30) score -= 1;
 
-  // 📘 P/B Ratio (nuanced)
-  if (pbRatio >= 0.5 && pbRatio < 1.5) score += 2;
-  else if (pbRatio >= 1.5 && pbRatio <= 3) score += 1;
-  else if (pbRatio < 0.5 || pbRatio > 5) score -= 1;
+  // 📘 P/B Ratio
+  if (pbRatio > 0 && pbRatio < 1) score += 2;
+  else if (pbRatio >= 1 && pbRatio <= 2.5) score += 1;
+  else if (pbRatio < 0.5 || pbRatio > 4) score -= 1;
 
-  // ⚖️ Beta (refined)
-  if (beta < 0.8) score += 1;
+  // ⚖️ Beta
+  if (beta < 0.9) score += 0.5;
   else if (beta > 1.5) score -= 1;
 
-  // 💰 Market Cap (adjusted)
-  if (marketCap >= 100_000_000_000) score += 1;
-  else if (marketCap < 10_000_000_000) score -= 1;
+  // 💰 Market Cap
+  if (marketCap >= 1_000_000_000_000) score += 0.5;
+  else if (marketCap < 100_000_000_000) score -= 0.5;
 
   // 🏷️ Final Label
-  if (score >= 5) return "Deep Value 💎";
-  if (score >= 3) return "Undervalued 📉";
-  if (score >= 1) return "Fairly Priced ⚖️";
-  return "Overpriced 🔴";
+  if (score >= 6) return "💰 Exceptional Value";
+  if (score >= 4.5) return "💎 Deep Value";
+  if (score >= 3) return "📉 Undervalued";
+  if (score >= 1.5) return "⚖️ Fairly Priced";
+  if (score >= 0) return "🟡 Slightly Overvalued";
+  if (score >= -2) return "🔴 Overvalued";
+  return "🚫 Highly Overvalued";
 }
+
+
 
 
 
