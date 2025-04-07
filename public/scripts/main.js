@@ -384,12 +384,12 @@ function getTechnicalSummaryLabel(stock) {
 
   // Weighted scoring system
   const weights = {
-    trend: 2, // MA50 > MA200
-    macd: 1.5, // MACD > Signal
-    stochastic: 1, // Stoch K > D
-    rsi: 1.5, // RSI > 50
-    bollinger: 1, // Price > Mid BB
-    obv: 1, // Volume confirmation
+    trend: 2,
+    macd: 1.5,
+    stochastic: 1,
+    rsi: 1.5,
+    bollinger: 1,
+    obv: 1,
   };
 
   let score = 0;
@@ -400,16 +400,15 @@ function getTechnicalSummaryLabel(stock) {
   if (isAboveMidBB) score += weights.bollinger;
   if (hasOBV) score += weights.obv;
 
-  const maxScore = Object.values(weights).reduce((a, b) => a + b, 0); // 8
-
-  // Score thresholds (adjusted to weighted max = 8)
+  // Final label thresholds using original label set
   if (score >= 7 && isLowVolatility) return "Strong Bullish 📈";
-  if (score >= 5.5) return "Moderate Bullish 🟢";
+  if (score <= 1) return "Bearish 🟥";
+  if (score >= 5.5) return "Oversold 🟢"; // aligns with improving technicals
   if (score >= 4) return "Possible Reversal 🟡";
   if (score >= 2.5) return "Neutral ⚪️";
-  if (score >= 1) return "Weak Signal 🟠";
-  return "Bearish 🟥";
+  return "Weak Signal 🟠"; // fallback (not in original, optional)
 }
+
 
 
 
@@ -427,48 +426,56 @@ function getAdvancedFundamentalRating(stock) {
   } = stock;
 
   let score = 0;
+  let isStrongGrowth = false;
+  let isStrongDividend = false;
 
-  // 📈 Growth (Weight: 2)
+  // 📈 Earnings Growth
   if (epsGrowthRate > 10 && epsForward > epsTrailingTwelveMonths) {
     score += 2;
+    isStrongGrowth = true;
   } else if (epsGrowthRate > 1) {
     score += 1;
   } else if (epsGrowthRate < 0) {
     score -= 2;
   }
 
-  // 💵 Dividend Yield (Weight: 2)
+  // 💵 Dividend Yield
   if (dividendYield >= 4) {
     score += 2;
+    isStrongDividend = true;
   } else if (dividendYield >= 1) {
     score += 1;
   } else if (dividendYield === 0) {
     score -= 1;
   }
 
-  // 📈 Dividend Growth (Weight: 1)
+  // 📈 Dividend Growth
   if (dividendGrowth5yr >= 5) {
     score += 1;
+    isStrongDividend = true;
   } else if (dividendGrowth5yr < 0) {
     score -= 1;
   }
 
-  // 🧾 Debt (Weight: 1)
+  // 🧾 Debt
   if (debtEquityRatio < 0.5) {
     score += 1;
   } else if (debtEquityRatio > 1.5) {
     score -= 1;
   }
 
-  // 🧠 Label Based on Score (Max = 6, Min = -4)
-  if (score >= 6) return "🟢 Excellent Fundamentals 💎";
-  if (score >= 5) return "🟡 Strong Growth 📈 + Dividend 💵";
-  if (score >= 4) return "🟩 Solid Fundamentals ✅";
-  if (score >= 2) return "🟧 Decent Value Play 🧱";
+  // 🏷️ Final Classification (original logic)
+  if (score >= 5 && isStrongGrowth && isStrongDividend)
+    return "🟢 Excellent Fundamentals 💎";
+  if (score >= 4 && isStrongGrowth) return "🟡 Solid Growth 📈";
+  if (score >= 4 && isStrongDividend) return "🟩 Strong Dividend Stock 💵";
+  if (score >= 2 && !isStrongGrowth && isStrongDividend)
+    return "🟧 Value Play (Low Growth) 🧱";
   if (score >= 0) return "⚪ Neutral Fundamentals 🤔";
-  if (score === -1 || score === -2) return "🟠 Weak – Monitor 🧐";
-  return "🔴 Poor Fundamentals ⚠️";
+  if (score === -1 || score === -2) return "🟠 Watchlist Stock 🧐";
+  return "🔴 Weak Fundamentals ⚠️";
 }
+
 
 
 
