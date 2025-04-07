@@ -224,60 +224,64 @@ function computeScore(stock, sector) {
     dividend: 1.0,
   };
 
-  // --- Valuation Score (PE & PB Ratios with refinement)
+  // --- Valuation Score (Refined PE & PB)
   const peScore =
     stock.peRatio > 0
-      ? Math.max(0, Math.min(1, (20 - stock.peRatio) / 20))
+      ? Math.min(1, Math.max(0, (25 - stock.peRatio) / 25))
       : 0.5;
   const pbScore =
-    stock.pbRatio > 0
-      ? Math.max(0, Math.min(1, (2.5 - stock.pbRatio) / 2.5))
-      : 0.5;
-  let valuationScore = ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
+    stock.pbRatio > 0 ? Math.min(1, Math.max(0, (3 - stock.pbRatio) / 3)) : 0.5;
+  const valuationScore = ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
 
-  // --- Market Stability (Volatility + Beta combined)
+  // --- Market Stability (Improved Volatility)
   const volatility = calculateHistoricalVolatility(stock.historicalData);
-  const normalizedVol = Math.min(volatility / 0.05, 1);
+  const normalizedVol = Math.min(volatility / 0.1, 1);
   const betaScore = stock.beta
-    ? Math.max(0, 1 - Math.abs(stock.beta - 1) / 1)
+    ? Math.max(0, 1 - Math.abs(stock.beta - 1))
     : 0.5;
   const stabilityScore =
     ((1 - normalizedVol) * 0.7 + betaScore * 0.3) * sectorMultiplier.stability;
 
-  // --- Dividend Benefit (Yield + Growth combined)
-  const dividendYieldScore = Math.min(stock.dividendYield / 5, 1);
+  // --- Dividend Benefit (Enhanced)
+  const dividendYieldScore = Math.min(stock.dividendYield / 6, 1);
   const dividendGrowthScore = stock.dividendGrowth5yr
-    ? Math.min(stock.dividendGrowth5yr / 10, 1)
+    ? Math.min(Math.max(stock.dividendGrowth5yr / 10, 0), 1)
     : 0.5;
   const dividendScore =
     (dividendYieldScore * 0.7 + dividendGrowthScore * 0.3) *
     sectorMultiplier.dividend;
 
-  // --- Historical Performance (Position in 52-week range)
+  // --- Historical Performance (Unchanged)
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
   const position =
     range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0.5;
   const historicalPerformance = position;
 
-  // --- Momentum Score (Enhanced RSI, MACD, Stochastic)
+  // --- Momentum Score (Refined)
   let momentumScore = 0;
-  if (stock.rsi14) {
-    momentumScore += (stock.rsi14 - 30) / 40; // Scaled between RSI 30-70
+  if (stock.rsi14 !== undefined) {
+    momentumScore += Math.min(Math.max((stock.rsi14 - 30) / 40, 0), 1);
   }
-  if (stock.macd && stock.macdSignal) {
+  if (stock.macd !== undefined && stock.macdSignal !== undefined) {
     momentumScore += stock.macd > stock.macdSignal ? 0.3 : 0;
   }
-  if (stock.stochasticK) {
-    momentumScore += (stock.stochasticK / 100) * 0.3;
+  if (stock.stochasticK !== undefined) {
+    momentumScore += Math.min(Math.max(stock.stochasticK / 100, 0), 1) * 0.3;
   }
-  momentumScore = Math.min(momentumScore / 2, 1); // normalize
+  momentumScore = Math.min(momentumScore / 1.6, 1);
 
-  // --- Volatility Risk (Enhanced ATR & Bollinger bands check)
+  // --- Volatility Risk (Enhanced)
   let volatilityRiskScore = 1;
   const atrRatio = stock.atr14 / stock.currentPrice;
-  volatilityRiskScore -= atrRatio > 0.03 ? 0.2 : atrRatio > 0.015 ? 0.1 : 0;
-  if (stock.currentPrice > stock.bollingerUpper) volatilityRiskScore -= 0.1;
-  if (stock.currentPrice < stock.bollingerLower) volatilityRiskScore -= 0.1;
+  if (atrRatio > 0.04) volatilityRiskScore -= 0.3;
+  else if (atrRatio > 0.02) volatilityRiskScore -= 0.15;
+
+  if (
+    stock.currentPrice > stock.bollingerUpper ||
+    stock.currentPrice < stock.bollingerLower
+  )
+    volatilityRiskScore -= 0.1;
+
   volatilityRiskScore = Math.max(volatilityRiskScore, 0.5);
 
   // --- Final Weighted Score
