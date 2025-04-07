@@ -358,6 +358,220 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
+
+function getTechnicalSummaryLabel(stock) {
+  const {
+    currentPrice,
+    movingAverage50d,
+    movingAverage200d,
+    rsi14,
+    macd,
+    macdSignal,
+    bollingerUpper,
+    bollingerLower,
+    bollingerMid,
+    stochasticK,
+    stochasticD,
+    obv,
+    atr14,
+  } = stock;
+
+  const priceNearUpper = currentPrice >= bollingerUpper * 0.98;
+  const priceNearLower = currentPrice <= bollingerLower * 1.02;
+  const isOverbought = rsi14 >= 70 || stochasticK >= 80;
+  const isOversold = rsi14 <= 30 || stochasticK <= 20;
+  const isBullishMACD = macd > macdSignal;
+  const isBearishMACD = macd < macdSignal;
+  const isBullishTrend = movingAverage50d > movingAverage200d;
+  const isBearishTrend = movingAverage50d < movingAverage200d;
+  const isBullishStochastic = stochasticK > stochasticD;
+  const isBearishStochastic = stochasticK < stochasticD;
+  const isHighVolatility = atr14 > currentPrice * 0.02; // ATR > 2% of price
+  const hasOBV = obv > 0;
+
+  // ✅ Strong Bullish: trend + momentum + confirmation + stable + volume
+  if (
+    isBullishTrend &&
+    isBullishMACD &&
+    isBullishStochastic &&
+    rsi14 > 50 &&
+    currentPrice > bollingerMid &&
+    !isHighVolatility &&
+    hasOBV
+  ) {
+    return "Strong Bullish 📈";
+  }
+
+  // ❌ Strong Bearish: downtrend + momentum loss + volatility ok + volume confirming
+  if (
+    isBearishTrend &&
+    isBearishMACD &&
+    isBearishStochastic &&
+    rsi14 < 50 &&
+    currentPrice < bollingerMid &&
+    !isHighVolatility &&
+    hasOBV
+  ) {
+    return "Bearish 🟥";
+  }
+
+  // 🔴 Overbought zone
+  if (priceNearUpper && isOverbought && isBearishMACD) {
+    return "Overbought 🔴";
+  }
+
+  // 🟢 Oversold zone
+  if (priceNearLower && isOversold && isBullishMACD) {
+    return "Oversold 🟢";
+  }
+
+  // 🟡 Possible Reversal
+  if (
+    (isBullishMACD && isBearishTrend && isBullishStochastic) ||
+    (isOversold && isBullishMACD)
+  ) {
+    return "Possible Reversal 🟡";
+  }
+
+  return "Neutral ⚪️";
+}
+
+
+
+function getAdvancedFundamentalRating(stock) {
+  const {
+    epsGrowthRate,
+    epsForward,
+    epsTrailingTwelveMonths,
+    dividendYield,
+    dividendGrowth5yr,
+    debtEquityRatio,
+  } = stock;
+
+  let score = 0;
+  let isStrongGrowth = false;
+  let isStrongDividend = false;
+
+  // Growth
+  if (epsGrowthRate > 10 && epsForward > epsTrailingTwelveMonths) {
+    score += 2;
+    isStrongGrowth = true;
+  } else if (epsGrowthRate > 1) {
+    score += 1;
+  } else if (epsGrowthRate < 0) {
+    score -= 2;
+  }
+
+  // Dividend Yield
+  if (dividendYield >= 4) {
+    score += 2;
+    isStrongDividend = true;
+  } else if (dividendYield >= 1) {
+    score += 1;
+  } else if (dividendYield === 0) {
+    score -= 1;
+  }
+
+  // Dividend Growth
+  if (dividendGrowth5yr >= 5) {
+    score += 1;
+    isStrongDividend = true;
+  } else if (dividendGrowth5yr < 0) {
+    score -= 1;
+  }
+
+  // Debt
+  if (debtEquityRatio < 0.5) {
+    score += 1;
+  } else if (debtEquityRatio > 1.5) {
+    score -= 1;
+  }
+
+  // 🧠 Final Classification
+  if (score >= 5 && isStrongGrowth && isStrongDividend)
+    return "🟢 Excellent Fundamentals 💎";
+  if (score >= 4 && isStrongGrowth) return "🟡 Solid Growth 📈";
+  if (score >= 4 && isStrongDividend) return "🟩 Strong Dividend Stock 💵";
+  if (score >= 2 && !isStrongGrowth && isStrongDividend)
+    return "🟧 Value Play (Low Growth) 🧱";
+  if (score >= 0) return "⚪ Neutral Fundamentals 🤔";
+  if (score === -1 || score === -2) return "🟠 Watchlist Stock 🧐";
+  return "🔴 Weak Fundamentals ⚠️";
+}
+
+
+function getEntryTimingLabel(stock) {
+  const {
+    currentPrice,
+    openPrice,
+    highPrice,
+    lowPrice,
+    prevClosePrice,
+    fiftyTwoWeekHigh,
+    fiftyTwoWeekLow,
+  } = stock;
+
+  const dailyRange = highPrice - lowPrice;
+  const isVolatile = dailyRange > currentPrice * 0.03;
+  const nearHigh = currentPrice >= fiftyTwoWeekHigh * 0.98;
+  const nearLow = currentPrice <= fiftyTwoWeekLow * 1.02;
+  const strongClose = currentPrice > openPrice && currentPrice > prevClosePrice;
+  const weakClose = currentPrice < openPrice && currentPrice < prevClosePrice;
+
+  // 🟢 Ideal setups
+  if (nearHigh && strongClose && !isVolatile) {
+    return "📈 Breakout – Good Entry Zone";
+  }
+
+  if (nearLow && strongClose) {
+    return "🟢 Rebound Setup – Potential Entry";
+  }
+
+  // 🟡 Middle-ground setup
+  if (strongClose && !isVolatile) {
+    return "✅ Stable Strength – Worth Watching";
+  }
+
+  // 🔴 Avoid
+  if (weakClose && isVolatile) {
+    return "🔴 Volatile & Weak – Avoid Entry";
+  }
+
+  // 🟡 Weak but not chaotic
+  if (weakClose) {
+    return "⚠️ Weak Close – Wait for Confirmation";
+  }
+
+  // ⚪ No signal
+  return "⚪ Sideways / Neutral";
+}
+
+
+
+function getValuationSummary(stock) {
+  const { peRatio, pbRatio, beta, marketCap } = stock;
+  let score = 0;
+
+  if (peRatio < 15) score += 1;
+  else if (peRatio > 25) score -= 1;
+
+  if (pbRatio < 1) score += 1;
+  else if (pbRatio > 3) score -= 1;
+
+  if (beta < 1) score += 1;
+  else if (beta > 1.2) score -= 1;
+
+  if (marketCap < 300_000_000_000) score -= 1;
+  else if (marketCap > 1_000_000_000_000) score += 1;
+
+  if (score >= 2) return "Undervalued 📉";
+  if (score <= -2) return "Expensive 🔴";
+  return "Fairly Priced ⚖️";
+}
+
+
+
+
 /***********************************************
  * 6) SCAN LOGIC (Main Workflow)
  ***********************************************/
@@ -701,6 +915,12 @@ window.scan = {
           stock.prediction = prediction;
           stock.growthPotential = parseFloat(growthPotential.toFixed(2));
           stock.finalScore = parseFloat(finalScore.toFixed(2));
+          stock.technicalSummary = getTechnicalSummaryLabel(stock);
+          stock.fundamentalSummary = getAdvancedFundamentalRating(stock);
+          stock.valuationSummary= getValuationSummary(stock);
+          stock.entryTimingLabel = getEntryTimingLabel(stock);
+
+
 
           // 10) Send data in Bubble key format
          const stockObject = {
@@ -711,6 +931,7 @@ window.scan = {
            _api_c2_lowPrice: stock.lowPrice,
            _api_c2_openPrice: stock.openPrice,
            _api_c2_prevClosePrice: stock.prevClosePrice,
+           _api_c2_entryTimingLabel: stock.entryTimingLabel,
            _api_c2_marketCap: stock.marketCap,
            _api_c2_peRatio: stock.peRatio,
            _api_c2_pbRatio: stock.pbRatio,
@@ -725,6 +946,8 @@ window.scan = {
            _api_c2_beta: stock.beta,
            _api_c2_movingAverage50d: stock.movingAverage50d,
            _api_c2_movingAverage200d: stock.movingAverage200d,
+           _api_c2_fundamentalSummary: stock.fundamentalSummary,
+           _api_c2_valuationSummary: stock.valuationSummary,
 
            // 📈 Technical Indicators
            _api_c2_rsi14: stock.rsi14,
@@ -737,6 +960,7 @@ window.scan = {
            _api_c2_stochasticD: stock.stochasticD,
            _api_c2_obv: stock.obv,
            _api_c2_atr14: stock.atr14,
+           _api_c2_technicalSummary: stock.technicalSummary,
 
            // 🔮 Prediction & Strategy
            _api_c2_prediction: stock.prediction,
