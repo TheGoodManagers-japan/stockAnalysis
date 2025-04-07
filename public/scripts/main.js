@@ -501,17 +501,48 @@ function getEntryTimingLabel(stock) {
 
   let score = 0;
 
+  console.log("🧪 Entry Timing Analysis for:", stock.ticker || "Unknown");
+  console.log({ currentPrice, openPrice, highPrice, lowPrice, prevClosePrice });
+  console.log({
+    dailyRange,
+    isVolatile,
+    nearHigh,
+    nearLow,
+    strongClose,
+    weakClose,
+  });
+
   // Positive signals
-  if (strongClose) score += 2;
-  if (nearLow) score += 1.5;
-  if (nearHigh) score += 1.5;
-  if (!isVolatile) score += 1;
+  if (strongClose) {
+    score += 2;
+    console.log("✔️ Strong close → +2");
+  }
+  if (nearLow) {
+    score += 1.5;
+    console.log("✔️ Near 52W Low → +1.5");
+  }
+  if (nearHigh) {
+    score += 1.5;
+    console.log("✔️ Near 52W High → +1.5");
+  }
+  if (!isVolatile) {
+    score += 1;
+    console.log("✔️ Low volatility → +1");
+  }
 
   // Negative signals
-  if (weakClose) score -= 1;
-  if (isVolatile) score -= 0.5;
+  if (weakClose) {
+    score -= 1;
+    console.log("❌ Weak close → -1");
+  }
+  if (isVolatile) {
+    score -= 0.5;
+    console.log("❌ High volatility → -0.5");
+  }
 
-  // Final label thresholds (rebalanced)
+  console.log("📊 Final Score:", score);
+
+  // Final label thresholds
   if (score >= 4) return "📈 Breakout – Good Entry Zone";
   if (score >= 3) return "🟢 Rebound Setup – Potential Entry";
   if (score >= 2) return "✅ Stable Strength – Worth Watching";
@@ -520,6 +551,7 @@ function getEntryTimingLabel(stock) {
 
   return "⚪ Sideways / Neutral";
 }
+
 
 
 
