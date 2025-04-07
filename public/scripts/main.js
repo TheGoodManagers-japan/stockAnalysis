@@ -358,7 +358,6 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-
 function getTechnicalSummaryLabel(stock) {
   const {
     currentPrice,
@@ -386,23 +385,23 @@ function getTechnicalSummaryLabel(stock) {
   const isBearishTrend = movingAverage50d < movingAverage200d;
   const isBullishStochastic = stochasticK > stochasticD;
   const isBearishStochastic = stochasticK < stochasticD;
-  const isHighVolatility = atr14 > currentPrice * 0.02; // ATR > 2% of price
+  const isHighVolatility = atr14 > currentPrice * 0.02;
   const hasOBV = obv > 0;
 
-  // ✅ Strong Bullish: trend + momentum + confirmation + stable + volume
-  if (
-    isBullishTrend &&
-    isBullishMACD &&
-    isBullishStochastic &&
-    rsi14 > 50 &&
-    currentPrice > bollingerMid &&
-    !isHighVolatility &&
-    hasOBV
-  ) {
+  // 📊 Scoring Logic
+  let score = 0;
+  if (isBullishTrend) score++;
+  if (isBullishMACD) score++;
+  if (isBullishStochastic) score++;
+  if (rsi14 > 50) score++;
+  if (currentPrice > bollingerMid) score++;
+  if (hasOBV) score++;
+
+  // 🔢 Label Selection Based on Score + Conditions
+  if (score >= 5 && !isHighVolatility) {
     return "Strong Bullish 📈";
   }
 
-  // ❌ Strong Bearish: downtrend + momentum loss + volatility ok + volume confirming
   if (
     isBearishTrend &&
     isBearishMACD &&
@@ -415,17 +414,14 @@ function getTechnicalSummaryLabel(stock) {
     return "Bearish 🟥";
   }
 
-  // 🔴 Overbought zone
   if (priceNearUpper && isOverbought && isBearishMACD) {
     return "Overbought 🔴";
   }
 
-  // 🟢 Oversold zone
   if (priceNearLower && isOversold && isBullishMACD) {
     return "Oversold 🟢";
   }
 
-  // 🟡 Possible Reversal
   if (
     (isBullishMACD && isBearishTrend && isBullishStochastic) ||
     (isOversold && isBullishMACD)
@@ -435,6 +431,7 @@ function getTechnicalSummaryLabel(stock) {
 
   return "Neutral ⚪️";
 }
+
 
 
 
@@ -518,33 +515,25 @@ function getEntryTimingLabel(stock) {
   const strongClose = currentPrice > openPrice && currentPrice > prevClosePrice;
   const weakClose = currentPrice < openPrice && currentPrice < prevClosePrice;
 
-  // 🟢 Ideal setups
-  if (nearHigh && strongClose && !isVolatile) {
-    return "📈 Breakout – Good Entry Zone";
-  }
+  let score = 0;
 
-  if (nearLow && strongClose) {
-    return "🟢 Rebound Setup – Potential Entry";
-  }
+  if (strongClose) score += 2;
+  if (nearLow) score += 1;
+  if (nearHigh) score += 1;
+  if (!isVolatile) score += 1;
+  if (weakClose) score -= 2;
+  if (isVolatile) score -= 1;
 
-  // 🟡 Middle-ground setup
-  if (strongClose && !isVolatile) {
-    return "✅ Stable Strength – Worth Watching";
-  }
+  if (score >= 4) return "📈 Breakout – Good Entry Zone";
+  if (score >= 3) return "🟢 Rebound Setup – Potential Entry";
+  if (score === 2) return "✅ Stable Strength – Worth Watching";
+  if (score <= -2) return "🔴 Volatile & Weak – Avoid Entry";
+  if (score < 0) return "⚠️ Weak Close – Wait for Confirmation";
 
-  // 🔴 Avoid
-  if (weakClose && isVolatile) {
-    return "🔴 Volatile & Weak – Avoid Entry";
-  }
-
-  // 🟡 Weak but not chaotic
-  if (weakClose) {
-    return "⚠️ Weak Close – Wait for Confirmation";
-  }
-
-  // ⚪ No signal
   return "⚪ Sideways / Neutral";
 }
+
+
 
 
 
