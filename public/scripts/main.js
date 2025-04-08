@@ -2187,3 +2187,152 @@ async function predict30DayAheadPrice(modelObj, data) {
 
   return predictedPrice;
 }
+
+
+
+async function analyzeStock(ticker, historicalData) {
+  console.log(`Starting analysis for ${ticker} with ${historicalData?.length || 0} data points...`);
+  
+  try {
+    // Pre-process data to ensure no NaN values
+    const cleanData = [];
+    for (let i = 0; i < historicalData.length; i++) {
+      const item = historicalData[i];
+      if (item && 
+          item.price !== undefined && 
+          !isNaN(item.price) && 
+          item.volume !== undefined && 
+          !isNaN(item.volume)) {
+        cleanData.push(item);
+      }
+    }
+
+    if (cleanData.length < historicalData.length) {
+      console.log(`Filtered out ${historicalData.length - cleanData.length} invalid data points for ${ticker}`);
+    }
+
+    // Check if we have enough data
+    if (cleanData.length < 60) { // Need at least 60 data points (30 for sequence + 30 for prediction)
+      console.warn(`Insufficient data for prediction on ${ticker}`);
+      if (cleanData.length > 0) {
+        return cleanData[cleanData.length - 1].price; // Return last valid price
+      }
+      return null;
+    }
+
+    // Check if this appears to be a Nikkei stock
+    const isNikkeiStock =
+      ticker.includes(".T") ||
+      ticker.includes(".JP") ||
+      ticker.endsWith("JT") ||
+      ticker.startsWith("JP:");
+
+    // Get current price (for fallback and constraints)
+    const prices = cleanData.map(item => item.price);
+    const currentPrice = prices[prices.length - 1];
+
+    // If we have enough data for model training
+    if (cleanData.length >= 90) { // At least 90 days of data
+      try {
+        console.log(`${ticker}: Training prediction model...`);
+        
+        // Use try-catch for each step to get better error information
+        let modelObj;
+        try {
+          // Train the model with 30-day sequence for 30-day ahead prediction
+          modelObj = await trainModelFor30DayAheadPrice(cleanData);
+          console.log(`${ticker}: Model training completed`);
+        } catch (trainError) {
+          console.error(`${ticker}: Error during model training:`, trainError.message);
+          throw new Error(`Model training failed: ${trainError.message}`);
+        }
+        
+        let predictedPrice;
+        try {
+          // Get prediction
+          predictedPrice = await predict30DayAheadPrice(modelObj, cleanData);
+          console.log(`${ticker}: Raw prediction: ${predictedPrice}`);
+        } catch (predictError) {
+          console.error(`${ticker}: Error during prediction:`, predictError.message);
+          throw new Error(`Prediction failed: ${predictError.message}`);
+        }
+        
+        // Validate prediction
+        if (isNaN(predictedPrice) || !isFinite(predictedPrice) || predictedPrice <= 0) {
+          console.warn(`${ticker}: Invalid prediction result. Using current price.`);
+          return currentPrice;
+        }
+        
+        // Apply market-specific constraints
+        const percentChange = (predictedPrice / currentPrice - 1) * 100;
+        
+        // Apply Nikkei-specific constraints
+        if (isNikkeiStock && percentChange > 15) {
+          console.log(`${ticker}: Limiting Nikkei stock prediction to +15%`);
+          predictedPrice = currentPrice * 1.15;
+        } else if (isNikkeiStock && percentChange < -15) {
+          console.log(`${ticker}: Limiting Nikkei stock prediction to -15%`);
+          predictedPrice = currentPrice * 0.85;
+        } else if (percentChange > 30) { // General constraints for other markets
+          console.log(`${ticker}: Limiting extreme prediction to +30%`);
+          predictedPrice = currentPrice * 1.3;
+        } else if (percentChange < -30) {
+          console.log(`${ticker}: Limiting extreme prediction to -30%`);
+          predictedPrice = currentPrice * 0.7;
+        }
+        
+        console.log(`${ticker}: Final prediction: ${predictedPrice.toFixed(2)} (${((predictedPrice/currentPrice-1)*100).toFixed(2)}%)`);
+        return predictedPrice;
+      } catch (error) {
+        console.error(`${ticker}: ML prediction process failed:`, error.message);
+        // Fall back to trend-based prediction on model failure
+        console.log(`${ticker}: Falling back to trend-based prediction`);
+      }
+    }
+    
+    // If we reach here, either we don't have enough data or ML prediction failed
+    // Use simple trend-based prediction as fallback
+    console.log(`${ticker}: Using trend-based prediction`);
+    
+    // Use the last 30 days (or what's available) to detect trend
+    const lookbackPeriod = Math.min(30, prices.length - 1);
+    const priorPrice = prices[prices.length - 1 - lookbackPeriod];
+    const recentTrendPercent = (currentPrice / priorPrice - 1) * 100;
+    
+    // Apply dampening factor to recent trend (30% of trend)
+    let predictedChangePercent = recentTrendPercent * 0.3;
+    
+    // Apply constraints based on stock type
+    const maxChange = isNikkeiStock ? 10 : 15; // More conservative for Nikkei
+    predictedChangePercent = Math.max(Math.min(predictedChangePercent, maxChange), -maxChange);
+    
+    const predictedPrice = currentPrice * (1 + predictedChangePercent / 100);
+    
+    console.log(`${ticker}: Trend-based prediction: ${predictedPrice.toFixed(2)} (${predictedChangePercent.toFixed(2)}%)`);
+    return predictedPrice;
+    
+  } catch (error) {
+    console.error(`Error analyzing stock for ${ticker}:`, error.message);
+    
+    // Ultimate fallback - return current price if available
+    if (historicalData && historicalData.length > 0) {
+      for (let i = historicalData.length - 1; i >= 0; i--) {
+        const item = historicalData[i];
+        if (item && item.price && !isNaN(item.price)) {
+          return item.price;
+        }
+      }
+    }
+    return null;
+  } finally {
+    // Clean up any potential memory leaks from TensorFlow.js
+    try {
+      tf.engine().endScope();
+      if (tf.engine().getNumTensors() > 0) {
+        console.warn(`${ticker}: Potential memory leak - ${tf.engine().getNumTensors()} tensors still allocated`);
+      }
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  }
+}
