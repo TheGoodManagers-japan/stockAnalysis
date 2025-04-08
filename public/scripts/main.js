@@ -654,7 +654,7 @@ function getStockTierLabel(stock) {
   // -------------------------------
   // Fallback (should not hit)
   // -------------------------------
-  return "🔴 TIER 5: Risky";
+  return "❓ Unclassified";
 }
 
 
