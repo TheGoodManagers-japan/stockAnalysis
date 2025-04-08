@@ -2735,3 +2735,124 @@ async function predict30DayAheadPrice(modelObj, data) {
     return lastKnownPrice;
   }
 }
+
+
+// This function serves as the entry point for stock prediction
+async function analyzeStock(ticker, historicalData) {
+  console.log(`Starting analysis for ${ticker} with ${historicalData.length} data points...`);
+  
+  try {
+    // Pre-process data to ensure no NaN values
+    const cleanData = [];
+    for (let i = 0; i < historicalData.length; i++) {
+      const item = historicalData[i];
+      if (item && 
+          item.price !== undefined && 
+          !isNaN(item.price) && 
+          item.volume !== undefined && 
+          !isNaN(item.volume)) {
+        cleanData.push(item);
+      }
+    }
+
+    if (cleanData.length < historicalData.length) {
+      console.log(
+        `Filtered out ${
+          historicalData.length - cleanData.length
+        } invalid data points for ${ticker}`
+      );
+    }
+
+    if (cleanData.length < 30) {
+      console.warn(`Insufficient data for reliable prediction on ${ticker}`);
+      if (cleanData.length > 0) {
+        return cleanData[cleanData.length - 1].price; // Return last valid price
+      }
+      return null;
+    }
+
+    // Check if this appears to be a Nikkei stock
+    const isNikkeiStock =
+      ticker.includes(".T") ||
+      ticker.includes(".JP") ||
+      ticker.endsWith("JT") ||
+      ticker.startsWith("JP:");
+
+    // Calculate basic statistics
+    const prices = cleanData.map(item => item.price);
+    const currentPrice = prices[prices.length - 1];
+
+    try {
+      // For full model training (if enough data)
+      if (cleanData.length >= 365) {
+        console.log(`${ticker}: Sufficient data for ML model training (${cleanData.length} points)`);
+        const startTime = Date.now();
+        
+        // Train the model
+        const modelObj = await trainModelFor30DayAheadPrice(cleanData);
+        
+        // Get prediction
+        const prediction = await predict30DayAheadPrice(modelObj, cleanData);
+        
+        const endTime = Date.now();
+        console.log(`${ticker}: ML prediction completed in ${(endTime - startTime)/1000} seconds`);
+
+        // Apply Nikkei-specific constraints if needed
+        if (isNikkeiStock && prediction.percentChange > 15) {
+          console.log(
+            `${ticker}: Applying Nikkei-specific constraint (max 15% monthly change)`
+          );
+          return currentPrice * 1.15; // Cap at 15% increase
+        }
+
+        // Validate prediction
+        if (isNaN(prediction.predictedPrice) || !isFinite(prediction.predictedPrice)) {
+          console.warn(`${ticker}: Invalid prediction result. Using current price.`);
+          return currentPrice;
+        }
+
+        console.log(`${ticker}: Predicted price: ${prediction.predictedPrice}`);
+        return prediction.predictedPrice;
+      } else {
+        // Simple trend-based prediction for limited data
+        console.log(`${ticker}: Insufficient historical data for ML model. Using trend-based prediction.`);
+        const lookbackPeriod = Math.min(30, prices.length - 1);
+        const priorPrice = prices[prices.length - 1 - lookbackPeriod];
+        const recentTrendPercent = (currentPrice / priorPrice - 1) * 100;
+
+        // Apply constraints
+        const maxChange = isNikkeiStock ? 10 : 15; // More conservative for Nikkei
+        const predictedChangePercent = Math.max(
+          Math.min(recentTrendPercent * 0.3, maxChange),
+          -maxChange
+        );
+        
+        const predictedPrice = currentPrice * (1 + predictedChangePercent / 100);
+        console.log(`${ticker}: Trend-based prediction: ${predictedPrice} (${predictedChangePercent.toFixed(2)}% change)`);
+        
+        return predictedPrice;
+      }
+    } catch (modelError) {
+      console.error(`${ticker}: Error in prediction model:`, modelError.message);
+      return currentPrice; // Return current price as fallback
+    }
+  } catch (error) {
+    console.error(`Error analyzing stock for ${ticker}:`, error.message);
+
+    // Safe fallback if available
+    if (historicalData && historicalData.length > 0) {
+      for (let i = historicalData.length - 1; i >= 0; i--) {
+        const item = historicalData[i];
+        if (item && item.price && !isNaN(item.price)) {
+          return item.price;
+        }
+      }
+    }
+    return null;
+  } finally {
+    // Force garbage collection to free memory
+    if (typeof global !== 'undefined' && global.gc) {
+      global.gc();
+    }
+  }
+}
