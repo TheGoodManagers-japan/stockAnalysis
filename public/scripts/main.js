@@ -1649,7 +1649,7 @@ window.scan = {
    _api_c2_sector: stock.sector,
    _api_c2_currentPrice: stock.currentPrice,
    _api_c2_entryTimingScore: stock.entryTimingScore,
-   _api_c2_prediction: stock.prediction,
+   _api_c2_prediction: stock.prediction.predictedPrice,
    _api_c2_stopLoss: stock.stopLoss,
    _api_c2_targetPrice: stock.targetPrice,
    _api_c2_growthPotential: stock.growthPotential,
