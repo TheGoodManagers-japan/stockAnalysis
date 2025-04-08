@@ -84,15 +84,22 @@ async function fetchYahooFinanceData(ticker) {
 
     function calculateMACD(closes) {
       if (closes.length < 26) return { macd: 0, signal: 0 };
-      const ema12 = calculateEMA(closes.slice(-26), 12);
-      const ema26 = calculateEMA(closes.slice(-26), 26);
-      const macdLine = ema12.map((val, i) => val - (ema26[i] || 0));
+
+      const ema12 = calculateEMA(closes, 12);
+      const ema26 = calculateEMA(closes, 26);
+
+      const macdLine = ema12
+        .slice(ema26.length - ema12.length) // align lengths
+        .map((val, i) => val - ema26[i]);
+
       const signalLine = calculateEMA(macdLine, 9);
+
       return {
         macd: macdLine[macdLine.length - 1],
         signal: signalLine[signalLine.length - 1],
       };
     }
+
 
     function calculateBollingerBands(closes, period = 20, multiplier = 2) {
       if (closes.length < period) return { upper: 0, lower: 0, mid: 0 };
@@ -109,27 +116,28 @@ async function fetchYahooFinanceData(ticker) {
     }
 
     function calculateStochasticOscillator(data, period = 14, smoothK = 3) {
-      if (data.length < period + smoothK) return { k: 0, d: 0 };
-      const recent = data.slice(-period);
-      const highs = recent.map((d) => d.high);
-      const lows = recent.map((d) => d.low);
-      const closes = recent.map((d) => d.close);
-      const highestHigh = Math.max(...highs);
-      const lowestLow = Math.min(...lows);
-      const lastClose = closes[closes.length - 1];
-      const k = ((lastClose - lowestLow) / (highestHigh - lowestLow)) * 100;
-      const kValues = data
-        .slice(-(period + smoothK))
-        .map((d, i, arr) => {
-          const slice = arr.slice(i, i + period);
-          const high = Math.max(...slice.map((d) => d.high));
-          const low = Math.min(...slice.map((d) => d.low));
-          return ((d.close - low) / (high - low)) * 100;
-        })
-        .slice(0, smoothK);
-      const d = kValues.reduce((acc, val) => acc + val, 0) / smoothK;
+      if (data.length < period + smoothK - 1) return { k: 0, d: 0 };
+
+      const kValues = [];
+
+      for (
+        let i = data.length - period - smoothK + 1;
+        i <= data.length - period;
+        i++
+      ) {
+        const slice = data.slice(i, i + period);
+        const high = Math.max(...slice.map((d) => d.high));
+        const low = Math.min(...slice.map((d) => d.low));
+        const close = data[i + period - 1].close;
+        kValues.push(((close - low) / (high - low)) * 100);
+      }
+
+      const k = kValues[kValues.length - 1]; // Latest %K
+      const d = kValues.reduce((sum, val) => sum + val, 0) / kValues.length; // Smoothed %D
+
       return { k, d };
     }
+
 
     function calculateOBV(data) {
       if (data.length < 2) return 0;
@@ -142,19 +150,25 @@ async function fetchYahooFinanceData(ticker) {
       return obv;
     }
 
-    function calculateATR(data, period = 14) {
-      if (data.length < period + 1) return 0;
-      const trs = data.slice(-period).map((d, i) => {
-        const prevClose =
-          i > 0 ? data[data.length - period + i - 1].close : d.close;
-        return Math.max(
-          d.high - d.low,
-          Math.abs(d.high - prevClose),
-          Math.abs(d.low - prevClose)
-        );
-      });
-      return trs.reduce((sum, val) => sum + val, 0) / period;
-    }
+   function calculateATR(data, period = 14) {
+     if (data.length < period + 1) return 0;
+
+     const trs = [];
+
+     for (let i = data.length - period; i < data.length; i++) {
+       const current = data[i];
+       const previous = data[i - 1];
+
+       const highLow = current.high - current.low;
+       const highClose = previous ? Math.abs(current.high - previous.close) : 0;
+       const lowClose = previous ? Math.abs(current.low - previous.close) : 0;
+
+       trs.push(Math.max(highLow, highClose, lowClose));
+     }
+
+     return trs.reduce((sum, val) => sum + val, 0) / period;
+   }
+
 
     const closes = historicalPrices.map((d) => d.close);
     const movingAverage50d = calculateMA(historicalPrices, 50);
