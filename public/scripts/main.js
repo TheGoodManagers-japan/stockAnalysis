@@ -491,26 +491,27 @@ function getEntryTimingLabel(stock) {
 
   let score = 0;
 
-  // Strength indicators
+  // ✅ Positive factors
   if (strongClose) score += 2;
   if (nearHigh) score += 1.5;
-  if (isVolatile && strongClose) score += 1;
-  if (!isVolatile) score += 0.5;
+  if (!isVolatile) score += 1;
+  if (isVolatile && strongClose) score += 0.5;
 
-  // Caution indicators
+  // ⚠️ Caution signs
   if (nearLow) score -= 0.5;
   if (weakClose) score -= 1;
   if (isVolatile && weakClose) score -= 1;
 
-  // 🏷️ Final Labels
-  if (score >= 4.5) return "📈 Breakout – Good Entry Zone";
-  if (score >= 3.5) return "🟢 Rebound Setup – Potential Entry";
-  if (score >= 2.5) return "✅ Stable Strength – Worth Watching";
-  if (score >= 1.5) return "⚪ Sideways / Neutral";
+  // 🏷️ Adjusted Labels
+  if (score >= 4) return "📈 Breakout – Good Entry Zone";
+  if (score >= 3) return "🟢 Rebound Setup – Potential Entry";
+  if (score >= 2) return "✅ Stable Strength – Worth Watching";
+  if (score >= 1) return "⚪ Sideways / Neutral";
   if (score >= 0) return "⚠️ Weak Close – Wait for Confirmation";
-  if (score >= -2) return "🔴 Volatile & Weak – Avoid Entry";
+  if (score >= -1.5) return "🔴 Volatile & Weak – Avoid Entry";
   return "🚫 High Risk – Volatile & Weak";
 }
+
 
 
 
