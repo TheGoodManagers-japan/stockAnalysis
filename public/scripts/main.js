@@ -1230,66 +1230,199 @@ function getEntryTimingScore(stock) {
  * Determine Buying Urgency and Risk Level
  */
 function getLimitOrderPrice(stock) {
+  // Extract all available data
   const {
+    ticker,
+    sector,
     currentPrice,
     fiftyTwoWeekLow,
     fiftyTwoWeekHigh,
     movingAverage50d,
     movingAverage200d,
     bollingerLower,
+    bollingerUpper,
     rsi14,
     macd,
+    macdSignal,
     stochasticK,
     stochasticD,
+    atr14,
+    historicalData,
+    prevClosePrice, // Previous day closing price
   } = stock;
 
-  // Step 1: Determine urgency
-  const oversold = rsi14 < 30;
-  const bearishMomentum = macd < 0;
-  const bearishStochastic = stochasticK < 20 && stochasticD < 20;
+  // Check for significant market-wide movement
+  const dailyChange = prevClosePrice ? currentPrice / prevClosePrice - 1 : 0;
+  const isMarketShockDay = Math.abs(dailyChange) > 0.02; // 2% daily move threshold
 
+  // Calculate stock-specific volatility characteristics
+  const volatilityFactor = atr14 ? atr14 / currentPrice : 0.02;
+  const isHighVolatility = volatilityFactor > 0.03;
+
+  // Analyze recent price trend to detect sudden drops
+  let recentMarketTrend = "NEUTRAL";
+  let recentMarketVolatility = "NORMAL";
+
+  if (historicalData && historicalData.length > 5) {
+    // Get the last 5 days of data
+    const recentData = historicalData.slice(-5);
+    const fiveDayReturn = currentPrice / recentData[0].price - 1;
+
+    // Calculate recent volatility
+    const recentDailyReturns = [];
+    for (let i = 1; i < recentData.length; i++) {
+      recentDailyReturns.push(
+        recentData[i].price / recentData[i - 1].price - 1
+      );
+    }
+
+    const recentVolatility = calculateStdDev(recentDailyReturns);
+
+    // Determine trend direction and volatility level
+    if (fiveDayReturn < -0.05) {
+      recentMarketTrend = "STRONG_DOWN";
+    } else if (fiveDayReturn < -0.02) {
+      recentMarketTrend = "DOWN";
+    } else if (fiveDayReturn > 0.05) {
+      recentMarketTrend = "STRONG_UP";
+    } else if (fiveDayReturn > 0.02) {
+      recentMarketTrend = "UP";
+    }
+
+    if (recentVolatility > 0.02) {
+      recentMarketVolatility = "HIGH";
+    }
+  }
+
+  // Sector-specific adjustments
+  const isTechSector = sector === "Technology" || sector === "Communications";
+  const isDefensiveSector =
+    sector === "Utilities" || sector === "Consumer Staples";
+
+  // Determine technical conditions
+  const isOversold = rsi14 < (isDefensiveSector ? 35 : 30);
+  const isBearishMomentum = macd < 0 && (macdSignal ? macd < macdSignal : true);
+  const isBearishStochastic = stochasticK < 20 && stochasticD < 20;
+  const isPriceNearSupport = currentPrice <= bollingerLower * 1.02;
+
+  // Calculate position in 52-week range (0-100%)
   const pricePositionInRange =
     ((currentPrice - fiftyTwoWeekLow) / (fiftyTwoWeekHigh - fiftyTwoWeekLow)) *
     100;
 
-  let urgencyLevel = "NEUTRAL";
-  if (oversold && bearishMomentum && bearishStochastic) {
-    urgencyLevel = "HIGH_URGENCY";
-  } else if (pricePositionInRange < 20) {
-    urgencyLevel = "MODERATE_URGENCY";
+  // Support and resistance levels
+  const majorSupport = Math.max(
+    movingAverage200d || currentPrice * 0.92,
+    fiftyTwoWeekLow * 1.05
+  );
+
+  const minorSupport = Math.max(
+    movingAverage50d || currentPrice * 0.96,
+    bollingerLower || currentPrice * (1 - volatilityFactor * 2)
+  );
+
+  // Dynamic urgency evaluation
+  let urgencyScore = 0;
+
+  // Technical factors
+  if (isOversold) urgencyScore += 2;
+  if (isBearishMomentum) urgencyScore += 1;
+  if (isBearishStochastic) urgencyScore += 1;
+  if (isPriceNearSupport) urgencyScore += 2;
+
+  // Price position factors
+  if (pricePositionInRange < 15) urgencyScore += 3;
+  else if (pricePositionInRange < 30) urgencyScore += 2;
+  else if (pricePositionInRange < 50) urgencyScore += 1;
+
+  // Market trend adjustments - critical for addressing your concern
+  if (recentMarketTrend === "STRONG_DOWN") {
+    urgencyScore -= 2; // Reduce urgency during sharp market drops
+
+    if (isMarketShockDay && dailyChange < 0) {
+      urgencyScore -= 3; // Further reduce during dramatic news-driven drops
+    }
+  } else if (recentMarketTrend === "DOWN") {
+    urgencyScore -= 1;
   }
 
-  // Step 2: Set support references
-  const support1 = movingAverage50d || currentPrice * 0.97;
-  const support2 = movingAverage200d || currentPrice * 0.96;
-  const bollLower = bollingerLower || currentPrice * 0.93;
+  // Volatility adjustments
+  if (isHighVolatility) urgencyScore += 1;
+  if (recentMarketVolatility === "HIGH") urgencyScore -= 1; // Be more cautious during volatile periods
 
-  const isSupportAbove = support1 > currentPrice;
+  // Sector adjustments
+  if (isTechSector) urgencyScore += 1;
+  if (isDefensiveSector) urgencyScore -= 1;
 
+  // Determine final urgency level
+  let urgencyLevel;
+  if (urgencyScore >= 6) urgencyLevel = "HIGH_URGENCY";
+  else if (urgencyScore >= 3) urgencyLevel = "MODERATE_URGENCY";
+  else if (urgencyScore >= 0) urgencyLevel = "LOW_URGENCY";
+  else urgencyLevel = "WAIT_AND_SEE"; // New level for market shock days
+
+  // Market shock day override - directly addressing your concern
+  if (isMarketShockDay && dailyChange < -0.03) {
+    urgencyLevel = "WAIT_AND_SEE"; // Force conservative approach during major drops
+  }
+
+  // Calculate limit order price based on urgency
   let limitOrderPrice;
 
-  if (isSupportAbove) {
-    // If support is above current price, wait for it to recover and buy at support
-    limitOrderPrice = support1;
-  } else {
-    // If support is below, use urgency strategy to set buy-the-dip pricing
-    if (urgencyLevel === "HIGH_URGENCY") {
-      limitOrderPrice = Math.min(currentPrice * 0.93, support1, bollLower);
-    } else if (urgencyLevel === "MODERATE_URGENCY") {
-      limitOrderPrice = Math.min(currentPrice * 0.95, support1, support2);
-    } else {
-      limitOrderPrice = Math.min(currentPrice * 0.97, support1);
-    }
+  switch (urgencyLevel) {
+    case "HIGH_URGENCY":
+      // More conservative during market shocks but still opportunistic
+      limitOrderPrice = Math.min(
+        currentPrice * (isMarketShockDay ? 0.97 : 0.99),
+        minorSupport * 1.01
+      );
+      break;
 
-    // Guardrails
-    limitOrderPrice = Math.max(
-      limitOrderPrice,
-      currentPrice * 0.85,
-      fiftyTwoWeekLow * 1.05
-    );
+    case "MODERATE_URGENCY":
+      // More patient approach
+      limitOrderPrice = Math.min(
+        currentPrice * (isMarketShockDay ? 0.95 : 0.97),
+        (minorSupport + majorSupport) / 2
+      );
+      break;
 
-    limitOrderPrice = Math.min(limitOrderPrice, currentPrice);
+    case "LOW_URGENCY":
+      // Conservative, wait for better price
+      limitOrderPrice = Math.min(
+        currentPrice * (isMarketShockDay ? 0.93 : 0.95),
+        majorSupport
+      );
+      break;
+
+    case "WAIT_AND_SEE":
+      // Very conservative during market shocks - expect further drops
+      // Target significant discounts during market-wide events
+      limitOrderPrice = Math.min(currentPrice * 0.9, majorSupport * 0.95);
+      break;
   }
+
+  // Market shock adjustment - expect further declines
+  if (isMarketShockDay && dailyChange < 0) {
+    // Additional discount during market shocks
+    limitOrderPrice *= 0.97;
+  }
+
+  // Recent trend adjustment
+  if (recentMarketTrend === "STRONG_DOWN") {
+    // Expect further declines in strong downtrends
+    limitOrderPrice *= 0.97;
+  }
+
+  // Final guardrails - adjust floor during market shocks
+  const absoluteMinimum = isMarketShockDay
+    ? Math.max(currentPrice * 0.85, fiftyTwoWeekLow * 1.02)
+    : Math.max(currentPrice * 0.9, fiftyTwoWeekLow * 1.05);
+
+  // Never go above current price
+  limitOrderPrice = Math.min(
+    Math.max(limitOrderPrice, absoluteMinimum),
+    currentPrice
+  );
 
   return parseFloat(limitOrderPrice.toFixed(2));
 }
