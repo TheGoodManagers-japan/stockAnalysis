@@ -1233,563 +1233,481 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       const tickers = [
-        { code: "4151.T", sector: "Pharmaceuticals" },
-        { code: "4502.T", sector: "Pharmaceuticals" },
-        { code: "4503.T", sector: "Pharmaceuticals" },
-        { code: "4506.T", sector: "Pharmaceuticals" },
-        { code: "4507.T", sector: "Pharmaceuticals" },
-        { code: "4519.T", sector: "Pharmaceuticals" },
-        { code: "4523.T", sector: "Pharmaceuticals" },
-        { code: "4568.T", sector: "Pharmaceuticals" },
-        { code: "4578.T", sector: "Pharmaceuticals" },
-        { code: "6479.T", sector: "Electric Machinery" },
-        { code: "6501.T", sector: "Electric Machinery" },
-        { code: "6503.T", sector: "Electric Machinery" },
-        { code: "6504.T", sector: "Electric Machinery" },
-        { code: "6506.T", sector: "Electric Machinery" },
-        { code: "6526.T", sector: "Electric Machinery" },
-        { code: "6594.T", sector: "Electric Machinery" },
-        { code: "6645.T", sector: "Electric Machinery" },
-        { code: "6674.T", sector: "Electric Machinery" },
-        { code: "6701.T", sector: "Electric Machinery" },
-        { code: "6702.T", sector: "Electric Machinery" },
-        { code: "6723.T", sector: "Electric Machinery" },
-        { code: "6724.T", sector: "Electric Machinery" },
-        { code: "6752.T", sector: "Electric Machinery" },
-        { code: "6753.T", sector: "Electric Machinery" },
-        { code: "6758.T", sector: "Electric Machinery" },
-        { code: "6762.T", sector: "Electric Machinery" },
-        { code: "6770.T", sector: "Electric Machinery" },
-        { code: "6841.T", sector: "Electric Machinery" },
-        { code: "6857.T", sector: "Electric Machinery" },
-        { code: "6861.T", sector: "Electric Machinery" },
-        { code: "6902.T", sector: "Electric Machinery" },
-        { code: "6920.T", sector: "Electric Machinery" },
-        { code: "6952.T", sector: "Electric Machinery" },
-        { code: "6954.T", sector: "Electric Machinery" },
-        { code: "6971.T", sector: "Electric Machinery" },
-        { code: "6976.T", sector: "Electric Machinery" },
-        { code: "6981.T", sector: "Electric Machinery" },
-        { code: "7735.T", sector: "Electric Machinery" },
-        { code: "7751.T", sector: "Electric Machinery" },
-        { code: "7752.T", sector: "Electric Machinery" },
-        { code: "8035.T", sector: "Electric Machinery" },
-        { code: "7201.T", sector: "Automobiles & Auto parts" },
-        { code: "7202.T", sector: "Automobiles & Auto parts" },
-        { code: "7203.T", sector: "Automobiles & Auto parts" },
-        { code: "7205.T", sector: "Automobiles & Auto parts" },
-        { code: "7211.T", sector: "Automobiles & Auto parts" },
-        { code: "7261.T", sector: "Automobiles & Auto parts" },
-        { code: "7267.T", sector: "Automobiles & Auto parts" },
-        { code: "7269.T", sector: "Automobiles & Auto parts" },
-        { code: "7270.T", sector: "Automobiles & Auto parts" },
-        { code: "7272.T", sector: "Automobiles & Auto parts" },
-        { code: "4543.T", sector: "Precision Instruments" },
-        { code: "4902.T", sector: "Precision Instruments" },
-        { code: "6146.T", sector: "Precision Instruments" },
-        { code: "7731.T", sector: "Precision Instruments" },
-        { code: "7733.T", sector: "Precision Instruments" },
-        { code: "7741.T", sector: "Precision Instruments" },
-        { code: "7762.T", sector: "Precision Instruments" },
-        { code: "9432.T", sector: "Communications" },
-        { code: "9433.T", sector: "Communications" },
-        { code: "9434.T", sector: "Communications" },
-        { code: "9613.T", sector: "Communications" },
-        { code: "9984.T", sector: "Communications" },
-        { code: "5831.T", sector: "Banking" },
-        { code: "7186.T", sector: "Banking" },
-        { code: "8304.T", sector: "Banking" },
-        { code: "8306.T", sector: "Banking" },
-        { code: "8308.T", sector: "Banking" },
-        { code: "8309.T", sector: "Banking" },
-        { code: "8316.T", sector: "Banking" },
-        { code: "8331.T", sector: "Banking" },
-        { code: "8354.T", sector: "Banking" },
-        { code: "8411.T", sector: "Banking" },
-        { code: "8253.T", sector: "Other Financial Services" },
-        { code: "8591.T", sector: "Other Financial Services" },
-        { code: "8697.T", sector: "Other Financial Services" },
-        { code: "8601.T", sector: "Securities" },
-        { code: "8604.T", sector: "Securities" },
-        { code: "8630.T", sector: "Insurance" },
-        { code: "8725.T", sector: "Insurance" },
-        { code: "8750.T", sector: "Insurance" },
-        { code: "8766.T", sector: "Insurance" },
-        { code: "8795.T", sector: "Insurance" },
-        { code: "1332.T", sector: "Fishery" },
-        { code: "2002.T", sector: "Foods" },
-        { code: "2269.T", sector: "Foods" },
-        { code: "2282.T", sector: "Foods" },
-        { code: "2501.T", sector: "Foods" },
-        { code: "2502.T", sector: "Foods" },
-        { code: "2503.T", sector: "Foods" },
-        { code: "2801.T", sector: "Foods" },
-        { code: "2802.T", sector: "Foods" },
-        { code: "2871.T", sector: "Foods" },
-        { code: "2914.T", sector: "Foods" },
-        { code: "3086.T", sector: "Retail" },
-        { code: "3092.T", sector: "Retail" },
-        { code: "3099.T", sector: "Retail" },
-        { code: "3382.T", sector: "Retail" },
-        { code: "7453.T", sector: "Retail" },
-        { code: "8233.T", sector: "Retail" },
-        { code: "8252.T", sector: "Retail" },
-        { code: "8267.T", sector: "Retail" },
-        { code: "9843.T", sector: "Retail" },
-        { code: "9983.T", sector: "Retail" },
-        { code: "2413.T", sector: "Services" },
-        { code: "2432.T", sector: "Services" },
-        { code: "3659.T", sector: "Services" },
-        { code: "4307.T", sector: "Services" },
-        { code: "4324.T", sector: "Services" },
-        { code: "4385.T", sector: "Services" },
-        { code: "4661.T", sector: "Services" },
-        { code: "4689.T", sector: "Services" },
-        { code: "4704.T", sector: "Services" },
-        { code: "4751.T", sector: "Services" },
-        { code: "4755.T", sector: "Services" },
-        { code: "6098.T", sector: "Services" },
-        { code: "6178.T", sector: "Services" },
-        { code: "7974.T", sector: "Services" },
-        { code: "9602.T", sector: "Services" },
-        { code: "9735.T", sector: "Services" },
-        { code: "9766.T", sector: "Services" },
-        { code: "1605.T", sector: "Mining" },
-        { code: "3401.T", sector: "Textiles & Apparel" },
-        { code: "3402.T", sector: "Textiles & Apparel" },
-        { code: "3861.T", sector: "Pulp & Paper" },
-        { code: "3405.T", sector: "Chemicals" },
-        { code: "3407.T", sector: "Chemicals" },
-        { code: "4004.T", sector: "Chemicals" },
-        { code: "4005.T", sector: "Chemicals" },
-        { code: "4021.T", sector: "Chemicals" },
-        { code: "4042.T", sector: "Chemicals" },
-        { code: "4043.T", sector: "Chemicals" },
-        { code: "4061.T", sector: "Chemicals" },
-        { code: "4063.T", sector: "Chemicals" },
-        { code: "4183.T", sector: "Chemicals" },
-        { code: "4188.T", sector: "Chemicals" },
-        { code: "4208.T", sector: "Chemicals" },
-        { code: "4452.T", sector: "Chemicals" },
-        { code: "4901.T", sector: "Chemicals" },
-        { code: "4911.T", sector: "Chemicals" },
-        { code: "6988.T", sector: "Chemicals" },
-        { code: "5019.T", sector: "Petroleum" },
-        { code: "5020.T", sector: "Petroleum" },
-        { code: "5101.T", sector: "Rubber" },
-        { code: "5108.T", sector: "Rubber" },
-        { code: "5201.T", sector: "Glass & Ceramics" },
-        { code: "5214.T", sector: "Glass & Ceramics" },
-        { code: "5233.T", sector: "Glass & Ceramics" },
-        { code: "5301.T", sector: "Glass & Ceramics" },
-        { code: "5332.T", sector: "Glass & Ceramics" },
-        { code: "5333.T", sector: "Glass & Ceramics" },
-        { code: "5401.T", sector: "Steel" },
-        { code: "5406.T", sector: "Steel" },
-        { code: "5411.T", sector: "Steel" },
-        { code: "3436.T", sector: "Nonferrous Metals" },
-        { code: "5706.T", sector: "Nonferrous Metals" },
-        { code: "5711.T", sector: "Nonferrous Metals" },
-        { code: "5713.T", sector: "Nonferrous Metals" },
-        { code: "5714.T", sector: "Nonferrous Metals" },
-        { code: "5801.T", sector: "Nonferrous Metals" },
-        { code: "5802.T", sector: "Nonferrous Metals" },
-        { code: "5803.T", sector: "Nonferrous Metals" },
-        { code: "2768.T", sector: "Trading Companies" },
-        { code: "8001.T", sector: "Trading Companies" },
-        { code: "8002.T", sector: "Trading Companies" },
-        { code: "8015.T", sector: "Trading Companies" },
-        { code: "8031.T", sector: "Trading Companies" },
-        { code: "8053.T", sector: "Trading Companies" },
-        { code: "8058.T", sector: "Trading Companies" },
-        { code: "1721.T", sector: "Construction" },
-        { code: "1801.T", sector: "Construction" },
-        { code: "1802.T", sector: "Construction" },
-        { code: "1803.T", sector: "Construction" },
-        { code: "1808.T", sector: "Construction" },
-        { code: "1812.T", sector: "Construction" },
-        { code: "1925.T", sector: "Construction" },
-        { code: "1928.T", sector: "Construction" },
-        { code: "1963.T", sector: "Construction" },
-        { code: "5631.T", sector: "Machinery" },
-        { code: "6103.T", sector: "Machinery" },
-        { code: "6113.T", sector: "Machinery" },
-        { code: "6273.T", sector: "Machinery" },
-        { code: "6301.T", sector: "Machinery" },
-        { code: "6302.T", sector: "Machinery" },
-        { code: "6305.T", sector: "Machinery" },
-        { code: "6326.T", sector: "Machinery" },
-        { code: "6361.T", sector: "Machinery" },
-        { code: "6367.T", sector: "Machinery" },
-        { code: "6471.T", sector: "Machinery" },
-        { code: "6472.T", sector: "Machinery" },
-        { code: "6473.T", sector: "Machinery" },
-        { code: "7004.T", sector: "Machinery" },
-        { code: "7011.T", sector: "Machinery" },
-        { code: "7013.T", sector: "Machinery" },
-        { code: "7012.T", sector: "Shipbuilding" },
-        { code: "7832.T", sector: "Other Manufacturing" },
-        { code: "7911.T", sector: "Other Manufacturing" },
-        { code: "7912.T", sector: "Other Manufacturing" },
-        { code: "7951.T", sector: "Other Manufacturing" },
-        { code: "3289.T", sector: "Real Estate" },
-        { code: "8801.T", sector: "Real Estate" },
-        { code: "8802.T", sector: "Real Estate" },
-        { code: "8804.T", sector: "Real Estate" },
-        { code: "8830.T", sector: "Real Estate" },
-        { code: "9001.T", sector: "Railway & Bus" },
-        { code: "9005.T", sector: "Railway & Bus" },
-        { code: "9007.T", sector: "Railway & Bus" },
-        { code: "9008.T", sector: "Railway & Bus" },
-        { code: "9009.T", sector: "Railway & Bus" },
-        { code: "9020.T", sector: "Railway & Bus" },
-        { code: "9021.T", sector: "Railway & Bus" },
-        { code: "9022.T", sector: "Railway & Bus" },
-        { code: "9064.T", sector: "Land Transport" },
-        { code: "9147.T", sector: "Land Transport" },
-        { code: "9101.T", sector: "Marine Transport" },
-        { code: "9104.T", sector: "Marine Transport" },
-        { code: "9107.T", sector: "Marine Transport" },
-        { code: "9201.T", sector: "Air Transport" },
-        { code: "9202.T", sector: "Air Transport" },
-        { code: "9301.T", sector: "Warehousing" },
-        { code: "9501.T", sector: "Electric Power" },
-        { code: "9502.T", sector: "Electric Power" },
-        { code: "9503.T", sector: "Electric Power" },
-        { code: "9531.T", sector: "Gas" },
-        { code: "9532.T", sector: "Gas" },
-      ];
+{code:"4151.T",sector:"Pharmaceuticals"},
+{code:"4502.T",sector:"Pharmaceuticals"},
+{code:"4503.T",sector:"Pharmaceuticals"},
+{code:"4506.T",sector:"Pharmaceuticals"},
+{code:"4507.T",sector:"Pharmaceuticals"},
+{code:"4519.T",sector:"Pharmaceuticals"},
+{code:"4523.T",sector:"Pharmaceuticals"},
+{code:"4568.T",sector:"Pharmaceuticals"},
+{code:"4578.T",sector:"Pharmaceuticals"},
+{code:"6479.T",sector:"Electric Machinery"},
+{code:"6501.T",sector:"Electric Machinery"},
+{code:"6503.T",sector:"Electric Machinery"},
+{code:"6504.T",sector:"Electric Machinery"},
+{code:"6506.T",sector:"Electric Machinery"},
+{code:"6526.T",sector:"Electric Machinery"},
+{code:"6594.T",sector:"Electric Machinery"},
+{code:"6645.T",sector:"Electric Machinery"},
+{code:"6674.T",sector:"Electric Machinery"},
+{code:"6701.T",sector:"Electric Machinery"},
+{code:"6702.T",sector:"Electric Machinery"},
+{code:"6723.T",sector:"Electric Machinery"},
+{code:"6724.T",sector:"Electric Machinery"},
+{code:"6752.T",sector:"Electric Machinery"},
+{code:"6753.T",sector:"Electric Machinery"},
+{code:"6758.T",sector:"Electric Machinery"},
+{code:"6762.T",sector:"Electric Machinery"},
+{code:"6770.T",sector:"Electric Machinery"},
+{code:"6841.T",sector:"Electric Machinery"},
+{code:"6857.T",sector:"Electric Machinery"},
+{code:"6861.T",sector:"Electric Machinery"},
+{code:"6902.T",sector:"Electric Machinery"},
+{code:"6920.T",sector:"Electric Machinery"},
+{code:"6952.T",sector:"Electric Machinery"},
+{code:"6954.T",sector:"Electric Machinery"},
+{code:"6971.T",sector:"Electric Machinery"},
+{code:"6976.T",sector:"Electric Machinery"},
+{code:"6981.T",sector:"Electric Machinery"},
+{code:"7735.T",sector:"Electric Machinery"},
+{code:"7751.T",sector:"Electric Machinery"},
+{code:"7752.T",sector:"Electric Machinery"},
+{code:"8035.T",sector:"Electric Machinery"},
+{code:"7201.T",sector:"Automobiles & Auto parts"},
+{code:"7202.T",sector:"Automobiles & Auto parts"},
+{code:"7203.T",sector:"Automobiles & Auto parts"},
+{code:"7205.T",sector:"Automobiles & Auto parts"},
+{code:"7211.T",sector:"Automobiles & Auto parts"},
+{code:"7261.T",sector:"Automobiles & Auto parts"},
+{code:"7267.T",sector:"Automobiles & Auto parts"},
+{code:"7269.T",sector:"Automobiles & Auto parts"},
+{code:"7270.T",sector:"Automobiles & Auto parts"},
+{code:"7272.T",sector:"Automobiles & Auto parts"},
+{code:"4543.T",sector:"Precision Instruments"},
+{code:"4902.T",sector:"Precision Instruments"},
+{code:"6146.T",sector:"Precision Instruments"},
+{code:"7731.T",sector:"Precision Instruments"},
+{code:"7733.T",sector:"Precision Instruments"},
+{code:"7741.T",sector:"Precision Instruments"},
+{code:"7762.T",sector:"Precision Instruments"},
+{code:"9432.T",sector:"Communications"},
+{code:"9433.T",sector:"Communications"},
+{code:"9434.T",sector:"Communications"},
+{code:"9613.T",sector:"Communications"},
+{code:"9984.T",sector:"Communications"},
+{code:"5831.T",sector:"Banking"},
+{code:"7186.T",sector:"Banking"},
+{code:"8304.T",sector:"Banking"},
+{code:"8306.T",sector:"Banking"},
+{code:"8308.T",sector:"Banking"},
+{code:"8309.T",sector:"Banking"},
+{code:"8316.T",sector:"Banking"},
+{code:"8331.T",sector:"Banking"},
+{code:"8354.T",sector:"Banking"},
+{code:"8411.T",sector:"Banking"},
+{code:"8253.T",sector:"Other Financial Services"},
+{code:"8591.T",sector:"Other Financial Services"},
+{code:"8697.T",sector:"Other Financial Services"},
+{code:"8601.T",sector:"Securities"},
+{code:"8604.T",sector:"Securities"},
+{code:"8630.T",sector:"Insurance"},
+{code:"8725.T",sector:"Insurance"},
+{code:"8750.T",sector:"Insurance"},
+{code:"8766.T",sector:"Insurance"},
+{code:"8795.T",sector:"Insurance"},
+{code:"1332.T",sector:"Fishery"},
+{code:"2002.T",sector:"Foods"},
+{code:"2269.T",sector:"Foods"},
+{code:"2282.T",sector:"Foods"},
+{code:"2501.T",sector:"Foods"},
+{code:"2502.T",sector:"Foods"},
+{code:"2503.T",sector:"Foods"},
+{code:"2801.T",sector:"Foods"},
+{code:"2802.T",sector:"Foods"},
+{code:"2871.T",sector:"Foods"},
+{code:"2914.T",sector:"Foods"},
+{code:"3086.T",sector:"Retail"},
+{code:"3092.T",sector:"Retail"},
+{code:"3099.T",sector:"Retail"},
+{code:"3382.T",sector:"Retail"},
+{code:"7453.T",sector:"Retail"},
+{code:"8233.T",sector:"Retail"},
+{code:"8252.T",sector:"Retail"},
+{code:"8267.T",sector:"Retail"},
+{code:"9843.T",sector:"Retail"},
+{code:"9983.T",sector:"Retail"},
+{code:"2413.T",sector:"Services"},
+{code:"2432.T",sector:"Services"},
+{code:"3659.T",sector:"Services"},
+{code:"4307.T",sector:"Services"},
+{code:"4324.T",sector:"Services"},
+{code:"4385.T",sector:"Services"},
+{code:"4661.T",sector:"Services"},
+{code:"4689.T",sector:"Services"},
+{code:"4704.T",sector:"Services"},
+{code:"4751.T",sector:"Services"},
+{code:"4755.T",sector:"Services"},
+{code:"6098.T",sector:"Services"},
+{code:"6178.T",sector:"Services"},
+{code:"7974.T",sector:"Services"},
+{code:"9602.T",sector:"Services"},
+{code:"9735.T",sector:"Services"},
+{code:"9766.T",sector:"Services"},
+{code:"1605.T",sector:"Mining"},
+{code:"3401.T",sector:"Textiles & Apparel"},
+{code:"3402.T",sector:"Textiles & Apparel"},
+{code:"3861.T",sector:"Pulp & Paper"},
+{code:"3405.T",sector:"Chemicals"},
+{code:"3407.T",sector:"Chemicals"},
+{code:"4004.T",sector:"Chemicals"},
+{code:"4005.T",sector:"Chemicals"},
+{code:"4021.T",sector:"Chemicals"},
+{code:"4042.T",sector:"Chemicals"},
+{code:"4043.T",sector:"Chemicals"},
+{code:"4061.T",sector:"Chemicals"},
+{code:"4063.T",sector:"Chemicals"},
+{code:"4183.T",sector:"Chemicals"},
+{code:"4188.T",sector:"Chemicals"},
+{code:"4208.T",sector:"Chemicals"},
+{code:"4452.T",sector:"Chemicals"},
+{code:"4901.T",sector:"Chemicals"},
+{code:"4911.T",sector:"Chemicals"},
+{code:"6988.T",sector:"Chemicals"},
+{code:"5019.T",sector:"Petroleum"},
+{code:"5020.T",sector:"Petroleum"},
+{code:"5101.T",sector:"Rubber"},
+{code:"5108.T",sector:"Rubber"},
+{code:"5201.T",sector:"Glass & Ceramics"},
+{code:"5214.T",sector:"Glass & Ceramics"},
+{code:"5233.T",sector:"Glass & Ceramics"},
+{code:"5301.T",sector:"Glass & Ceramics"},
+{code:"5332.T",sector:"Glass & Ceramics"},
+{code:"5333.T",sector:"Glass & Ceramics"},
+{code:"5401.T",sector:"Steel"},
+{code:"5406.T",sector:"Steel"},
+{code:"5411.T",sector:"Steel"},
+{code:"3436.T",sector:"Nonferrous Metals"},
+{code:"5706.T",sector:"Nonferrous Metals"},
+{code:"5711.T",sector:"Nonferrous Metals"},
+{code:"5713.T",sector:"Nonferrous Metals"},
+{code:"5714.T",sector:"Nonferrous Metals"},
+{code:"5801.T",sector:"Nonferrous Metals"},
+{code:"5802.T",sector:"Nonferrous Metals"},
+{code:"5803.T",sector:"Nonferrous Metals"},
+{code:"2768.T",sector:"Trading Companies"},
+{code:"8001.T",sector:"Trading Companies"},
+{code:"8002.T",sector:"Trading Companies"},
+{code:"8015.T",sector:"Trading Companies"},
+{code:"8031.T",sector:"Trading Companies"},
+{code:"8053.T",sector:"Trading Companies"},
+{code:"8058.T",sector:"Trading Companies"},
+{code:"1721.T",sector:"Construction"},
+{code:"1801.T",sector:"Construction"},
+{code:"1802.T",sector:"Construction"},
+{code:"1803.T",sector:"Construction"},
+{code:"1808.T",sector:"Construction"},
+{code:"1812.T",sector:"Construction"},
+{code:"1925.T",sector:"Construction"},
+{code:"1928.T",sector:"Construction"},
+{code:"1963.T",sector:"Construction"},
+{code:"5631.T",sector:"Machinery"},
+{code:"6103.T",sector:"Machinery"},
+{code:"6113.T",sector:"Machinery"},
+{code:"6273.T",sector:"Machinery"},
+{code:"6301.T",sector:"Machinery"},
+{code:"6302.T",sector:"Machinery"},
+{code:"6305.T",sector:"Machinery"},
+{code:"6326.T",sector:"Machinery"},
+{code:"6361.T",sector:"Machinery"},
+{code:"6367.T",sector:"Machinery"},
+{code:"6471.T",sector:"Machinery"},
+{code:"6472.T",sector:"Machinery"},
+{code:"6473.T",sector:"Machinery"},
+{code:"7004.T",sector:"Machinery"},
+{code:"7011.T",sector:"Machinery"},
+{code:"7013.T",sector:"Machinery"},
+{code:"7012.T",sector:"Shipbuilding"},
+{code:"7832.T",sector:"Other Manufacturing"},
+{code:"7911.T",sector:"Other Manufacturing"},
+{code:"7912.T",sector:"Other Manufacturing"},
+{code:"7951.T",sector:"Other Manufacturing"},
+{code:"3289.T",sector:"Real Estate"},
+{code:"8801.T",sector:"Real Estate"},
+{code:"8802.T",sector:"Real Estate"},
+{code:"8804.T",sector:"Real Estate"},
+{code:"8830.T",sector:"Real Estate"},
+{code:"9001.T",sector:"Railway & Bus"},
+{code:"9005.T",sector:"Railway & Bus"},
+{code:"9007.T",sector:"Railway & Bus"},
+{code:"9008.T",sector:"Railway & Bus"},
+{code:"9009.T",sector:"Railway & Bus"},
+{code:"9020.T",sector:"Railway & Bus"},
+{code:"9021.T",sector:"Railway & Bus"},
+{code:"9022.T",sector:"Railway & Bus"},
+{code:"9064.T",sector:"Land Transport"},
+{code:"9147.T",sector:"Land Transport"},
+{code:"9101.T",sector:"Marine Transport"},
+{code:"9104.T",sector:"Marine Transport"},
+{code:"9107.T",sector:"Marine Transport"},
+{code:"9201.T",sector:"Air Transport"},
+{code:"9202.T",sector:"Air Transport"},
+{code:"9301.T",sector:"Warehousing"},
+{code:"9501.T",sector:"Electric Power"},
+{code:"9502.T",sector:"Electric Power"},
+{code:"9503.T",sector:"Electric Power"},
+{code:"9531.T",sector:"Gas"},
+{code:"9532.T",sector:"Gas"}
+];
 
-      // Stats tracking
-      let processed = 0;
-      let succeeded = 0;
-      let failed = 0;
-      const startTime = Date.now();
 
-      // Configure batch size - adjust based on API limits and system performance
-      const BATCH_SIZE = 5; // Process 5 stocks at a time
+      for (const tickerObj of tickers) {
+  console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
-      // Process tickers in batches
-      for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-        const batch = tickers.slice(i, i + BATCH_SIZE);
-        const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-        const totalBatches = Math.ceil(tickers.length / BATCH_SIZE);
+  try {
+    // 1) Fetch Yahoo data
+    const result = await fetchSingleStockData(tickerObj);
+    if (!result.success) {
+      console.error("Error fetching stock analysis:", result.error);
+      throw new Error("Failed to fetch Yahoo data.");
+    }
 
-        console.log(
-          `Processing batch ${batchNumber}/${totalBatches}, tickers: ${batch
-            .map((t) => t.code)
-            .join(", ")}`
-        );
+    const { code, sector, yahooData } = result.data;
 
-        // Process all tickers in this batch concurrently
-        const batchResults = await Promise.all(
-          batch.map(async (tickerObj) => {
-            try {
-              console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
+    // First check if yahooData exists at all
+    if (!yahooData) {
+      console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
+      throw new Error("Yahoo data is completely missing.");
+    }
 
-              // 1) Fetch Yahoo data
-              const result = await fetchSingleStockData(tickerObj);
-              if (!result.success) {
-                console.error("Error fetching stock analysis:", result.error);
-                throw new Error("Failed to fetch Yahoo data.");
-              }
+    // Define critical fields that must be present
+    const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+    const missingCriticalFields = criticalFields.filter(
+      (field) => !yahooData[field]
+    );
 
-              const { code, sector, yahooData } = result.data;
+    // Define non-critical fields to check
+    const nonCriticalFields = [
+      "openPrice",
+      "prevClosePrice",
+      "marketCap",
+      "peRatio",
+      "pbRatio",
+      "dividendYield",
+      "dividendGrowth5yr",
+      "fiftyTwoWeekHigh",
+      "fiftyTwoWeekLow",
+      "epsTrailingTwelveMonths",
+      "epsForward",
+      "epsGrowthRate",
+      "debtEquityRatio",
+      "movingAverage50d",
+      "movingAverage200d",
+      "rsi14",
+      "macd",
+      "macdSignal",
+      "bollingerMid",
+      "bollingerUpper",
+      "bollingerLower",
+      "stochasticK",
+      "stochasticD",
+      "obv",
+      "atr14",
+    ];
+    const missingNonCriticalFields = nonCriticalFields.filter(
+      (field) => yahooData[field] === undefined || yahooData[field] === null
+    );
 
-              // First check if yahooData exists at all
-              if (!yahooData) {
-                console.error(
-                  `Missing Yahoo data for ${code}. Aborting calculation.`
-                );
-                throw new Error("Yahoo data is completely missing.");
-              }
+    // Check for zero values (which might indicate failures in calculations)
+    const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+      (field) =>
+        yahooData[field] !== undefined &&
+        yahooData[field] !== null &&
+        yahooData[field] === 0 &&
+        !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
+    );
 
-              // Define critical fields that must be present
-              const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
-              const missingCriticalFields = criticalFields.filter(
-                (field) => !yahooData[field]
-              );
+    // Log detailed information
+    console.log(`Data validation for ${code}:`);
 
-              // Define non-critical fields to check
-              const nonCriticalFields = [
-                "openPrice",
-                "prevClosePrice",
-                "marketCap",
-                "peRatio",
-                "pbRatio",
-                "dividendYield",
-                "dividendGrowth5yr",
-                "fiftyTwoWeekHigh",
-                "fiftyTwoWeekLow",
-                "epsTrailingTwelveMonths",
-                "epsForward",
-                "epsGrowthRate",
-                "debtEquityRatio",
-                "movingAverage50d",
-                "movingAverage200d",
-                "rsi14",
-                "macd",
-                "macdSignal",
-                "bollingerMid",
-                "bollingerUpper",
-                "bollingerLower",
-                "stochasticK",
-                "stochasticD",
-                "obv",
-                "atr14",
-              ];
+    if (missingCriticalFields.length > 0) {
+      console.error(
+        `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+      );
+      throw new Error(
+        `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
+      );
+    }
 
-              const missingNonCriticalFields = nonCriticalFields.filter(
-                (field) =>
-                  yahooData[field] === undefined || yahooData[field] === null
-              );
+    if (missingNonCriticalFields.length > 0) {
+      console.warn(
+        `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
+      );
+    }
 
-              // Check for zero values (which might indicate failures in calculations)
-              const zeroFields = [
-                ...criticalFields,
-                ...nonCriticalFields,
-              ].filter(
-                (field) =>
-                  yahooData[field] !== undefined &&
-                  yahooData[field] !== null &&
-                  yahooData[field] === 0 &&
-                  ![
-                    "dividendYield",
-                    "dividendGrowth5yr",
-                    "epsGrowthRate",
-                  ].includes(field) // Fields that can legitimately be zero
-              );
+    if (zeroFields.length > 0) {
+      console.warn(
+        `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+          ", "
+        )}`
+      );
+    }
 
-              // Log detailed information
-              console.log(`Data validation for ${code}:`);
+    console.log(
+      `✅ All critical fields present for ${code}. Continuing analysis...`
+    );
+    console.log("Yahoo data:", yahooData);
 
-              if (missingCriticalFields.length > 0) {
-                console.error(
-                  `❌ Missing critical fields: ${missingCriticalFields.join(
-                    ", "
-                  )}`
-                );
-                throw new Error(
-                  `Critical Yahoo data is missing: ${missingCriticalFields.join(
-                    ", "
-                  )}`
-                );
-              }
 
-              if (missingNonCriticalFields.length > 0) {
-                console.warn(
-                  `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(
-                    ", "
-                  )}`
-                );
-              }
+    // 2) Build stock object
+    const stock = {
+      ticker: code,
+      sector,
+      currentPrice: yahooData.currentPrice,
+      highPrice: yahooData.highPrice,
+      lowPrice: yahooData.lowPrice,
+      openPrice: yahooData.openPrice,
+      prevClosePrice: yahooData.prevClosePrice,
+      marketCap: yahooData.marketCap,
+      peRatio: yahooData.peRatio,
+      pbRatio: yahooData.pbRatio,
+      dividendYield: yahooData.dividendYield,
+      dividendGrowth5yr: yahooData.dividendGrowth5yr,
+      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+      epsForward: yahooData.epsForward,
+      epsGrowthRate: yahooData.epsGrowthRate,
+      debtEquityRatio: yahooData.debtEquityRatio,
+      movingAverage50d: yahooData.movingAverage50d,
+      movingAverage200d: yahooData.movingAverage200d,
 
-              if (zeroFields.length > 0) {
-                console.warn(
-                  `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
-                    ", "
-                  )}`
-                );
-              }
+      // 📈 Technical indicators
+      rsi14: yahooData.rsi14,
+      macd: yahooData.macd,
+      macdSignal: yahooData.macdSignal,
+      bollingerMid: yahooData.bollingerMid,
+      bollingerUpper: yahooData.bollingerUpper,
+      bollingerLower: yahooData.bollingerLower,
+      stochasticK: yahooData.stochasticK,
+      stochasticD: yahooData.stochasticD,
+      obv: yahooData.obv,
+      atr14: yahooData.atr14,
+    };
 
-              console.log(
-                `✅ All critical fields present for ${code}. Continuing analysis...`
-              );
+    const historicalData = await fetchHistoricalData(stock.ticker);
+    stock.historicalData = historicalData || [];
 
-              // 2) Build stock object
-              const stock = {
-                ticker: code,
-                sector,
-                currentPrice: yahooData.currentPrice,
-                highPrice: yahooData.highPrice,
-                lowPrice: yahooData.lowPrice,
-                openPrice: yahooData.openPrice,
-                prevClosePrice: yahooData.prevClosePrice,
-                marketCap: yahooData.marketCap,
-                peRatio: yahooData.peRatio,
-                pbRatio: yahooData.pbRatio,
-                dividendYield: yahooData.dividendYield,
-                dividendGrowth5yr: yahooData.dividendGrowth5yr,
-                fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-                fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-                epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-                epsForward: yahooData.epsForward,
-                epsGrowthRate: yahooData.epsGrowthRate,
-                debtEquityRatio: yahooData.debtEquityRatio,
-                movingAverage50d: yahooData.movingAverage50d,
-                movingAverage200d: yahooData.movingAverage200d,
+    // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+    console.log(`Analyzing stock: ${stock.ticker}`);
+    const prediction = await analyzeStock(stock.ticker, historicalData);
+    if (prediction == null) {
+      console.error(
+        `Failed to generate prediction for ${stock.ticker}. Aborting.`
+      );
+      throw new Error("Failed to generate prediction.");
+    }
+    stock.prediction = prediction;
 
-                // 📈 Technical indicators
-                rsi14: yahooData.rsi14,
-                macd: yahooData.macd,
-                macdSignal: yahooData.macdSignal,
-                bollingerMid: yahooData.bollingerMid,
-                bollingerUpper: yahooData.bollingerUpper,
-                bollingerLower: yahooData.bollingerLower,
-                stochasticK: yahooData.stochasticK,
-                stochasticD: yahooData.stochasticD,
-                obv: yahooData.obv,
-                atr14: yahooData.atr14,
-              };
+    // 5) Calculate Stop Loss & Target
+    const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+      stock,
+      prediction
+    );
+    if (stopLoss === null || targetPrice === null) {
+      console.error(
+        `Failed to calculate stop loss or target price for ${stock.ticker}.`
+      );
+      throw new Error("Stop loss or target price calculation failed.");
+    }
+    stock.stopLoss = stopLoss;
+    stock.targetPrice = targetPrice;
 
-              const historicalData = await fetchHistoricalData(stock.ticker);
-              stock.historicalData = historicalData || [];
+    // 7) Compute growth potential
+    const growthPotential =
+      ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
 
-              // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
-              console.log(`Analyzing stock: ${stock.ticker}`);
-              const prediction = await analyzeStock(
-                stock.ticker,
-                historicalData
-              );
-              if (prediction == null) {
-                console.error(
-                  `Failed to generate prediction for ${stock.ticker}. Aborting.`
-                );
-                throw new Error("Failed to generate prediction.");
-              }
-              stock.prediction = prediction;
+    // 8) Compute fundamental/technical score
+    stock.score = computeScore(stock, stock.sector);
 
-              // 5) Calculate Stop Loss & Target
-              const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-                stock,
-                prediction
-              );
-              if (stopLoss === null || targetPrice === null) {
-                console.error(
-                  `Failed to calculate stop loss or target price for ${stock.ticker}.`
-                );
-                throw new Error(
-                  "Stop loss or target price calculation failed."
-                );
-              }
-              stock.stopLoss = stopLoss;
-              stock.targetPrice = targetPrice;
+    // 9) Combine them => finalScore
+    const weights = { metrics: 0.7, growth: 0.3 };
+    const finalScore =
+      weights.metrics * stock.score + weights.growth * (growthPotential / 100);
 
-              // 7) Compute growth potential
-              const growthPotential =
-                ((stock.targetPrice - stock.currentPrice) /
-                  stock.currentPrice) *
-                100;
+    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+    stock.finalScore = parseFloat(finalScore.toFixed(2));
+    stock.technicalScore = getTechnicalScore(stock);
+    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+    stock.valuationScore = getValuationScore(stock);
+    stock.entryTimingScore = getEntryTimingScore(stock);
+    stock.tier = getNumericTier(stock);
 
-              // 8) Compute fundamental/technical score
-              stock.score = computeScore(stock, stock.sector);
+    // 10) Send data in Bubble key format
+ const stockObject = {
+   _api_c2_ticker: stock.ticker,
+   _api_c2_sector: stock.sector,
+   _api_c2_currentPrice: stock.currentPrice,
+   _api_c2_entryTimingScore: stock.entryTimingScore,
+   _api_c2_predictedPrediction: stock.prediction,
+   _api_c2_stopLoss: stock.stopLoss,
+   _api_c2_targetPrice: stock.targetPrice,
+   _api_c2_growthPotential: stock.growthPotential,
+   _api_c2_score: stock.score,
+   _api_c2_finalScore: stock.finalScore,
+   _api_c2_tier: stock.tier,
 
-              // 9) Combine them => finalScore
-              const weights = { metrics: 0.7, growth: 0.3 };
-              const finalScore =
-                weights.metrics * stock.score +
-                weights.growth * (growthPotential / 100);
+   // Add complete stock data as JSON
+   _api_c2_otherData: JSON.stringify({
+     // Price data
+     highPrice: stock.highPrice,
+     lowPrice: stock.lowPrice,
+     openPrice: stock.openPrice,
+     prevClosePrice: stock.prevClosePrice,
 
-              stock.prediction = prediction;
-              stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-              stock.finalScore = parseFloat(finalScore.toFixed(2));
-              stock.technicalScore = getTechnicalScore(stock);
-              stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-              stock.valuationScore = getValuationScore(stock);
-              stock.entryTimingScore = getEntryTimingScore(stock);
-              stock.tier = getNumericTier(stock);
+     // Fundamental metrics
+     marketCap: stock.marketCap,
+     peRatio: stock.peRatio,
+     pbRatio: stock.pbRatio,
+     dividendYield: stock.dividendYield,
+     dividendGrowth5yr: stock.dividendGrowth5yr,
+     fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+     fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+     epsForward: stock.epsForward,
+     epsGrowthRate: stock.epsGrowthRate,
+     debtEquityRatio: stock.debtEquityRatio,
 
-              // 10) Send data in Bubble key format
-              const stockObject = {
-                _api_c2_ticker: stock.ticker,
-                _api_c2_sector: stock.sector,
-                _api_c2_currentPrice: stock.currentPrice,
-                _api_c2_entryTimingScore: stock.entryTimingScore,
-                _api_c2_prediction: stock.prediction.predictedPrice,
-                _api_c2_stopLoss: stock.stopLoss,
-                _api_c2_targetPrice: stock.targetPrice,
-                _api_c2_growthPotential: stock.growthPotential,
-                _api_c2_score: stock.score,
-                _api_c2_finalScore: stock.finalScore,
-                _api_c2_tier: stock.tier,
+     // Technical indicators
+     movingAverage50d: stock.movingAverage50d,
+     movingAverage200d: stock.movingAverage200d,
+     rsi14: stock.rsi14,
+     macd: stock.macd,
+     macdSignal: stock.macdSignal,
+     bollingerMid: stock.bollingerMid,
+     bollingerUpper: stock.bollingerUpper,
+     bollingerLower: stock.bollingerLower,
+     stochasticK: stock.stochasticK,
+     stochasticD: stock.stochasticD,
+     obv: stock.obv,
+     atr14: stock.atr14,
 
-                // Add complete stock data as JSON
-                _api_c2_otherData: JSON.stringify({
-                  // Price data
-                  highPrice: stock.highPrice,
-                  lowPrice: stock.lowPrice,
-                  openPrice: stock.openPrice,
-                  prevClosePrice: stock.prevClosePrice,
+     // Calculated scores
+     technicalScore: stock.technicalScore,
+     fundamentalScore: stock.fundamentalScore,
+     valuationScore: stock.valuationScore,
+   }),
+ };
 
-                  // Fundamental metrics
-                  marketCap: stock.marketCap,
-                  peRatio: stock.peRatio,
-                  pbRatio: stock.pbRatio,
-                  dividendYield: stock.dividendYield,
-                  dividendGrowth5yr: stock.dividendGrowth5yr,
-                  fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-                  fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-                  epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-                  epsForward: stock.epsForward,
-                  epsGrowthRate: stock.epsGrowthRate,
-                  debtEquityRatio: stock.debtEquityRatio,
-
-                  // Technical indicators
-                  movingAverage50d: stock.movingAverage50d,
-                  movingAverage200d: stock.movingAverage200d,
-                  rsi14: stock.rsi14,
-                  macd: stock.macd,
-                  macdSignal: stock.macdSignal,
-                  bollingerMid: stock.bollingerMid,
-                  bollingerUpper: stock.bollingerUpper,
-                  bollingerLower: stock.bollingerLower,
-                  stochasticK: stock.stochasticK,
-                  stochasticD: stock.stochasticD,
-                  obv: stock.obv,
-                  atr14: stock.atr14,
-
-                  // Calculated scores
-                  technicalScore: stock.technicalScore,
-                  fundamentalScore: stock.fundamentalScore,
-                  valuationScore: stock.valuationScore,
-                }),
-              };
-
-              console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
-              bubble_fn_result(stockObject);
-
-              succeeded++;
-              return { success: true, ticker: tickerObj.code };
-            } catch (error) {
-              console.error(
-                `❌ Error processing ticker ${tickerObj.code}:`,
-                error.message
-              );
-              failed++;
-              return {
-                success: false,
-                ticker: tickerObj.code,
-                error: error.message,
-              };
-            } finally {
-              processed++;
-            }
-          })
-        );
-
-        // Log batch results
-        const batchSuccesses = batchResults.filter((r) => r.success).length;
-        console.log(
-          `Batch ${batchNumber}/${totalBatches} completed: ${batchSuccesses}/${batch.length} successful`
-        );
-
-        // Optional: add a small delay between batches to reduce API pressure
-        if (i + BATCH_SIZE < tickers.length) {
-          console.log(`Waiting 2 seconds before processing next batch...`);
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+    console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+    bubble_fn_result(stockObject);
+  } catch (error) {
+          console.error(
+            `❌ Error processing ticker ${tickerObj.code}:`,
+            error.message
+          );
         }
       }
-
-      // Calculate and log final stats
-      const endTime = Date.now();
-      const duration = (endTime - startTime) / 1000;
-      console.log(`
-      ✅ Stock analysis completed:
-      - Total processed: ${processed}/${tickers.length}
-      - Successful: ${succeeded}
-      - Failed: ${failed}
-      - Time taken: ${duration.toFixed(2)} seconds
-      `);
     } catch (error) {
       console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
@@ -2278,38 +2196,10 @@ async function predict30DayAheadPrice(modelObj, data, maxMonthlyReturnPct = 5) {
   // Calculate percentage change for reporting
   const percentChange = (Math.exp(constrainedLogReturn) - 1) * 100;
   
-  return {
-    predictedPrice,
-    percentChange,
-    lastPrice: recentPrices[recentPrices.length - 1],
-    predictedReturn: constrainedLogReturn,
-    originalPredictedReturn: predictedLogReturn,
-    wasConstrained: constrainedLogReturn !== predictedLogReturn
-  };
+  return predictedPrice;
 }
 
-/**
- * Utility function to evaluate model performance on historical data
- */
-async function evaluateModelPerformance(modelObj, testData, actualFuturePrices) {
-  const predictions = await predict30DayAheadPrice(modelObj, testData);
-  const actualPrice = actualFuturePrices[0];
-  
-  const errorPercent = ((predictions.predictedPrice - actualPrice) / actualPrice) * 100;
-  const actualReturnPercent = ((actualPrice - testData[testData.length - 1].price) / testData[testData.length - 1].price) * 100;
-  
-  return {
-    predictedPrice: predictions.predictedPrice,
-    actualPrice,
-    errorPercent,
-    predictedReturnPercent: predictions.percentChange,
-    actualReturnPercent,
-    wasConstrained: predictions.wasConstrained
-  };
-}
-/**
- * Main orchestration function.
- */
+
 export async function analyzeStock(
   ticker,
   historicalData,
@@ -2321,29 +2211,20 @@ export async function analyzeStock(
     }
 
     const modelObj = await trainModelFor30DayAheadPrice(historicalData);
-    const prediction = await predict30DayAheadPrice(
+    const predictedPrice = await predict30DayAheadPrice(
       modelObj,
       historicalData,
       maxMonthlyReturnPct
     );
 
-    console.log(`📈 Prediction for ${ticker}:`);
-    console.log(`➡️ Last Known Price: ¥${prediction.lastPrice.toFixed(2)}`);
-    console.log(
-      `➡️ Predicted Price (30d): ¥${prediction.predictedPrice.toFixed(2)}`
-    );
-    console.log(`➡️ Expected Return: ${prediction.percentChange.toFixed(2)}%`);
-    if (prediction.wasConstrained) {
-      console.log(`⚠️ Prediction was constrained due to volatility limits.`);
-    }
-
     return {
       ticker,
-      ...prediction,
+      predictedPrice,
     };
   } catch (error) {
     console.error(`❌ Error analyzing stock ${ticker}:`, error.message);
     return null;
   }
 }
+
 
