@@ -551,6 +551,93 @@ function getValuationSummary(stock) {
 
 
 
+function getStockTierLabel(stock) {
+  const technical = stock.technicalSummary;
+  const fundamental = stock.fundamentalSummary;
+  const valuation = stock.valuationSummary;
+
+  const isTopTechnical = ["Strong Bullish 📈", "Bullish Momentum 🟢"].includes(
+    technical
+  );
+  const isDecentTechnical = ["Possible Reversal 🟡", "Neutral ⚪️"].includes(
+    technical
+  );
+  const isWeakTechnical = ["Weak Signal 🟠", "Bearish 🟥"].includes(technical);
+
+  const isExcellentFundamental = fundamental === "🟢 Excellent Fundamentals 💎";
+  const isStrongFundamental = [
+    "🟡 Solid Growth 📈",
+    "🟩 Strong Dividend Stock 💵",
+  ].includes(fundamental);
+  const isNeutralFundamental = [
+    "🟧 Value Play (Low Growth) 🧱",
+    "⚪ Neutral Fundamentals 🤔",
+    "🟠 Watchlist Stock 🧐",
+  ].includes(fundamental);
+  const isWeakFundamental = fundamental === "🔴 Weak Fundamentals ⚠️";
+
+  const isTopValuation = ["💰 Exceptional Value", "💎 Deep Value"].includes(
+    valuation
+  );
+  const isGoodValuation = ["📉 Undervalued", "⚖️ Fairly Priced"].includes(
+    valuation
+  );
+  const isWeakValuation = [
+    "🟡 Slightly Overvalued",
+    "🔴 Overvalued",
+    "🚫 Highly Overvalued",
+  ].includes(valuation);
+
+  // TIER 1: Dream Stocks
+  if (isTopTechnical && isExcellentFundamental && isTopValuation) {
+    return "🟩 TIER 1: Dream Stock";
+  }
+
+  // TIER 2: Elite Growth or Value Plays
+  if (
+    (isTopTechnical && isExcellentFundamental && isGoodValuation) ||
+    (isTopTechnical && isStrongFundamental && isTopValuation)
+  ) {
+    return "🟢 TIER 2: Elite Opportunity";
+  }
+
+  // TIER 3: Solid Picks
+  if (
+    (isTopTechnical && isNeutralFundamental && isTopValuation) ||
+    (isDecentTechnical && isExcellentFundamental && isGoodValuation) ||
+    (isTopTechnical && isStrongFundamental && isGoodValuation)
+  ) {
+    return "🟨 TIER 3: Solid Pick";
+  }
+
+  // TIER 4: Speculative
+  if (
+    (isDecentTechnical && isNeutralFundamental && isTopValuation) ||
+    (isWeakTechnical && isExcellentFundamental && isGoodValuation) ||
+    (isTopTechnical && isNeutralFundamental && isGoodValuation)
+  ) {
+    return "🟠 TIER 4: Speculative Watch";
+  }
+
+  // TIER 5: Risky / Avoid for Now
+  if (
+    (isTopTechnical && isWeakFundamental && isWeakValuation) ||
+    (isDecentTechnical && isWeakFundamental && isWeakValuation)
+  ) {
+    return "🔴 TIER 5: Risky";
+  }
+
+  // TIER 6: Red Flag
+  if (isWeakTechnical && isWeakFundamental && isWeakValuation) {
+    return "🚫 TIER 6: Red Flag";
+  }
+
+  // Default fallback
+  return "❓ Unclassified";
+}
+
+
+
 
 
 
@@ -904,6 +991,7 @@ window.scan = {
           stock.fundamentalSummary = getAdvancedFundamentalRating(stock);
           stock.valuationSummary= getValuationSummary(stock);
           stock.entryTimingLabel = getEntryTimingLabel(stock);
+          stock.tier = getStockTierLabel(stock);
 
 
 
@@ -953,6 +1041,7 @@ window.scan = {
            _api_c2_growthPotential: stock.growthPotential,
            _api_c2_score: stock.score,
            _api_c2_finalScore: stock.finalScore,
+           _api_c2_tier: stock.tier,
          };
 
 
