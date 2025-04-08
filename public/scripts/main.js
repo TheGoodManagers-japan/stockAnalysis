@@ -1607,6 +1607,8 @@ window.scan = {
       );
       throw new Error("Failed to generate prediction.");
     }
+
+    console.log("prediction: ",prediction);
     stock.prediction = prediction;
 
     // 5) Calculate Stop Loss & Target
@@ -2218,7 +2220,7 @@ export async function analyzeStock(
     );
 
     return predictedPrice;
-    
+
   } catch (error) {
     console.error(`❌ Error analyzing stock ${ticker}:`, error.message);
     return null;
