@@ -1505,16 +1505,90 @@ window.scan = {
     }
 
     const { code, sector, yahooData } = result.data;
-    console.log("yahoo data:", yahooData);
-    if (
-      !yahooData ||
-      !yahooData.currentPrice ||
-      !yahooData.highPrice ||
-      !yahooData.lowPrice
-    ) {
-      console.error(`Incomplete Yahoo data for ${code}. Aborting calculation.`);
-      throw new Error("Critical Yahoo data is missing.");
+
+    // First check if yahooData exists at all
+    if (!yahooData) {
+      console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
+      throw new Error("Yahoo data is completely missing.");
     }
+
+    // Define critical fields that must be present
+    const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+    const missingCriticalFields = criticalFields.filter(
+      (field) => !yahooData[field]
+    );
+
+    // Define non-critical fields to check
+    const nonCriticalFields = [
+      "openPrice",
+      "prevClosePrice",
+      "marketCap",
+      "peRatio",
+      "pbRatio",
+      "dividendYield",
+      "dividendGrowth5yr",
+      "fiftyTwoWeekHigh",
+      "fiftyTwoWeekLow",
+      "epsTrailingTwelveMonths",
+      "epsForward",
+      "epsGrowthRate",
+      "debtEquityRatio",
+      "movingAverage50d",
+      "movingAverage200d",
+      "rsi14",
+      "macd",
+      "macdSignal",
+      "bollingerMid",
+      "bollingerUpper",
+      "bollingerLower",
+      "stochasticK",
+      "stochasticD",
+      "obv",
+      "atr14",
+    ];
+    const missingNonCriticalFields = nonCriticalFields.filter(
+      (field) => yahooData[field] === undefined || yahooData[field] === null
+    );
+
+    // Check for zero values (which might indicate failures in calculations)
+    const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+      (field) =>
+        yahooData[field] !== undefined &&
+        yahooData[field] !== null &&
+        yahooData[field] === 0 &&
+        !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
+    );
+
+    // Log detailed information
+    console.log(`Data validation for ${code}:`);
+
+    if (missingCriticalFields.length > 0) {
+      console.error(
+        `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+      );
+      throw new Error(
+        `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
+      );
+    }
+
+    if (missingNonCriticalFields.length > 0) {
+      console.warn(
+        `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
+      );
+    }
+
+    if (zeroFields.length > 0) {
+      console.warn(
+        `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+          ", "
+        )}`
+      );
+    }
+
+    console.log(
+      `✅ All critical fields present for ${code}. Continuing analysis...`
+    );
+    console.log("Yahoo data:", yahooData);
 
 
     // 2) Build stock object
