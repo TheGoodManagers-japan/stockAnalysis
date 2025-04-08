@@ -549,113 +549,61 @@ function getValuationSummary(stock) {
   return "🚫 Highly Overvalued";
 }
 
+const TECHNICAL_SCORES = {
+  "Strong Bullish 📈": 3,
+  "Bullish Momentum 🟢": 2.5,
+  "Possible Reversal 🟡": 2,
+  "Neutral ⚪️": 1.5,
+  "Weak Signal 🟠": 1,
+  "Bearish 🟥": 0,
+};
+
+const FUNDAMENTAL_SCORES = {
+  "🟢 Excellent Fundamentals 💎": 3,
+  "🟡 Solid Growth 📈": 2.5,
+  "🟩 Strong Dividend Stock 💵": 2.5,
+  "🟧 Value Play (Low Growth) 🧱": 1.5,
+  "⚪ Neutral Fundamentals 🤔": 1,
+  "🟠 Watchlist Stock 🧐": 0.5,
+  "🔴 Weak Fundamentals ⚠️": 0,
+};
+
+const VALUATION_SCORES = {
+  "💰 Exceptional Value": 3,
+  "💎 Deep Value": 2.5,
+  "📉 Undervalued": 2,
+  "⚖️ Fairly Priced": 1.5,
+  "🟡 Slightly Overvalued": 1,
+  "🔴 Overvalued": 0.5,
+  "🚫 Highly Overvalued": 0,
+};
+
+const TIER_LABELS = {
+  1: "🟩 TIER 1: Dream Stock",
+  2: "🟢 TIER 2: Elite Opportunity",
+  3: "🟨 TIER 3: Solid Pick",
+  4: "🟠 TIER 4: Speculative Watch",
+  5: "🔴 TIER 5: Risky",
+  6: "🚫 TIER 6: Red Flag",
+};
 
 
-function getStockTierLabel(stock) {
-  const technical = stock.technicalSummary;
-  const fundamental = stock.fundamentalSummary;
-  const valuation = stock.valuationSummary;
 
-  const isTopTechnical = ["Strong Bullish 📈", "Bullish Momentum 🟢"].includes(
-    technical
-  );
-  const isDecentTechnical = ["Possible Reversal 🟡", "Neutral ⚪️"].includes(
-    technical
-  );
-  const isWeakTechnical = ["Weak Signal 🟠", "Bearish 🟥"].includes(technical);
+function getNumericTier(stock) {
+  const tScore = TECHNICAL_SCORES[stock.technicalSummary] ?? 0;
+  const fScore = FUNDAMENTAL_SCORES[stock.fundamentalSummary] ?? 0;
+  const vScore = VALUATION_SCORES[stock.valuationSummary] ?? 0;
 
-  const isExcellentFundamental = fundamental === "🟢 Excellent Fundamentals 💎";
-  const isStrongFundamental = [
-    "🟡 Solid Growth 📈",
-    "🟩 Strong Dividend Stock 💵",
-  ].includes(fundamental);
-  const isNeutralFundamental = [
-    "🟧 Value Play (Low Growth) 🧱",
-    "⚪ Neutral Fundamentals 🤔",
-    "🟠 Watchlist Stock 🧐",
-  ].includes(fundamental);
-  const isWeakFundamental = fundamental === "🔴 Weak Fundamentals ⚠️";
+  const total = tScore + fScore + vScore;
 
-  const isTopValuation = ["💰 Exceptional Value", "💎 Deep Value"].includes(
-    valuation
-  );
-  const isGoodValuation = ["📉 Undervalued", "⚖️ Fairly Priced"].includes(
-    valuation
-  );
-  const isWeakValuation = [
-    "🟡 Slightly Overvalued",
-    "🔴 Overvalued",
-    "🚫 Highly Overvalued",
-  ].includes(valuation);
-
-  // -------------------------------
-  // 🟩 TIER 1: Dream Stock
-  // -------------------------------
-  if (isTopTechnical && isExcellentFundamental && isTopValuation) {
-    return "🟩 TIER 1: Dream Stock";
-  }
-
-  // -------------------------------
-  // 🟢 TIER 2: Elite Opportunity
-  // -------------------------------
-  if (
-    (isTopTechnical && isExcellentFundamental && isGoodValuation) ||
-    (isTopTechnical && isStrongFundamental && isTopValuation) ||
-    (isDecentTechnical && isExcellentFundamental && isTopValuation)
-  ) {
-    return "🟢 TIER 2: Elite Opportunity";
-  }
-
-  // -------------------------------
-  // 🟨 TIER 3: Solid Pick
-  // -------------------------------
-  if (
-    (isTopTechnical && isNeutralFundamental && isTopValuation) ||
-    (isDecentTechnical && isExcellentFundamental && isGoodValuation) ||
-    (isTopTechnical && isStrongFundamental && isGoodValuation) ||
-    (isDecentTechnical && isStrongFundamental && isTopValuation)
-  ) {
-    return "🟨 TIER 3: Solid Pick";
-  }
-
-  // -------------------------------
-  // 🟠 TIER 4: Speculative Watch
-  // -------------------------------
-  if (
-    (isDecentTechnical && isNeutralFundamental && isTopValuation) ||
-    (isWeakTechnical && isExcellentFundamental && isTopValuation) ||
-    (isTopTechnical && isNeutralFundamental && isGoodValuation) ||
-    (isDecentTechnical && isStrongFundamental && isGoodValuation) ||
-    (isWeakTechnical && isStrongFundamental && isGoodValuation)
-  ) {
-    return "🟠 TIER 4: Speculative Watch";
-  }
-
-  // -------------------------------
-  // 🔴 TIER 5: Risky
-  // -------------------------------
-  if (
-    (isTopTechnical && isWeakFundamental) ||
-    (isDecentTechnical && isWeakFundamental) ||
-    (isWeakTechnical && isExcellentFundamental && isWeakValuation) ||
-    (isWeakTechnical && isStrongFundamental && isWeakValuation) ||
-    (isWeakTechnical && isNeutralFundamental && isGoodValuation)
-  ) {
-    return "🔴 TIER 5: Risky";
-  }
-
-  // -------------------------------
-  // 🚫 TIER 6: Red Flag
-  // -------------------------------
-  if (isWeakTechnical && isWeakFundamental && isWeakValuation) {
-    return "🚫 TIER 6: Red Flag";
-  }
-
-  // -------------------------------
-  // Fallback (should not hit)
-  // -------------------------------
-  return "❓ Unclassified";
+  if (total >= 8) return 1; // TIER 1: Dream
+  if (total >= 6.5) return 2; // TIER 2: Elite
+  if (total >= 5) return 3; // TIER 3: Solid
+  if (total >= 3.5) return 4; // TIER 4: Speculative
+  if (total >= 2) return 5; // TIER 5: Risky
+  return 6; // TIER 6: Red Flag
 }
+
 
 
 
@@ -1013,7 +961,8 @@ window.scan = {
           stock.fundamentalSummary = getAdvancedFundamentalRating(stock);
           stock.valuationSummary= getValuationSummary(stock);
           stock.entryTimingLabel = getEntryTimingLabel(stock);
-          stock.tier = getStockTierLabel(stock);
+          const tierNum = getNumericTier(stock);
+          stock.tier = TIER_LABELS[tierNum];
 
 
 
