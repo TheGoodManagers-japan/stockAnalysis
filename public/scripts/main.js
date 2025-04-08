@@ -1304,531 +1304,488 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       const tickers = [
-        { code: "4151.T", sector: "Pharmaceuticals" },
-        { code: "4502.T", sector: "Pharmaceuticals" },
-        { code: "4503.T", sector: "Pharmaceuticals" },
-        { code: "4506.T", sector: "Pharmaceuticals" },
-        { code: "4507.T", sector: "Pharmaceuticals" },
-        { code: "4519.T", sector: "Pharmaceuticals" },
-        { code: "4523.T", sector: "Pharmaceuticals" },
-        { code: "4568.T", sector: "Pharmaceuticals" },
-        { code: "4578.T", sector: "Pharmaceuticals" },
-        { code: "6479.T", sector: "Electric Machinery" },
-        { code: "6501.T", sector: "Electric Machinery" },
-        { code: "6503.T", sector: "Electric Machinery" },
-        { code: "6504.T", sector: "Electric Machinery" },
-        { code: "6506.T", sector: "Electric Machinery" },
-        { code: "6526.T", sector: "Electric Machinery" },
-        { code: "6594.T", sector: "Electric Machinery" },
-        { code: "6645.T", sector: "Electric Machinery" },
-        { code: "6674.T", sector: "Electric Machinery" },
-        { code: "6701.T", sector: "Electric Machinery" },
-        { code: "6702.T", sector: "Electric Machinery" },
-        { code: "6723.T", sector: "Electric Machinery" },
-        { code: "6724.T", sector: "Electric Machinery" },
-        { code: "6752.T", sector: "Electric Machinery" },
-        { code: "6753.T", sector: "Electric Machinery" },
-        { code: "6758.T", sector: "Electric Machinery" },
-        { code: "6762.T", sector: "Electric Machinery" },
-        { code: "6770.T", sector: "Electric Machinery" },
-        { code: "6841.T", sector: "Electric Machinery" },
-        { code: "6857.T", sector: "Electric Machinery" },
-        { code: "6861.T", sector: "Electric Machinery" },
-        { code: "6902.T", sector: "Electric Machinery" },
-        { code: "6920.T", sector: "Electric Machinery" },
-        { code: "6952.T", sector: "Electric Machinery" },
-        { code: "6954.T", sector: "Electric Machinery" },
-        { code: "6971.T", sector: "Electric Machinery" },
-        { code: "6976.T", sector: "Electric Machinery" },
-        { code: "6981.T", sector: "Electric Machinery" },
-        { code: "7735.T", sector: "Electric Machinery" },
-        { code: "7751.T", sector: "Electric Machinery" },
-        { code: "7752.T", sector: "Electric Machinery" },
-        { code: "8035.T", sector: "Electric Machinery" },
-        { code: "7201.T", sector: "Automobiles & Auto parts" },
-        { code: "7202.T", sector: "Automobiles & Auto parts" },
-        { code: "7203.T", sector: "Automobiles & Auto parts" },
-        { code: "7205.T", sector: "Automobiles & Auto parts" },
-        { code: "7211.T", sector: "Automobiles & Auto parts" },
-        { code: "7261.T", sector: "Automobiles & Auto parts" },
-        { code: "7267.T", sector: "Automobiles & Auto parts" },
-        { code: "7269.T", sector: "Automobiles & Auto parts" },
-        { code: "7270.T", sector: "Automobiles & Auto parts" },
-        { code: "7272.T", sector: "Automobiles & Auto parts" },
-        { code: "4543.T", sector: "Precision Instruments" },
-        { code: "4902.T", sector: "Precision Instruments" },
-        { code: "6146.T", sector: "Precision Instruments" },
-        { code: "7731.T", sector: "Precision Instruments" },
-        { code: "7733.T", sector: "Precision Instruments" },
-        { code: "7741.T", sector: "Precision Instruments" },
-        { code: "7762.T", sector: "Precision Instruments" },
-        { code: "9432.T", sector: "Communications" },
-        { code: "9433.T", sector: "Communications" },
-        { code: "9434.T", sector: "Communications" },
-        { code: "9613.T", sector: "Communications" },
-        { code: "9984.T", sector: "Communications" },
-        { code: "5831.T", sector: "Banking" },
-        { code: "7186.T", sector: "Banking" },
-        { code: "8304.T", sector: "Banking" },
-        { code: "8306.T", sector: "Banking" },
-        { code: "8308.T", sector: "Banking" },
-        { code: "8309.T", sector: "Banking" },
-        { code: "8316.T", sector: "Banking" },
-        { code: "8331.T", sector: "Banking" },
-        { code: "8354.T", sector: "Banking" },
-        { code: "8411.T", sector: "Banking" },
-        { code: "8253.T", sector: "Other Financial Services" },
-        { code: "8591.T", sector: "Other Financial Services" },
-        { code: "8697.T", sector: "Other Financial Services" },
-        { code: "8601.T", sector: "Securities" },
-        { code: "8604.T", sector: "Securities" },
-        { code: "8630.T", sector: "Insurance" },
-        { code: "8725.T", sector: "Insurance" },
-        { code: "8750.T", sector: "Insurance" },
-        { code: "8766.T", sector: "Insurance" },
-        { code: "8795.T", sector: "Insurance" },
-        { code: "1332.T", sector: "Fishery" },
-        { code: "2002.T", sector: "Foods" },
-        { code: "2269.T", sector: "Foods" },
-        { code: "2282.T", sector: "Foods" },
-        { code: "2501.T", sector: "Foods" },
-        { code: "2502.T", sector: "Foods" },
-        { code: "2503.T", sector: "Foods" },
-        { code: "2801.T", sector: "Foods" },
-        { code: "2802.T", sector: "Foods" },
-        { code: "2871.T", sector: "Foods" },
-        { code: "2914.T", sector: "Foods" },
-        { code: "3086.T", sector: "Retail" },
-        { code: "3092.T", sector: "Retail" },
-        { code: "3099.T", sector: "Retail" },
-        { code: "3382.T", sector: "Retail" },
-        { code: "7453.T", sector: "Retail" },
-        { code: "8233.T", sector: "Retail" },
-        { code: "8252.T", sector: "Retail" },
-        { code: "8267.T", sector: "Retail" },
-        { code: "9843.T", sector: "Retail" },
-        { code: "9983.T", sector: "Retail" },
-        { code: "2413.T", sector: "Services" },
-        { code: "2432.T", sector: "Services" },
-        { code: "3659.T", sector: "Services" },
-        { code: "4307.T", sector: "Services" },
-        { code: "4324.T", sector: "Services" },
-        { code: "4385.T", sector: "Services" },
-        { code: "4661.T", sector: "Services" },
-        { code: "4689.T", sector: "Services" },
-        { code: "4704.T", sector: "Services" },
-        { code: "4751.T", sector: "Services" },
-        { code: "4755.T", sector: "Services" },
-        { code: "6098.T", sector: "Services" },
-        { code: "6178.T", sector: "Services" },
-        { code: "7974.T", sector: "Services" },
-        { code: "9602.T", sector: "Services" },
-        { code: "9735.T", sector: "Services" },
-        { code: "9766.T", sector: "Services" },
-        { code: "1605.T", sector: "Mining" },
-        { code: "3401.T", sector: "Textiles & Apparel" },
-        { code: "3402.T", sector: "Textiles & Apparel" },
-        { code: "3861.T", sector: "Pulp & Paper" },
-        { code: "3405.T", sector: "Chemicals" },
-        { code: "3407.T", sector: "Chemicals" },
-        { code: "4004.T", sector: "Chemicals" },
-        { code: "4005.T", sector: "Chemicals" },
-        { code: "4021.T", sector: "Chemicals" },
-        { code: "4042.T", sector: "Chemicals" },
-        { code: "4043.T", sector: "Chemicals" },
-        { code: "4061.T", sector: "Chemicals" },
-        { code: "4063.T", sector: "Chemicals" },
-        { code: "4183.T", sector: "Chemicals" },
-        { code: "4188.T", sector: "Chemicals" },
-        { code: "4208.T", sector: "Chemicals" },
-        { code: "4452.T", sector: "Chemicals" },
-        { code: "4901.T", sector: "Chemicals" },
-        { code: "4911.T", sector: "Chemicals" },
-        { code: "6988.T", sector: "Chemicals" },
-        { code: "5019.T", sector: "Petroleum" },
-        { code: "5020.T", sector: "Petroleum" },
-        { code: "5101.T", sector: "Rubber" },
-        { code: "5108.T", sector: "Rubber" },
-        { code: "5201.T", sector: "Glass & Ceramics" },
-        { code: "5214.T", sector: "Glass & Ceramics" },
-        { code: "5233.T", sector: "Glass & Ceramics" },
-        { code: "5301.T", sector: "Glass & Ceramics" },
-        { code: "5332.T", sector: "Glass & Ceramics" },
-        { code: "5333.T", sector: "Glass & Ceramics" },
-        { code: "5401.T", sector: "Steel" },
-        { code: "5406.T", sector: "Steel" },
-        { code: "5411.T", sector: "Steel" },
-        { code: "3436.T", sector: "Nonferrous Metals" },
-        { code: "5706.T", sector: "Nonferrous Metals" },
-        { code: "5711.T", sector: "Nonferrous Metals" },
-        { code: "5713.T", sector: "Nonferrous Metals" },
-        { code: "5714.T", sector: "Nonferrous Metals" },
-        { code: "5801.T", sector: "Nonferrous Metals" },
-        { code: "5802.T", sector: "Nonferrous Metals" },
-        { code: "5803.T", sector: "Nonferrous Metals" },
-        { code: "2768.T", sector: "Trading Companies" },
-        { code: "8001.T", sector: "Trading Companies" },
-        { code: "8002.T", sector: "Trading Companies" },
-        { code: "8015.T", sector: "Trading Companies" },
-        { code: "8031.T", sector: "Trading Companies" },
-        { code: "8053.T", sector: "Trading Companies" },
-        { code: "8058.T", sector: "Trading Companies" },
-        { code: "1721.T", sector: "Construction" },
-        { code: "1801.T", sector: "Construction" },
-        { code: "1802.T", sector: "Construction" },
-        { code: "1803.T", sector: "Construction" },
-        { code: "1808.T", sector: "Construction" },
-        { code: "1812.T", sector: "Construction" },
-        { code: "1925.T", sector: "Construction" },
-        { code: "1928.T", sector: "Construction" },
-        { code: "1963.T", sector: "Construction" },
-        { code: "5631.T", sector: "Machinery" },
-        { code: "6103.T", sector: "Machinery" },
-        { code: "6113.T", sector: "Machinery" },
-        { code: "6273.T", sector: "Machinery" },
-        { code: "6301.T", sector: "Machinery" },
-        { code: "6302.T", sector: "Machinery" },
-        { code: "6305.T", sector: "Machinery" },
-        { code: "6326.T", sector: "Machinery" },
-        { code: "6361.T", sector: "Machinery" },
-        { code: "6367.T", sector: "Machinery" },
-        { code: "6471.T", sector: "Machinery" },
-        { code: "6472.T", sector: "Machinery" },
-        { code: "6473.T", sector: "Machinery" },
-        { code: "7004.T", sector: "Machinery" },
-        { code: "7011.T", sector: "Machinery" },
-        { code: "7013.T", sector: "Machinery" },
-        { code: "7012.T", sector: "Shipbuilding" },
-        { code: "7832.T", sector: "Other Manufacturing" },
-        { code: "7911.T", sector: "Other Manufacturing" },
-        { code: "7912.T", sector: "Other Manufacturing" },
-        { code: "7951.T", sector: "Other Manufacturing" },
-        { code: "3289.T", sector: "Real Estate" },
-        { code: "8801.T", sector: "Real Estate" },
-        { code: "8802.T", sector: "Real Estate" },
-        { code: "8804.T", sector: "Real Estate" },
-        { code: "8830.T", sector: "Real Estate" },
-        { code: "9001.T", sector: "Railway & Bus" },
-        { code: "9005.T", sector: "Railway & Bus" },
-        { code: "9007.T", sector: "Railway & Bus" },
-        { code: "9008.T", sector: "Railway & Bus" },
-        { code: "9009.T", sector: "Railway & Bus" },
-        { code: "9020.T", sector: "Railway & Bus" },
-        { code: "9021.T", sector: "Railway & Bus" },
-        { code: "9022.T", sector: "Railway & Bus" },
-        { code: "9064.T", sector: "Land Transport" },
-        { code: "9147.T", sector: "Land Transport" },
-        { code: "9101.T", sector: "Marine Transport" },
-        { code: "9104.T", sector: "Marine Transport" },
-        { code: "9107.T", sector: "Marine Transport" },
-        { code: "9201.T", sector: "Air Transport" },
-        { code: "9202.T", sector: "Air Transport" },
-        { code: "9301.T", sector: "Warehousing" },
-        { code: "9501.T", sector: "Electric Power" },
-        { code: "9502.T", sector: "Electric Power" },
-        { code: "9503.T", sector: "Electric Power" },
-        { code: "9531.T", sector: "Gas" },
-        { code: "9532.T", sector: "Gas" },
-      ];
+{code:"4151.T",sector:"Pharmaceuticals"},
+{code:"4502.T",sector:"Pharmaceuticals"},
+{code:"4503.T",sector:"Pharmaceuticals"},
+{code:"4506.T",sector:"Pharmaceuticals"},
+{code:"4507.T",sector:"Pharmaceuticals"},
+{code:"4519.T",sector:"Pharmaceuticals"},
+{code:"4523.T",sector:"Pharmaceuticals"},
+{code:"4568.T",sector:"Pharmaceuticals"},
+{code:"4578.T",sector:"Pharmaceuticals"},
+{code:"6479.T",sector:"Electric Machinery"},
+{code:"6501.T",sector:"Electric Machinery"},
+{code:"6503.T",sector:"Electric Machinery"},
+{code:"6504.T",sector:"Electric Machinery"},
+{code:"6506.T",sector:"Electric Machinery"},
+{code:"6526.T",sector:"Electric Machinery"},
+{code:"6594.T",sector:"Electric Machinery"},
+{code:"6645.T",sector:"Electric Machinery"},
+{code:"6674.T",sector:"Electric Machinery"},
+{code:"6701.T",sector:"Electric Machinery"},
+{code:"6702.T",sector:"Electric Machinery"},
+{code:"6723.T",sector:"Electric Machinery"},
+{code:"6724.T",sector:"Electric Machinery"},
+{code:"6752.T",sector:"Electric Machinery"},
+{code:"6753.T",sector:"Electric Machinery"},
+{code:"6758.T",sector:"Electric Machinery"},
+{code:"6762.T",sector:"Electric Machinery"},
+{code:"6770.T",sector:"Electric Machinery"},
+{code:"6841.T",sector:"Electric Machinery"},
+{code:"6857.T",sector:"Electric Machinery"},
+{code:"6861.T",sector:"Electric Machinery"},
+{code:"6902.T",sector:"Electric Machinery"},
+{code:"6920.T",sector:"Electric Machinery"},
+{code:"6952.T",sector:"Electric Machinery"},
+{code:"6954.T",sector:"Electric Machinery"},
+{code:"6971.T",sector:"Electric Machinery"},
+{code:"6976.T",sector:"Electric Machinery"},
+{code:"6981.T",sector:"Electric Machinery"},
+{code:"7735.T",sector:"Electric Machinery"},
+{code:"7751.T",sector:"Electric Machinery"},
+{code:"7752.T",sector:"Electric Machinery"},
+{code:"8035.T",sector:"Electric Machinery"},
+{code:"7201.T",sector:"Automobiles & Auto parts"},
+{code:"7202.T",sector:"Automobiles & Auto parts"},
+{code:"7203.T",sector:"Automobiles & Auto parts"},
+{code:"7205.T",sector:"Automobiles & Auto parts"},
+{code:"7211.T",sector:"Automobiles & Auto parts"},
+{code:"7261.T",sector:"Automobiles & Auto parts"},
+{code:"7267.T",sector:"Automobiles & Auto parts"},
+{code:"7269.T",sector:"Automobiles & Auto parts"},
+{code:"7270.T",sector:"Automobiles & Auto parts"},
+{code:"7272.T",sector:"Automobiles & Auto parts"},
+{code:"4543.T",sector:"Precision Instruments"},
+{code:"4902.T",sector:"Precision Instruments"},
+{code:"6146.T",sector:"Precision Instruments"},
+{code:"7731.T",sector:"Precision Instruments"},
+{code:"7733.T",sector:"Precision Instruments"},
+{code:"7741.T",sector:"Precision Instruments"},
+{code:"7762.T",sector:"Precision Instruments"},
+{code:"9432.T",sector:"Communications"},
+{code:"9433.T",sector:"Communications"},
+{code:"9434.T",sector:"Communications"},
+{code:"9613.T",sector:"Communications"},
+{code:"9984.T",sector:"Communications"},
+{code:"5831.T",sector:"Banking"},
+{code:"7186.T",sector:"Banking"},
+{code:"8304.T",sector:"Banking"},
+{code:"8306.T",sector:"Banking"},
+{code:"8308.T",sector:"Banking"},
+{code:"8309.T",sector:"Banking"},
+{code:"8316.T",sector:"Banking"},
+{code:"8331.T",sector:"Banking"},
+{code:"8354.T",sector:"Banking"},
+{code:"8411.T",sector:"Banking"},
+{code:"8253.T",sector:"Other Financial Services"},
+{code:"8591.T",sector:"Other Financial Services"},
+{code:"8697.T",sector:"Other Financial Services"},
+{code:"8601.T",sector:"Securities"},
+{code:"8604.T",sector:"Securities"},
+{code:"8630.T",sector:"Insurance"},
+{code:"8725.T",sector:"Insurance"},
+{code:"8750.T",sector:"Insurance"},
+{code:"8766.T",sector:"Insurance"},
+{code:"8795.T",sector:"Insurance"},
+{code:"1332.T",sector:"Fishery"},
+{code:"2002.T",sector:"Foods"},
+{code:"2269.T",sector:"Foods"},
+{code:"2282.T",sector:"Foods"},
+{code:"2501.T",sector:"Foods"},
+{code:"2502.T",sector:"Foods"},
+{code:"2503.T",sector:"Foods"},
+{code:"2801.T",sector:"Foods"},
+{code:"2802.T",sector:"Foods"},
+{code:"2871.T",sector:"Foods"},
+{code:"2914.T",sector:"Foods"},
+{code:"3086.T",sector:"Retail"},
+{code:"3092.T",sector:"Retail"},
+{code:"3099.T",sector:"Retail"},
+{code:"3382.T",sector:"Retail"},
+{code:"7453.T",sector:"Retail"},
+{code:"8233.T",sector:"Retail"},
+{code:"8252.T",sector:"Retail"},
+{code:"8267.T",sector:"Retail"},
+{code:"9843.T",sector:"Retail"},
+{code:"9983.T",sector:"Retail"},
+{code:"2413.T",sector:"Services"},
+{code:"2432.T",sector:"Services"},
+{code:"3659.T",sector:"Services"},
+{code:"4307.T",sector:"Services"},
+{code:"4324.T",sector:"Services"},
+{code:"4385.T",sector:"Services"},
+{code:"4661.T",sector:"Services"},
+{code:"4689.T",sector:"Services"},
+{code:"4704.T",sector:"Services"},
+{code:"4751.T",sector:"Services"},
+{code:"4755.T",sector:"Services"},
+{code:"6098.T",sector:"Services"},
+{code:"6178.T",sector:"Services"},
+{code:"7974.T",sector:"Services"},
+{code:"9602.T",sector:"Services"},
+{code:"9735.T",sector:"Services"},
+{code:"9766.T",sector:"Services"},
+{code:"1605.T",sector:"Mining"},
+{code:"3401.T",sector:"Textiles & Apparel"},
+{code:"3402.T",sector:"Textiles & Apparel"},
+{code:"3861.T",sector:"Pulp & Paper"},
+{code:"3405.T",sector:"Chemicals"},
+{code:"3407.T",sector:"Chemicals"},
+{code:"4004.T",sector:"Chemicals"},
+{code:"4005.T",sector:"Chemicals"},
+{code:"4021.T",sector:"Chemicals"},
+{code:"4042.T",sector:"Chemicals"},
+{code:"4043.T",sector:"Chemicals"},
+{code:"4061.T",sector:"Chemicals"},
+{code:"4063.T",sector:"Chemicals"},
+{code:"4183.T",sector:"Chemicals"},
+{code:"4188.T",sector:"Chemicals"},
+{code:"4208.T",sector:"Chemicals"},
+{code:"4452.T",sector:"Chemicals"},
+{code:"4901.T",sector:"Chemicals"},
+{code:"4911.T",sector:"Chemicals"},
+{code:"6988.T",sector:"Chemicals"},
+{code:"5019.T",sector:"Petroleum"},
+{code:"5020.T",sector:"Petroleum"},
+{code:"5101.T",sector:"Rubber"},
+{code:"5108.T",sector:"Rubber"},
+{code:"5201.T",sector:"Glass & Ceramics"},
+{code:"5214.T",sector:"Glass & Ceramics"},
+{code:"5233.T",sector:"Glass & Ceramics"},
+{code:"5301.T",sector:"Glass & Ceramics"},
+{code:"5332.T",sector:"Glass & Ceramics"},
+{code:"5333.T",sector:"Glass & Ceramics"},
+{code:"5401.T",sector:"Steel"},
+{code:"5406.T",sector:"Steel"},
+{code:"5411.T",sector:"Steel"},
+{code:"3436.T",sector:"Nonferrous Metals"},
+{code:"5706.T",sector:"Nonferrous Metals"},
+{code:"5711.T",sector:"Nonferrous Metals"},
+{code:"5713.T",sector:"Nonferrous Metals"},
+{code:"5714.T",sector:"Nonferrous Metals"},
+{code:"5801.T",sector:"Nonferrous Metals"},
+{code:"5802.T",sector:"Nonferrous Metals"},
+{code:"5803.T",sector:"Nonferrous Metals"},
+{code:"2768.T",sector:"Trading Companies"},
+{code:"8001.T",sector:"Trading Companies"},
+{code:"8002.T",sector:"Trading Companies"},
+{code:"8015.T",sector:"Trading Companies"},
+{code:"8031.T",sector:"Trading Companies"},
+{code:"8053.T",sector:"Trading Companies"},
+{code:"8058.T",sector:"Trading Companies"},
+{code:"1721.T",sector:"Construction"},
+{code:"1801.T",sector:"Construction"},
+{code:"1802.T",sector:"Construction"},
+{code:"1803.T",sector:"Construction"},
+{code:"1808.T",sector:"Construction"},
+{code:"1812.T",sector:"Construction"},
+{code:"1925.T",sector:"Construction"},
+{code:"1928.T",sector:"Construction"},
+{code:"1963.T",sector:"Construction"},
+{code:"5631.T",sector:"Machinery"},
+{code:"6103.T",sector:"Machinery"},
+{code:"6113.T",sector:"Machinery"},
+{code:"6273.T",sector:"Machinery"},
+{code:"6301.T",sector:"Machinery"},
+{code:"6302.T",sector:"Machinery"},
+{code:"6305.T",sector:"Machinery"},
+{code:"6326.T",sector:"Machinery"},
+{code:"6361.T",sector:"Machinery"},
+{code:"6367.T",sector:"Machinery"},
+{code:"6471.T",sector:"Machinery"},
+{code:"6472.T",sector:"Machinery"},
+{code:"6473.T",sector:"Machinery"},
+{code:"7004.T",sector:"Machinery"},
+{code:"7011.T",sector:"Machinery"},
+{code:"7013.T",sector:"Machinery"},
+{code:"7012.T",sector:"Shipbuilding"},
+{code:"7832.T",sector:"Other Manufacturing"},
+{code:"7911.T",sector:"Other Manufacturing"},
+{code:"7912.T",sector:"Other Manufacturing"},
+{code:"7951.T",sector:"Other Manufacturing"},
+{code:"3289.T",sector:"Real Estate"},
+{code:"8801.T",sector:"Real Estate"},
+{code:"8802.T",sector:"Real Estate"},
+{code:"8804.T",sector:"Real Estate"},
+{code:"8830.T",sector:"Real Estate"},
+{code:"9001.T",sector:"Railway & Bus"},
+{code:"9005.T",sector:"Railway & Bus"},
+{code:"9007.T",sector:"Railway & Bus"},
+{code:"9008.T",sector:"Railway & Bus"},
+{code:"9009.T",sector:"Railway & Bus"},
+{code:"9020.T",sector:"Railway & Bus"},
+{code:"9021.T",sector:"Railway & Bus"},
+{code:"9022.T",sector:"Railway & Bus"},
+{code:"9064.T",sector:"Land Transport"},
+{code:"9147.T",sector:"Land Transport"},
+{code:"9101.T",sector:"Marine Transport"},
+{code:"9104.T",sector:"Marine Transport"},
+{code:"9107.T",sector:"Marine Transport"},
+{code:"9201.T",sector:"Air Transport"},
+{code:"9202.T",sector:"Air Transport"},
+{code:"9301.T",sector:"Warehousing"},
+{code:"9501.T",sector:"Electric Power"},
+{code:"9502.T",sector:"Electric Power"},
+{code:"9503.T",sector:"Electric Power"},
+{code:"9531.T",sector:"Gas"},
+{code:"9532.T",sector:"Gas"}
+];
 
-      // Define batch size - how many tickers to process in parallel
-      const BATCH_SIZE = 10;
 
-      // Process tickers in batches
-      for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-        const currentBatch = tickers.slice(i, i + BATCH_SIZE);
-        console.log(
-          `\n=== Processing batch ${Math.floor(i / BATCH_SIZE) + 1} (${
-            i + 1
-          }-${Math.min(i + BATCH_SIZE, tickers.length)} of ${
-            tickers.length
-          }) ===\n`
-        );
+      for (const tickerObj of tickers) {
+  console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
-        // Process the current batch in parallel
-        await Promise.all(
-          currentBatch.map((tickerObj) => this.processStockTicker(tickerObj))
-        );
+  try {
+    // 1) Fetch Yahoo data
+    const result = await fetchSingleStockData(tickerObj);
+    if (!result.success) {
+      console.error("Error fetching stock analysis:", result.error);
+      throw new Error("Failed to fetch Yahoo data.");
+    }
 
-        console.log(
-          `\n=== Completed batch ${Math.floor(i / BATCH_SIZE) + 1} ===\n`
-        );
+    const { code, sector, yahooData } = result.data;
+
+    // First check if yahooData exists at all
+    if (!yahooData) {
+      console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
+      throw new Error("Yahoo data is completely missing.");
+    }
+
+    // Define critical fields that must be present
+    const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+    const missingCriticalFields = criticalFields.filter(
+      (field) => !yahooData[field]
+    );
+
+    // Define non-critical fields to check
+    const nonCriticalFields = [
+      "openPrice",
+      "prevClosePrice",
+      "marketCap",
+      "peRatio",
+      "pbRatio",
+      "dividendYield",
+      "dividendGrowth5yr",
+      "fiftyTwoWeekHigh",
+      "fiftyTwoWeekLow",
+      "epsTrailingTwelveMonths",
+      "epsForward",
+      "epsGrowthRate",
+      "debtEquityRatio",
+      "movingAverage50d",
+      "movingAverage200d",
+      "rsi14",
+      "macd",
+      "macdSignal",
+      "bollingerMid",
+      "bollingerUpper",
+      "bollingerLower",
+      "stochasticK",
+      "stochasticD",
+      "obv",
+      "atr14",
+    ];
+    const missingNonCriticalFields = nonCriticalFields.filter(
+      (field) => yahooData[field] === undefined || yahooData[field] === null
+    );
+
+    // Check for zero values (which might indicate failures in calculations)
+    const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+      (field) =>
+        yahooData[field] !== undefined &&
+        yahooData[field] !== null &&
+        yahooData[field] === 0 &&
+        !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
+    );
+
+    // Log detailed information
+    console.log(`Data validation for ${code}:`);
+
+    if (missingCriticalFields.length > 0) {
+      console.error(
+        `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+      );
+      throw new Error(
+        `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
+      );
+    }
+
+    if (missingNonCriticalFields.length > 0) {
+      console.warn(
+        `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
+      );
+    }
+
+    if (zeroFields.length > 0) {
+      console.warn(
+        `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+          ", "
+        )}`
+      );
+    }
+
+    console.log(
+      `✅ All critical fields present for ${code}. Continuing analysis...`
+    );
+    console.log("Yahoo data:", yahooData);
+
+
+    // 2) Build stock object
+    const stock = {
+      ticker: code,
+      sector,
+      currentPrice: yahooData.currentPrice,
+      highPrice: yahooData.highPrice,
+      lowPrice: yahooData.lowPrice,
+      openPrice: yahooData.openPrice,
+      prevClosePrice: yahooData.prevClosePrice,
+      marketCap: yahooData.marketCap,
+      peRatio: yahooData.peRatio,
+      pbRatio: yahooData.pbRatio,
+      dividendYield: yahooData.dividendYield,
+      dividendGrowth5yr: yahooData.dividendGrowth5yr,
+      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+      epsForward: yahooData.epsForward,
+      epsGrowthRate: yahooData.epsGrowthRate,
+      debtEquityRatio: yahooData.debtEquityRatio,
+      movingAverage50d: yahooData.movingAverage50d,
+      movingAverage200d: yahooData.movingAverage200d,
+
+      // 📈 Technical indicators
+      rsi14: yahooData.rsi14,
+      macd: yahooData.macd,
+      macdSignal: yahooData.macdSignal,
+      bollingerMid: yahooData.bollingerMid,
+      bollingerUpper: yahooData.bollingerUpper,
+      bollingerLower: yahooData.bollingerLower,
+      stochasticK: yahooData.stochasticK,
+      stochasticD: yahooData.stochasticD,
+      obv: yahooData.obv,
+      atr14: yahooData.atr14,
+    };
+
+    const historicalData = await fetchHistoricalData(stock.ticker);
+    stock.historicalData = historicalData || [];
+
+    // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+    console.log(`Analyzing stock: ${stock.ticker}`);
+    const prediction = await analyzeStock(stock.ticker, historicalData);
+    if (prediction == null) {
+      console.error(
+        `Failed to generate prediction for ${stock.ticker}. Aborting.`
+      );
+      throw new Error("Failed to generate prediction.");
+    }
+
+    console.log("prediction: ",prediction);
+    stock.prediction = prediction;
+
+    // 5) Calculate Stop Loss & Target
+    const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+      stock,
+      prediction
+    );
+    if (stopLoss === null || targetPrice === null) {
+      console.error(
+        `Failed to calculate stop loss or target price for ${stock.ticker}.`
+      );
+      throw new Error("Stop loss or target price calculation failed.");
+    }
+    stock.stopLoss = stopLoss;
+    stock.targetPrice = targetPrice;
+
+    // 7) Compute growth potential
+    const growthPotential =
+      ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
+
+    // 8) Compute fundamental/technical score
+    stock.score = computeScore(stock, stock.sector);
+
+    // 9) Combine them => finalScore
+    const weights = { metrics: 0.7, growth: 0.3 };
+    const finalScore =
+      weights.metrics * stock.score + weights.growth * (growthPotential / 100);
+
+    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+    stock.finalScore = parseFloat(finalScore.toFixed(2));
+    stock.technicalScore = getTechnicalScore(stock);
+    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+    stock.valuationScore = getValuationScore(stock);
+    stock.entryTimingScore = getEntryTimingScore(stock);
+    stock.tier = getNumericTier(stock);
+    stock.limitOrder = getLimitOrderPrice(stock);
+
+    // 10) Send data in Bubble key format
+ const stockObject = {
+   _api_c2_ticker: stock.ticker,
+   _api_c2_sector: stock.sector,
+   _api_c2_currentPrice: stock.currentPrice,
+   _api_c2_entryTimingScore: stock.entryTimingScore,
+   _api_c2_prediction: stock.prediction,
+   _api_c2_stopLoss: stock.stopLoss,
+   _api_c2_targetPrice: stock.targetPrice,
+   _api_c2_growthPotential: stock.growthPotential,
+   _api_c2_score: stock.score,
+   _api_c2_finalScore: stock.finalScore,
+   _api_c2_tier: stock.tier,
+   _api_c2_limitOrder: stock.limitOrder,
+
+   // Add complete stock data as JSON
+   _api_c2_otherData: JSON.stringify({
+     // Price data
+     highPrice: stock.highPrice,
+     lowPrice: stock.lowPrice,
+     openPrice: stock.openPrice,
+     prevClosePrice: stock.prevClosePrice,
+
+     // Fundamental metrics
+     marketCap: stock.marketCap,
+     peRatio: stock.peRatio,
+     pbRatio: stock.pbRatio,
+     dividendYield: stock.dividendYield,
+     dividendGrowth5yr: stock.dividendGrowth5yr,
+     fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+     fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+     epsForward: stock.epsForward,
+     epsGrowthRate: stock.epsGrowthRate,
+     debtEquityRatio: stock.debtEquityRatio,
+
+     // Technical indicators
+     movingAverage50d: stock.movingAverage50d,
+     movingAverage200d: stock.movingAverage200d,
+     rsi14: stock.rsi14,
+     macd: stock.macd,
+     macdSignal: stock.macdSignal,
+     bollingerMid: stock.bollingerMid,
+     bollingerUpper: stock.bollingerUpper,
+     bollingerLower: stock.bollingerLower,
+     stochasticK: stock.stochasticK,
+     stochasticD: stock.stochasticD,
+     obv: stock.obv,
+     atr14: stock.atr14,
+
+     // Calculated scores
+     technicalScore: stock.technicalScore,
+     fundamentalScore: stock.fundamentalScore,
+     valuationScore: stock.valuationScore,
+   }),
+ };
+
+    console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+    bubble_fn_result(stockObject);
+  } catch (error) {
+          console.error(
+            `❌ Error processing ticker ${tickerObj.code}:`,
+            error.message
+          );
+        }
       }
-
-      console.log("All batches completed successfully.");
     } catch (error) {
       console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
-    }
-  },
-
-  // Method to process a single ticker
-  async processStockTicker(tickerObj) {
-    console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
-
-    try {
-      // 1) Fetch Yahoo data
-      const result = await fetchSingleStockData(tickerObj);
-      if (!result.success) {
-        console.error(
-          `Error fetching stock analysis for ${tickerObj.code}:`,
-          result.error
-        );
-        throw new Error("Failed to fetch Yahoo data.");
-      }
-
-      const { code, sector, yahooData } = result.data;
-
-      // First check if yahooData exists at all
-      if (!yahooData) {
-        console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
-        throw new Error("Yahoo data is completely missing.");
-      }
-
-      // Define critical fields that must be present
-      const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
-      const missingCriticalFields = criticalFields.filter(
-        (field) => !yahooData[field]
-      );
-
-      // Define non-critical fields to check
-      const nonCriticalFields = [
-        "openPrice",
-        "prevClosePrice",
-        "marketCap",
-        "peRatio",
-        "pbRatio",
-        "dividendYield",
-        "dividendGrowth5yr",
-        "fiftyTwoWeekHigh",
-        "fiftyTwoWeekLow",
-        "epsTrailingTwelveMonths",
-        "epsForward",
-        "epsGrowthRate",
-        "debtEquityRatio",
-        "movingAverage50d",
-        "movingAverage200d",
-        "rsi14",
-        "macd",
-        "macdSignal",
-        "bollingerMid",
-        "bollingerUpper",
-        "bollingerLower",
-        "stochasticK",
-        "stochasticD",
-        "obv",
-        "atr14",
-      ];
-      const missingNonCriticalFields = nonCriticalFields.filter(
-        (field) => yahooData[field] === undefined || yahooData[field] === null
-      );
-
-      // Check for zero values (which might indicate failures in calculations)
-      const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
-        (field) =>
-          yahooData[field] !== undefined &&
-          yahooData[field] !== null &&
-          yahooData[field] === 0 &&
-          !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(
-            field
-          ) // Fields that can legitimately be zero
-      );
-
-      // Log detailed information
-      console.log(`Data validation for ${code}:`);
-
-      if (missingCriticalFields.length > 0) {
-        console.error(
-          `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
-        );
-        throw new Error(
-          `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
-        );
-      }
-
-      if (missingNonCriticalFields.length > 0) {
-        console.warn(
-          `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(
-            ", "
-          )}`
-        );
-      }
-
-      if (zeroFields.length > 0) {
-        console.warn(
-          `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
-            ", "
-          )}`
-        );
-      }
-
-      console.log(
-        `✅ All critical fields present for ${code}. Continuing analysis...`
-      );
-      console.log("Yahoo data:", yahooData);
-
-      // 2) Build stock object
-      const stock = {
-        ticker: code,
-        sector,
-        currentPrice: yahooData.currentPrice,
-        highPrice: yahooData.highPrice,
-        lowPrice: yahooData.lowPrice,
-        openPrice: yahooData.openPrice,
-        prevClosePrice: yahooData.prevClosePrice,
-        marketCap: yahooData.marketCap,
-        peRatio: yahooData.peRatio,
-        pbRatio: yahooData.pbRatio,
-        dividendYield: yahooData.dividendYield,
-        dividendGrowth5yr: yahooData.dividendGrowth5yr,
-        fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-        fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-        epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-        epsForward: yahooData.epsForward,
-        epsGrowthRate: yahooData.epsGrowthRate,
-        debtEquityRatio: yahooData.debtEquityRatio,
-        movingAverage50d: yahooData.movingAverage50d,
-        movingAverage200d: yahooData.movingAverage200d,
-
-        // 📈 Technical indicators
-        rsi14: yahooData.rsi14,
-        macd: yahooData.macd,
-        macdSignal: yahooData.macdSignal,
-        bollingerMid: yahooData.bollingerMid,
-        bollingerUpper: yahooData.bollingerUpper,
-        bollingerLower: yahooData.bollingerLower,
-        stochasticK: yahooData.stochasticK,
-        stochasticD: yahooData.stochasticD,
-        obv: yahooData.obv,
-        atr14: yahooData.atr14,
-      };
-
-      const historicalData = await fetchHistoricalData(stock.ticker);
-      stock.historicalData = historicalData || [];
-
-      // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
-      console.log(`Analyzing stock: ${stock.ticker}`);
-      const prediction = await analyzeStock(stock.ticker, historicalData);
-      if (prediction == null) {
-        console.error(
-          `Failed to generate prediction for ${stock.ticker}. Aborting.`
-        );
-        throw new Error("Failed to generate prediction.");
-      }
-
-      console.log("prediction: ", prediction);
-      stock.prediction = prediction;
-
-      // 5) Calculate Stop Loss & Target
-      const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-        stock,
-        prediction
-      );
-      if (stopLoss === null || targetPrice === null) {
-        console.error(
-          `Failed to calculate stop loss or target price for ${stock.ticker}.`
-        );
-        throw new Error("Stop loss or target price calculation failed.");
-      }
-      stock.stopLoss = stopLoss;
-      stock.targetPrice = targetPrice;
-
-      // 7) Compute growth potential
-      const growthPotential =
-        ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
-
-      // 8) Compute fundamental/technical score
-      stock.score = computeScore(stock, stock.sector);
-
-      // 9) Combine them => finalScore
-      const weights = { metrics: 0.7, growth: 0.3 };
-      const finalScore =
-        weights.metrics * stock.score +
-        weights.growth * (growthPotential / 100);
-
-      stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-      stock.finalScore = parseFloat(finalScore.toFixed(2));
-      stock.technicalScore = getTechnicalScore(stock);
-      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-      stock.valuationScore = getValuationScore(stock);
-      stock.entryTimingScore = getEntryTimingScore(stock);
-      stock.tier = getNumericTier(stock);
-      stock.limitOrder = getLimitOrderPrice(stock);
-
-      // 10) Send data in Bubble key format
-      const stockObject = {
-        _api_c2_ticker: stock.ticker,
-        _api_c2_sector: stock.sector,
-        _api_c2_currentPrice: stock.currentPrice,
-        _api_c2_entryTimingScore: stock.entryTimingScore,
-        _api_c2_prediction: stock.prediction,
-        _api_c2_stopLoss: stock.stopLoss,
-        _api_c2_targetPrice: stock.targetPrice,
-        _api_c2_growthPotential: stock.growthPotential,
-        _api_c2_score: stock.score,
-        _api_c2_finalScore: stock.finalScore,
-        _api_c2_tier: stock.tier,
-        _api_c2_limitOrder: stock.limitOrder,
-
-        // Add complete stock data as JSON
-        _api_c2_otherData: JSON.stringify({
-          // Price data
-          highPrice: stock.highPrice,
-          lowPrice: stock.lowPrice,
-          openPrice: stock.openPrice,
-          prevClosePrice: stock.prevClosePrice,
-
-          // Fundamental metrics
-          marketCap: stock.marketCap,
-          peRatio: stock.peRatio,
-          pbRatio: stock.pbRatio,
-          dividendYield: stock.dividendYield,
-          dividendGrowth5yr: stock.dividendGrowth5yr,
-          fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-          epsForward: stock.epsForward,
-          epsGrowthRate: stock.epsGrowthRate,
-          debtEquityRatio: stock.debtEquityRatio,
-
-          // Technical indicators
-          movingAverage50d: stock.movingAverage50d,
-          movingAverage200d: stock.movingAverage200d,
-          rsi14: stock.rsi14,
-          macd: stock.macd,
-          macdSignal: stock.macdSignal,
-          bollingerMid: stock.bollingerMid,
-          bollingerUpper: stock.bollingerUpper,
-          bollingerLower: stock.bollingerLower,
-          stochasticK: stock.stochasticK,
-          stochasticD: stock.stochasticD,
-          obv: stock.obv,
-          atr14: stock.atr14,
-
-          // Calculated scores
-          technicalScore: stock.technicalScore,
-          fundamentalScore: stock.fundamentalScore,
-          valuationScore: stock.valuationScore,
-        }),
-      };
-
-      console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
-      bubble_fn_result(stockObject);
-
-      console.log(`✅ Successfully processed ${stock.ticker}`);
-      return stockObject;
-    } catch (error) {
-      console.error(
-        `❌ Error processing ticker ${tickerObj.code}:`,
-        error.message
-      );
-
-      // Return null or an error object to indicate failure
-      return {
-        error: true,
-        ticker: tickerObj.code,
-        message: error.message,
-      };
     }
   },
 };
@@ -1895,6 +1852,7 @@ const customHeaders = {
   "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
 };
+// Utility Functions (unchanged)
 function computeMedian(arr) {
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -1921,27 +1879,16 @@ function computeIQR(arr) {
   return q3 - q1;
 }
 
-/**
- * Compute standard deviation of an array
- */
 function computeStdDev(arr) {
   const mean = arr.reduce((sum, val) => sum + val, 0) / arr.length;
   const squaredDiffs = arr.map((val) => Math.pow(val - mean, 2));
-  return Math.sqrt(
-    squaredDiffs.reduce((sum, val) => sum + val, 0) / arr.length
-  );
+  return Math.sqrt(squaredDiffs.reduce((sum, val) => sum + val, 0) / arr.length);
 }
 
-/**
- * Winsorize a value given lower and upper bounds.
- */
 function winsorizeVal(val, lower, upper) {
   return Math.min(Math.max(val, lower), upper);
 }
 
-/**
- * Winsorize an array given lower and upper percentile thresholds.
- */
 function winsorizeArray(arr, lowerP = 0.05, upperP = 0.95) {
   const lower = computePercentile(arr, lowerP);
   const upper = computePercentile(arr, upperP);
@@ -1952,9 +1899,6 @@ function winsorizeArray(arr, lowerP = 0.05, upperP = 0.95) {
   };
 }
 
-/**
- * Compute simple moving average over an array.
- */
 function computeSMA(arr, window) {
   const sma = [];
   for (let i = 0; i < arr.length; i++) {
@@ -1966,69 +1910,39 @@ function computeSMA(arr, window) {
   return sma;
 }
 
-/**
- * Compute exponential moving average (EMA)
- */
 function computeEMA(arr, window) {
-  const k = 2 / (window + 1); // Smoothing factor
+  const k = 2 / (window + 1);
   const ema = [arr[0]];
-
   for (let i = 1; i < arr.length; i++) {
     ema.push(arr[i] * k + ema[i - 1] * (1 - k));
   }
-
   return ema;
 }
 
-/**
- * Compute MACD (Moving Average Convergence Divergence)
- */
 function computeMACD(arr, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
   const fastEMA = computeEMA(arr, fastPeriod);
   const slowEMA = computeEMA(arr, slowPeriod);
-
-  // MACD line = fast EMA - slow EMA
   const macdLine = fastEMA.map((fast, i) => fast - slowEMA[i]);
-
-  // Signal line = EMA of MACD line
   const signalLine = computeEMA(macdLine, signalPeriod);
-
-  // Histogram = MACD line - signal line
   const histogram = macdLine.map((macd, i) => macd - signalLine[i]);
-
   return { macdLine, signalLine, histogram };
 }
 
-/**
- * Compute Relative Strength Index (RSI)
- */
 function computeRSI(prices, window = 14) {
   if (prices.length <= window) {
-    return Array(prices.length).fill(50); // Default to neutral RSI if not enough data
+    return Array(prices.length).fill(50);
   }
-
   const changes = [];
   for (let i = 1; i < prices.length; i++) {
     changes.push(prices[i] - prices[i - 1]);
   }
-
-  const rsi = [50]; // First value defaults to neutral
-
+  const rsi = [50];
   for (let i = window; i < changes.length; i++) {
     const windowChanges = changes.slice(i - window, i);
-
     const gains = windowChanges.filter((change) => change > 0);
-    const losses = windowChanges
-      .filter((change) => change < 0)
-      .map((change) => Math.abs(change));
-
-    const avgGain = gains.length
-      ? gains.reduce((sum, val) => sum + val, 0) / window
-      : 0;
-    const avgLoss = losses.length
-      ? losses.reduce((sum, val) => sum + val, 0) / window
-      : 0;
-
+    const losses = windowChanges.filter((change) => change < 0).map((change) => Math.abs(change));
+    const avgGain = gains.length ? gains.reduce((sum, val) => sum + val, 0) / window : 0;
+    const avgLoss = losses.length ? losses.reduce((sum, val) => sum + val, 0) / window : 0;
     if (avgLoss === 0) {
       rsi.push(100);
     } else {
@@ -2036,85 +1950,57 @@ function computeRSI(prices, window = 14) {
       rsi.push(100 - 100 / (1 + rs));
     }
   }
-
-  // Pad the beginning with the first calculated RSI value
   while (rsi.length < prices.length) {
     rsi.unshift(rsi[0]);
   }
-
   return rsi;
 }
 
-/**
- * Compute Bollinger Bands
- */
 function computeBollingerBands(prices, window = 20, numStdDev = 2) {
   const sma = computeSMA(prices, window);
   const bands = [];
-
   for (let i = 0; i < prices.length; i++) {
     const start = Math.max(0, i - window + 1);
     const windowSlice = prices.slice(start, i + 1);
     const stdDev = computeStdDev(windowSlice);
-
     bands.push({
       middle: sma[i],
       upper: sma[i] + numStdDev * stdDev,
       lower: sma[i] - numStdDev * stdDev,
     });
   }
-
   return bands;
 }
 
-/**
- * Compute Average True Range (ATR) - a volatility indicator
- */
 function computeATR(prices, high, low, period = 14) {
   if (!high || !low) {
-    // If high/low not provided, approximate using the price
     high = prices;
     low = prices;
   }
-
   const trueRanges = [];
-
-  // First true range is simply the high - low
   trueRanges.push(high[0] - low[0]);
-
-  // Calculate subsequent true ranges
   for (let i = 1; i < prices.length; i++) {
     const trueHigh = Math.max(high[i], prices[i - 1]);
     const trueLow = Math.min(low[i], prices[i - 1]);
     trueRanges.push(trueHigh - trueLow);
   }
-
-  // Calculate ATR using EMA
   const atr = [trueRanges[0]];
   for (let i = 1; i < trueRanges.length; i++) {
     atr.push((atr[i - 1] * (period - 1) + trueRanges[i]) / period);
   }
-
   return atr;
 }
 
-/**
- * Compute daily log return.
- * For log prices, daily return = log(p[i]) - log(p[i-1])
- */
 function computeDailyLogReturn(logPrices) {
-  const returns = [0]; // First day return set to 0.
+  const returns = [0];
   for (let i = 1; i < logPrices.length; i++) {
     returns.push(logPrices[i] - logPrices[i - 1]);
   }
   return returns;
 }
 
-/**
- * Calculate annualized volatility based on log returns
- */
 function computeVolatility(logReturns, daysInYear = 252) {
-  const stdDev = computeStdDev(logReturns.slice(1)); // Skip first zero return
+  const stdDev = computeStdDev(logReturns.slice(1));
   return stdDev * Math.sqrt(daysInYear);
 }
 
@@ -2123,378 +2009,201 @@ function customHuberLoss(delta = 1.0) {
     const error = yTrue.sub(yPred).abs();
     const quadratic = tf.minimum(error, delta);
     const linear = error.sub(quadratic);
-    return tf
-      .add(tf.mul(0.5, tf.square(quadratic)), tf.mul(delta, linear))
-      .mean();
+    return tf.add(tf.mul(0.5, tf.square(quadratic)), tf.mul(delta, linear)).mean();
   };
 }
 
-function prepareDataFor30DayAheadPrice(
-  data,
-  sequenceLength = 30,
-  predictionGap = 30
-) {
-  if (data.length < sequenceLength + predictionGap) {
-    throw new Error(`Not enough data to create sequences for prediction.`);
-  }
-
+/* ─── MODULARIZATION OF FEATURE EXTRACTION & NORMALIZATION ───────────────────── */
+/**
+ * Given a sequence (e.g. the most recent 30 data points) and the meta parameters computed during training,
+ * preprocess the data so it can be fed into the model.
+ */
+function preprocessForPrediction(data, meta) {
   // Extract raw arrays.
   const prices = data.map((item) => item.price);
   const volumes = data.map((item) => item.volume);
+  const logPrices = prices.map(Math.log);
 
-  // Convert prices to log scale.
-  const logPrices = prices.map((p) => Math.log(p));
-
-  // Compute additional features on log scale.
+  // Compute features
   const sma7 = computeSMA(logPrices, 7);
   const sma20 = computeSMA(logPrices, 20);
   const sma50 = computeSMA(logPrices, 50);
   const dailyLogReturn = computeDailyLogReturn(logPrices);
 
-  // Calculate volatility
+  // Volatility
   const volatility = [];
   const volWindow = 20;
   for (let i = 0; i < dailyLogReturn.length; i++) {
     const start = Math.max(0, i - volWindow + 1);
     const windowReturns = dailyLogReturn.slice(start, i + 1);
-    const vol = computeStdDev(windowReturns) * Math.sqrt(252); // Annualize
+    const vol = computeStdDev(windowReturns) * Math.sqrt(252);
     volatility.push(vol);
   }
 
-  // Compute RSI
+  // RSI and momentum
   const rsi = computeRSI(prices);
-
-  // Compute price momentum: 30-day return
   const momentum = [];
   for (let i = 0; i < prices.length; i++) {
     const lookback = Math.max(0, i - 30);
     momentum.push(Math.log(prices[i] / prices[lookback]));
   }
 
-  // Calculate price relative to 50-day SMA (a technical indicator)
+  // Price relative to 50-day SMA.
   const priceToSMA = [];
   for (let i = 0; i < prices.length; i++) {
     priceToSMA.push(Math.log(prices[i]) - sma50[i]);
   }
 
-  // Use training portion (excluding prediction gap) to compute robust parameters
-  const trainLen = data.length - predictionGap;
-  const trainLogPricesRaw = logPrices.slice(0, trainLen);
-  const trainVolumesRaw = volumes.slice(0, trainLen);
-  const trainSMA7_raw = sma7.slice(0, trainLen);
-  const trainSMA20_raw = sma20.slice(0, trainLen);
-  const trainReturnRaw = dailyLogReturn.slice(0, trainLen);
-  const trainVolatilityRaw = volatility.slice(0, trainLen);
-  const trainRSI_raw = rsi.slice(0, trainLen);
-  const trainMomentumRaw = momentum.slice(0, trainLen);
-  const trainPriceToSMA_raw = priceToSMA.slice(0, trainLen);
+  // Create a normalized sequence using the meta statistics computed during training.
+  const normalizedSequence = data.map((item, idx) => [
+    // Normalize log price
+    (winsorizeVal(Math.log(item.price), meta.bounds.logPrice.lower, meta.bounds.logPrice.upper) -
+      meta.medianLogPrice) /
+      (meta.iqrLogPrice || 1),
+    // Normalize volume
+    (winsorizeVal(item.volume, meta.bounds.volume.lower, meta.bounds.volume.upper) -
+      meta.medianVolume) /
+      (meta.iqrVolume || 1),
+    // Normalize 7-day SMA
+    (winsorizeVal(sma7[idx], meta.bounds.sma7.lower, meta.bounds.sma7.upper) -
+      meta.medianSMA7) /
+      (meta.iqrSMA7 || 1),
+    // Normalize 20-day SMA
+    (winsorizeVal(sma20[idx], meta.bounds.sma20.lower, meta.bounds.sma20.upper) -
+      meta.medianSMA20) /
+      (meta.iqrSMA20 || 1),
+    // Normalize daily log return
+    (winsorizeVal(dailyLogReturn[idx], meta.bounds.return.lower, meta.bounds.return.upper) -
+      meta.medianReturn) /
+      (meta.iqrReturn || 1),
+    // Normalize volatility
+    (winsorizeVal(volatility[idx], meta.bounds.volatility.lower, meta.bounds.volatility.upper) -
+      meta.medianVolatility) /
+      (meta.iqrVolatility || 1),
+    // Normalize RSI
+    (winsorizeVal(rsi[idx], meta.bounds.rsi.lower, meta.bounds.rsi.upper) -
+      meta.medianRSI) /
+      (meta.iqrRSI || 1),
+    // Normalize momentum
+    (winsorizeVal(momentum[idx], meta.bounds.momentum.lower, meta.bounds.momentum.upper) -
+      meta.medianMomentum) /
+      (meta.iqrMomentum || 1),
+    // Normalize Price-to-SMA
+    (winsorizeVal(priceToSMA[idx], meta.bounds.priceToSMA.lower, meta.bounds.priceToSMA.upper) -
+      meta.medianPriceToSMA) /
+      (meta.iqrPriceToSMA || 1)
+  ]);
 
-  // Winsorize each feature to remove extreme outliers
-  const {
-    winsorized: trainLogPrices,
-    lower: lowerLogPrice,
-    upper: upperLogPrice,
-  } = winsorizeArray(trainLogPricesRaw, 0.01, 0.99); // Tighter bounds for Nikkei
-
-  const {
-    winsorized: trainVolumes,
-    lower: lowerVolume,
-    upper: upperVolume,
-  } = winsorizeArray(trainVolumesRaw, 0.01, 0.99);
-
-  const {
-    winsorized: trainSMA7,
-    lower: lowerSMA7,
-    upper: upperSMA7,
-  } = winsorizeArray(trainSMA7_raw, 0.01, 0.99);
-
-  const {
-    winsorized: trainSMA20,
-    lower: lowerSMA20,
-    upper: upperSMA20,
-  } = winsorizeArray(trainSMA20_raw, 0.01, 0.99);
-
-  const {
-    winsorized: trainReturn,
-    lower: lowerReturn,
-    upper: upperReturn,
-  } = winsorizeArray(trainReturnRaw, 0.01, 0.99);
-
-  const {
-    winsorized: trainVolatility,
-    lower: lowerVolatility,
-    upper: upperVolatility,
-  } = winsorizeArray(trainVolatilityRaw, 0.01, 0.99);
-
-  const {
-    winsorized: trainRSI,
-    lower: lowerRSI,
-    upper: upperRSI,
-  } = winsorizeArray(trainRSI_raw, 0.05, 0.95);
-
-  const {
-    winsorized: trainMomentum,
-    lower: lowerMomentum,
-    upper: upperMomentum,
-  } = winsorizeArray(trainMomentumRaw, 0.01, 0.99);
-
-  const {
-    winsorized: trainPriceToSMA,
-    lower: lowerPriceToSMA,
-    upper: upperPriceToSMA,
-  } = winsorizeArray(trainPriceToSMA_raw, 0.01, 0.99);
-
-  // Compute robust statistics on winsorized training data.
-  const medianLogPrice = computeMedian(trainLogPrices);
-  const iqrLogPrice = computeIQR(trainLogPrices);
-  const medianVolume = computeMedian(trainVolumes);
-  const iqrVolume = computeIQR(trainVolumes);
-  const medianSMA7 = computeMedian(trainSMA7);
-  const iqrSMA7 = computeIQR(trainSMA7);
-  const medianSMA20 = computeMedian(trainSMA20);
-  const iqrSMA20 = computeIQR(trainSMA20);
-  const medianReturn = computeMedian(trainReturn);
-  const iqrReturn = computeIQR(trainReturn);
-  const medianVolatility = computeMedian(trainVolatility);
-  const iqrVolatility = computeIQR(trainVolatility);
-  const medianRSI = computeMedian(trainRSI);
-  const iqrRSI = computeIQR(trainRSI);
-  const medianMomentum = computeMedian(trainMomentum);
-  const iqrMomentum = computeIQR(trainMomentum);
-  const medianPriceToSMA = computeMedian(trainPriceToSMA);
-  const iqrPriceToSMA = computeIQR(trainPriceToSMA);
-
-  // Store winsorization bounds.
-  const metaBounds = {
-    logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
-    volume: { lower: lowerVolume, upper: upperVolume },
-    sma7: { lower: lowerSMA7, upper: upperSMA7 },
-    sma20: { lower: lowerSMA20, upper: upperSMA20 },
-    return: { lower: lowerReturn, upper: upperReturn },
-    volatility: { lower: lowerVolatility, upper: upperVolatility },
-    rsi: { lower: lowerRSI, upper: upperRSI },
-    momentum: { lower: lowerMomentum, upper: upperMomentum },
-    priceToSMA: { lower: lowerPriceToSMA, upper: upperPriceToSMA },
-  };
-
-  // Helper normalization function: winsorize first, then robust normalize.
-  const normalize = (val, median, iqr, lower, upper) =>
-    (winsorizeVal(val, lower, upper) - median) / (iqr || 1);
-
-  // Calculate historical returns distribution for 30-day horizon
-  const thirtyDayLogReturns = [];
-  for (let i = 0; i <= data.length - 30; i++) {
-    thirtyDayLogReturns.push(Math.log(prices[i + 30 - 1] / prices[i]));
-  }
-
-  // Calculate 95th, 99th percentiles for both upside and downside
-  const maxUpside = computePercentile(thirtyDayLogReturns, 0.99);
-  const maxDownside = computePercentile(thirtyDayLogReturns, 0.01);
-
-  // Store these bounds for constraining predictions later
-  const returnConstraints = {
-    maxLogReturn: maxUpside,
-    minLogReturn: maxDownside,
-  };
-
-  const inputs = [];
-  const outputs = [];
-
-  // Build training sequences.
-  for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
-    const seq = [];
-    for (let j = 0; j < sequenceLength; j++) {
-      const idx = i + j;
-      seq.push([
-        // Log price (normalized)
-        normalize(
-          Math.log(prices[idx]),
-          medianLogPrice,
-          iqrLogPrice,
-          lowerLogPrice,
-          upperLogPrice
-        ),
-        // Volume (normalized)
-        normalize(
-          volumes[idx],
-          medianVolume,
-          iqrVolume,
-          lowerVolume,
-          upperVolume
-        ),
-        // 7-day SMA (normalized)
-        normalize(sma7[idx], medianSMA7, iqrSMA7, lowerSMA7, upperSMA7),
-        // 20-day SMA (normalized)
-        normalize(sma20[idx], medianSMA20, iqrSMA20, lowerSMA20, upperSMA20),
-        // Daily log return (normalized)
-        normalize(
-          dailyLogReturn[idx],
-          medianReturn,
-          iqrReturn,
-          lowerReturn,
-          upperReturn
-        ),
-        // Volatility (normalized)
-        normalize(
-          volatility[idx],
-          medianVolatility,
-          iqrVolatility,
-          lowerVolatility,
-          upperVolatility
-        ),
-        // RSI (normalized)
-        normalize(rsi[idx], medianRSI, iqrRSI, lowerRSI, upperRSI),
-        // Momentum (normalized)
-        normalize(
-          momentum[idx],
-          medianMomentum,
-          iqrMomentum,
-          lowerMomentum,
-          upperMomentum
-        ),
-        // Price to SMA (normalized)
-        normalize(
-          priceToSMA[idx],
-          medianPriceToSMA,
-          iqrPriceToSMA,
-          lowerPriceToSMA,
-          upperPriceToSMA
-        ),
-      ]);
-    }
-    inputs.push(seq);
-
-    // Target: logPrice 30 days after sequence end
-    const targetLogPrice = Math.log(
-      prices[i + sequenceLength + predictionGap - 1]
-    );
-    outputs.push(
-      normalize(
-        targetLogPrice,
-        medianLogPrice,
-        iqrLogPrice,
-        lowerLogPrice,
-        upperLogPrice
-      )
-    );
-  }
-
-  // Convert inputs and outputs to tensors.
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 9]); // 9 features
-  const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
-
-  const meta = {
-    medianLogPrice,
-    iqrLogPrice,
-    medianVolume,
-    iqrVolume,
-    medianSMA7,
-    iqrSMA7,
-    medianSMA20,
-    iqrSMA20,
-    medianReturn,
-    iqrReturn,
-    medianVolatility,
-    iqrVolatility,
-    medianRSI,
-    iqrRSI,
-    medianMomentum,
-    iqrMomentum,
-    medianPriceToSMA,
-    iqrPriceToSMA,
-    bounds: metaBounds,
-    returnConstraints,
-    // Save the last known actual price.
-    lastKnownPrice: prices[prices.length - 1],
-    // Save historical volatility for realistic predictions
-    historicalVolatility: computeVolatility(dailyLogReturn),
-  };
-
-  return { inputTensor, outputTensor, meta };
+  return normalizedSequence;
 }
 
+/* ─── USE tf.tidy FOR MODEL PREDICTION ─────────────────────────────────────────────── */
 /**
- * Creates an ensemble of models with different architectures
+ * Uses tf.tidy to encapsulate tensor operations for a single model prediction.
  */
-async function createModelEnsemble(inputShape, numModels = 3) {
-  const models = [];
-
-  // Model 1: LSTM model
-  const model1 = tf.sequential();
-  model1.add(
-    tf.layers.lstm({
-      units: 64,
-      inputShape,
-      returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      dropout: 0.2,
-      recurrentDropout: 0.2,
-    })
-  );
-  model1.add(tf.layers.dropout({ rate: 0.2 }));
-  model1.add(tf.layers.dense({ units: 32, activation: "relu" }));
-  model1.add(tf.layers.dense({ units: 1 }));
-
-  // Model 2: GRU model (alternative RNN architecture)
-  const model2 = tf.sequential();
-  model2.add(
-    tf.layers.gru({
-      units: 64,
-      inputShape,
-      returnSequences: true,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      dropout: 0.3,
-    })
-  );
-  model2.add(
-    tf.layers.gru({
-      units: 32,
-      returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-    })
-  );
-  model2.add(tf.layers.dense({ units: 1 }));
-
-  // Model 3: ConvLSTM model (with CNN feature extraction)
-  const model3 = tf.sequential();
-  model3.add(
-    tf.layers.conv1d({
-      filters: 32,
-      kernelSize: 3,
-      activation: "relu",
-      inputShape,
-    })
-  );
-  model3.add(tf.layers.maxPooling1d({ poolSize: 2 }));
-  model3.add(
-    tf.layers.lstm({
-      units: 48,
-      returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-    })
-  );
-  model3.add(tf.layers.dropout({ rate: 0.2 }));
-  model3.add(tf.layers.dense({ units: 1 }));
-
-  models.push(model1, model2, model3);
-
-  // Compile all models
-  models.forEach((model) => {
-    model.compile({
-      optimizer: tf.train.adam(0.001),
-      loss: customHuberLoss(0.8),
-    });
+function predictWithModel(model, inputData) {
+  return tf.tidy(() => {
+    const inputTensor = tf.tensor3d([inputData], [1, inputData.length, inputData[0].length]);
+    return model.predict(inputTensor).dataSync()[0];
   });
-
-  return models;
 }
 
-/**
- * Trains an ensemble of models for 30-day ahead price prediction.
- */
+/* ─── UPDATED PREDICTION FUNCTION (with Parallel Ensemble Prediction) ─────────────── */
+async function predict30DayAheadPrice(modelObj, data) {
+  const { models, meta } = modelObj;
+  const sequenceLength = 30;
+
+  try {
+    // Extract the most recent data points needed for prediction.
+    const recentData = data.slice(-sequenceLength);
+    const normSeq = preprocessForPrediction(recentData, meta);
+
+    // Use Promise.all to predict in parallel across the ensemble.
+    const predictions = await Promise.all(
+      models.map(async (model) => {
+        try {
+          const predNormLogPrice = predictWithModel(model, normSeq);
+          return (isNaN(predNormLogPrice) || !isFinite(predNormLogPrice)) ? null : predNormLogPrice;
+        } catch (err) {
+          console.warn("Error in model prediction:", err.message);
+          return null;
+        }
+      })
+    );
+
+    const validPreds = predictions.filter((p) => p !== null);
+    if (validPreds.length === 0) {
+      console.warn("No valid predictions from any model. Using fallback method.");
+      // Fallback: simple trend-based dampened prediction.
+      const recentPrices = recentData.map((item) => item.price);
+      const startPrice = recentPrices[0];
+      const endPrice = recentPrices[recentPrices.length - 1];
+      const recentTrendPercent = (endPrice / startPrice - 1) * 100;
+      const predictedChangePercent = recentTrendPercent * 0.5;
+      const boundedChange = Math.max(Math.min(predictedChangePercent, 5), -5);
+      return {
+        predictedPrice: meta.lastKnownPrice * (1 + boundedChange / 100),
+        percentChange: boundedChange,
+        currentPrice: meta.lastKnownPrice,
+        confidence: {
+          isNonModelFallback: true,
+          monthlyVolatility: meta.historicalVolatility * Math.sqrt(30 / 252) * 100,
+          maxAllowedMove: 5,
+        },
+      };
+    }
+
+    const avgPredNormLogPrice =
+      validPreds.reduce((a, b) => a + b, 0) / validPreds.length;
+    const predictedLogPrice = avgPredNormLogPrice * meta.iqrLogPrice + meta.medianLogPrice;
+    const currentLogPrice = Math.log(meta.lastKnownPrice);
+    let predictedReturn = predictedLogPrice - currentLogPrice;
+
+    predictedReturn = Math.min(
+      Math.max(predictedReturn, meta.returnConstraints.minLogReturn),
+      meta.returnConstraints.maxLogReturn
+    );
+
+    const monthlyVolatility = meta.historicalVolatility * Math.sqrt(30 / 252);
+    const maxMonthlyMove = 2.5 * monthlyVolatility;
+    predictedReturn = Math.min(Math.max(predictedReturn, -maxMonthlyMove), maxMonthlyMove);
+
+    const constrainedLogPrice = currentLogPrice + predictedReturn;
+    let predictedPrice = Math.exp(constrainedLogPrice);
+
+    if (isNaN(predictedPrice) || !isFinite(predictedPrice)) {
+      console.warn("Final prediction invalid. Using current price as fallback.");
+      predictedPrice = meta.lastKnownPrice;
+      predictedReturn = 0;
+    }
+
+    const percentChange = (predictedPrice / meta.lastKnownPrice - 1) * 100;
+    console.log(`Current price: ${meta.lastKnownPrice.toFixed(2)}`);
+    console.log(`Predicted price in 30 days: ${predictedPrice.toFixed(2)} (${percentChange.toFixed(2)}%)`);
+    console.log(`Monthly volatility: ${(monthlyVolatility * 100).toFixed(2)}%`);
+    console.log(`Max allowed monthly move: ±${(maxMonthlyMove * 100).toFixed(2)}%`);
+
+    return {
+      predictedPrice,
+      percentChange,
+      currentPrice: meta.lastKnownPrice,
+      confidence: {
+        monthlyVolatility: monthlyVolatility * 100,
+        maxAllowedMove: maxMonthlyMove * 100,
+      },
+    };
+  } catch (error) {
+    console.error("Error in prediction:", error.message);
+    return {
+      predictedPrice: meta.lastKnownPrice,
+      percentChange: 0,
+      currentPrice: meta.lastKnownPrice,
+      confidence: { isErrorFallback: true },
+    };
+  }
+}
+
+/* ─── TRAINING FUNCTION (with Meta Persisting) ───────────────────────────────────── */
 async function trainModelFor30DayAheadPrice(data) {
   const sequenceLength = 30;
   const predictionGap = 30;
@@ -2507,20 +2216,15 @@ async function trainModelFor30DayAheadPrice(data) {
   const inputShape = [sequenceLength, 9]; // 9 features
   const models = await createModelEnsemble(inputShape);
 
-  console.log(
-    "Training ensemble of models for 30-day ahead prediction with enhanced features..."
-  );
-
+  console.log("Training ensemble of models for 30-day ahead prediction with enhanced features...");
   const trainedModels = [];
   for (let i = 0; i < models.length; i++) {
     console.log(`Training model ${i + 1}/${models.length}...`);
-
     const earlyStopping = tf.callbacks.earlyStopping({
       monitor: "val_loss",
       patience: 8,
       minDelta: 0.001,
     });
-
     await models[i].fit(inputTensor, outputTensor, {
       epochs: 100,
       batchSize: 32,
@@ -2528,295 +2232,17 @@ async function trainModelFor30DayAheadPrice(data) {
       callbacks: [earlyStopping],
       shuffle: true,
     });
-
     trainedModels.push(models[i]);
   }
 
   console.log("Ensemble training completed.");
-
   return { models: trainedModels, meta };
 }
 
-/**
- * Predicts the stock price 30 days ahead using the ensemble of trained models.
- * Applies realistic constraints based on historical volatility.
- */
-async function predict30DayAheadPrice(modelObj, data) {
-  const { models, meta } = modelObj;
-  const {
-    medianLogPrice,
-    iqrLogPrice,
-    medianVolume,
-    iqrVolume,
-    medianSMA7,
-    iqrSMA7,
-    medianSMA20,
-    iqrSMA20,
-    medianReturn,
-    iqrReturn,
-    medianVolatility,
-    iqrVolatility,
-    medianRSI,
-    iqrRSI,
-    medianMomentum,
-    iqrMomentum,
-    medianPriceToSMA,
-    iqrPriceToSMA,
-    bounds,
-    returnConstraints,
-    lastKnownPrice,
-    historicalVolatility,
-  } = meta;
-  const sequenceLength = 30;
-
-  try {
-    // Extract recent data.
-    const recentData = data.slice(-sequenceLength);
-    const recentPrices = recentData.map((item) => item.price);
-    const recentVolumes = recentData.map((item) => item.volume);
-
-    // Compute logPrices and other features for recent data
-    const recentLogPrices = recentPrices.map((p) => Math.log(p));
-    const sma7Recent = computeSMA(recentLogPrices, 7);
-    const sma20Recent = computeSMA(recentLogPrices, 20);
-    const sma50Recent = computeSMA(recentLogPrices, 50);
-    const returnRecent = computeDailyLogReturn(recentLogPrices);
-
-    // Calculate volatility for recent data
-    const volatilityRecent = [];
-    const volWindow = 20;
-    for (let i = 0; i < returnRecent.length; i++) {
-      const start = Math.max(0, i - volWindow + 1);
-      const windowReturns = returnRecent.slice(start, i + 1);
-      const vol = computeStdDev(windowReturns) * Math.sqrt(252); // Annualize
-      volatilityRecent.push(vol);
-    }
-
-    // Calculate RSI
-    const rsiRecent = computeRSI(recentPrices);
-
-    // Calculate momentum
-    const momentumRecent = [];
-    for (let i = 0; i < recentPrices.length; i++) {
-      const lookback = Math.max(0, i - 30);
-      momentumRecent.push(Math.log(recentPrices[i] / recentPrices[lookback]));
-    }
-
-    // Calculate price relative to 50-day SMA
-    const priceToSMARecent = [];
-    for (let i = 0; i < recentPrices.length; i++) {
-      priceToSMARecent.push(Math.log(recentPrices[i]) - sma50Recent[i]);
-    }
-
-    // Create the normalized sequence for prediction
-    const normSeq = recentData.map((item, idx) => [
-      // Log price (normalized)
-      (winsorizeVal(
-        Math.log(item.price),
-        bounds.logPrice.lower,
-        bounds.logPrice.upper
-      ) -
-        medianLogPrice) /
-        (iqrLogPrice || 1),
-      // Volume (normalized)
-      (winsorizeVal(item.volume, bounds.volume.lower, bounds.volume.upper) -
-        medianVolume) /
-        (iqrVolume || 1),
-      // 7-day SMA (normalized)
-      (winsorizeVal(sma7Recent[idx], bounds.sma7.lower, bounds.sma7.upper) -
-        medianSMA7) /
-        (iqrSMA7 || 1),
-      // 20-day SMA (normalized)
-      (winsorizeVal(sma20Recent[idx], bounds.sma20.lower, bounds.sma20.upper) -
-        medianSMA20) /
-        (iqrSMA20 || 1),
-      // Return (normalized)
-      (winsorizeVal(
-        returnRecent[idx],
-        bounds.return.lower,
-        bounds.return.upper
-      ) -
-        medianReturn) /
-        (iqrReturn || 1),
-      // Volatility (normalized)
-      (winsorizeVal(
-        volatilityRecent[idx],
-        bounds.volatility.lower,
-        bounds.volatility.upper
-      ) -
-        medianVolatility) /
-        (iqrVolatility || 1),
-      // RSI (normalized)
-      (winsorizeVal(rsiRecent[idx], bounds.rsi.lower, bounds.rsi.upper) -
-        medianRSI) /
-        (iqrRSI || 1),
-      // Momentum (normalized)
-      (winsorizeVal(
-        momentumRecent[idx],
-        bounds.momentum.lower,
-        bounds.momentum.upper
-      ) -
-        medianMomentum) /
-        (iqrMomentum || 1),
-      // Price to SMA (normalized)
-      (winsorizeVal(
-        priceToSMARecent[idx],
-        bounds.priceToSMA.lower,
-        bounds.priceToSMA.upper
-      ) -
-        medianPriceToSMA) /
-        (iqrPriceToSMA || 1),
-    ]);
-
-    const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 9]);
-
-    // Get predictions from each model
-    const predictions = [];
-    let validPredictions = 0;
-
-    for (const model of models) {
-      try {
-        const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
-
-        // Only add prediction if it's a valid number
-        if (!isNaN(predNormLogPrice) && isFinite(predNormLogPrice)) {
-          predictions.push(predNormLogPrice);
-          validPredictions++;
-        }
-      } catch (err) {
-        console.warn("Error in model prediction:", err.message);
-        // Continue with other models
-      }
-    }
-
-    // If we don't have any valid predictions, use a fallback approach
-    if (validPredictions === 0) {
-      console.warn(
-        "No valid predictions from any model. Using trend-based fallback method."
-      );
-
-      // Simple fallback: Use recent trend (last 30 days) with dampening
-      const startPrice = recentPrices[0];
-      const endPrice = recentPrices[recentPrices.length - 1];
-      const recentTrendPercent = (endPrice / startPrice - 1) * 100;
-
-      // Dampen the trend by 0.5 (assume trend continues but weaker)
-      const predictedChangePercent = recentTrendPercent * 0.5;
-
-      // Apply strict bounds for fallback prediction (max 5% for Nikkei)
-      const boundedChange = Math.max(Math.min(predictedChangePercent, 5), -5);
-      const predictedPrice = lastKnownPrice * (1 + boundedChange / 100);
-
-      return {
-        predictedPrice,
-        percentChange: boundedChange,
-        currentPrice: lastKnownPrice,
-        confidence: {
-          isNonModelFallback: true,
-          monthlyVolatility: historicalVolatility * Math.sqrt(30 / 252) * 100,
-          maxAllowedMove: 5,
-        },
-      };
-    }
-
-    // Average the valid ensemble predictions
-    const avgPredNormLogPrice =
-      predictions.reduce((a, b) => a + b, 0) / validPredictions;
-
-    // Inverse transformation: get predicted log-price
-    const predictedLogPrice =
-      avgPredNormLogPrice * iqrLogPrice + medianLogPrice;
-
-    // Apply realistic constraints based on historical volatility and market behavior
-    const currentLogPrice = Math.log(lastKnownPrice);
-
-    // Calculate the predicted return
-    let predictedReturn = predictedLogPrice - currentLogPrice;
-
-    // Check for NaN or infinite values and replace with safe defaults
-    if (isNaN(predictedReturn) || !isFinite(predictedReturn)) {
-      console.warn("Invalid predicted return. Using 0% change as fallback.");
-      predictedReturn = 0;
-    }
-
-    // Apply constraints based on historical return bounds
-    predictedReturn = Math.min(
-      Math.max(predictedReturn, returnConstraints.minLogReturn),
-      returnConstraints.maxLogReturn
-    );
-
-    // Apply additional volatility-based constraints (tighter for Nikkei stocks)
-    // Max monthly change = ±2.5 * monthly volatility
-    const monthlyVolatility = historicalVolatility * Math.sqrt(30 / 252); // Convert annual to monthly
-    const maxMonthlyMove = 2.5 * monthlyVolatility;
-
-    // Apply the tighter bound for Nikkei stocks (known for lower volatility)
-    predictedReturn = Math.min(
-      Math.max(predictedReturn, -maxMonthlyMove),
-      maxMonthlyMove
-    );
-
-    // Special case for extremely high/low volatility
-    if (isNaN(maxMonthlyMove) || !isFinite(maxMonthlyMove)) {
-      console.warn("Invalid volatility calculation. Using fixed ±5% bounds.");
-      predictedReturn = Math.min(Math.max(predictedReturn, -0.05), 0.05);
-    }
-
-    // Re-calculate predicted log price with constraints
-    const constrainedLogPrice = currentLogPrice + predictedReturn;
-
-    // Exponentiate to get the actual price prediction
-    let predictedPrice = Math.exp(constrainedLogPrice);
-
-    // Final check for NaN or infinity
-    if (isNaN(predictedPrice) || !isFinite(predictedPrice)) {
-      console.warn(
-        "Final prediction is invalid. Using current price as fallback."
-      );
-      predictedPrice = lastKnownPrice;
-      predictedReturn = 0;
-    }
-
-    // Calculate predicted percent change for logging
-    const percentChange = (predictedPrice / lastKnownPrice - 1) * 100;
-
-    console.log(`Current price: ${lastKnownPrice.toFixed(2)}`);
-    console.log(
-      `Predicted price in 30 days: ${predictedPrice.toFixed(
-        2
-      )} (${percentChange.toFixed(2)}%)`
-    );
-    console.log(`Monthly volatility: ${(monthlyVolatility * 100).toFixed(2)}%`);
-    console.log(
-      `Maximum allowed monthly move: ±${(maxMonthlyMove * 100).toFixed(2)}%`
-    );
-
-    return {
-      predictedPrice,
-      percentChange,
-      currentPrice: lastKnownPrice,
-      confidence: {
-        monthlyVolatility: monthlyVolatility * 100,
-        maxAllowedMove: maxMonthlyMove * 100,
-      },
-    };
-  } catch (error) {
-    console.error("Error in prediction:", error.message);
-    // If any error occurs in the prediction process, return a safe fallback (0% change)
-    return {
-      predictedPrice: lastKnownPrice,
-      percentChange: 0,
-      currentPrice: lastKnownPrice,
-      confidence: {
-        isErrorFallback: true,
-      },
-    };
-  }
-}
-
+/* ─── ANALYZE STOCK (Wrapper that Selects Prediction Routine) ───────────────────── */
 export async function analyzeStock(ticker, historicalData) {
   try {
-    // Pre-process data to ensure no NaN values
+    // Pre-process and filter data
     const cleanData = historicalData.filter(
       (item) =>
         item &&
@@ -2825,87 +2251,57 @@ export async function analyzeStock(ticker, historicalData) {
         item.volume !== undefined &&
         !isNaN(item.volume)
     );
-
     if (cleanData.length < historicalData.length) {
-      console.log(
-        `Filtered out ${
-          historicalData.length - cleanData.length
-        } invalid data points for ${ticker}`
-      );
+      console.log(`Filtered out ${historicalData.length - cleanData.length} invalid data points for ${ticker}`);
     }
-
     if (cleanData.length < 30) {
       console.warn(`Insufficient data for reliable prediction on ${ticker}`);
-      if (cleanData.length > 0) {
-        return cleanData[cleanData.length - 1].price; // Return last valid price
-      }
-      return null;
+      return cleanData.length > 0 ? cleanData[cleanData.length - 1].price : null;
     }
 
-    // Check if this appears to be a Nikkei stock
+    // Check for Nikkei-specific stocks.
     const isNikkeiStock =
       ticker.includes(".T") ||
       ticker.includes(".JP") ||
       ticker.endsWith("JT") ||
       ticker.startsWith("JP:");
 
-    // Calculate basic statistics
     const prices = cleanData.map((item) => item.price);
     const currentPrice = prices[prices.length - 1];
 
     try {
-      // If we have enough data for full model training
       if (cleanData.length >= 365) {
         const modelObj = await trainModelFor30DayAheadPrice(cleanData);
         const prediction = await predict30DayAheadPrice(modelObj, cleanData);
-
-        // Apply Nikkei-specific constraints if needed
         if (isNikkeiStock && prediction.percentChange > 15) {
-          console.log(
-            "Applying Nikkei-specific constraint (max 15% monthly change)"
-          );
-          return currentPrice * 1.15; // Cap at 15% increase
+          console.log("Applying Nikkei-specific constraint (max 15% monthly change)");
+          return currentPrice * 1.15;
         }
-
-        // Final validation on prediction result
-        if (
-          isNaN(prediction.predictedPrice) ||
-          !isFinite(prediction.predictedPrice)
-        ) {
+        if (isNaN(prediction.predictedPrice) || !isFinite(prediction.predictedPrice)) {
           console.warn("Invalid prediction result. Using current price.");
           return currentPrice;
         }
-
         return prediction.predictedPrice;
       } else {
-        // Simple trend-based prediction for limited data
+        // Trend-based prediction for limited data.
         const lookbackPeriod = Math.min(30, prices.length - 1);
         const priorPrice = prices[prices.length - 1 - lookbackPeriod];
         const recentTrendPercent = (currentPrice / priorPrice - 1) * 100;
-
-        // Apply dampening and constraints
-        const maxChange = isNikkeiStock ? 10 : 15; // More conservative for Nikkei
-        const predictedChangePercent = Math.max(
-          Math.min(recentTrendPercent * 0.3, maxChange),
-          -maxChange
-        );
-
+        const maxChange = isNikkeiStock ? 10 : 15;
+        const predictedChangePercent = Math.max(Math.min(recentTrendPercent * 0.3, maxChange), -maxChange);
         return currentPrice * (1 + predictedChangePercent / 100);
       }
     } catch (modelError) {
       console.error("Error in prediction model:", modelError.message);
-      return currentPrice; // Return current price as fallback
+      return currentPrice;
     }
   } catch (error) {
     console.error(`Error analyzing stock for ${ticker}:`, error.message);
-
-    // Safe fallback if available
     if (historicalData && historicalData.length > 0) {
       const lastValidPrice = historicalData
         .filter((item) => item && item.price && !isNaN(item.price))
         .map((item) => item.price)
         .pop();
-
       return lastValidPrice || null;
     }
     return null;
