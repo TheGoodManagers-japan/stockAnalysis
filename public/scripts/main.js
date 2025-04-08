@@ -1226,6 +1226,108 @@ function getEntryTimingScore(stock) {
 
 
 
+/**
+ * Determine Buying Urgency and Risk Level
+ */
+function getBuyingUrgency(stock) {
+  const {
+    rsi14,
+    macd,
+    stochasticK,
+    stochasticD,
+    currentPrice,
+    fiftyTwoWeekLow,
+    fiftyTwoWeekHigh
+  } = stock;
+
+  // Calculate price position in the 52-week range.
+  const pricePositionInRange =
+    ((currentPrice - fiftyTwoWeekLow) / (fiftyTwoWeekHigh - fiftyTwoWeekLow)) * 100;
+
+  // Assess market conditions.
+  const oversoldCondition = rsi14 < 30;
+  const bearishMomentum = macd < 0;
+  const lowStochasticValues = stochasticK < 20 && stochasticD < 20;
+
+  // Default urgency and risk settings.
+  let urgencyLevel = 'NEUTRAL';
+  let riskLevel = 'MODERATE';
+
+  if (oversoldCondition && bearishMomentum && lowStochasticValues) {
+    urgencyLevel = 'HIGH_URGENCY';
+    riskLevel = 'HIGH_RISK';
+  } else if (pricePositionInRange < 20) {
+    urgencyLevel = 'MODERATE_URGENCY';
+    riskLevel = 'MODERATE_RISK';
+  }
+
+  return {
+    urgencyLevel,
+    riskLevel,
+    pricePositionInRange: parseFloat(pricePositionInRange.toFixed(2))
+  };
+}
+
+
+function calculateLimitOrderPrice(stock, urgencyLevel) {
+  const {
+    currentPrice,
+    fiftyTwoWeekLow,
+    movingAverage50d,
+    movingAverage200d,
+    bollingerLower
+  } = stock;
+
+  let limitOrderPrice;
+
+  if (urgencyLevel === 'HIGH_URGENCY') {
+    // Aggressive buying strategy: deeper discount.
+    limitOrderPrice = Math.min(
+      currentPrice * 0.9,                   // 10% below current price,
+      bollingerLower || currentPrice * 0.9,   // lower Bollinger Band (if available),
+      movingAverage50d || currentPrice * 0.95 // or 50-day moving average.
+    );
+  } else if (urgencyLevel === 'MODERATE_URGENCY') {
+    // Moderate discount strategy.
+    limitOrderPrice = Math.min(
+      currentPrice * 0.95,                     // 5% below current price,
+      movingAverage50d || currentPrice * 0.97,   // primary support level,
+      movingAverage200d || currentPrice * 0.96    // secondary support level.
+    );
+  } else {
+    // Conservative strategy for a neutral market.
+    limitOrderPrice = Math.min(
+      currentPrice * 0.97,
+      movingAverage50d || currentPrice * 0.98
+    );
+  }
+
+  // Ensure the limit order price is not too low.
+  limitOrderPrice = Math.max(
+    limitOrderPrice,
+    currentPrice * 0.85,      // Prevent excessively low orders.
+    fiftyTwoWeekLow * 1.05     // Maintain a price slightly above the 52-week low.
+  );
+
+  // Round to 2 decimal places.
+  return parseFloat(limitOrderPrice.toFixed(2));
+}
+
+
+function getLimitOrder(stock) {
+  // Determine buying urgency.
+  const urgencyDetails = getBuyingUrgency(stock);
+  
+  // Calculate the limit order price using the urgency level.
+  const limitOrderPrice = calculateLimitOrderPrice(stock, urgencyDetails.urgencyLevel);
+  
+  // Return only the limit order price.
+  return limitOrderPrice;
+}
+
+
+
+
 /***********************************************
  * 6) SCAN LOGIC (Main Workflow)
  ***********************************************/
@@ -1644,6 +1746,7 @@ window.scan = {
     stock.valuationScore = getValuationScore(stock);
     stock.entryTimingScore = getEntryTimingScore(stock);
     stock.tier = getNumericTier(stock);
+    stock.limitOrder = getLimitOrder(stock);
 
     // 10) Send data in Bubble key format
  const stockObject = {
@@ -1658,6 +1761,7 @@ window.scan = {
    _api_c2_score: stock.score,
    _api_c2_finalScore: stock.finalScore,
    _api_c2_tier: stock.tier,
+   _api_c2_limitOrder: stock.limitOrder,
 
    // Add complete stock data as JSON
    _api_c2_otherData: JSON.stringify({
