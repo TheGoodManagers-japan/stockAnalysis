@@ -588,53 +588,75 @@ function getStockTierLabel(stock) {
     "🚫 Highly Overvalued",
   ].includes(valuation);
 
-  // TIER 1: Dream Stocks
+  // -------------------------------
+  // 🟩 TIER 1: Dream Stock
+  // -------------------------------
   if (isTopTechnical && isExcellentFundamental && isTopValuation) {
     return "🟩 TIER 1: Dream Stock";
   }
 
-  // TIER 2: Elite Growth or Value Plays
+  // -------------------------------
+  // 🟢 TIER 2: Elite Opportunity
+  // -------------------------------
   if (
     (isTopTechnical && isExcellentFundamental && isGoodValuation) ||
-    (isTopTechnical && isStrongFundamental && isTopValuation)
+    (isTopTechnical && isStrongFundamental && isTopValuation) ||
+    (isDecentTechnical && isExcellentFundamental && isTopValuation)
   ) {
     return "🟢 TIER 2: Elite Opportunity";
   }
 
-  // TIER 3: Solid Picks
+  // -------------------------------
+  // 🟨 TIER 3: Solid Pick
+  // -------------------------------
   if (
     (isTopTechnical && isNeutralFundamental && isTopValuation) ||
     (isDecentTechnical && isExcellentFundamental && isGoodValuation) ||
-    (isTopTechnical && isStrongFundamental && isGoodValuation)
+    (isTopTechnical && isStrongFundamental && isGoodValuation) ||
+    (isDecentTechnical && isStrongFundamental && isTopValuation)
   ) {
     return "🟨 TIER 3: Solid Pick";
   }
 
-  // TIER 4: Speculative
+  // -------------------------------
+  // 🟠 TIER 4: Speculative Watch
+  // -------------------------------
   if (
     (isDecentTechnical && isNeutralFundamental && isTopValuation) ||
-    (isWeakTechnical && isExcellentFundamental && isGoodValuation) ||
-    (isTopTechnical && isNeutralFundamental && isGoodValuation)
+    (isWeakTechnical && isExcellentFundamental && isTopValuation) ||
+    (isTopTechnical && isNeutralFundamental && isGoodValuation) ||
+    (isDecentTechnical && isStrongFundamental && isGoodValuation) ||
+    (isWeakTechnical && isStrongFundamental && isGoodValuation)
   ) {
     return "🟠 TIER 4: Speculative Watch";
   }
 
-  // TIER 5: Risky / Avoid for Now
+  // -------------------------------
+  // 🔴 TIER 5: Risky
+  // -------------------------------
   if (
-    (isTopTechnical && isWeakFundamental && isWeakValuation) ||
-    (isDecentTechnical && isWeakFundamental && isWeakValuation)
+    (isTopTechnical && isWeakFundamental) ||
+    (isDecentTechnical && isWeakFundamental) ||
+    (isWeakTechnical && isExcellentFundamental && isWeakValuation) ||
+    (isWeakTechnical && isStrongFundamental && isWeakValuation) ||
+    (isWeakTechnical && isNeutralFundamental && isGoodValuation)
   ) {
     return "🔴 TIER 5: Risky";
   }
 
-  // TIER 6: Red Flag
+  // -------------------------------
+  // 🚫 TIER 6: Red Flag
+  // -------------------------------
   if (isWeakTechnical && isWeakFundamental && isWeakValuation) {
     return "🚫 TIER 6: Red Flag";
   }
 
-  // Default fallback
-  return "❓ Unclassified";
+  // -------------------------------
+  // Fallback (should not hit)
+  // -------------------------------
+  return "🔴 TIER 5: Risky";
 }
+
 
 
 
