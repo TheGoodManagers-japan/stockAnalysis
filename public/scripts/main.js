@@ -178,44 +178,7 @@ function computeScore(stock, sector) {
 
   const sectorMultipliers = {
     Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
-    "Electric Machinery": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    Automobiles: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
-    "Precision Instruments": { valuation: 1.0, stability: 1.1, dividend: 1.0 },
-    Communications: { valuation: 0.9, stability: 1.1, dividend: 1.1 },
-    Banking: { valuation: 1.3, stability: 0.8, dividend: 1.2 },
-    "Other Financial Services": {
-      valuation: 1.2,
-      stability: 0.9,
-      dividend: 1.1,
-    },
-    Securities: { valuation: 1.0, stability: 0.8, dividend: 1.2 },
-    Insurance: { valuation: 1.1, stability: 0.9, dividend: 1.3 },
-    Fishery: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    Foods: { valuation: 1.0, stability: 1.2, dividend: 1.2 },
-    Retail: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
-    Services: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    Mining: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
-    "Textiles & Apparel": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    "Pulp & Paper": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
-    Chemicals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
-    Petroleum: { valuation: 1.2, stability: 0.8, dividend: 0.9 },
-    Rubber: { valuation: 1.0, stability: 0.9, dividend: 1.0 },
-    "Glass & Ceramics": { valuation: 1.0, stability: 0.9, dividend: 1.0 },
-    Steel: { valuation: 1.1, stability: 0.8, dividend: 1.0 },
-    "Nonferrous Metals": { valuation: 1.0, stability: 0.8, dividend: 1.0 },
-    "Trading Companies": { valuation: 1.1, stability: 1.0, dividend: 1.0 },
-    Construction: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    Machinery: { valuation: 1.1, stability: 1.0, dividend: 1.0 },
-    Shipbuilding: { valuation: 1.2, stability: 0.7, dividend: 0.9 },
-    "Other Manufacturing": { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    "Real Estate": { valuation: 1.1, stability: 0.9, dividend: 1.0 },
-    "Railway & Bus": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
-    "Land Transport": { valuation: 1.0, stability: 1.2, dividend: 1.1 },
-    "Marine Transport": { valuation: 1.1, stability: 0.8, dividend: 1.0 },
-    "Air Transport": { valuation: 1.2, stability: 0.8, dividend: 0.9 },
-    Warehousing: { valuation: 1.0, stability: 1.0, dividend: 1.0 },
-    "Electric Power": { valuation: 1.0, stability: 1.2, dividend: 1.3 },
-    Gas: { valuation: 1.0, stability: 1.2, dividend: 1.3 },
+    // ... (keep your existing sectorMultipliers here)
   };
 
   const sectorMultiplier = sectorMultipliers[sector] || {
@@ -224,7 +187,7 @@ function computeScore(stock, sector) {
     dividend: 1.0,
   };
 
-  // --- Valuation Score (Refined PE & PB)
+  // --- Valuation
   const peScore =
     stock.peRatio > 0
       ? Math.min(1, Math.max(0, (25 - stock.peRatio) / 25))
@@ -233,16 +196,12 @@ function computeScore(stock, sector) {
     stock.pbRatio > 0 ? Math.min(1, Math.max(0, (3 - stock.pbRatio) / 3)) : 0.5;
   const valuationScore = ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
 
-  // --- Market Stability (Improved Volatility)
+  
   const volatility = calculateHistoricalVolatility(stock.historicalData);
   const normalizedVol = Math.min(volatility / 0.1, 1);
-  const betaScore = stock.beta
-    ? Math.max(0, 1 - Math.abs(stock.beta - 1))
-    : 0.5;
-  const stabilityScore =
-    ((1 - normalizedVol) * 0.7 + betaScore * 0.3) * sectorMultiplier.stability;
+  const stabilityScore = (1 - normalizedVol) * sectorMultiplier.stability;
 
-  // --- Dividend Benefit (Enhanced)
+  // --- Dividend Benefit
   const dividendYieldScore = Math.min(stock.dividendYield / 6, 1);
   const dividendGrowthScore = stock.dividendGrowth5yr
     ? Math.min(Math.max(stock.dividendGrowth5yr / 10, 0), 1)
@@ -251,13 +210,13 @@ function computeScore(stock, sector) {
     (dividendYieldScore * 0.7 + dividendGrowthScore * 0.3) *
     sectorMultiplier.dividend;
 
-  // --- Historical Performance (Unchanged)
+  // --- Historical Performance
   const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
   const position =
     range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0.5;
   const historicalPerformance = position;
 
-  // --- Momentum Score (Refined)
+  // --- Momentum Score
   let momentumScore = 0;
   if (stock.rsi14 !== undefined) {
     momentumScore += Math.min(Math.max((stock.rsi14 - 30) / 40, 0), 1);
@@ -270,7 +229,7 @@ function computeScore(stock, sector) {
   }
   momentumScore = Math.min(momentumScore / 1.6, 1);
 
-  // --- Volatility Risk (Enhanced)
+  // --- Volatility Risk
   let volatilityRiskScore = 1;
   const atrRatio = stock.atr14 / stock.currentPrice;
   if (atrRatio > 0.04) volatilityRiskScore -= 0.3;
@@ -295,6 +254,7 @@ function computeScore(stock, sector) {
 
   return Math.min(Math.max(rawScore, 0), 1);
 }
+
 
 
 /***********************************************
@@ -414,20 +374,22 @@ function getTechnicalSummaryLabel(stock) {
     score += weights.bollinger * 0.5;
   }
 
-  if (isLowVolatility && score >= 4) {
+  // Adjust for volatility
+  if (isLowVolatility && score >= 3) {
     score += 0.5;
   } else if (!isLowVolatility && score < 2) {
     score -= 0.5;
   }
 
-  // 🎯 Final Labels
-  if (score >= 6.5) return "Strong Bullish 📈";
-  if (score >= 5) return "Oversold 🟢";
-  if (score >= 3.5) return "Possible Reversal 🟡";
-  if (score >= 2) return "Neutral ⚪️";
-  if (score >= 1) return "Weak Signal 🟠";
+  // 🎯 Improved Label Thresholds
+  if (score >= 6) return "Strong Bullish 📈";
+  if (score >= 4.5) return "Bullish Momentum 🟢";
+  if (score >= 3) return "Possible Reversal 🟡";
+  if (score >= 1.5) return "Neutral ⚪️";
+  if (score >= 0.5) return "Weak Signal 🟠";
   return "Bearish 🟥";
 }
+
 
 
 
@@ -558,7 +520,7 @@ function getEntryTimingLabel(stock) {
 
 
 function getValuationSummary(stock) {
-  const { peRatio, pbRatio, beta, marketCap } = stock;
+  const { peRatio, pbRatio, marketCap } = stock;
   let score = 0;
 
   // 🧮 P/E Ratio
@@ -572,23 +534,20 @@ function getValuationSummary(stock) {
   else if (pbRatio >= 1 && pbRatio <= 2.5) score += 1;
   else if (pbRatio < 0.5 || pbRatio > 4) score -= 1;
 
-  // ⚖️ Beta
-  if (beta < 0.9) score += 0.5;
-  else if (beta > 1.5) score -= 1;
-
   // 💰 Market Cap
   if (marketCap >= 1_000_000_000_000) score += 0.5;
   else if (marketCap < 100_000_000_000) score -= 0.5;
 
   // 🏷️ Final Label
-  if (score >= 6) return "💰 Exceptional Value";
-  if (score >= 4.5) return "💎 Deep Value";
-  if (score >= 3) return "📉 Undervalued";
-  if (score >= 1.5) return "⚖️ Fairly Priced";
+  if (score >= 5.5) return "💰 Exceptional Value";
+  if (score >= 4) return "💎 Deep Value";
+  if (score >= 2.5) return "📉 Undervalued";
+  if (score >= 1) return "⚖️ Fairly Priced";
   if (score >= 0) return "🟡 Slightly Overvalued";
-  if (score >= -2) return "🔴 Overvalued";
+  if (score >= -1.5) return "🔴 Overvalued";
   return "🚫 Highly Overvalued";
 }
+
 
 
 
@@ -877,7 +836,6 @@ window.scan = {
       epsForward: yahooData.epsForward,
       epsGrowthRate: yahooData.epsGrowthRate,
       debtEquityRatio: yahooData.debtEquityRatio,
-      beta: yahooData.beta,
       movingAverage50d: yahooData.movingAverage50d,
       movingAverage200d: yahooData.movingAverage200d,
 
@@ -969,7 +927,6 @@ window.scan = {
            _api_c2_epsForward: stock.epsForward,
            _api_c2_epsGrowthRate: stock.epsGrowthRate,
            _api_c2_debtEquityRatio: stock.debtEquityRatio,
-           _api_c2_beta: stock.beta,
            _api_c2_movingAverage50d: stock.movingAverage50d,
            _api_c2_movingAverage200d: stock.movingAverage200d,
            _api_c2_fundamentalSummary: stock.fundamentalSummary,

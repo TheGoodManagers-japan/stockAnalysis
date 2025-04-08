@@ -198,7 +198,6 @@ async function fetchYahooFinanceData(ticker) {
       epsForward: epsForward,
       epsGrowthRate: epsGrowthRate,
       debtEquityRatio: debtEquityRatio,
-      beta: toNumber(quote.beta),
       movingAverage50d: toNumber(movingAverage50d),
       movingAverage200d: toNumber(movingAverage200d),
       rsi14: toNumber(rsi),
