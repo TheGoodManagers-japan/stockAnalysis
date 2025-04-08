@@ -163,99 +163,273 @@ function calculateStopLossAndTarget(stock, prediction) {
   };
 }
 
-/***********************************************
- * 3) COMPUTE SCORE (Optional Improvements)
- ***********************************************/
+
 function computeScore(stock, sector) {
-  const weights = {
-    valuation: 0.25,
-    marketStability: 0.2,
-    dividendBenefit: 0.15,
-    historicalPerformance: 0.15,
-    momentum: 0.15,
-    volatilityRisk: 0.1,
+  // Input validation
+  if (!stock || typeof stock !== 'object') {
+    console.error('Invalid stock data provided');
+    return 0;
+  }
+
+  if (!sector || typeof sector !== 'string') {
+    console.warn('Invalid sector provided, using default multipliers');
+    sector = '';
+  }
+
+  // Configuration constants
+  const CONFIG = {
+    // Component weights
+    WEIGHTS: {
+      valuation: 0.25,
+      marketStability: 0.2,
+      dividendBenefit: 0.15,
+      historicalPerformance: 0.15,
+      momentum: 0.15,
+      volatilityRisk: 0.1,
+    },
+    // Thresholds for scoring calculations
+    THRESHOLDS: {
+      maxPE: 25,          // PE ratio above which score becomes 0
+      maxPB: 3,           // PB ratio above which score becomes 0
+      volatilityBase: 0.1, // Base volatility for normalization
+      maxDividendYield: 6, // Max dividend yield for scoring
+      dividendGrowthCap: 10, // Cap for dividend growth rate
+      highATR: 0.04,      // High ATR threshold
+      mediumATR: 0.02,    // Medium ATR threshold
+    }
   };
 
-  const sectorMultipliers = {
-    Pharmaceuticals: { valuation: 1.1, stability: 0.9, dividend: 1.0 },
-    // ... (keep your existing sectorMultipliers here)
+  // Sector-specific multipliers for different scoring components
+  const SECTOR_MULTIPLIERS = {
+    // Default values
+    DEFAULT: { valuation: 1.0, stability: 1.0, dividend: 1.0, growth: 1.0 },
+    
+    // Financial sectors - often trade at lower valuations, dividends important
+    "Banking": { valuation: 1.2, stability: 0.9, dividend: 1.3, growth: 0.9 },
+    "Other Financial Services": { valuation: 1.2, stability: 0.8, dividend: 1.1, growth: 1.1 },
+    "Securities": { valuation: 1.3, stability: 0.7, dividend: 1.0, growth: 1.2 },
+    "Insurance": { valuation: 1.3, stability: 0.9, dividend: 1.2, growth: 0.9 },
+    
+    // Technology and healthcare - growth focused, valuations often higher
+    "Pharmaceuticals": { valuation: 0.9, stability: 0.9, dividend: 0.9, growth: 1.2 },
+    "Precision Instruments": { valuation: 0.9, stability: 0.8, dividend: 0.8, growth: 1.2 },
+    "Communications": { valuation: 0.9, stability: 1.0, dividend: 0.9, growth: 1.1 },
+    "Electric Machinery": { valuation: 0.9, stability: 0.9, dividend: 0.9, growth: 1.1 },
+    
+    // Consumer staples - stability focused
+    "Foods": { valuation: 1.1, stability: 1.2, dividend: 1.1, growth: 0.9 },
+    "Retail": { valuation: 1.0, stability: 1.0, dividend: 1.0, growth: 1.0 },
+    "Fishery": { valuation: 1.0, stability: 1.1, dividend: 1.0, growth: 0.9 },
+    
+    // Services and consumer discretionary
+    "Services": { valuation: 1.0, stability: 0.9, dividend: 0.9, growth: 1.1 },
+    "Automobiles & Auto parts": { valuation: 1.1, stability: 0.8, dividend: 1.0, growth: 1.0 },
+    
+    // Manufacturing sectors
+    "Steel": { valuation: 1.2, stability: 0.8, dividend: 1.1, growth: 0.9 },
+    "Nonferrous Metals": { valuation: 1.2, stability: 0.8, dividend: 1.1, growth: 0.9 },
+    "Chemicals": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 1.0 },
+    "Petroleum": { valuation: 1.2, stability: 0.8, dividend: 1.3, growth: 0.8 },
+    "Rubber": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 0.9 },
+    "Glass & Ceramics": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 0.9 },
+    "Machinery": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 1.0 },
+    "Shipbuilding": { valuation: 1.1, stability: 0.8, dividend: 1.0, growth: 0.9 },
+    "Other Manufacturing": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 1.0 },
+    
+    // Utilities - income focused
+    "Electric Power": { valuation: 1.2, stability: 1.2, dividend: 1.3, growth: 0.7 },
+    "Gas": { valuation: 1.2, stability: 1.2, dividend: 1.3, growth: 0.7 },
+    
+    // Transport
+    "Railway & Bus": { valuation: 1.1, stability: 1.1, dividend: 1.1, growth: 0.9 },
+    "Land Transport": { valuation: 1.1, stability: 1.0, dividend: 1.0, growth: 0.9 },
+    "Marine Transport": { valuation: 1.1, stability: 0.8, dividend: 1.0, growth: 0.9 },
+    "Air Transport": { valuation: 1.0, stability: 0.7, dividend: 0.9, growth: 1.0 },
+    "Warehousing": { valuation: 1.1, stability: 1.0, dividend: 1.1, growth: 0.9 },
+    
+    // Real estate and construction
+    "Real Estate": { valuation: 1.2, stability: 0.9, dividend: 1.2, growth: 0.9 },
+    "Construction": { valuation: 1.1, stability: 0.8, dividend: 1.0, growth: 0.9 },
+    
+    // Others
+    "Trading Companies": { valuation: 1.1, stability: 0.9, dividend: 1.1, growth: 1.0 },
+    "Mining": { valuation: 1.2, stability: 0.7, dividend: 1.2, growth: 0.8 },
+    "Textiles & Apparel": { valuation: 1.1, stability: 0.9, dividend: 1.0, growth: 0.9 },
+    "Pulp & Paper": { valuation: 1.1, stability: 0.9, dividend: 1.1, growth: 0.8 }
   };
 
-  const sectorMultiplier = sectorMultipliers[sector] || {
-    valuation: 1.0,
-    stability: 1.0,
-    dividend: 1.0,
-  };
+  // Get sector multipliers or use defaults if sector not found
+  const sectorMultiplier = SECTOR_MULTIPLIERS[sector] || SECTOR_MULTIPLIERS.DEFAULT;
 
-  // --- Valuation
-  const peScore =
-    stock.peRatio > 0
-      ? Math.min(1, Math.max(0, (25 - stock.peRatio) / 25))
-      : 0.5;
-  const pbScore =
-    stock.pbRatio > 0 ? Math.min(1, Math.max(0, (3 - stock.pbRatio) / 3)) : 0.5;
-  const valuationScore = ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
-
+  // Helper functions for score calculations
+  const clamp = (value, min = 0, max = 1) => Math.min(Math.max(value, min), max);
   
-  const volatility = calculateHistoricalVolatility(stock.historicalData);
-  const normalizedVol = Math.min(volatility / 0.1, 1);
-  const stabilityScore = (1 - normalizedVol) * sectorMultiplier.stability;
+  const getValueWithDefault = (value, defaultValue = 0.5) => {
+    return value !== undefined && !isNaN(value) ? value : defaultValue;
+  };
 
-  // --- Dividend Benefit
-  const dividendYieldScore = Math.min(stock.dividendYield / 6, 1);
-  const dividendGrowthScore = stock.dividendGrowth5yr
-    ? Math.min(Math.max(stock.dividendGrowth5yr / 10, 0), 1)
-    : 0.5;
-  const dividendScore =
-    (dividendYieldScore * 0.7 + dividendGrowthScore * 0.3) *
-    sectorMultiplier.dividend;
-
-  // --- Historical Performance
-  const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
-  const position =
-    range > 0 ? (stock.currentPrice - stock.fiftyTwoWeekLow) / range : 0.5;
-  const historicalPerformance = position;
-
-  // --- Momentum Score
-  let momentumScore = 0;
-  if (stock.rsi14 !== undefined) {
-    momentumScore += Math.min(Math.max((stock.rsi14 - 30) / 40, 0), 1);
+  /**
+   * Calculate valuation score based on PE and PB ratios
+   */
+  function calculateValuationScore() {
+    const peRatio = getValueWithDefault(stock.peRatio);
+    const pbRatio = getValueWithDefault(stock.pbRatio);
+    
+    const peScore = peRatio > 0 
+      ? clamp((CONFIG.THRESHOLDS.maxPE - peRatio) / CONFIG.THRESHOLDS.maxPE) 
+      : 0.5;
+      
+    const pbScore = pbRatio > 0 
+      ? clamp((CONFIG.THRESHOLDS.maxPB - pbRatio) / CONFIG.THRESHOLDS.maxPB) 
+      : 0.5;
+    
+    return ((peScore + pbScore) / 2) * sectorMultiplier.valuation;
   }
-  if (stock.macd !== undefined && stock.macdSignal !== undefined) {
-    momentumScore += stock.macd > stock.macdSignal ? 0.3 : 0;
+
+  /**
+   * Calculate stability score based on historical volatility
+   */
+  function calculateStabilityScore() {
+    const volatility = calculateHistoricalVolatility(stock.historicalData);
+    const normalizedVol = clamp(volatility / CONFIG.THRESHOLDS.volatilityBase, 0, 1);
+    return (1 - normalizedVol) * sectorMultiplier.stability;
   }
-  if (stock.stochasticK !== undefined) {
-    momentumScore += Math.min(Math.max(stock.stochasticK / 100, 0), 1) * 0.3;
+
+  /**
+   * Calculate dividend benefit score based on yield and growth
+   */
+  function calculateDividendScore() {
+    const dividendYield = getValueWithDefault(stock.dividendYield, 0);
+    const dividendGrowth = getValueWithDefault(stock.dividendGrowth5yr);
+    
+    const yieldScore = clamp(dividendYield / CONFIG.THRESHOLDS.maxDividendYield);
+    const growthScore = clamp(dividendGrowth / CONFIG.THRESHOLDS.dividendGrowthCap);
+    
+    return (yieldScore * 0.7 + growthScore * 0.3) * sectorMultiplier.dividend;
   }
-  momentumScore = Math.min(momentumScore / 1.6, 1);
 
-  // --- Volatility Risk
-  let volatilityRiskScore = 1;
-  const atrRatio = stock.atr14 / stock.currentPrice;
-  if (atrRatio > 0.04) volatilityRiskScore -= 0.3;
-  else if (atrRatio > 0.02) volatilityRiskScore -= 0.15;
+  /**
+   * Calculate historical performance score based on 52-week range position
+   */
+  function calculateHistoricalPerformanceScore() {
+    const high = getValueWithDefault(stock.fiftyTwoWeekHigh);
+    const low = getValueWithDefault(stock.fiftyTwoWeekLow);
+    const current = getValueWithDefault(stock.currentPrice);
+    
+    const range = high - low;
+    const position = range > 0 ? (current - low) / range : 0.5;
+    
+    // Apply the growth multiplier to historical performance
+    return position * sectorMultiplier.growth;
+  }
 
-  if (
-    stock.currentPrice > stock.bollingerUpper ||
-    stock.currentPrice < stock.bollingerLower
-  )
-    volatilityRiskScore -= 0.1;
+  /**
+   * Calculate momentum score based on technical indicators
+   */
+  function calculateMomentumScore() {
+    let score = 0;
+    let divisor = 0;
+    
+    // RSI component
+    if (stock.rsi14 !== undefined) {
+      score += clamp((stock.rsi14 - 30) / 40) * 0.5;
+      divisor += 0.5;
+    }
+    
+    // MACD component
+    if (stock.macd !== undefined && stock.macdSignal !== undefined) {
+      score += (stock.macd > stock.macdSignal ? 0.3 : 0) * 0.3;
+      divisor += 0.3;
+    }
+    
+    // Stochastic component
+    if (stock.stochasticK !== undefined) {
+      score += clamp(stock.stochasticK / 100) * 0.2;
+      divisor += 0.2;
+    }
+    
+    return divisor > 0 ? clamp(score / divisor) : 0.5;
+  }
 
-  volatilityRiskScore = Math.max(volatilityRiskScore, 0.5);
+  /**
+   * Calculate volatility risk score based on ATR and Bollinger Bands
+   */
+  function calculateVolatilityRiskScore() {
+    let score = 1;
+    
+    // ATR component
+    if (stock.atr14 !== undefined && stock.currentPrice > 0) {
+      const atrRatio = stock.atr14 / stock.currentPrice;
+      if (atrRatio > CONFIG.THRESHOLDS.highATR) {
+        score -= 0.3;
+      } else if (atrRatio > CONFIG.THRESHOLDS.mediumATR) {
+        score -= 0.15;
+      }
+    }
+    
+    // Bollinger Band component
+    if (stock.bollingerUpper !== undefined && stock.bollingerLower !== undefined && 
+        stock.currentPrice !== undefined) {
+      if (stock.currentPrice > stock.bollingerUpper || 
+          stock.currentPrice < stock.bollingerLower) {
+        score -= 0.1;
+      }
+    }
+    
+    return clamp(score, 0.5);
+  }
 
-  // --- Final Weighted Score
+  /**
+   * Calculate historical volatility from price data
+   */
+  function calculateHistoricalVolatility(historicalData) {
+    if (!historicalData || !Array.isArray(historicalData) || historicalData.length < 2) {
+      return 0.15; // Default volatility if no data available
+    }
+    
+    try {
+      const prices = historicalData.map(d => d.close || d.price || 0);
+      const returns = [];
+      
+      for (let i = 1; i < prices.length; i++) {
+        if (prices[i-1] > 0) {
+          returns.push((prices[i] - prices[i-1]) / prices[i-1]);
+        }
+      }
+      
+      if (returns.length === 0) return 0.15;
+      
+      const meanReturn = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
+      const squaredDifferences = returns.map(ret => Math.pow(ret - meanReturn, 2));
+      const variance = squaredDifferences.reduce((sum, diff) => sum + diff, 0) / returns.length;
+      
+      return Math.sqrt(variance) * Math.sqrt(252); // Annualized volatility
+    } catch (e) {
+      console.error('Error calculating volatility:', e);
+      return 0.15;
+    }
+  }
+
+  // Calculate individual component scores
+  const valuationScore = calculateValuationScore();
+  const stabilityScore = calculateStabilityScore();
+  const dividendScore = calculateDividendScore();
+  const historicalPerformanceScore = calculateHistoricalPerformanceScore();
+  const momentumScore = calculateMomentumScore();
+  const volatilityRiskScore = calculateVolatilityRiskScore();
+
+  // Calculate final weighted score
   const rawScore =
-    valuationScore * weights.valuation +
-    stabilityScore * weights.marketStability +
-    dividendScore * weights.dividendBenefit +
-    historicalPerformance * weights.historicalPerformance +
-    momentumScore * weights.momentum +
-    volatilityRiskScore * weights.volatilityRisk;
+    valuationScore * CONFIG.WEIGHTS.valuation +
+    stabilityScore * CONFIG.WEIGHTS.marketStability +
+    dividendScore * CONFIG.WEIGHTS.dividendBenefit +
+    historicalPerformanceScore * CONFIG.WEIGHTS.historicalPerformance +
+    momentumScore * CONFIG.WEIGHTS.momentum +
+    volatilityRiskScore * CONFIG.WEIGHTS.volatilityRisk;
 
-  return Math.min(Math.max(rawScore, 0), 1);
+  // Return final clamped score
+  return clamp(rawScore);
 }
-
-
 
 /***********************************************
  * 4) FETCH SINGLE STOCK DATA
@@ -322,296 +496,766 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-function getTechnicalSummaryLabel(stock) {
+function getTechnicalScore(stock) {
+  // Extract only the properties we know are available
   const {
-    currentPrice,
-    movingAverage50d,
-    movingAverage200d,
-    rsi14,
-    macd,
-    macdSignal,
-    bollingerMid,
-    bollingerUpper,
-    stochasticK,
-    stochasticD,
-    atr14,
+    currentPrice = 0,
+    movingAverage50d = 0,
+    movingAverage200d = 0,
+    rsi14 = 50,
+    macd = 0,
+    macdSignal = 0,
+    bollingerMid = 0,
+    bollingerUpper = 0,
+    bollingerLower = 0,
+    stochasticK = 50,
+    stochasticD = 50,
+    atr14 = 0,
+    obv = 0,
   } = stock;
 
-  // Signal checks
-  const isBullishTrend = movingAverage50d > movingAverage200d;
-  const isBullishMACD = macd > macdSignal;
-  const isBullishStochastic = stochasticK > stochasticD;
-  const isStrongRSI = rsi14 >= 60;
-  const isModerateRSI = rsi14 >= 50 && rsi14 < 60;
-  const isStrongBB = currentPrice > bollingerUpper;
-  const isAboveMidBB = currentPrice > bollingerMid;
-  const isLowVolatility = atr14 <= currentPrice * 0.02;
+  // === TREND SIGNALS ===
+  const goldCross =
+    movingAverage50d > movingAverage200d &&
+    movingAverage50d - movingAverage200d < movingAverage50d * 0.05;
+  const deathCross =
+    movingAverage50d < movingAverage200d &&
+    movingAverage200d - movingAverage50d < movingAverage200d * 0.05;
+  const strongBullishTrend = movingAverage50d > movingAverage200d * 1.05;
+  const strongBearishTrend = movingAverage50d < movingAverage200d * 0.95;
+  const moderateBullishTrend =
+    movingAverage50d > movingAverage200d && !goldCross && !strongBullishTrend;
+  const moderateBearishTrend =
+    movingAverage50d < movingAverage200d && !deathCross && !strongBearishTrend;
 
-  // Weighted scoring system
+  // === MOMENTUM SIGNALS ===
+  // MACD
+  const isBullishMACD = macd > macdSignal;
+  const isBearishMACD = macd < macdSignal;
+  const macdCrossover = Math.abs(macd - macdSignal) < Math.abs(macd * 0.1);
+  const macdDivergence = Math.abs(macd - macdSignal) > Math.abs(macd * 0.25);
+
+  // RSI
+  const isOverbought = rsi14 >= 70;
+  const isOverboughtExtreme = rsi14 >= 80;
+  const isOversold = rsi14 <= 30;
+  const isOversoldExtreme = rsi14 <= 20;
+  const isBullishRSI = rsi14 >= 55 && rsi14 < 70;
+  const isBearishRSI = rsi14 <= 45 && rsi14 > 30;
+
+  // Stochastic
+  const isStochOverbought = stochasticK >= 80 && stochasticD >= 80;
+  const isStochOversold = stochasticK <= 20 && stochasticD <= 20;
+  const isBullishStochastic = stochasticK > stochasticD;
+  const isBearishStochastic = stochasticK < stochasticD;
+  const stochCrossover = Math.abs(stochasticK - stochasticD) < 5;
+
+  // === VOLATILITY AND PRICE ACTION ===
+  // Bollinger Bands
+  const isBullishBB = currentPrice > bollingerMid;
+  const isBearishBB = currentPrice < bollingerMid;
+  const isUpperBreakout = currentPrice > bollingerUpper;
+  const isLowerBreakout = currentPrice < bollingerLower;
+  const isNarrowBands =
+    bollingerUpper &&
+    bollingerLower &&
+    (bollingerUpper - bollingerLower) / bollingerMid < 0.05;
+  const isWideBands =
+    bollingerUpper &&
+    bollingerLower &&
+    (bollingerUpper - bollingerLower) / bollingerMid > 0.08;
+
+  // ATR (Volatility)
+  const isHighVolatility = atr14 >= currentPrice * 0.03;
+  const isVeryHighVolatility = atr14 >= currentPrice * 0.04;
+  const isLowVolatility = atr14 <= currentPrice * 0.015;
+  const isVeryLowVolatility = atr14 <= currentPrice * 0.01;
+
+  // === SCORING SYSTEM ===
+  // Base weights for different signal categories
   const weights = {
-    trend: 2,
-    macd: 1.5,
-    stochastic: 1,
-    rsi: 1.5,
-    bollinger: 1,
+    trend: 2.5,
+    momentum: 2.0,
+    volatility: 1.5,
+    special: 1.5,
   };
 
-  let score = 0;
+  // Initialize bullish and bearish scores
+  let bullishScore = 0;
+  let bearishScore = 0;
 
-  if (isBullishTrend) score += weights.trend;
-  if (isBullishMACD) score += weights.macd;
-  if (isBullishStochastic) score += weights.stochastic;
+  // === CALCULATE BULLISH SIGNALS ===
+  // Trend signals
+  if (strongBullishTrend) bullishScore += weights.trend * 1.2;
+  else if (moderateBullishTrend) bullishScore += weights.trend;
+  else if (goldCross) bullishScore += weights.special * 1.5;
 
-  if (isStrongRSI) {
-    score += weights.rsi;
-  } else if (isModerateRSI) {
-    score += weights.rsi * 0.5;
+  // Momentum signals
+  if (isBullishMACD) {
+    bullishScore += weights.momentum * 0.7;
+    if (macdDivergence) bullishScore += weights.momentum * 0.3;
+  } else if (macdCrossover && macd > 0) {
+    bullishScore += weights.special * 0.7;
   }
 
-  if (isStrongBB) {
-    score += weights.bollinger;
-  } else if (isAboveMidBB) {
-    score += weights.bollinger * 0.5;
+  if (isOversold) {
+    bullishScore += weights.special * 0.8;
+    if (isOversoldExtreme) bullishScore += weights.special * 0.4;
+  } else if (isBullishRSI) {
+    bullishScore += weights.momentum * 0.7;
   }
 
-  // Adjust for volatility
-  if (isLowVolatility && score >= 3) {
-    score += 0.5;
-  } else if (!isLowVolatility && score < 2) {
-    score -= 0.5;
+  if (isBullishStochastic) {
+    bullishScore += weights.momentum * 0.6;
+    if (isStochOversold && stochCrossover)
+      bullishScore += weights.special * 0.8;
   }
 
-  // 🎯 Improved Label Thresholds
-  if (score >= 6) return "Strong Bullish 📈";
-  if (score >= 4.5) return "Bullish Momentum 🟢";
-  if (score >= 3) return "Possible Reversal 🟡";
-  if (score >= 1.5) return "Neutral ⚪️";
-  if (score >= 0.5) return "Weak Signal 🟠";
-  return "Bearish 🟥";
+  // Volatility signals
+  if (isUpperBreakout) bullishScore += weights.volatility * 0.8;
+  else if (isBullishBB) bullishScore += weights.volatility * 0.6;
+
+  if (isNarrowBands && moderateBullishTrend)
+    bullishScore += weights.special * 0.7;
+
+  // === CALCULATE BEARISH SIGNALS ===
+  // Trend signals
+  if (strongBearishTrend) bearishScore += weights.trend * 1.2;
+  else if (moderateBearishTrend) bearishScore += weights.trend;
+  else if (deathCross) bearishScore += weights.special * 1.5;
+
+  // Momentum signals
+  if (isBearishMACD) {
+    bearishScore += weights.momentum * 0.7;
+    if (macdDivergence) bearishScore += weights.momentum * 0.3;
+  } else if (macdCrossover && macd < 0) {
+    bearishScore += weights.special * 0.7;
+  }
+
+  if (isOverbought) {
+    bearishScore += weights.special * 0.8;
+    if (isOverboughtExtreme) bearishScore += weights.special * 0.4;
+  } else if (isBearishRSI) {
+    bearishScore += weights.momentum * 0.7;
+  }
+
+  if (isBearishStochastic) {
+    bearishScore += weights.momentum * 0.6;
+    if (isStochOverbought && stochCrossover)
+      bearishScore += weights.special * 0.8;
+  }
+
+  // Volatility signals
+  if (isLowerBreakout) bearishScore += weights.volatility * 0.8;
+  else if (isBearishBB) bearishScore += weights.volatility * 0.6;
+
+  if (isNarrowBands && moderateBearishTrend)
+    bearishScore += weights.special * 0.7;
+
+  // === VOLATILITY ADJUSTMENTS ===
+  // Adjust scores based on volatility conditions
+  if (isVeryHighVolatility) {
+    bullishScore *= 1.1;
+    bearishScore *= 1.2;
+  } else if (isHighVolatility) {
+    bullishScore *= 1.05;
+    bearishScore *= 1.1;
+  } else if (isLowVolatility) {
+    bullishScore *= 0.95;
+    bearishScore *= 0.95;
+  } else if (isVeryLowVolatility) {
+    bullishScore *= 0.9;
+    bearishScore *= 0.9;
+  }
+
+  // === NET SCORE ===
+  // Calculate net score (bullish - bearish)
+  const netScore = bullishScore - bearishScore;
+
+  // Return just the score, rounded to one decimal place
+  return Math.round(netScore * 10) / 10;
 }
 
 
-
-
-
-
-function getAdvancedFundamentalRating(stock) {
+function getAdvancedFundamentalScore(stock) {
+  const sector = stock.sector;
+  // Extract metrics safely with defaults
   const {
-    epsGrowthRate,
-    epsForward,
-    epsTrailingTwelveMonths,
-    dividendYield,
-    dividendGrowth5yr,
-    debtEquityRatio,
+    // Growth metrics
+    epsGrowthRate = 0,
+    epsForward = 0,
+    epsTrailingTwelveMonths = 0,
+
+    // Value metrics
+    peRatio = 0,
+    pbRatio = 0,
+
+    // Financial health metrics
+    debtEquityRatio = 1,
+
+    // Dividend metrics
+    dividendYield = 0,
+    dividendGrowth5yr = 0,
+
+    // Price data
+    currentPrice = 0,
+    marketCap = 0,
   } = stock;
 
-  let score = 0;
+  // Initialize scores
+  let growthScore = 0;
+  let valueScore = 0;
+  let financialHealthScore = 0;
+  let dividendScore = 0;
+  let totalScore = 0;
+
+  // Track key characteristics
   let isStrongGrowth = false;
+  let isStrongValue = false;
   let isStrongDividend = false;
+  let isStrongBalance = false;
 
-  // 📈 Earnings Growth (more nuanced)
-  if (epsGrowthRate >= 20 && epsForward > epsTrailingTwelveMonths) {
-    score += 2.5;
+  // Industry-specific adjustments (simplified)
+  const isHighGrowthSector =
+    sector &&
+    (sector.includes("Technology") ||
+      sector.includes("Communications") ||
+      sector.includes("Pharmaceutical") ||
+      sector.includes("Electric Machinery"));
+
+  const isDividendFocusSector =
+    sector &&
+    (sector.includes("Utilities") ||
+      sector.includes("Electric Power") ||
+      sector.includes("Gas") ||
+      sector.includes("Banking") ||
+      sector.includes("Insurance") ||
+      sector.includes("Real Estate"));
+
+  // === GROWTH SCORE ===
+  // EPS Growth Rate
+  if (epsGrowthRate >= 20) {
+    growthScore += 3;
     isStrongGrowth = true;
-  } else if (epsGrowthRate >= 10 && epsForward > epsTrailingTwelveMonths) {
-    score += 1.5;
+  } else if (epsGrowthRate >= 10) {
+    growthScore += 2;
     isStrongGrowth = true;
-  } else if (epsGrowthRate >= 1) {
-    score += 1;
+  } else if (epsGrowthRate >= 5) {
+    growthScore += 1;
   } else if (epsGrowthRate < 0) {
-    score -= 2;
+    growthScore -= 2;
   }
 
-  // 💵 Dividend Yield (enhanced)
-  if (dividendYield >= 6) {
-    score += 2.5;
-    isStrongDividend = true;
-  } else if (dividendYield >= 4) {
-    score += 2;
-    isStrongDividend = true;
-  } else if (dividendYield >= 2) {
-    score += 1;
-  } else if (dividendYield === 0) {
-    score -= 1;
+  // Forward vs Trailing EPS
+  if (epsForward > epsTrailingTwelveMonths * 1.2) {
+    growthScore += 2;
+    isStrongGrowth = true;
+  } else if (epsForward > epsTrailingTwelveMonths * 1.05) {
+    growthScore += 1;
+  } else if (epsForward < epsTrailingTwelveMonths * 0.95) {
+    growthScore -= 1;
   }
 
-  // 📈 Dividend Growth
-  if (dividendGrowth5yr >= 5) {
-    score += 1;
-    isStrongDividend = true;
-  } else if (dividendGrowth5yr < 0) {
-    score -= 1;
+  // Normalize growth score (0-10)
+  growthScore = Math.max(0, Math.min(10, growthScore * 2));
+
+  // === VALUE SCORE ===
+  // P/E Ratio (lower is better for value)
+  if (peRatio > 0 && peRatio < 10) {
+    valueScore += 3;
+    isStrongValue = true;
+  } else if (peRatio > 0 && peRatio < 15) {
+    valueScore += 2;
+    isStrongValue = true;
+  } else if (peRatio > 0 && peRatio < 20) {
+    valueScore += 1;
+  } else if (peRatio > 30) {
+    valueScore -= 1;
+  } else if (peRatio <= 0) {
+    valueScore -= 1; // Negative earnings
   }
 
-  // 🧾 Debt (enhanced penalty/reward)
+  // Adjust for high growth sectors
+  if (isHighGrowthSector && peRatio > 0 && peRatio < 25) {
+    valueScore += 1;
+  }
+
+  // P/B Ratio (lower is better for value)
+  if (pbRatio > 0 && pbRatio < 1) {
+    valueScore += 3;
+    isStrongValue = true;
+  } else if (pbRatio > 0 && pbRatio < 2) {
+    valueScore += 2;
+  } else if (pbRatio > 0 && pbRatio < 3) {
+    valueScore += 1;
+  } else if (pbRatio > 5) {
+    valueScore -= 1;
+  }
+
+  // Normalize value score (0-10)
+  valueScore = Math.max(0, Math.min(10, valueScore * 1.67));
+
+  // === FINANCIAL HEALTH SCORE ===
+  // Debt-to-Equity Ratio
   if (debtEquityRatio < 0.25) {
-    score += 1.5;
+    financialHealthScore += 3;
+    isStrongBalance = true;
   } else if (debtEquityRatio < 0.5) {
-    score += 1;
+    financialHealthScore += 2;
+    isStrongBalance = true;
+  } else if (debtEquityRatio < 1.0) {
+    financialHealthScore += 1;
   } else if (debtEquityRatio > 2.0) {
-    score -= 2;
-  } else if (debtEquityRatio > 1.0) {
-    score -= 1;
+    financialHealthScore -= 2;
+  } else if (debtEquityRatio > 1.5) {
+    financialHealthScore -= 1;
   }
 
-  // 🏷️ Final Classification (adjusted)
-  if (score >= 6 && isStrongGrowth && isStrongDividend)
-    return "🟢 Excellent Fundamentals 💎";
-  if (score >= 5 && isStrongGrowth) return "🟡 Solid Growth 📈";
-  if (score >= 5 && isStrongDividend) return "🟩 Strong Dividend Stock 💵";
-  if (score >= 3 && !isStrongGrowth && isStrongDividend)
-    return "🟧 Value Play (Low Growth) 🧱";
-  if (score >= 1) return "⚪ Neutral Fundamentals 🤔";
-  if (score >= -1) return "🟠 Watchlist Stock 🧐";
+  // Adjust for sector (financial sectors typically have higher debt)
+  if (
+    sector &&
+    (sector.includes("Banking") ||
+      sector.includes("Financial") ||
+      sector.includes("Insurance")) &&
+    debtEquityRatio < 1.5
+  ) {
+    financialHealthScore += 1;
+  }
 
-  return "🔴 Weak Fundamentals ⚠️";
+  // Normalize financial health score (0-10)
+  financialHealthScore = Math.max(
+    0,
+    Math.min(10, (financialHealthScore + 2) * 2)
+  );
+
+  // === DIVIDEND SCORE ===
+  // Skip dividend evaluation if no dividend
+  if (dividendYield === 0) {
+    dividendScore = 0;
+  } else {
+    // Dividend Yield
+    if (dividendYield >= 6) {
+      dividendScore += 3;
+      isStrongDividend = true;
+    } else if (dividendYield >= 4) {
+      dividendScore += 2;
+      isStrongDividend = true;
+    } else if (dividendYield >= 2) {
+      dividendScore += 1;
+    }
+
+    // Dividend Growth
+    if (dividendGrowth5yr >= 10) {
+      dividendScore += 2;
+      isStrongDividend = true;
+    } else if (dividendGrowth5yr >= 5) {
+      dividendScore += 1;
+    } else if (dividendGrowth5yr < 0) {
+      dividendScore -= 1;
+    }
+
+    // Normalize dividend score (0-10)
+    dividendScore = Math.max(0, Math.min(10, dividendScore * 2));
+  }
+
+  // === CALCULATE TOTAL SCORE ===
+  // Set weights based on sector type
+  let weights = {
+    growth: 0.35,
+    value: 0.3,
+    financialHealth: 0.25,
+    dividend: 0.1,
+  };
+
+  // Adjust weights for dividend-focused sectors
+  if (isDividendFocusSector) {
+    weights = {
+      growth: 0.2,
+      value: 0.3,
+      financialHealth: 0.25,
+      dividend: 0.25,
+    };
+  }
+
+  // Adjust weights for high-growth sectors
+  if (isHighGrowthSector) {
+    weights = {
+      growth: 0.45,
+      value: 0.2,
+      financialHealth: 0.25,
+      dividend: 0.1,
+    };
+  }
+
+  // Calculate final score
+  totalScore =
+    growthScore * weights.growth +
+    valueScore * weights.value +
+    financialHealthScore * weights.financialHealth +
+    dividendScore * weights.dividend;
+
+  // Round to one decimal place and return just the score
+  return Math.round(totalScore * 10) / 10;
 }
 
 
 
 
 
-function getEntryTimingLabel(stock) {
+
+function getValuationScore(stock) {
+  const sector = stock.sector;
+
   const {
-    currentPrice,
-    openPrice,
-    highPrice,
-    lowPrice,
-    prevClosePrice,
-    fiftyTwoWeekHigh,
-    fiftyTwoWeekLow,
+    peRatio = 0,
+    pbRatio = 0,
+    marketCap = 0,
+    priceToSales = 0,
+    epsGrowthRate = 0,
+    dividendYield = 0,
   } = stock;
 
-  const dailyRange = highPrice - lowPrice;
-  const isVolatile = dailyRange > currentPrice * 0.05;
-  const nearHigh = currentPrice >= fiftyTwoWeekHigh * 0.98;
-  const nearLow = currentPrice <= fiftyTwoWeekLow * 1.02;
-  const strongClose = currentPrice > openPrice && currentPrice > prevClosePrice;
-  const weakClose = currentPrice < openPrice && currentPrice < prevClosePrice;
+  // Determine sector category for adjusted valuation metrics
+  const isHighGrowthSector =
+    sector &&
+    (sector.includes("Technology") ||
+      sector.includes("Communications") ||
+      sector.includes("Pharmaceutical") ||
+      sector.includes("Electric Machinery"));
 
-  let score = 0;
+  const isValueSector =
+    sector &&
+    (sector.includes("Bank") ||
+      sector.includes("Insurance") ||
+      sector.includes("Utilities") ||
+      sector.includes("Real Estate"));
 
-  // ✅ Positive factors
-  if (strongClose) score += 2;
-  if (nearHigh) score += 1.5;
-  if (!isVolatile) score += 1;
-  if (isVolatile && strongClose) score += 0.5;
+  // Adjust thresholds based on sector
+  const peThresholds = isHighGrowthSector
+    ? [0, 25, 40, 60] // [very low, low, fair, high] for growth sectors
+    : isValueSector
+    ? [0, 8, 15, 20] // for value sectors
+    : [0, 10, 18, 30]; // default
 
-  // ⚠️ Caution signs
-  if (nearLow) score -= 0.5;
-  if (weakClose) score -= 1;
-  if (isVolatile && weakClose) score -= 1;
+  const pbThresholds = isHighGrowthSector
+    ? [0, 2, 4, 6]
+    : isValueSector
+    ? [0, 0.8, 1.5, 2.5]
+    : [0, 1, 2.5, 4];
 
-  // 🏷️ Adjusted Labels
-  if (score >= 4.5) return "📈 Breakout – Good Entry Zone";
-  if (score >= 3.5) return "🟢 Rebound Setup – Potential Entry";
-  if (score >= 2.5) return "✅ Stable Strength – Worth Watching";
-  if (score >= 1.5) return "⚪ Sideways / Neutral";
-  if (score >= 0) return "⚠️ Weak Close – Wait for Confirmation";
-  if (score >= -2) return "🔴 Volatile & Weak – Avoid Entry";
-  return "🚫 High Risk – Volatile & Weak";
+  // Initialize score components
+  let peScore = 0;
+  let pbScore = 0;
+  let psScore = 0;
+  let marketCapScore = 0;
+  let growthAdjustment = 0;
+  let yieldBonus = 0;
+
+  // Calculate PE Score
+  if (peRatio <= 0) {
+    peScore = -2; // Negative earnings
+  } else if (peRatio <= peThresholds[1]) {
+    peScore = 2; // Very low PE
+  } else if (peRatio <= peThresholds[2]) {
+    peScore = 1; // Low PE
+  } else if (peRatio <= peThresholds[3]) {
+    peScore = -1; // High PE
+  } else {
+    peScore = -2; // Very high PE
+  }
+
+  // Calculate PB Score
+  if (pbRatio <= 0) {
+    pbScore = -1; // Negative book value
+  } else if (pbRatio < pbThresholds[1]) {
+    pbScore = 2; // Very low PB
+  } else if (pbRatio <= pbThresholds[2]) {
+    pbScore = 1; // Low PB
+  } else if (pbRatio <= pbThresholds[3]) {
+    pbScore = 0; // Fair PB
+  } else {
+    pbScore = -1; // High PB
+  }
+
+  // P/S ratio evaluation if available
+  if (priceToSales > 0) {
+    if (isHighGrowthSector) {
+      if (priceToSales < 3) psScore = 1;
+      else if (priceToSales > 10) psScore = -1;
+    } else {
+      if (priceToSales < 1) psScore = 1;
+      else if (priceToSales > 3) psScore = -1;
+    }
+  }
+
+  // Market Cap evaluation
+  if (marketCap >= 1_000_000_000_000) {
+    // Trillion dollar
+    marketCapScore = 0.5; // Large stable company
+  } else if (marketCap >= 100_000_000_000) {
+    // 100B+
+    marketCapScore = 0.3;
+  } else if (marketCap >= 10_000_000_000) {
+    // 10B+
+    marketCapScore = 0;
+  } else if (marketCap >= 2_000_000_000) {
+    // 2B+
+    marketCapScore = -0.1;
+  } else {
+    marketCapScore = -0.3; // Small cap risk
+  }
+
+  // Growth adjustment - high growth can justify higher valuations
+  if (epsGrowthRate >= 25) {
+    growthAdjustment = 1;
+  } else if (epsGrowthRate >= 15) {
+    growthAdjustment = 0.5;
+  } else if (epsGrowthRate <= -10) {
+    growthAdjustment = -1;
+  } else if (epsGrowthRate < 0) {
+    growthAdjustment = -0.5;
+  }
+
+  // Dividend yield can add value for income investors
+  if (dividendYield >= 4) {
+    yieldBonus = 0.5;
+  } else if (dividendYield >= 2) {
+    yieldBonus = 0.3;
+  }
+
+  // Calculate total score with weights
+  const totalScore =
+    peScore * 1.5 + // PE has highest weight
+    pbScore * 1.2 + // PB has second highest
+    psScore * 0.8 + // PS has medium weight
+    marketCapScore + // Market cap has low weight
+    growthAdjustment + // Growth adjustment
+    yieldBonus; // Dividend bonus
+
+  // Return rounded score
+  return Math.round(totalScore * 10) / 10;
 }
-
-
-
-
-
-
-
-
-
-function getValuationSummary(stock) {
-  const { peRatio, pbRatio, marketCap } = stock;
-  let score = 0;
-
-  // 🧮 P/E Ratio
-  if (peRatio > 0 && peRatio <= 10) score += 2;
-  else if (peRatio > 10 && peRatio <= 18) score += 1;
-  else if (peRatio > 30) score -= 2;
-  else if (peRatio > 18 && peRatio <= 30) score -= 1;
-
-  // 📘 P/B Ratio
-  if (pbRatio > 0 && pbRatio < 1) score += 2;
-  else if (pbRatio >= 1 && pbRatio <= 2.5) score += 1;
-  else if (pbRatio < 0.5 || pbRatio > 4) score -= 1;
-
-  // 💰 Market Cap
-  if (marketCap >= 1_000_000_000_000) score += 0.5;
-  else if (marketCap < 100_000_000_000) score -= 0.5;
-
-  // 🏷️ Final Label
-  if (score >= 5.5) return "💰 Exceptional Value";
-  if (score >= 4) return "💎 Deep Value";
-  if (score >= 2.5) return "📉 Undervalued";
-  if (score >= 1) return "⚖️ Fairly Priced";
-  if (score >= 0) return "🟡 Slightly Overvalued";
-  if (score >= -1.5) return "🔴 Overvalued";
-  return "🚫 Highly Overvalued";
-}
-
-const TECHNICAL_SCORES = {
-  "Strong Bullish 📈": 3,
-  "Bullish Momentum 🟢": 2.5,
-  "Possible Reversal 🟡": 2,
-  "Neutral ⚪️": 1.5,
-  "Weak Signal 🟠": 1,
-  "Bearish 🟥": 0,
-};
-
-const FUNDAMENTAL_SCORES = {
-  "🟢 Excellent Fundamentals 💎": 3,
-  "🟡 Solid Growth 📈": 2.5,
-  "🟩 Strong Dividend Stock 💵": 2.5,
-  "🟧 Value Play (Low Growth) 🧱": 1.5,
-  "⚪ Neutral Fundamentals 🤔": 1,
-  "🟠 Watchlist Stock 🧐": 0.5,
-  "🔴 Weak Fundamentals ⚠️": 0,
-};
-
-const VALUATION_SCORES = {
-  "💰 Exceptional Value": 3,
-  "💎 Deep Value": 2.5,
-  "📉 Undervalued": 2,
-  "⚖️ Fairly Priced": 1.5,
-  "🟡 Slightly Overvalued": 1,
-  "🔴 Overvalued": 0.5,
-  "🚫 Highly Overvalued": 0,
-};
-
-const TIER_LABELS = {
-  1: "🟩 TIER 1: Dream Stock",
-  2: "🟢 TIER 2: Elite Opportunity",
-  3: "🟨 TIER 3: Solid Pick",
-  4: "🟠 TIER 4: Speculative Watch",
-  5: "🔴 TIER 5: Risky",
-  6: "🚫 TIER 6: Red Flag",
-};
 
 
 
 function getNumericTier(stock) {
-  const tScore = TECHNICAL_SCORES[stock.technicalSummary] ?? 0;
-  const fScore = FUNDAMENTAL_SCORES[stock.fundamentalSummary] ?? 0;
-  const vScore = VALUATION_SCORES[stock.valuationSummary] ?? 0;
+  // Extract numerical scores directly
+  const technicalScore = stock.technicalScore || 0;
+  const fundamentalScore = stock.fundamentalScore || 0;
+  const valuationScore = stock.valuationScore || 0;
 
-  const total = tScore + fScore + vScore;
+  // Apply contextual rules for tier adjustment
+  let adjustedScore = technicalScore + fundamentalScore + valuationScore;
 
-  if (total >= 8) return 1; // TIER 1: Dream
-  if (total >= 6.5) return 2; // TIER 2: Elite
-  if (total >= 5) return 3; // TIER 3: Solid
-  if (total >= 3.5) return 4; // TIER 4: Speculative
-  if (total >= 2) return 5; // TIER 5: Risky
+  // Special case: Great fundamentals but terrible valuation
+  if (fundamentalScore >= 7.5 && valuationScore <= -2) {
+    adjustedScore -= 0.5; // Penalize overvalued good companies
+  }
+
+  // Special case: Great valuation but terrible fundamentals
+  if (valuationScore >= 3.5 && fundamentalScore <= 3) {
+    adjustedScore -= 0.5; // Value trap warning
+  }
+
+  // Special case: Excellent technical setup with good fundamentals
+  if (technicalScore >= 3.5 && fundamentalScore >= 7) {
+    adjustedScore += 0.5; // Bonus for alignment
+  }
+
+  // Assign tier based on adjusted total score
+  if (adjustedScore >= 8) return 1; // TIER 1: Dream
+  if (adjustedScore >= 6.5) return 2; // TIER 2: Elite
+  if (adjustedScore >= 5) return 3; // TIER 3: Solid
+  if (adjustedScore >= 3.5) return 4; // TIER 4: Speculative
+  if (adjustedScore >= 2) return 5; // TIER 5: Risky
   return 6; // TIER 6: Red Flag
 }
 
 
 
 
+function getEntryTimingLabel(stock) {
+  // Extract properties with default values
+  const {
+    currentPrice = 0,
+    openPrice = 0,
+    highPrice = 0,
+    lowPrice = 0,
+    prevClosePrice = 0,
+    fiftyTwoWeekHigh = 0,
+    fiftyTwoWeekLow = 0,
+    movingAverage50d = 0,
+    movingAverage200d = 0,
+    atr14 = 0,
+  } = stock;
 
+  // Calculate basic metrics
+  const dailyRange = highPrice - lowPrice;
+  const percentRange = currentPrice > 0 ? (dailyRange / currentPrice) * 100 : 0;
+  const percentFromHigh =
+    fiftyTwoWeekHigh > 0
+      ? ((fiftyTwoWeekHigh - currentPrice) / fiftyTwoWeekHigh) * 100
+      : 0;
+  const percentFromLow =
+    fiftyTwoWeekLow > 0
+      ? ((currentPrice - fiftyTwoWeekLow) / fiftyTwoWeekLow) * 100
+      : 0;
+  const distanceFrom50d =
+    movingAverage50d > 0
+      ? ((currentPrice - movingAverage50d) / movingAverage50d) * 100
+      : 0;
 
+  // Pattern detection
+  const isVolatile =
+    percentRange > 5 || (atr14 > 0 && atr14 > currentPrice * 0.03);
+  const isExtremeLowVolatility = percentRange < 1.5;
+  const nearHigh = percentFromHigh <= 2;
+  const veryNearHigh = percentFromHigh <= 1;
+  const atAllTimeHigh = currentPrice >= fiftyTwoWeekHigh;
+  const nearLow = percentFromLow <= 2;
+  const veryNearLow = percentFromLow <= 1;
+  const atAllTimeLow = currentPrice <= fiftyTwoWeekLow;
 
+  // Candlestick patterns
+  const strongClose =
+    currentPrice > openPrice &&
+    currentPrice > prevClosePrice &&
+    currentPrice - Math.min(openPrice, prevClosePrice) >
+      (highPrice - currentPrice) * 2;
+  const veryStrongClose =
+    strongClose && currentPrice > highPrice - (highPrice - lowPrice) * 0.2;
+  const weakClose =
+    currentPrice < openPrice &&
+    currentPrice < prevClosePrice &&
+    Math.max(openPrice, prevClosePrice) - currentPrice >
+      (currentPrice - lowPrice) * 2;
+  const veryWeakClose =
+    weakClose && currentPrice < lowPrice + (highPrice - lowPrice) * 0.2;
+  const bullishReversal =
+    currentPrice > openPrice &&
+    openPrice < prevClosePrice &&
+    currentPrice > prevClosePrice;
+  const bearishReversal =
+    currentPrice < openPrice &&
+    openPrice > prevClosePrice &&
+    currentPrice < prevClosePrice;
+  const doji =
+    Math.abs(currentPrice - openPrice) < (highPrice - lowPrice) * 0.1;
 
+  // Moving average relationship
+  const aboveMA50 = currentPrice > movingAverage50d;
+  const aboveMA200 = currentPrice > movingAverage200d;
+  const nearMA50 = Math.abs(distanceFrom50d) < 1;
+  const aboveBothMAs = aboveMA50 && aboveMA200;
+  const belowBothMAs = !aboveMA50 && !aboveMA200;
 
+  // Compute weighted entry score
+  let score = 0;
+
+  // ✅ Bullish signals (positive score)
+  if (veryStrongClose) score += 3;
+  else if (strongClose) score += 2;
+
+  if (bullishReversal) score += 1.5;
+
+  if (atAllTimeHigh) score += 2;
+  else if (veryNearHigh) score += 1.5;
+  else if (nearHigh) score += 1;
+
+  if (aboveBothMAs) score += 1.5;
+  else if (aboveMA50 && nearMA50) score += 1;
+
+  if (nearMA50 && bullishReversal) score += 0.5;
+
+  // Volatility impacts
+  if (!isVolatile && strongClose) score += 1;
+  if (isExtremeLowVolatility && currentPrice > prevClosePrice) score -= 0.5; // Too quiet
+
+  // ⚠️ Bearish signals (negative score)
+  if (veryWeakClose) score -= 3;
+  else if (weakClose) score -= 2;
+
+  if (bearishReversal) score -= 1.5;
+
+  if (atAllTimeLow) score -= 2;
+  else if (veryNearLow) score -= 1.5;
+  else if (nearLow) score -= 1;
+
+  if (belowBothMAs) score -= 1.5;
+
+  if (isVolatile && weakClose) score -= 1;
+
+  // Special case for doji at key levels
+  if (doji) {
+    if (nearHigh || nearLow) {
+      score += 0; // Neutral impact - waiting for next move
+    } else if (aboveBothMAs) {
+      score += 0.5; // Slight positive in uptrend
+    } else if (belowBothMAs) {
+      score -= 0.5; // Slight negative in downtrend
+    }
+  }
+
+  // Format score for display
+  const roundedScore = Math.round(score * 10) / 10;
+
+  // 🏷️ Generate final label based on score and conditions
+  if (score >= 5) {
+    return `📈 Strong Breakout (${roundedScore}) - Excellent Entry`;
+  }
+
+  if (score >= 4) {
+    if (atAllTimeHigh) {
+      return `🚀 New High Momentum (${roundedScore}) - Good Entry`;
+    }
+    return `📈 Breakout (${roundedScore}) - Good Entry Zone`;
+  }
+
+  if (score >= 3) {
+    if (bullishReversal) {
+      return `🔄 Bullish Reversal (${roundedScore}) - Potential Entry`;
+    }
+    return `🟢 Strong Setup (${roundedScore}) - Potential Entry`;
+  }
+
+  if (score >= 2) {
+    if (aboveBothMAs) {
+      return `✅ Uptrend Pullback (${roundedScore}) - Watch Closely`;
+    }
+    return `✅ Positive Action (${roundedScore}) - Worth Watching`;
+  }
+
+  if (score >= 0.5) {
+    if (doji && aboveBothMAs) {
+      return `⏸️ Uptrend Pause (${roundedScore}) - Monitor Closely`;
+    }
+    return `⚪ Moderately Positive (${roundedScore}) - Wait for Strength`;
+  }
+
+  if (score > -0.5 && score < 0.5) {
+    if (doji) {
+      return `⏺️ Indecision (${roundedScore}) - Neutral Pattern`;
+    }
+    return `⚪ Sideways / Neutral (${roundedScore})`;
+  }
+
+  if (score >= -2) {
+    return `⚠️ Weakness Detected (${roundedScore}) - Wait for Confirmation`;
+  }
+
+  if (score >= -3.5) {
+    if (bearishReversal) {
+      return `📉 Bearish Reversal (${roundedScore}) - Avoid Entry`;
+    }
+    return `🔴 Significant Weakness (${roundedScore}) - Avoid Entry`;
+  }
+
+  if (score >= -5) {
+    return `🚫 Strong Downside Action (${roundedScore}) - High Risk`;
+  }
+
+  return `⛔ Extreme Weakness (${roundedScore}) - Very High Risk`;
+}
 
 
 
@@ -861,18 +1505,17 @@ window.scan = {
     }
 
     const { code, sector, yahooData } = result.data;
-    console.log("yahoo data:", yahooData)
+    console.log("yahoo data:", yahooData);
     if (
       !yahooData ||
       !yahooData.currentPrice ||
       !yahooData.highPrice ||
       !yahooData.lowPrice
     ) {
-      console.error(
-        `Incomplete Yahoo data for ${code}. Aborting calculation.`
-      );
+      console.error(`Incomplete Yahoo data for ${code}. Aborting calculation.`);
       throw new Error("Critical Yahoo data is missing.");
     }
+
 
     // 2) Build stock object
     const stock = {
@@ -910,115 +1553,114 @@ window.scan = {
       atr14: yahooData.atr14,
     };
 
+    const historicalData = await fetchHistoricalData(stock.ticker);
+    stock.historicalData = historicalData || [];
 
+    // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+    console.log(`Analyzing stock: ${stock.ticker}`);
+    const prediction = await analyzeStock(stock.ticker, historicalData);
+    if (prediction == null) {
+      console.error(
+        `Failed to generate prediction for ${stock.ticker}. Aborting.`
+      );
+      throw new Error("Failed to generate prediction.");
+    }
+    stock.prediction = prediction;
 
-        const historicalData = await fetchHistoricalData(stock.ticker);
-        stock.historicalData = historicalData || [];
+    // 5) Calculate Stop Loss & Target
+    const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+      stock,
+      prediction
+    );
+    if (stopLoss === null || targetPrice === null) {
+      console.error(
+        `Failed to calculate stop loss or target price for ${stock.ticker}.`
+      );
+      throw new Error("Stop loss or target price calculation failed.");
+    }
+    stock.stopLoss = stopLoss;
+    stock.targetPrice = targetPrice;
 
-        // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
-        console.log(`Analyzing stock: ${stock.ticker}`);
-        const prediction = await analyzeStock(stock.ticker, historicalData);
-        if (prediction == null) {
-          console.error(
-            `Failed to generate prediction for ${stock.ticker}. Aborting.`
-          );
-          throw new Error("Failed to generate prediction.");
-        }
-        stock.prediction = prediction;
+    // 7) Compute growth potential
+    const growthPotential =
+      ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
 
-        // 5) Calculate Stop Loss & Target
-        const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-          stock,
-          prediction
-        );
-          if (stopLoss === null || targetPrice === null) {
-            console.error(
-              `Failed to calculate stop loss or target price for ${stock.ticker}.`
-            );
-            throw new Error("Stop loss or target price calculation failed.");
-          }
-          stock.stopLoss = stopLoss;
-          stock.targetPrice = targetPrice;
+    // 8) Compute fundamental/technical score
+    stock.score = computeScore(stock, stock.sector);
 
-          // 7) Compute growth potential
-          const growthPotential =
-            ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
-            100;
+    // 9) Combine them => finalScore
+    const weights = { metrics: 0.7, growth: 0.3 };
+    const finalScore =
+      weights.metrics * stock.score + weights.growth * (growthPotential / 100);
 
-          // 8) Compute fundamental/technical score
-          stock.score = computeScore(stock, stock.sector);
+    stock.prediction = prediction;
+    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+    stock.finalScore = parseFloat(finalScore.toFixed(2));
+    stock.technicalScore = getTechnicalScore(stock);
+    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+    stock.valuationScore = getValuationScore(stock);
+    stock.entryTimingLabel = getEntryTimingLabel(stock);
+    stock.tier = getNumericTier(stock);
 
-          // 9) Combine them => finalScore
-          const weights = { metrics: 0.7, growth: 0.3 };
-          const finalScore =
-            weights.metrics * stock.score +
-            weights.growth * (growthPotential / 100);
+    // 10) Send data in Bubble key format
+ const stockObject = {
+   _api_c2_ticker: stock.ticker,
+   _api_c2_sector: stock.sector,
+   _api_c2_currentPrice: stock.currentPrice,
+   _api_c2_entryTimingLabel: stock.entryTimingLabel,
+   _api_c2_prediction: stock.prediction,
+   _api_c2_stopLoss: stock.stopLoss,
+   _api_c2_targetPrice: stock.targetPrice,
+   _api_c2_growthPotential: stock.growthPotential,
+   _api_c2_score: stock.score,
+   _api_c2_finalScore: stock.finalScore,
+   _api_c2_tier: stock.tier,
 
-          stock.prediction = prediction;
-          stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-          stock.finalScore = parseFloat(finalScore.toFixed(2));
-          stock.technicalSummary = getTechnicalSummaryLabel(stock);
-          stock.fundamentalSummary = getAdvancedFundamentalRating(stock);
-          stock.valuationSummary= getValuationSummary(stock);
-          stock.entryTimingLabel = getEntryTimingLabel(stock);
-          const tierNum = getNumericTier(stock);
-          stock.tier = TIER_LABELS[tierNum];
+   // Add complete stock data as JSON
+   _api_c2_otherData: JSON.stringify({
+     // Price data
+     highPrice: stock.highPrice,
+     lowPrice: stock.lowPrice,
+     openPrice: stock.openPrice,
+     prevClosePrice: stock.prevClosePrice,
 
+     // Fundamental metrics
+     marketCap: stock.marketCap,
+     peRatio: stock.peRatio,
+     pbRatio: stock.pbRatio,
+     dividendYield: stock.dividendYield,
+     dividendGrowth5yr: stock.dividendGrowth5yr,
+     fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+     fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+     epsForward: stock.epsForward,
+     epsGrowthRate: stock.epsGrowthRate,
+     debtEquityRatio: stock.debtEquityRatio,
 
+     // Technical indicators
+     movingAverage50d: stock.movingAverage50d,
+     movingAverage200d: stock.movingAverage200d,
+     rsi14: stock.rsi14,
+     macd: stock.macd,
+     macdSignal: stock.macdSignal,
+     bollingerMid: stock.bollingerMid,
+     bollingerUpper: stock.bollingerUpper,
+     bollingerLower: stock.bollingerLower,
+     stochasticK: stock.stochasticK,
+     stochasticD: stock.stochasticD,
+     obv: stock.obv,
+     atr14: stock.atr14,
 
-          // 10) Send data in Bubble key format
-         const stockObject = {
-           _api_c2_ticker: stock.ticker,
-           _api_c2_sector: stock.sector,
-           _api_c2_currentPrice: stock.currentPrice,
-           _api_c2_highPrice: stock.highPrice,
-           _api_c2_lowPrice: stock.lowPrice,
-           _api_c2_openPrice: stock.openPrice,
-           _api_c2_prevClosePrice: stock.prevClosePrice,
-           _api_c2_entryTimingLabel: stock.entryTimingLabel,
-           _api_c2_marketCap: stock.marketCap,
-           _api_c2_peRatio: stock.peRatio,
-           _api_c2_pbRatio: stock.pbRatio,
-           _api_c2_dividendYield: stock.dividendYield,
-           _api_c2_dividendGrowth5yr: stock.dividendGrowth5yr,
-           _api_c2_fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-           _api_c2_fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-           _api_c2_epsTrailing: stock.epsTrailingTwelveMonths,
-           _api_c2_epsForward: stock.epsForward,
-           _api_c2_epsGrowthRate: stock.epsGrowthRate,
-           _api_c2_debtEquityRatio: stock.debtEquityRatio,
-           _api_c2_movingAverage50d: stock.movingAverage50d,
-           _api_c2_movingAverage200d: stock.movingAverage200d,
-           _api_c2_fundamentalSummary: stock.fundamentalSummary,
-           _api_c2_valuationSummary: stock.valuationSummary,
+     // Calculated scores
+     technicalScore: stock.technicalScore,
+     fundamentalScore: stock.fundamentalScore,
+     valuationScore: stock.valuationScore,
+   }),
+ };
 
-           // 📈 Technical Indicators
-           _api_c2_rsi14: stock.rsi14,
-           _api_c2_macd: stock.macd,
-           _api_c2_macdSignal: stock.macdSignal,
-           _api_c2_bollingerMid: stock.bollingerMid,
-           _api_c2_bollingerUpper: stock.bollingerUpper,
-           _api_c2_bollingerLower: stock.bollingerLower,
-           _api_c2_stochasticK: stock.stochasticK,
-           _api_c2_stochasticD: stock.stochasticD,
-           _api_c2_obv: stock.obv,
-           _api_c2_atr14: stock.atr14,
-           _api_c2_technicalSummary: stock.technicalSummary,
-
-           // 🔮 Prediction & Strategy
-           _api_c2_prediction: stock.prediction,
-           _api_c2_stopLoss: stock.stopLoss,
-           _api_c2_targetPrice: stock.targetPrice,
-           _api_c2_growthPotential: stock.growthPotential,
-           _api_c2_score: stock.score,
-           _api_c2_finalScore: stock.finalScore,
-           _api_c2_tier: stock.tier,
-         };
-
-
-          console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
-          bubble_fn_result(stockObject);
-        } catch (error) {
+    console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+    bubble_fn_result(stockObject);
+  } catch (error) {
           console.error(
             `❌ Error processing ticker ${tickerObj.code}:`,
             error.message
@@ -1085,11 +1727,6 @@ window.scanCurrentPrice = {
   },
 };
 
-/***********************************************
- * 8) TRAIN & PREDICT (With DAILY Clamping)
- ***********************************************/
-
-// If you want daily clamping, swap out predictNext30DaysWithVolume with the code below.
 
 const customHeaders = {
   "User-Agent":
@@ -1098,8 +1735,9 @@ const customHeaders = {
   "Accept-Encoding": "gzip, deflate, br",
 };
 /**
- * Helper functions for robust statistics.
+ * Modified version of the stock price prediction model with fixes for unrealistic predictions
  */
+
 function computeMedian(arr) {
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -1167,8 +1805,28 @@ function computeDailyLogReturn(logPrices) {
 }
 
 /**
- * Custom Huber loss function.
- * Delta is the threshold at which to change from quadratic to linear.
+ * Compute monthly log returns from log prices
+ */
+function computeMonthlyLogReturns(logPrices, period = 30) {
+  const monthlyReturns = [];
+  for (let i = period; i < logPrices.length; i++) {
+    monthlyReturns.push(logPrices[i] - logPrices[i - period]);
+  }
+  return monthlyReturns;
+}
+
+/**
+ * Calculate statistical volatility (standard deviation of returns)
+ */
+function calculateVolatility(returns) {
+  const mean = returns.reduce((sum, val) => sum + val, 0) / returns.length;
+  const squaredDiffs = returns.map(val => Math.pow(val - mean, 2));
+  const variance = squaredDiffs.reduce((sum, val) => sum + val, 0) / returns.length;
+  return Math.sqrt(variance);
+}
+
+/**
+ * Modified Huber loss function for robustness against outliers
  */
 function customHuberLoss(delta = 1.0) {
   return function(yTrue, yPred) {
@@ -1176,16 +1834,13 @@ function customHuberLoss(delta = 1.0) {
     const quadratic = tf.minimum(error, delta);
     const linear = error.sub(quadratic);
     return tf.add(tf.mul(0.5, tf.square(quadratic)), tf.mul(delta, linear)).mean();
-  }
+  };
 }
 
 /**
- * Prepares training data for direct 30-day ahead price prediction.
- * The model now works with log prices. Each training sample consists of a 30-day sequence of:
- * [logPrice, volume, SMA_logPrice, dailyLogReturn] (robustly normalized),
- * and a target: the logPrice 30 days after the end of the sequence.
+ * Improved data preparation with market-specific constraints and additional features
  */
-function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap = 30) {
+function prepareDataFor30DayAheadPrice(data, sequenceLength = 60, predictionGap = 30) {
   if (data.length < sequenceLength + predictionGap) {
     throw new Error(`Not enough data to create sequences for prediction.`);
   }
@@ -1199,36 +1854,82 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   
   // Compute additional features on log scale.
   const sma7 = computeSMA(logPrices, 7);
+  const sma20 = computeSMA(logPrices, 20);
+  const sma50 = computeSMA(logPrices, 50);
   const dailyLogReturn = computeDailyLogReturn(logPrices);
+  
+  // Calculate volatility features
+  const volatility10 = [];
+  const volatility30 = [];
+  
+  for (let i = 0; i < logPrices.length; i++) {
+    const start10 = Math.max(0, i - 10 + 1);
+    const start30 = Math.max(0, i - 30 + 1);
+    
+    const vol10 = calculateVolatility(dailyLogReturn.slice(start10, i + 1)) || 0;
+    const vol30 = calculateVolatility(dailyLogReturn.slice(start30, i + 1)) || 0;
+    
+    volatility10.push(vol10);
+    volatility30.push(vol30);
+  }
 
-  // Use training portion (excluding prediction gap) to compute robust parameters for logPrices.
+  // Calculate monthly return statistics for constraint setting
+  const monthlyLogReturns = computeMonthlyLogReturns(logPrices);
+  const { lower: minMonthlyReturn, upper: maxMonthlyReturn } = winsorizeArray(monthlyLogReturns, 0.01, 0.99);
+  
+  // Calculate typical ranges for Japanese stocks (more conservative than general markets)
+  // Japanese market historically has lower volatility than US markets
+  const japaneseMaxMonthlyReturn = Math.min(maxMonthlyReturn, Math.log(1.10)); // Max 10% monthly return
+  const japaneseMinMonthlyReturn = Math.max(minMonthlyReturn, Math.log(0.90)); // Min -10% monthly return
+
+  // Use training portion (excluding prediction gap) to compute robust parameters
   const trainLogPricesRaw = logPrices.slice(0, logPrices.length - predictionGap);
   const trainVolumesRaw = volumes.slice(0, volumes.length - predictionGap);
-  const trainSMA_raw = sma7.slice(0, sma7.length - predictionGap);
+  const trainSMA7_raw = sma7.slice(0, sma7.length - predictionGap);
+  const trainSMA20_raw = sma20.slice(0, sma20.length - predictionGap);
+  const trainSMA50_raw = sma50.slice(0, sma50.length - predictionGap);
   const trainReturnRaw = dailyLogReturn.slice(0, dailyLogReturn.length - predictionGap);
+  const trainVol10_raw = volatility10.slice(0, volatility10.length - predictionGap);
+  const trainVol30_raw = volatility30.slice(0, volatility30.length - predictionGap);
 
   // Winsorize each feature.
   const { winsorized: trainLogPrices, lower: lowerLogPrice, upper: upperLogPrice } = winsorizeArray(trainLogPricesRaw);
   const { winsorized: trainVolumes, lower: lowerVolume, upper: upperVolume } = winsorizeArray(trainVolumesRaw);
-  const { winsorized: trainSMA, lower: lowerSMA, upper: upperSMA } = winsorizeArray(trainSMA_raw);
+  const { winsorized: trainSMA7, lower: lowerSMA7, upper: upperSMA7 } = winsorizeArray(trainSMA7_raw);
+  const { winsorized: trainSMA20, lower: lowerSMA20, upper: upperSMA20 } = winsorizeArray(trainSMA20_raw);
+  const { winsorized: trainSMA50, lower: lowerSMA50, upper: upperSMA50 } = winsorizeArray(trainSMA50_raw);
   const { winsorized: trainReturn, lower: lowerReturn, upper: upperReturn } = winsorizeArray(trainReturnRaw);
+  const { winsorized: trainVol10, lower: lowerVol10, upper: upperVol10 } = winsorizeArray(trainVol10_raw);
+  const { winsorized: trainVol30, lower: lowerVol30, upper: upperVol30 } = winsorizeArray(trainVol30_raw);
 
   // Compute robust statistics on winsorized training data.
   const medianLogPrice = computeMedian(trainLogPrices);
   const iqrLogPrice = computeIQR(trainLogPrices);
   const medianVolume = computeMedian(trainVolumes);
   const iqrVolume = computeIQR(trainVolumes);
-  const medianSMA = computeMedian(trainSMA);
-  const iqrSMA = computeIQR(trainSMA);
+  const medianSMA7 = computeMedian(trainSMA7);
+  const iqrSMA7 = computeIQR(trainSMA7);
+  const medianSMA20 = computeMedian(trainSMA20);
+  const iqrSMA20 = computeIQR(trainSMA20);
+  const medianSMA50 = computeMedian(trainSMA50);
+  const iqrSMA50 = computeIQR(trainSMA50);
   const medianReturn = computeMedian(trainReturn);
   const iqrReturn = computeIQR(trainReturn);
+  const medianVol10 = computeMedian(trainVol10);
+  const iqrVol10 = computeIQR(trainVol10);
+  const medianVol30 = computeMedian(trainVol30);
+  const iqrVol30 = computeIQR(trainVol30);
 
   // Store winsorization bounds.
   const metaBounds = {
     logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
     volume: { lower: lowerVolume, upper: upperVolume },
-    sma: { lower: lowerSMA, upper: upperSMA },
-    return: { lower: lowerReturn, upper: upperReturn }
+    sma7: { lower: lowerSMA7, upper: upperSMA7 },
+    sma20: { lower: lowerSMA20, upper: upperSMA20 },
+    sma50: { lower: lowerSMA50, upper: upperSMA50 },
+    return: { lower: lowerReturn, upper: upperReturn },
+    vol10: { lower: lowerVol10, upper: upperVol10 },
+    vol30: { lower: lowerVol30, upper: upperVol30 }
   };
 
   // Helper normalization function: winsorize first, then robust normalize.
@@ -1242,12 +1943,15 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
     const seq = [];
     for (let j = 0; j < sequenceLength; j++) {
-      // Use logPrice for the price feature.
       seq.push([
         normalize(Math.log(prices[i + j]), medianLogPrice, iqrLogPrice, lowerLogPrice, upperLogPrice),
         normalize(volumes[i + j], medianVolume, iqrVolume, lowerVolume, upperVolume),
-        normalize(sma7[i + j], medianSMA, iqrSMA, lowerSMA, upperSMA),
-        normalize(dailyLogReturn[i + j], medianReturn, iqrReturn, lowerReturn, upperReturn)
+        normalize(sma7[i + j], medianSMA7, iqrSMA7, lowerSMA7, upperSMA7),
+        normalize(sma20[i + j], medianSMA20, iqrSMA20, lowerSMA20, upperSMA20),
+        normalize(sma50[i + j], medianSMA50, iqrSMA50, lowerSMA50, upperSMA50),
+        normalize(dailyLogReturn[i + j], medianReturn, iqrReturn, lowerReturn, upperReturn),
+        normalize(volatility10[i + j], medianVol10, iqrVol10, lowerVol10, upperVol10),
+        normalize(volatility30[i + j], medianVol30, iqrVol30, lowerVol30, upperVol30)
       ]);
     }
     inputs.push(seq);
@@ -1258,7 +1962,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   }
 
   // Convert inputs and outputs to tensors.
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 4]);
+  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 8]);
   const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
 
   const meta = {
@@ -1266,11 +1970,21 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     iqrLogPrice,
     medianVolume,
     iqrVolume,
-    medianSMA,
-    iqrSMA,
+    medianSMA7,
+    iqrSMA7,
+    medianSMA20,
+    iqrSMA20,
+    medianSMA50,
+    iqrSMA50,
     medianReturn,
     iqrReturn,
+    medianVol10,
+    iqrVol10,
+    medianVol30,
+    iqrVol30,
     bounds: metaBounds,
+    minMonthlyReturn: japaneseMinMonthlyReturn,
+    maxMonthlyReturn: japaneseMaxMonthlyReturn,
     // Save the last known actual price.
     lastKnownPrice: prices[prices.length - 1]
   };
@@ -1279,97 +1993,234 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
 }
 
 /**
- * Trains a model to predict the logPrice 30 days ahead.
+ * Improved model training with more robust architecture and regularization
  */
 async function trainModelFor30DayAheadPrice(data) {
-  const sequenceLength = 30;
+  const sequenceLength = 60; // Increased from 30 to capture more historical context
   const predictionGap = 30;
   const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(data, sequenceLength, predictionGap);
 
   const model = tf.sequential();
-  model.add(
-    tf.layers.lstm({
-      units: 64,
-      inputShape: [sequenceLength, 4],
-      returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-    })
-  );
-  model.add(tf.layers.dropout({ rate: 0.2 }));
-  model.add(tf.layers.dense({ units: 1 }));
+  
+  // First LSTM layer with batch normalization
+  model.add(tf.layers.lstm({
+    units: 32,
+    inputShape: [sequenceLength, 8], // Updated for the 8 features
+    returnSequences: true,
+    kernelRegularizer: tf.regularizers.l1l2({ l1: 0.001, l2: 0.01 }),
+    recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+  }));
+  
+  model.add(tf.layers.batchNormalization());
+  model.add(tf.layers.dropout({ rate: 0.3 }));
+  
+  // Second LSTM layer
+  model.add(tf.layers.lstm({
+    units: 16,
+    returnSequences: false,
+    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+    recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+  }));
+  
+  model.add(tf.layers.batchNormalization());
+  model.add(tf.layers.dropout({ rate: 0.3 }));
+  
+  // Output layer with tanh activation to constrain outputs
+  model.add(tf.layers.dense({ 
+    units: 1, 
+    activation: 'tanh',
+    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 })
+  }));
 
-  model.compile({ optimizer: tf.train.adam(), loss: customHuberLoss(1.0) });
+  // Using lower learning rate for stability
+  const optimizer = tf.train.adam({ learningRate: 0.001 });
+  model.compile({ optimizer: optimizer, loss: customHuberLoss(0.5) }); // Lowered delta for more robustness
 
-  console.log('Training model for 30-day ahead log-price prediction with robust preprocessing...');
+  console.log('Training model for 30-day ahead log-price prediction with improved architecture...');
+  
+  // More sophisticated early stopping
   const earlyStopping = tf.callbacks.earlyStopping({
     monitor: 'val_loss',
-    patience: 5,
+    patience: 10,
+    minDelta: 0.001,
+    mode: 'min',
+    verbose: 1
   });
 
   await model.fit(inputTensor, outputTensor, {
-    epochs: 50,
+    epochs: 100, // Increased epochs with early stopping
     batchSize: 32,
     validationSplit: 0.2,
     callbacks: [earlyStopping],
+    verbose: 1
   });
+  
   console.log('Training completed.');
 
   return { model, meta };
 }
 
 /**
- * Predicts the stock price 30 days ahead using the trained model.
- * Applies the same winsorization and robust normalization on log-prices.
+ * Improved prediction function with realistic constraints for Japanese stocks
  */
-async function predict30DayAheadPrice(modelObj, data) {
+async function predict30DayAheadPrice(modelObj, data, maxMonthlyReturnPct = 5) {
   const { model, meta } = modelObj;
-  const { medianLogPrice, iqrLogPrice, medianVolume, iqrVolume, medianSMA, iqrSMA, medianReturn, iqrReturn, bounds, lastKnownPrice } = meta;
-  const sequenceLength = 30;
+  const sequenceLength = 60; // Must match the sequence length used during training
+  
+  // Extract relevant meta data
+  const {
+    medianLogPrice, iqrLogPrice,
+    medianVolume, iqrVolume,
+    medianSMA7, iqrSMA7,
+    medianSMA20, iqrSMA20,
+    medianSMA50, iqrSMA50,
+    medianReturn, iqrReturn,
+    medianVol10, iqrVol10,
+    medianVol30, iqrVol30,
+    bounds,
+    minMonthlyReturn,
+    maxMonthlyReturn
+  } = meta;
 
-  // Extract recent data.
+  // Use a market-specific constraint that can be adjusted
+  const userMaxMonthlyReturn = Math.log(1 + (maxMonthlyReturnPct / 100));
+  const userMinMonthlyReturn = Math.log(1 - (maxMonthlyReturnPct / 100));
+  
+  // Use the more conservative of the two constraints
+  const effectiveMaxReturn = Math.min(maxMonthlyReturn, userMaxMonthlyReturn);
+  const effectiveMinReturn = Math.max(minMonthlyReturn, userMinMonthlyReturn);
+
+  // Extract recent data
+  if (data.length < sequenceLength) {
+    throw new Error(`Not enough data for prediction. Need at least ${sequenceLength} data points.`);
+  }
+
   const recentData = data.slice(-sequenceLength);
   const recentPrices = recentData.map(item => item.price);
   const recentVolumes = recentData.map(item => item.volume);
   
-  // Compute logPrices, SMA, and daily log return for recent data.
+  // Compute features for recent data
   const recentLogPrices = recentPrices.map(p => Math.log(p));
-  const smaRecent = computeSMA(recentLogPrices, 7);
+  const sma7Recent = computeSMA(recentLogPrices, 7);
+  const sma20Recent = computeSMA(recentLogPrices, 20);
+  const sma50Recent = computeSMA(recentLogPrices, 50);
   const returnRecent = computeDailyLogReturn(recentLogPrices);
+  
+  // Calculate volatility features
+  const vol10Recent = [];
+  const vol30Recent = [];
+  
+  for (let i = 0; i < recentLogPrices.length; i++) {
+    const start10 = Math.max(0, i - 10 + 1);
+    const start30 = Math.max(0, i - 30 + 1);
+    
+    const vol10 = calculateVolatility(returnRecent.slice(start10, i + 1)) || 0;
+    const vol30 = calculateVolatility(returnRecent.slice(start30, i + 1)) || 0;
+    
+    vol10Recent.push(vol10);
+    vol30Recent.push(vol30);
+  }
 
+  // Create normalized input sequence
   const normSeq = recentData.map((item, idx) => [
     (winsorizeVal(Math.log(item.price), bounds.logPrice.lower, bounds.logPrice.upper) - medianLogPrice) / (iqrLogPrice || 1),
     (winsorizeVal(item.volume, bounds.volume.lower, bounds.volume.upper) - medianVolume) / (iqrVolume || 1),
-    (winsorizeVal(smaRecent[idx], bounds.sma.lower, bounds.sma.upper) - medianSMA) / (iqrSMA || 1),
-    (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) - medianReturn) / (iqrReturn || 1)
+    (winsorizeVal(sma7Recent[idx], bounds.sma7.lower, bounds.sma7.upper) - medianSMA7) / (iqrSMA7 || 1),
+    (winsorizeVal(sma20Recent[idx], bounds.sma20.lower, bounds.sma20.upper) - medianSMA20) / (iqrSMA20 || 1),
+    (winsorizeVal(sma50Recent[idx], bounds.sma50.lower, bounds.sma50.upper) - medianSMA50) / (iqrSMA50 || 1),
+    (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) - medianReturn) / (iqrReturn || 1),
+    (winsorizeVal(vol10Recent[idx], bounds.vol10.lower, bounds.vol10.upper) - medianVol10) / (iqrVol10 || 1),
+    (winsorizeVal(vol30Recent[idx], bounds.vol30.lower, bounds.vol30.upper) - medianVol30) / (iqrVol30 || 1)
   ]);
 
-  const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 4]);
+  const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 8]);
+  
+  // Make prediction
   const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
 
-  // Inverse transformation: get predicted log-price, then exponentiate.
+  // Inverse transformation to get predicted log-price
   const predictedLogPrice = predNormLogPrice * iqrLogPrice + medianLogPrice;
-  const predictedPrice = Math.exp(predictedLogPrice);
-
-  return predictedPrice;
+  
+  // Calculate and constrain the predicted return
+  const lastLogPrice = Math.log(recentPrices[recentPrices.length - 1]);
+  const predictedLogReturn = predictedLogPrice - lastLogPrice;
+  
+  // Apply market-specific constraints
+  const constrainedLogReturn = Math.min(Math.max(predictedLogReturn, effectiveMinReturn), effectiveMaxReturn);
+  
+  // Calculate the final constrained log price and convert to actual price
+  const constrainedLogPrice = lastLogPrice + constrainedLogReturn;
+  const predictedPrice = Math.exp(constrainedLogPrice);
+  
+  // Calculate percentage change for reporting
+  const percentChange = (Math.exp(constrainedLogReturn) - 1) * 100;
+  
+  return {
+    predictedPrice,
+    percentChange,
+    lastPrice: recentPrices[recentPrices.length - 1],
+    predictedReturn: constrainedLogReturn,
+    originalPredictedReturn: predictedLogReturn,
+    wasConstrained: constrainedLogReturn !== predictedLogReturn
+  };
 }
 
 /**
+ * Utility function to evaluate model performance on historical data
+ */
+async function evaluateModelPerformance(modelObj, testData, actualFuturePrices) {
+  const predictions = await predict30DayAheadPrice(modelObj, testData);
+  const actualPrice = actualFuturePrices[0];
+  
+  const errorPercent = ((predictions.predictedPrice - actualPrice) / actualPrice) * 100;
+  const actualReturnPercent = ((actualPrice - testData[testData.length - 1].price) / testData[testData.length - 1].price) * 100;
+  
+  return {
+    predictedPrice: predictions.predictedPrice,
+    actualPrice,
+    errorPercent,
+    predictedReturnPercent: predictions.percentChange,
+    actualReturnPercent,
+    wasConstrained: predictions.wasConstrained
+  };
+}
+/**
  * Main orchestration function.
  */
-export async function analyzeStock(ticker, historicalData) {
+export async function analyzeStock(
+  ticker,
+  historicalData,
+  maxMonthlyReturnPct = 5
+) {
   try {
-    if (historicalData.length < 365) {
+    if (historicalData.length < 120) {
       throw new Error(`Not enough data to train the model for ${ticker}.`);
     }
 
     const modelObj = await trainModelFor30DayAheadPrice(historicalData);
-    const predictedPrice = await predict30DayAheadPrice(modelObj, historicalData);
+    const prediction = await predict30DayAheadPrice(
+      modelObj,
+      historicalData,
+      maxMonthlyReturnPct
+    );
 
-    console.log(`Predicted 30-day ahead price for ${ticker}:`, predictedPrice);
-    return predictedPrice;
+    console.log(`📈 Prediction for ${ticker}:`);
+    console.log(`➡️ Last Known Price: ¥${prediction.lastPrice.toFixed(2)}`);
+    console.log(
+      `➡️ Predicted Price (30d): ¥${prediction.predictedPrice.toFixed(2)}`
+    );
+    console.log(`➡️ Expected Return: ${prediction.percentChange.toFixed(2)}%`);
+    if (prediction.wasConstrained) {
+      console.log(`⚠️ Prediction was constrained due to volatility limits.`);
+    }
+
+    return {
+      ticker,
+      ...prediction,
+    };
   } catch (error) {
-    console.error(`Error analyzing stock for ${ticker}:`, error.message);
+    console.error(`❌ Error analyzing stock ${ticker}:`, error.message);
     return null;
   }
 }
+
