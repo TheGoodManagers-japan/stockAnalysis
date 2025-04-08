@@ -1074,7 +1074,7 @@ function getNumericTier(stock) {
 
 
 
-function getEntryTimingLabel(stock) {
+function getEntryTimingScore(stock) {
   // Extract properties with default values
   const {
     currentPrice = 0,
@@ -1196,65 +1196,32 @@ function getEntryTimingLabel(stock) {
     }
   }
 
-  // Format score for display
-  const roundedScore = Math.round(score * 10) / 10;
-
-  // 🏷️ Generate final label based on score and conditions
-  if (score >= 5) {
-    return `📈 Strong Breakout (${roundedScore}) - Excellent Entry`;
-  }
-
+  // Return integer score (1-7)
   if (score >= 4) {
-    if (atAllTimeHigh) {
-      return `🚀 New High Momentum (${roundedScore}) - Good Entry`;
-    }
-    return `📈 Breakout (${roundedScore}) - Good Entry Zone`;
-  }
-
-  if (score >= 3) {
-    if (bullishReversal) {
-      return `🔄 Bullish Reversal (${roundedScore}) - Potential Entry`;
-    }
-    return `🟢 Strong Setup (${roundedScore}) - Potential Entry`;
+    return 1; // Strong Buy
   }
 
   if (score >= 2) {
-    if (aboveBothMAs) {
-      return `✅ Uptrend Pullback (${roundedScore}) - Watch Closely`;
-    }
-    return `✅ Positive Action (${roundedScore}) - Worth Watching`;
+    return 2; // Buy
   }
 
   if (score >= 0.5) {
-    if (doji && aboveBothMAs) {
-      return `⏸️ Uptrend Pause (${roundedScore}) - Monitor Closely`;
-    }
-    return `⚪ Moderately Positive (${roundedScore}) - Wait for Strength`;
+    return 3; // Watch
   }
 
   if (score > -0.5 && score < 0.5) {
-    if (doji) {
-      return `⏺️ Indecision (${roundedScore}) - Neutral Pattern`;
-    }
-    return `⚪ Sideways / Neutral (${roundedScore})`;
+    return 4; // Neutral
   }
 
   if (score >= -2) {
-    return `⚠️ Weakness Detected (${roundedScore}) - Wait for Confirmation`;
+    return 5; // Caution
   }
 
-  if (score >= -3.5) {
-    if (bearishReversal) {
-      return `📉 Bearish Reversal (${roundedScore}) - Avoid Entry`;
-    }
-    return `🔴 Significant Weakness (${roundedScore}) - Avoid Entry`;
+  if (score >= -4) {
+    return 6; // Avoid
   }
 
-  if (score >= -5) {
-    return `🚫 Strong Downside Action (${roundedScore}) - High Risk`;
-  }
-
-  return `⛔ Extreme Weakness (${roundedScore}) - Very High Risk`;
+  return 7; // Strong Avoid
 }
 
 
