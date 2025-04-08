@@ -2217,10 +2217,8 @@ export async function analyzeStock(
       maxMonthlyReturnPct
     );
 
-    return {
-      ticker,
-      predictedPrice,
-    };
+    return predictedPrice;
+    
   } catch (error) {
     console.error(`❌ Error analyzing stock ${ticker}:`, error.message);
     return null;
