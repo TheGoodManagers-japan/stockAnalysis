@@ -1225,38 +1225,60 @@ function getEntryTimingScore(stock) {
 }
 
 
-
-/**
- * Determine Buying Urgency and Risk Level
- */
 function getBuyingUrgency(stock) {
   const {
     rsi14,
     macd,
+    macdSignal,
     stochasticK,
     stochasticD,
     currentPrice,
     fiftyTwoWeekLow,
-    fiftyTwoWeekHigh
+    fiftyTwoWeekHigh,
+    movingAverage50d,
+    movingAverage200d,
+    atr14,
+    pbRatio,
+    peRatio
   } = stock;
 
-  // Calculate price position in the 52-week range.
-  const pricePositionInRange =
+  // Comprehensive price positioning analysis
+  const pricePositionInRange = 
     ((currentPrice - fiftyTwoWeekLow) / (fiftyTwoWeekHigh - fiftyTwoWeekLow)) * 100;
-
-  // Assess market conditions.
+  
+  // Advanced technical condition assessment
   const oversoldCondition = rsi14 < 30;
-  const bearishMomentum = macd < 0;
+  const bearishMomentum = macd < macdSignal;
   const lowStochasticValues = stochasticK < 20 && stochasticD < 20;
+  
+  // Price movement relative to moving averages
+  const belowShortTermMA = currentPrice < movingAverage50d;
+  const belowLongTermMA = currentPrice < movingAverage200d;
+  
+  // Volatility and valuation indicators
+  const highVolatility = atr14 > (currentPrice * 0.05); // ATR > 5% of price
+  const cheapValuation = pbRatio < 1 || peRatio < 15; // Value investing indicators
 
-  // Default urgency and risk settings.
+  // Complex urgency scoring system
+  let urgencyScore = 0;
+  
+  // Add points for different conditions
+  if (oversoldCondition) urgencyScore += 3;
+  if (bearishMomentum) urgencyScore += 2;
+  if (lowStochasticValues) urgencyScore += 2;
+  if (belowShortTermMA) urgencyScore += 1;
+  if (belowLongTermMA) urgencyScore += 1;
+  if (highVolatility) urgencyScore += 1;
+  if (cheapValuation) urgencyScore += 2;
+  
+  // Determine urgency and risk levels
   let urgencyLevel = 'NEUTRAL';
   let riskLevel = 'MODERATE';
-
-  if (oversoldCondition && bearishMomentum && lowStochasticValues) {
+  
+  if (urgencyScore >= 7) {
     urgencyLevel = 'HIGH_URGENCY';
     riskLevel = 'HIGH_RISK';
-  } else if (pricePositionInRange < 20) {
+  } else if (urgencyScore >= 4) {
     urgencyLevel = 'MODERATE_URGENCY';
     riskLevel = 'MODERATE_RISK';
   }
@@ -1264,7 +1286,17 @@ function getBuyingUrgency(stock) {
   return {
     urgencyLevel,
     riskLevel,
-    pricePositionInRange: parseFloat(pricePositionInRange.toFixed(2))
+    urgencyScore,
+    pricePositionInRange: parseFloat(pricePositionInRange.toFixed(2)),
+    technicalIndicators: {
+      oversoldCondition,
+      bearishMomentum,
+      lowStochasticValues,
+      belowShortTermMA,
+      belowLongTermMA,
+      highVolatility,
+      cheapValuation
+    }
   };
 }
 
@@ -1273,56 +1305,79 @@ function calculateLimitOrderPrice(stock, urgencyLevel) {
   const {
     currentPrice,
     fiftyTwoWeekLow,
+    fiftyTwoWeekHigh,
     movingAverage50d,
     movingAverage200d,
-    bollingerLower
+    bollingerLower,
+    bollingerUpper,
+    atr14,
+    obv, // On-Balance Volume
+    peRatio,
+    pbRatio
   } = stock;
 
-  let limitOrderPrice;
+  // Dynamic discount calculation based on multiple factors
+  const discountFactors = {
+    'HIGH_URGENCY': {
+      baseDiscount: 0.85, // 15% discount
+      supportLevel: Math.min(
+        bollingerLower || currentPrice * 0.85,
+        movingAverage50d || currentPrice * 0.85,
+        currentPrice - (atr14 * 2) // Consider volatility
+      )
+    },
+    'MODERATE_URGENCY': {
+      baseDiscount: 0.93, // 7% discount
+      supportLevel: Math.min(
+        movingAverage50d || currentPrice * 0.93,
+        movingAverage200d || currentPrice * 0.92
+      )
+    },
+    'NEUTRAL': {
+      baseDiscount: 0.97, // 3% discount
+      supportLevel: movingAverage50d || currentPrice * 0.97
+    }
+  };
 
-  if (urgencyLevel === 'HIGH_URGENCY') {
-    // Aggressive buying strategy: deeper discount.
-    limitOrderPrice = Math.min(
-      currentPrice * 0.9,                   // 10% below current price,
-      bollingerLower || currentPrice * 0.9,   // lower Bollinger Band (if available),
-      movingAverage50d || currentPrice * 0.95 // or 50-day moving average.
-    );
-  } else if (urgencyLevel === 'MODERATE_URGENCY') {
-    // Moderate discount strategy.
-    limitOrderPrice = Math.min(
-      currentPrice * 0.95,                     // 5% below current price,
-      movingAverage50d || currentPrice * 0.97,   // primary support level,
-      movingAverage200d || currentPrice * 0.96    // secondary support level.
-    );
-  } else {
-    // Conservative strategy for a neutral market.
-    limitOrderPrice = Math.min(
-      currentPrice * 0.97,
-      movingAverage50d || currentPrice * 0.98
-    );
-  }
-
-  // Ensure the limit order price is not too low.
-  limitOrderPrice = Math.max(
-    limitOrderPrice,
-    currentPrice * 0.85,      // Prevent excessively low orders.
-    fiftyTwoWeekLow * 1.05     // Maintain a price slightly above the 52-week low.
+  // Select appropriate discount strategy
+  const strategy = discountFactors[urgencyLevel] || discountFactors['NEUTRAL'];
+  
+  // Calculate limit order price with multiple safety checks
+  let limitOrderPrice = Math.min(
+    currentPrice * strategy.baseDiscount,
+    strategy.supportLevel,
+    // Consider valuation metrics for additional safety
+    ...(peRatio && peRatio < 15 ? [currentPrice * 0.9] : []),
+    ...(pbRatio && pbRatio < 1 ? [currentPrice * 0.88] : [])
   );
 
-  // Round to 2 decimal places.
+  // Apply lower and upper bounds
+  limitOrderPrice = Math.max(
+    limitOrderPrice,
+    currentPrice * 0.80, // Absolute minimum
+    fiftyTwoWeekLow * 1.05 // Slightly above 52-week low
+  );
+  
+  limitOrderPrice = Math.min(
+    limitOrderPrice,
+    currentPrice, // Never exceed current price
+    fiftyTwoWeekHigh * 0.95 // Stay below recent high
+  );
+
+  // Round to 2 decimal places
   return parseFloat(limitOrderPrice.toFixed(2));
 }
 
 
 function getLimitOrder(stock) {
-  // Determine buying urgency.
+  // Determine buying urgency with detailed analysis
   const urgencyDetails = getBuyingUrgency(stock);
   
-  // Calculate the limit order price using the urgency level.
+  // Calculate the limit order price
   const limitOrderPrice = calculateLimitOrderPrice(stock, urgencyDetails.urgencyLevel);
   
-  // Return only the limit order price.
-  return limitOrderPrice;
+  // Return comprehensive limit order details
+  return limitOrderPrice
 }
 
 
@@ -1761,7 +1816,7 @@ window.scan = {
    _api_c2_score: stock.score,
    _api_c2_finalScore: stock.finalScore,
    _api_c2_tier: stock.tier,
-   _api_c2_limitOrder: stock.limitOrder,
+   _api_c2_limitOrder: stock.tierlimitOrder,
 
    // Add complete stock data as JSON
    _api_c2_otherData: JSON.stringify({
