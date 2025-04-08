@@ -1640,7 +1640,7 @@ window.scan = {
     stock.technicalScore = getTechnicalScore(stock);
     stock.fundamentalScore = getAdvancedFundamentalScore(stock);
     stock.valuationScore = getValuationScore(stock);
-    stock.entryTimingLabel = getEntryTimingLabel(stock);
+    stock.entryTimingScore = getEntryTimingScore(stock);
     stock.tier = getNumericTier(stock);
 
     // 10) Send data in Bubble key format
@@ -1648,7 +1648,7 @@ window.scan = {
    _api_c2_ticker: stock.ticker,
    _api_c2_sector: stock.sector,
    _api_c2_currentPrice: stock.currentPrice,
-   _api_c2_entryTimingLabel: stock.entryTimingLabel,
+   _api_c2_entryTimingScore: stock.entryTimingScore,
    _api_c2_prediction: stock.prediction,
    _api_c2_stopLoss: stock.stopLoss,
    _api_c2_targetPrice: stock.targetPrice,
