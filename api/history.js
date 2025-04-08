@@ -17,24 +17,32 @@ async function fetchHistoricalData(ticker, years = 3) {
       interval: "1d",
     });
 
-    // Uncomment the following line to inspect the full shape of the returned object
-    // console.log(JSON.stringify(data, null, 2));
-
     if (!data || !data.quotes || data.quotes.length === 0) {
       console.warn(`No historical data available for ticker: ${ticker}`);
       return [];
     }
 
-    // Log the "quotes" array to check if it contains what you expect
-    console.log(data.quotes);
+    // Filter out any invalid quotes before mapping
+    const validQuotes = data.quotes.filter(
+      (quote) =>
+        quote &&
+        typeof quote.close === "number" &&
+        !isNaN(quote.close) &&
+        typeof quote.volume === "number" &&
+        !isNaN(quote.volume)
+    );
 
-    return data.quotes.map((quote) => ({
+    console.log(
+      `Filtered out ${data.quotes.length - validQuotes.length} invalid quotes`
+    );
+
+    return validQuotes.map((quote) => ({
       date: quote.date,
-      open: quote.open,
-      high: quote.high,
-      low: quote.low,
+      open: quote.open || quote.close, // Fallback to close if open is missing
+      high: quote.high || quote.close, // Fallback to close if high is missing
+      low: quote.low || quote.close, // Fallback to close if low is missing
       close: quote.close,
-      volume: quote.volume,
+      volume: quote.volume || 0, // Default to 0 if volume is missing
       price: quote.close,
     }));
   } catch (error) {
@@ -42,7 +50,7 @@ async function fetchHistoricalData(ticker, years = 3) {
       `Error fetching historical data for ${ticker}:`,
       error.message
     );
-    throw new Error("Failed to fetch historical data");
+    throw new Error(`Failed to fetch historical data: ${error.message}`);
   }
 }
 
