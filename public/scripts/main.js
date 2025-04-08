@@ -1532,292 +1532,262 @@ window.scan = {
 ];
 
 
-      // Process stocks in batches of 10
-      const BATCH_SIZE = 10;
-      const batches = [];
-      
-      // Split the tickers array into batches
-      for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-        batches.push(tickers.slice(i, i + BATCH_SIZE));
+      for (const tickerObj of tickers) {
+  console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
+
+  try {
+    // 1) Fetch Yahoo data
+    const result = await fetchSingleStockData(tickerObj);
+    if (!result.success) {
+      console.error("Error fetching stock analysis:", result.error);
+      throw new Error("Failed to fetch Yahoo data.");
+    }
+
+    const { code, sector, yahooData } = result.data;
+
+    // First check if yahooData exists at all
+    if (!yahooData) {
+      console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
+      throw new Error("Yahoo data is completely missing.");
+    }
+
+    // Define critical fields that must be present
+    const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+    const missingCriticalFields = criticalFields.filter(
+      (field) => !yahooData[field]
+    );
+
+    // Define non-critical fields to check
+    const nonCriticalFields = [
+      "openPrice",
+      "prevClosePrice",
+      "marketCap",
+      "peRatio",
+      "pbRatio",
+      "dividendYield",
+      "dividendGrowth5yr",
+      "fiftyTwoWeekHigh",
+      "fiftyTwoWeekLow",
+      "epsTrailingTwelveMonths",
+      "epsForward",
+      "epsGrowthRate",
+      "debtEquityRatio",
+      "movingAverage50d",
+      "movingAverage200d",
+      "rsi14",
+      "macd",
+      "macdSignal",
+      "bollingerMid",
+      "bollingerUpper",
+      "bollingerLower",
+      "stochasticK",
+      "stochasticD",
+      "obv",
+      "atr14",
+    ];
+    const missingNonCriticalFields = nonCriticalFields.filter(
+      (field) => yahooData[field] === undefined || yahooData[field] === null
+    );
+
+    // Check for zero values (which might indicate failures in calculations)
+    const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+      (field) =>
+        yahooData[field] !== undefined &&
+        yahooData[field] !== null &&
+        yahooData[field] === 0 &&
+        !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
+    );
+
+    // Log detailed information
+    console.log(`Data validation for ${code}:`);
+
+    if (missingCriticalFields.length > 0) {
+      console.error(
+        `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+      );
+      throw new Error(
+        `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
+      );
+    }
+
+    if (missingNonCriticalFields.length > 0) {
+      console.warn(
+        `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
+      );
+    }
+
+    if (zeroFields.length > 0) {
+      console.warn(
+        `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+          ", "
+        )}`
+      );
+    }
+
+    console.log(
+      `✅ All critical fields present for ${code}. Continuing analysis...`
+    );
+    console.log("Yahoo data:", yahooData);
+
+
+    // 2) Build stock object
+    const stock = {
+      ticker: code,
+      sector,
+      currentPrice: yahooData.currentPrice,
+      highPrice: yahooData.highPrice,
+      lowPrice: yahooData.lowPrice,
+      openPrice: yahooData.openPrice,
+      prevClosePrice: yahooData.prevClosePrice,
+      marketCap: yahooData.marketCap,
+      peRatio: yahooData.peRatio,
+      pbRatio: yahooData.pbRatio,
+      dividendYield: yahooData.dividendYield,
+      dividendGrowth5yr: yahooData.dividendGrowth5yr,
+      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+      epsForward: yahooData.epsForward,
+      epsGrowthRate: yahooData.epsGrowthRate,
+      debtEquityRatio: yahooData.debtEquityRatio,
+      movingAverage50d: yahooData.movingAverage50d,
+      movingAverage200d: yahooData.movingAverage200d,
+
+      // 📈 Technical indicators
+      rsi14: yahooData.rsi14,
+      macd: yahooData.macd,
+      macdSignal: yahooData.macdSignal,
+      bollingerMid: yahooData.bollingerMid,
+      bollingerUpper: yahooData.bollingerUpper,
+      bollingerLower: yahooData.bollingerLower,
+      stochasticK: yahooData.stochasticK,
+      stochasticD: yahooData.stochasticD,
+      obv: yahooData.obv,
+      atr14: yahooData.atr14,
+    };
+
+    const historicalData = await fetchHistoricalData(stock.ticker);
+    stock.historicalData = historicalData || [];
+
+    // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+    console.log(`Analyzing stock: ${stock.ticker}`);
+    const prediction = await analyzeStock(stock.ticker, historicalData);
+    if (prediction == null) {
+      console.error(
+        `Failed to generate prediction for ${stock.ticker}. Aborting.`
+      );
+      throw new Error("Failed to generate prediction.");
+    }
+
+    console.log("prediction: ",prediction);
+    stock.prediction = prediction;
+
+    // 5) Calculate Stop Loss & Target
+    const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+      stock,
+      prediction
+    );
+    if (stopLoss === null || targetPrice === null) {
+      console.error(
+        `Failed to calculate stop loss or target price for ${stock.ticker}.`
+      );
+      throw new Error("Stop loss or target price calculation failed.");
+    }
+    stock.stopLoss = stopLoss;
+    stock.targetPrice = targetPrice;
+
+    // 7) Compute growth potential
+    const growthPotential =
+      ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
+
+    // 8) Compute fundamental/technical score
+    stock.score = computeScore(stock, stock.sector);
+
+    // 9) Combine them => finalScore
+    const weights = { metrics: 0.7, growth: 0.3 };
+    const finalScore =
+      weights.metrics * stock.score + weights.growth * (growthPotential / 100);
+
+    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+    stock.finalScore = parseFloat(finalScore.toFixed(2));
+    stock.technicalScore = getTechnicalScore(stock);
+    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+    stock.valuationScore = getValuationScore(stock);
+    stock.entryTimingScore = getEntryTimingScore(stock);
+    stock.tier = getNumericTier(stock);
+    stock.limitOrder = getLimitOrderPrice(stock);
+
+    // 10) Send data in Bubble key format
+ const stockObject = {
+   _api_c2_ticker: stock.ticker,
+   _api_c2_sector: stock.sector,
+   _api_c2_currentPrice: stock.currentPrice,
+   _api_c2_entryTimingScore: stock.entryTimingScore,
+   _api_c2_prediction: stock.prediction,
+   _api_c2_stopLoss: stock.stopLoss,
+   _api_c2_targetPrice: stock.targetPrice,
+   _api_c2_growthPotential: stock.growthPotential,
+   _api_c2_score: stock.score,
+   _api_c2_finalScore: stock.finalScore,
+   _api_c2_tier: stock.tier,
+   _api_c2_limitOrder: stock.limitOrder,
+
+   // Add complete stock data as JSON
+   _api_c2_otherData: JSON.stringify({
+     // Price data
+     highPrice: stock.highPrice,
+     lowPrice: stock.lowPrice,
+     openPrice: stock.openPrice,
+     prevClosePrice: stock.prevClosePrice,
+
+     // Fundamental metrics
+     marketCap: stock.marketCap,
+     peRatio: stock.peRatio,
+     pbRatio: stock.pbRatio,
+     dividendYield: stock.dividendYield,
+     dividendGrowth5yr: stock.dividendGrowth5yr,
+     fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+     fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+     epsForward: stock.epsForward,
+     epsGrowthRate: stock.epsGrowthRate,
+     debtEquityRatio: stock.debtEquityRatio,
+
+     // Technical indicators
+     movingAverage50d: stock.movingAverage50d,
+     movingAverage200d: stock.movingAverage200d,
+     rsi14: stock.rsi14,
+     macd: stock.macd,
+     macdSignal: stock.macdSignal,
+     bollingerMid: stock.bollingerMid,
+     bollingerUpper: stock.bollingerUpper,
+     bollingerLower: stock.bollingerLower,
+     stochasticK: stock.stochasticK,
+     stochasticD: stock.stochasticD,
+     obv: stock.obv,
+     atr14: stock.atr14,
+
+     // Calculated scores
+     technicalScore: stock.technicalScore,
+     fundamentalScore: stock.fundamentalScore,
+     valuationScore: stock.valuationScore,
+   }),
+ };
+
+    console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+    bubble_fn_result(stockObject);
+  } catch (error) {
+          console.error(
+            `❌ Error processing ticker ${tickerObj.code}:`,
+            error.message
+          );
+        }
       }
-      
-      console.log(`Processing ${tickers.length} stocks in ${batches.length} batches of up to ${BATCH_SIZE}`);
-      
-      // Process each batch sequentially, but the stocks within each batch in parallel
-      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
-        console.log(`\n=== Processing Batch ${batchIndex + 1}/${batches.length} (${batch.length} stocks) ===\n`);
-        
-        // Process all stocks in the current batch in parallel
-        const batchPromises = batch.map(tickerObj => this.processStock(tickerObj));
-        
-        // Wait for all stocks in this batch to complete
-        await Promise.all(batchPromises);
-        
-        console.log(`\n=== Completed Batch ${batchIndex + 1}/${batches.length} ===\n`);
-      }
-      
-      console.log("All batches processed successfully");
     } catch (error) {
       console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
     }
   },
-  
-  // New method to process a single stock
-  async processStock(tickerObj) {
-    console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
-
-    try {
-      // 1) Fetch Yahoo data
-      const result = await fetchSingleStockData(tickerObj);
-      if (!result.success) {
-        console.error("Error fetching stock analysis:", result.error);
-        throw new Error("Failed to fetch Yahoo data.");
-      }
-
-      const { code, sector, yahooData } = result.data;
-
-      // First check if yahooData exists at all
-      if (!yahooData) {
-        console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
-        throw new Error("Yahoo data is completely missing.");
-      }
-
-      // Define critical fields that must be present
-      const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
-      const missingCriticalFields = criticalFields.filter(
-        (field) => !yahooData[field]
-      );
-
-      // Define non-critical fields to check
-      const nonCriticalFields = [
-        "openPrice",
-        "prevClosePrice",
-        "marketCap",
-        "peRatio",
-        "pbRatio",
-        "dividendYield",
-        "dividendGrowth5yr",
-        "fiftyTwoWeekHigh",
-        "fiftyTwoWeekLow",
-        "epsTrailingTwelveMonths",
-        "epsForward",
-        "epsGrowthRate",
-        "debtEquityRatio",
-        "movingAverage50d",
-        "movingAverage200d",
-        "rsi14",
-        "macd",
-        "macdSignal",
-        "bollingerMid",
-        "bollingerUpper",
-        "bollingerLower",
-        "stochasticK",
-        "stochasticD",
-        "obv",
-        "atr14",
-      ];
-      const missingNonCriticalFields = nonCriticalFields.filter(
-        (field) => yahooData[field] === undefined || yahooData[field] === null
-      );
-
-      // Check for zero values (which might indicate failures in calculations)
-      const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
-        (field) =>
-          yahooData[field] !== undefined &&
-          yahooData[field] !== null &&
-          yahooData[field] === 0 &&
-          !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
-      );
-
-      // Log detailed information
-      console.log(`Data validation for ${code}:`);
-
-      if (missingCriticalFields.length > 0) {
-        console.error(
-          `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
-        );
-        throw new Error(
-          `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
-        );
-      }
-
-      if (missingNonCriticalFields.length > 0) {
-        console.warn(
-          `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
-        );
-      }
-
-      if (zeroFields.length > 0) {
-        console.warn(
-          `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
-            ", "
-          )}`
-        );
-      }
-
-      console.log(
-        `✅ All critical fields present for ${code}. Continuing analysis...`
-      );
-      console.log("Yahoo data:", yahooData);
-
-      // 2) Build stock object
-      const stock = {
-        ticker: code,
-        sector,
-        currentPrice: yahooData.currentPrice,
-        highPrice: yahooData.highPrice,
-        lowPrice: yahooData.lowPrice,
-        openPrice: yahooData.openPrice,
-        prevClosePrice: yahooData.prevClosePrice,
-        marketCap: yahooData.marketCap,
-        peRatio: yahooData.peRatio,
-        pbRatio: yahooData.pbRatio,
-        dividendYield: yahooData.dividendYield,
-        dividendGrowth5yr: yahooData.dividendGrowth5yr,
-        fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-        fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-        epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-        epsForward: yahooData.epsForward,
-        epsGrowthRate: yahooData.epsGrowthRate,
-        debtEquityRatio: yahooData.debtEquityRatio,
-        movingAverage50d: yahooData.movingAverage50d,
-        movingAverage200d: yahooData.movingAverage200d,
-
-        // 📈 Technical indicators
-        rsi14: yahooData.rsi14,
-        macd: yahooData.macd,
-        macdSignal: yahooData.macdSignal,
-        bollingerMid: yahooData.bollingerMid,
-        bollingerUpper: yahooData.bollingerUpper,
-        bollingerLower: yahooData.bollingerLower,
-        stochasticK: yahooData.stochasticK,
-        stochasticD: yahooData.stochasticD,
-        obv: yahooData.obv,
-        atr14: yahooData.atr14,
-      };
-
-      const historicalData = await fetchHistoricalData(stock.ticker);
-      stock.historicalData = historicalData || [];
-
-      // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
-      console.log(`Analyzing stock: ${stock.ticker}`);
-      const prediction = await analyzeStock(stock.ticker, historicalData);
-      if (prediction == null) {
-        console.error(
-          `Failed to generate prediction for ${stock.ticker}. Aborting.`
-        );
-        throw new Error("Failed to generate prediction.");
-      }
-
-      console.log("prediction: ", prediction);
-      stock.prediction = prediction;
-
-      // 5) Calculate Stop Loss & Target
-      const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-        stock,
-        prediction
-      );
-      if (stopLoss === null || targetPrice === null) {
-        console.error(
-          `Failed to calculate stop loss or target price for ${stock.ticker}.`
-        );
-        throw new Error("Stop loss or target price calculation failed.");
-      }
-      stock.stopLoss = stopLoss;
-      stock.targetPrice = targetPrice;
-
-      // 7) Compute growth potential
-      const growthPotential =
-        ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
-
-      // 8) Compute fundamental/technical score
-      stock.score = computeScore(stock, stock.sector);
-
-      // 9) Combine them => finalScore
-      const weights = { metrics: 0.7, growth: 0.3 };
-      const finalScore =
-        weights.metrics * stock.score + weights.growth * (growthPotential / 100);
-
-      stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-      stock.finalScore = parseFloat(finalScore.toFixed(2));
-      stock.technicalScore = getTechnicalScore(stock);
-      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-      stock.valuationScore = getValuationScore(stock);
-      stock.entryTimingScore = getEntryTimingScore(stock);
-      stock.tier = getNumericTier(stock);
-      stock.limitOrder = getLimitOrderPrice(stock);
-
-      // 10) Send data in Bubble key format
-      const stockObject = {
-        _api_c2_ticker: stock.ticker,
-        _api_c2_sector: stock.sector,
-        _api_c2_currentPrice: stock.currentPrice,
-        _api_c2_entryTimingScore: stock.entryTimingScore,
-        _api_c2_prediction: stock.prediction,
-        _api_c2_stopLoss: stock.stopLoss,
-        _api_c2_targetPrice: stock.targetPrice,
-        _api_c2_growthPotential: stock.growthPotential,
-        _api_c2_score: stock.score,
-        _api_c2_finalScore: stock.finalScore,
-        _api_c2_tier: stock.tier,
-        _api_c2_limitOrder: stock.limitOrder,
-
-        // Add complete stock data as JSON
-        _api_c2_otherData: JSON.stringify({
-          // Price data
-          highPrice: stock.highPrice,
-          lowPrice: stock.lowPrice,
-          openPrice: stock.openPrice,
-          prevClosePrice: stock.prevClosePrice,
-
-          // Fundamental metrics
-          marketCap: stock.marketCap,
-          peRatio: stock.peRatio,
-          pbRatio: stock.pbRatio,
-          dividendYield: stock.dividendYield,
-          dividendGrowth5yr: stock.dividendGrowth5yr,
-          fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-          epsForward: stock.epsForward,
-          epsGrowthRate: stock.epsGrowthRate,
-          debtEquityRatio: stock.debtEquityRatio,
-
-          // Technical indicators
-          movingAverage50d: stock.movingAverage50d,
-          movingAverage200d: stock.movingAverage200d,
-          rsi14: stock.rsi14,
-          macd: stock.macd,
-          macdSignal: stock.macdSignal,
-          bollingerMid: stock.bollingerMid,
-          bollingerUpper: stock.bollingerUpper,
-          bollingerLower: stock.bollingerLower,
-          stochasticK: stock.stochasticK,
-          stochasticD: stock.stochasticD,
-          obv: stock.obv,
-          atr14: stock.atr14,
-
-          // Calculated scores
-          technicalScore: stock.technicalScore,
-          fundamentalScore: stock.fundamentalScore,
-          valuationScore: stock.valuationScore,
-        }),
-      };
-
-      console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
-      bubble_fn_result(stockObject);
-      
-      return { success: true, ticker: code };
-    } catch (error) {
-      console.error(
-        `❌ Error processing ticker ${tickerObj.code}:`,
-        error.message
-      );
-      return { success: false, ticker: tickerObj.code, error: error.message };
-    }
-  }
 };
 
 
@@ -1881,22 +1851,7 @@ const customHeaders = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/91.0.4472.124 Safari/537.36",
   "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
-};
-// Helper function to clean up tensors
-function cleanupTensors(tensors) {
-  if (Array.isArray(tensors)) {
-    tensors.forEach(tensor => {
-      if (tensor && typeof tensor.dispose === 'function') {
-        tensor.dispose();
-      }
-    });
-  } else if (tensors && typeof tensors.dispose === 'function') {
-    tensors.dispose();
-  }
-}
-
-// Optimized median calculation
-function computeMedian(arr) {
+};function computeMedian(arr) {
   const sorted = [...arr].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 !== 0
@@ -1904,99 +1859,86 @@ function computeMedian(arr) {
     : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// Optimized percentile calculation that can compute multiple percentiles at once
-function computeMultiplePercentiles(arr, percentiles) {
-  const sorted = [...arr].sort((a, b) => a - b);
-  const results = {};
-  
-  percentiles.forEach(p => {
-    const idx = p * (sorted.length - 1);
-    if (Number.isInteger(idx)) {
-      results[p] = sorted[idx];
-    } else {
-      const lower = sorted[Math.floor(idx)];
-      const upper = sorted[Math.ceil(idx)];
-      results[p] = lower + (upper - lower) * (idx - Math.floor(idx));
-    }
-  });
-  
-  return results;
-}
-
-// Optimized single percentile calculation
 function computePercentile(arr, p) {
-  return computeMultiplePercentiles(arr, [p])[p];
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = p * (sorted.length - 1);
+  if (Number.isInteger(idx)) {
+    return sorted[idx];
+  } else {
+    const lower = sorted[Math.floor(idx)];
+    const upper = sorted[Math.ceil(idx)];
+    return lower + (upper - lower) * (idx - Math.floor(idx));
+  }
 }
 
-// Optimized IQR calculation that reuses the sorted array
 function computeIQR(arr) {
-  const { 0.25: q1, 0.75: q3 } = computeMultiplePercentiles(arr, [0.25, 0.75]);
+  const q1 = computePercentile(arr, 0.25);
+  const q3 = computePercentile(arr, 0.75);
   return q3 - q1;
 }
 
-// Optimized standard deviation
+/**
+ * Compute standard deviation of an array
+ */
 function computeStdDev(arr) {
   const mean = arr.reduce((sum, val) => sum + val, 0) / arr.length;
-  let sumSquaredDiffs = 0;
-  
-  // Avoid mapping to create a new array
-  for (let i = 0; i < arr.length; i++) {
-    sumSquaredDiffs += Math.pow(arr[i] - mean, 2);
-  }
-  
-  return Math.sqrt(sumSquaredDiffs / arr.length);
+  const squaredDiffs = arr.map((val) => Math.pow(val - mean, 2));
+  return Math.sqrt(
+    squaredDiffs.reduce((sum, val) => sum + val, 0) / arr.length
+  );
 }
 
-// Winsorize a value
+/**
+ * Winsorize a value given lower and upper bounds.
+ */
 function winsorizeVal(val, lower, upper) {
   return Math.min(Math.max(val, lower), upper);
 }
 
-// Optimized winsorization that reuses sorted array
+/**
+ * Winsorize an array given lower and upper percentile thresholds.
+ */
 function winsorizeArray(arr, lowerP = 0.05, upperP = 0.95) {
   const lower = computePercentile(arr, lowerP);
   const upper = computePercentile(arr, upperP);
-  
   return {
-    winsorized: arr.map(x => winsorizeVal(x, lower, upper)),
+    winsorized: arr.map((x) => winsorizeVal(x, lower, upper)),
     lower,
     upper,
   };
 }
 
-// Optimized SMA with sliding window
+/**
+ * Compute simple moving average over an array.
+ */
 function computeSMA(arr, window) {
   const sma = [];
-  let sum = 0;
-  
-  // Handle initial window (partial windows)
-  for (let i = 0; i < Math.min(window, arr.length); i++) {
-    sum += arr[i];
-    sma.push(sum / (i + 1));
+  for (let i = 0; i < arr.length; i++) {
+    const start = Math.max(0, i - window + 1);
+    const subset = arr.slice(start, i + 1);
+    const avg = subset.reduce((sum, v) => sum + v, 0) / subset.length;
+    sma.push(avg);
   }
-  
-  // Use sliding window for the rest
-  for (let i = window; i < arr.length; i++) {
-    sum = sum - arr[i - window] + arr[i];
-    sma.push(sum / window);
-  }
-  
   return sma;
 }
 
-// Optimized EMA calculation
+/**
+ * Compute exponential moving average (EMA)
+ */
 function computeEMA(arr, window) {
   const k = 2 / (window + 1); // Smoothing factor
   const ema = [arr[0]];
-  
+
   for (let i = 1; i < arr.length; i++) {
     ema.push(arr[i] * k + ema[i - 1] * (1 - k));
   }
-  
+
   return ema;
 }
 
-// Optimized MACD that reuses EMA calculations
+/**
+ * Compute MACD (Moving Average Convergence Divergence)
+ */
 function computeMACD(arr, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
   const fastEMA = computeEMA(arr, fastPeriod);
   const slowEMA = computeEMA(arr, slowPeriod);
@@ -2013,127 +1955,159 @@ function computeMACD(arr, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
   return { macdLine, signalLine, histogram };
 }
 
-// Optimized RSI calculation
+/**
+ * Compute Relative Strength Index (RSI)
+ */
 function computeRSI(prices, window = 14) {
   if (prices.length <= window) {
-    return Array(prices.length).fill(50); // Default to neutral
+    return Array(prices.length).fill(50); // Default to neutral RSI if not enough data
   }
-  
-  // Calculate price changes once
+
   const changes = [];
   for (let i = 1; i < prices.length; i++) {
     changes.push(prices[i] - prices[i - 1]);
   }
-  
-  const rsi = [];
-  let avgGain = 0;
-  let avgLoss = 0;
-  
-  // First RSI value calculation
-  for (let i = 0; i < window; i++) {
-    if (changes[i] > 0) {
-      avgGain += changes[i];
-    } else if (changes[i] < 0) {
-      avgLoss += Math.abs(changes[i]);
+
+  const rsi = [50]; // First value defaults to neutral
+
+  for (let i = window; i < changes.length; i++) {
+    const windowChanges = changes.slice(i - window, i);
+
+    const gains = windowChanges.filter((change) => change > 0);
+    const losses = windowChanges
+      .filter((change) => change < 0)
+      .map((change) => Math.abs(change));
+
+    const avgGain = gains.length
+      ? gains.reduce((sum, val) => sum + val, 0) / window
+      : 0;
+    const avgLoss = losses.length
+      ? losses.reduce((sum, val) => sum + val, 0) / window
+      : 0;
+
+    if (avgLoss === 0) {
+      rsi.push(100);
+    } else {
+      const rs = avgGain / avgLoss;
+      rsi.push(100 - 100 / (1 + rs));
     }
   }
-  
-  avgGain /= window;
-  avgLoss /= window;
-  
-  // Calculate initial RSI
-  let rs = avgGain / (avgLoss || 1e-10); // Avoid division by zero
-  rsi.push(100 - (100 / (1 + rs)));
-  
-  // Calculate remaining RSIs with smoothing
-  for (let i = window; i < changes.length; i++) {
-    const currentGain = changes[i] > 0 ? changes[i] : 0;
-    const currentLoss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
-    
-    // Use smoothed averages
-    avgGain = ((avgGain * (window - 1)) + currentGain) / window;
-    avgLoss = ((avgLoss * (window - 1)) + currentLoss) / window;
-    
-    rs = avgGain / (avgLoss || 1e-10);
-    rsi.push(100 - (100 / (1 + rs)));
+
+  // Pad the beginning with the first calculated RSI value
+  while (rsi.length < prices.length) {
+    rsi.unshift(rsi[0]);
   }
-  
-  // Pad with first value to match input length
-  const padding = prices.length - rsi.length;
-  return Array(padding).fill(rsi[0]).concat(rsi);
+
+  return rsi;
 }
 
-// Optimized Bollinger Bands calculation
+/**
+ * Compute Bollinger Bands
+ */
 function computeBollingerBands(prices, window = 20, numStdDev = 2) {
   const sma = computeSMA(prices, window);
   const bands = [];
-  
+
   for (let i = 0; i < prices.length; i++) {
     const start = Math.max(0, i - window + 1);
-    const slice = prices.slice(start, i + 1);
-    const stdDev = computeStdDev(slice);
-    
+    const windowSlice = prices.slice(start, i + 1);
+    const stdDev = computeStdDev(windowSlice);
+
     bands.push({
       middle: sma[i],
       upper: sma[i] + numStdDev * stdDev,
       lower: sma[i] - numStdDev * stdDev,
     });
   }
-  
+
   return bands;
 }
 
-// Optimized daily log return calculation
+/**
+ * Compute Average True Range (ATR) - a volatility indicator
+ */
+function computeATR(prices, high, low, period = 14) {
+  if (!high || !low) {
+    // If high/low not provided, approximate using the price
+    high = prices;
+    low = prices;
+  }
+
+  const trueRanges = [];
+
+  // First true range is simply the high - low
+  trueRanges.push(high[0] - low[0]);
+
+  // Calculate subsequent true ranges
+  for (let i = 1; i < prices.length; i++) {
+    const trueHigh = Math.max(high[i], prices[i - 1]);
+    const trueLow = Math.min(low[i], prices[i - 1]);
+    trueRanges.push(trueHigh - trueLow);
+  }
+
+  // Calculate ATR using EMA
+  const atr = [trueRanges[0]];
+  for (let i = 1; i < trueRanges.length; i++) {
+    atr.push((atr[i - 1] * (period - 1) + trueRanges[i]) / period);
+  }
+
+  return atr;
+}
+
+/**
+ * Compute daily log return.
+ * For log prices, daily return = log(p[i]) - log(p[i-1])
+ */
 function computeDailyLogReturn(logPrices) {
-  const returns = [0]; // First day return set to 0
-  
+  const returns = [0]; // First day return set to 0.
   for (let i = 1; i < logPrices.length; i++) {
     returns.push(logPrices[i] - logPrices[i - 1]);
   }
-  
   return returns;
 }
 
-// Optimized volatility calculation
+/**
+ * Calculate annualized volatility based on log returns
+ */
 function computeVolatility(logReturns, daysInYear = 252) {
-  // Skip first zero return
-  const stdDev = computeStdDev(logReturns.slice(1)); 
+  const stdDev = computeStdDev(logReturns.slice(1)); // Skip first zero return
   return stdDev * Math.sqrt(daysInYear);
 }
 
-// Custom Huber Loss (simplified version)
 function customHuberLoss(delta = 1.0) {
-  return function(yTrue, yPred) {
+  return function (yTrue, yPred) {
     const error = yTrue.sub(yPred).abs();
-    const quadratic = tf.minimum(error, tf.scalar(delta));
+    const quadratic = tf.minimum(error, delta);
     const linear = error.sub(quadratic);
-    return tf.add(
-      tf.mul(0.5, tf.square(quadratic)), 
-      tf.mul(delta, linear)
-    ).mean();
+    return tf
+      .add(tf.mul(0.5, tf.square(quadratic)), tf.mul(delta, linear))
+      .mean();
   };
 }
 
-// Optimized data preparation
-function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap = 30) {
+function prepareDataFor30DayAheadPrice(
+  data,
+  sequenceLength = 30,
+  predictionGap = 30
+) {
   if (data.length < sequenceLength + predictionGap) {
-    throw new Error("Not enough data to create sequences for prediction.");
+    throw new Error(`Not enough data to create sequences for prediction.`);
   }
 
-  // Extract raw arrays
-  const prices = data.map(item => item.price);
-  const volumes = data.map(item => item.volume);
+  // Extract raw arrays.
+  const prices = data.map((item) => item.price);
+  const volumes = data.map((item) => item.volume);
 
-  // Convert prices to log scale
-  const logPrices = prices.map(p => Math.log(p));
+  // Convert prices to log scale.
+  const logPrices = prices.map((p) => Math.log(p));
 
-  // Compute features efficiently
+  // Compute additional features on log scale.
   const sma7 = computeSMA(logPrices, 7);
   const sma20 = computeSMA(logPrices, 20);
   const sma50 = computeSMA(logPrices, 50);
   const dailyLogReturn = computeDailyLogReturn(logPrices);
 
-  // Calculate volatility with sliding window
+  // Calculate volatility
   const volatility = [];
   const volWindow = 20;
   for (let i = 0; i < dailyLogReturn.length; i++) {
@@ -2143,7 +2117,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     volatility.push(vol);
   }
 
-  // Compute RSI efficiently
+  // Compute RSI
   const rsi = computeRSI(prices);
 
   // Compute price momentum: 30-day return
@@ -2153,13 +2127,13 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     momentum.push(Math.log(prices[i] / prices[lookback]));
   }
 
-  // Calculate price relative to 50-day SMA
+  // Calculate price relative to 50-day SMA (a technical indicator)
   const priceToSMA = [];
   for (let i = 0; i < prices.length; i++) {
     priceToSMA.push(Math.log(prices[i]) - sma50[i]);
   }
 
-  // Use training portion for robust parameters
+  // Use training portion (excluding prediction gap) to compute robust parameters
   const trainLen = data.length - predictionGap;
   const trainLogPricesRaw = logPrices.slice(0, trainLen);
   const trainVolumesRaw = volumes.slice(0, trainLen);
@@ -2171,12 +2145,12 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const trainMomentumRaw = momentum.slice(0, trainLen);
   const trainPriceToSMA_raw = priceToSMA.slice(0, trainLen);
 
-  // Winsorize each feature efficiently
+  // Winsorize each feature to remove extreme outliers
   const {
     winsorized: trainLogPrices,
     lower: lowerLogPrice,
     upper: upperLogPrice,
-  } = winsorizeArray(trainLogPricesRaw, 0.01, 0.99);
+  } = winsorizeArray(trainLogPricesRaw, 0.01, 0.99); // Tighter bounds for Nikkei
 
   const {
     winsorized: trainVolumes,
@@ -2226,7 +2200,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     upper: upperPriceToSMA,
   } = winsorizeArray(trainPriceToSMA_raw, 0.01, 0.99);
 
-  // Compute robust statistics
+  // Compute robust statistics on winsorized training data.
   const medianLogPrice = computeMedian(trainLogPrices);
   const iqrLogPrice = computeIQR(trainLogPrices);
   const medianVolume = computeMedian(trainVolumes);
@@ -2246,7 +2220,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
   const medianPriceToSMA = computeMedian(trainPriceToSMA);
   const iqrPriceToSMA = computeIQR(trainPriceToSMA);
 
-  // Store bounds
+  // Store winsorization bounds.
   const metaBounds = {
     logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
     volume: { lower: lowerVolume, upper: upperVolume },
@@ -2259,7 +2233,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     priceToSMA: { lower: lowerPriceToSMA, upper: upperPriceToSMA },
   };
 
-  // Helper normalizer function
+  // Helper normalization function: winsorize first, then robust normalize.
   const normalize = (val, median, iqr, lower, upper) =>
     (winsorizeVal(val, lower, upper) - median) / (iqr || 1);
 
@@ -2269,17 +2243,20 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     thirtyDayLogReturns.push(Math.log(prices[i + 30 - 1] / prices[i]));
   }
 
-  // Get percentile bounds efficiently
-  const { 0.01: minLogReturn, 0.99: maxLogReturn } = 
-    computeMultiplePercentiles(thirtyDayLogReturns, [0.01, 0.99]);
+  // Calculate 95th, 99th percentiles for both upside and downside
+  const maxUpside = computePercentile(thirtyDayLogReturns, 0.99);
+  const maxDownside = computePercentile(thirtyDayLogReturns, 0.01);
 
-  // Store return constraints
-  const returnConstraints = { maxLogReturn, minLogReturn };
+  // Store these bounds for constraining predictions later
+  const returnConstraints = {
+    maxLogReturn: maxUpside,
+    minLogReturn: maxDownside,
+  };
 
-  // Build sequences efficiently
   const inputs = [];
   const outputs = [];
 
+  // Build training sequences.
   for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
     const seq = [];
     for (let j = 0; j < sequenceLength; j++) {
@@ -2343,7 +2320,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     }
     inputs.push(seq);
 
-    // Target: logPrice 30 days ahead
+    // Target: logPrice 30 days after sequence end
     const targetLogPrice = Math.log(
       prices[i + sequenceLength + predictionGap - 1]
     );
@@ -2358,7 +2335,7 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     );
   }
 
-  // Convert to tensors
+  // Convert inputs and outputs to tensors.
   const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 9]); // 9 features
   const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
 
@@ -2383,46 +2360,61 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 30, predictionGap 
     iqrPriceToSMA,
     bounds: metaBounds,
     returnConstraints,
+    // Save the last known actual price.
     lastKnownPrice: prices[prices.length - 1],
+    // Save historical volatility for realistic predictions
     historicalVolatility: computeVolatility(dailyLogReturn),
   };
 
   return { inputTensor, outputTensor, meta };
 }
 
-// Optimized model creation
+/**
+ * Creates an ensemble of models with different architectures
+ */
 async function createModelEnsemble(inputShape, numModels = 3) {
   const models = [];
 
-  // Create more efficient models with shared configuration
-  
-  // Model 1: LSTM model with simplified architecture
+  // Model 1: LSTM model
   const model1 = tf.sequential();
   model1.add(
     tf.layers.lstm({
-      units: 48, // Reduced from 64
+      units: 64,
       inputShape,
       returnSequences: false,
       kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
       recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
       dropout: 0.2,
+      recurrentDropout: 0.2,
     })
   );
+  model1.add(tf.layers.dropout({ rate: 0.2 }));
+  model1.add(tf.layers.dense({ units: 32, activation: "relu" }));
   model1.add(tf.layers.dense({ units: 1 }));
 
-  // Model 2: Simplified GRU model
+  // Model 2: GRU model (alternative RNN architecture)
   const model2 = tf.sequential();
   model2.add(
     tf.layers.gru({
-      units: 48,
+      units: 64,
       inputShape,
+      returnSequences: true,
+      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+      dropout: 0.3,
+    })
+  );
+  model2.add(
+    tf.layers.gru({
+      units: 32,
       returnSequences: false,
       kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
     })
   );
   model2.add(tf.layers.dense({ units: 1 }));
 
-  // Model 3: Simplified CNN model
+  // Model 3: ConvLSTM model (with CNN feature extraction)
   const model3 = tf.sequential();
   model3.add(
     tf.layers.conv1d({
@@ -2432,73 +2424,79 @@ async function createModelEnsemble(inputShape, numModels = 3) {
       inputShape,
     })
   );
-  model3.add(tf.layers.globalAveragePooling1d());
+  model3.add(tf.layers.maxPooling1d({ poolSize: 2 }));
+  model3.add(
+    tf.layers.lstm({
+      units: 48,
+      returnSequences: false,
+      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+    })
+  );
+  model3.add(tf.layers.dropout({ rate: 0.2 }));
   model3.add(tf.layers.dense({ units: 1 }));
 
   models.push(model1, model2, model3);
 
-  // Use simpler loss function for faster training
+  // Compile all models
   models.forEach((model) => {
     model.compile({
       optimizer: tf.train.adam(0.001),
-      loss: "meanSquaredError", // Faster than custom Huber loss
+      loss: customHuberLoss(0.8),
     });
   });
 
   return models;
 }
 
-// Optimized model training
+/**
+ * Trains an ensemble of models for 30-day ahead price prediction.
+ */
 async function trainModelFor30DayAheadPrice(data) {
   const sequenceLength = 30;
   const predictionGap = 30;
-  
-  // Create the prepared data
   const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(
     data,
     sequenceLength,
     predictionGap
   );
 
-  try {
-    const inputShape = [sequenceLength, 9]; // 9 features
-    const models = await createModelEnsemble(inputShape);
-    
-    console.log("Training ensemble of models for 30-day ahead prediction...");
-    
-    // Train models in parallel
-    const trainPromises = models.map((model, i) => {
-      console.log(`Training model ${i + 1}/${models.length}...`);
-      
-      return model.fit(inputTensor, outputTensor, {
-        epochs: 50, // Reduced from 100
-        batchSize: 64, // Increased batch size
-        validationSplit: 0.2,
-        callbacks: [
-          tf.callbacks.earlyStopping({
-            monitor: "val_loss",
-            patience: 5, // Reduced patience for faster convergence
-            minDelta: 0.001,
-          }),
-        ],
-        shuffle: true,
-        verbose: 0, // Reduce console output
-      });
+  const inputShape = [sequenceLength, 9]; // 9 features
+  const models = await createModelEnsemble(inputShape);
+
+  console.log(
+    "Training ensemble of models for 30-day ahead prediction with enhanced features..."
+  );
+
+  const trainedModels = [];
+  for (let i = 0; i < models.length; i++) {
+    console.log(`Training model ${i + 1}/${models.length}...`);
+
+    const earlyStopping = tf.callbacks.earlyStopping({
+      monitor: "val_loss",
+      patience: 8,
+      minDelta: 0.001,
     });
-    
-    // Wait for all models to finish training
-    await Promise.all(trainPromises);
-    
-    console.log("Ensemble training completed.");
-    
-    return { models, meta };
-  } finally {
-    // Clean up tensors
-    cleanupTensors([inputTensor, outputTensor]);
+
+    await models[i].fit(inputTensor, outputTensor, {
+      epochs: 100,
+      batchSize: 32,
+      validationSplit: 0.2,
+      callbacks: [earlyStopping],
+      shuffle: true,
+    });
+
+    trainedModels.push(models[i]);
   }
+
+  console.log("Ensemble training completed.");
+
+  return { models: trainedModels, meta };
 }
 
-// Optimized prediction function
+/**
+ * Predicts the stock price 30 days ahead using the ensemble of trained models.
+ * Applies realistic constraints based on historical volatility.
+ */
 async function predict30DayAheadPrice(modelObj, data) {
   const { models, meta } = modelObj;
   const {
@@ -2528,19 +2526,19 @@ async function predict30DayAheadPrice(modelObj, data) {
   const sequenceLength = 30;
 
   try {
-    // Extract recent data
+    // Extract recent data.
     const recentData = data.slice(-sequenceLength);
-    const recentPrices = recentData.map(item => item.price);
-    const recentVolumes = recentData.map(item => item.volume);
+    const recentPrices = recentData.map((item) => item.price);
+    const recentVolumes = recentData.map((item) => item.volume);
 
-    // Compute features
-    const recentLogPrices = recentPrices.map(p => Math.log(p));
+    // Compute logPrices and other features for recent data
+    const recentLogPrices = recentPrices.map((p) => Math.log(p));
     const sma7Recent = computeSMA(recentLogPrices, 7);
     const sma20Recent = computeSMA(recentLogPrices, 20);
     const sma50Recent = computeSMA(recentLogPrices, 50);
     const returnRecent = computeDailyLogReturn(recentLogPrices);
 
-    // Calculate volatility
+    // Calculate volatility for recent data
     const volatilityRecent = [];
     const volWindow = 20;
     for (let i = 0; i < returnRecent.length; i++) {
@@ -2566,7 +2564,7 @@ async function predict30DayAheadPrice(modelObj, data) {
       priceToSMARecent.push(Math.log(recentPrices[i]) - sma50Recent[i]);
     }
 
-    // Create normalized sequence
+    // Create the normalized sequence for prediction
     const normSeq = recentData.map((item, idx) => [
       // Log price (normalized)
       (winsorizeVal(
@@ -2628,132 +2626,161 @@ async function predict30DayAheadPrice(modelObj, data) {
 
     const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 9]);
 
-    try {
-      // Get predictions from all models in parallel for speed
-      const predictions = await Promise.all(
-        models.map(model => model.predict(inputTensor).data())
-      );
-      
-      // Extract predictions and filter invalid ones
-      const validPredictions = predictions
-        .map(p => p[0])
-        .filter(p => !isNaN(p) && isFinite(p));
-      
-      // If no valid predictions, use fallback
-      if (validPredictions.length === 0) {
-        console.warn("No valid predictions from any model. Using trend-based fallback.");
-        
-        // Simple fallback: Use recent trend with dampening
-        const startPrice = recentPrices[0];
-        const endPrice = recentPrices[recentPrices.length - 1];
-        const recentTrendPercent = (endPrice / startPrice - 1) * 100;
-        
-        // Dampen the trend
-        const predictedChangePercent = recentTrendPercent * 0.5;
-        
-        // Apply bounds
-        const boundedChange = Math.max(Math.min(predictedChangePercent, 5), -5);
-        const predictedPrice = lastKnownPrice * (1 + boundedChange / 100);
-        
-        // Log fallback information
-        console.log(`Using trend-based fallback prediction: ${predictedPrice.toFixed(2)} (${boundedChange.toFixed(2)}%)`);
-        
-        // Return just the predicted price
-        return predictedPrice;
+    // Get predictions from each model
+    const predictions = [];
+    let validPredictions = 0;
+
+    for (const model of models) {
+      try {
+        const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
+
+        // Only add prediction if it's a valid number
+        if (!isNaN(predNormLogPrice) && isFinite(predNormLogPrice)) {
+          predictions.push(predNormLogPrice);
+          validPredictions++;
+        }
+      } catch (err) {
+        console.warn("Error in model prediction:", err.message);
+        // Continue with other models
       }
-      
-      // Average the valid ensemble predictions
-      const avgPredNormLogPrice = validPredictions.reduce((a, b) => a + b, 0) / validPredictions.length;
-      
-      // Get predicted log-price
-      const predictedLogPrice = avgPredNormLogPrice * iqrLogPrice + medianLogPrice;
-      
-      // Apply constraints based on historical volatility and market behavior
-      const currentLogPrice = Math.log(lastKnownPrice);
-      
-      // Calculate predicted return
-      let predictedReturn = predictedLogPrice - currentLogPrice;
-      
-      // Check for NaN or infinite values
-      if (isNaN(predictedReturn) || !isFinite(predictedReturn)) {
-        console.warn("Invalid predicted return. Using 0% change as fallback.");
-        predictedReturn = 0;
-      }
-      
-      // Apply constraints based on historical bounds
-      predictedReturn = Math.min(
-        Math.max(predictedReturn, returnConstraints.minLogReturn),
-        returnConstraints.maxLogReturn
-      );
-      
-      // Apply volatility-based constraints
-      const monthlyVolatility = historicalVolatility * Math.sqrt(30 / 252);
-      const maxMonthlyMove = 2.5 * monthlyVolatility;
-      
-      // Apply tighter bounds
-      predictedReturn = Math.min(
-        Math.max(predictedReturn, -maxMonthlyMove),
-        maxMonthlyMove
-      );
-      
-      // Handle invalid volatility
-      if (isNaN(maxMonthlyMove) || !isFinite(maxMonthlyMove)) {
-        console.warn("Invalid volatility calculation. Using fixed ±5% bounds.");
-        predictedReturn = Math.min(Math.max(predictedReturn, -0.05), 0.05);
-      }
-      
-      // Recalculate with constraints
-      const constrainedLogPrice = currentLogPrice + predictedReturn;
-      
-      // Get actual price prediction
-      let predictedPrice = Math.exp(constrainedLogPrice);
-      
-      // Final check for NaN or infinity
-      if (isNaN(predictedPrice) || !isFinite(predictedPrice)) {
-        console.warn("Final prediction is invalid. Using current price.");
-        predictedPrice = lastKnownPrice;
-        predictedReturn = 0;
-      }
-      
-      // Calculate percent change
-      const percentChange = (predictedPrice / lastKnownPrice - 1) * 100;
-      
-      // Log additional information for debugging purposes
-      console.log(`Current price: ${lastKnownPrice.toFixed(2)}`);
-      console.log(`Predicted price in 30 days: ${predictedPrice.toFixed(2)} (${percentChange.toFixed(2)}%)`);
-      
-      // Return just the predicted price
-      return predictedPrice;
-    } finally {
-      // Clean up tensors
-      cleanupTensors(inputTensor);
     }
+
+    // If we don't have any valid predictions, use a fallback approach
+    if (validPredictions === 0) {
+      console.warn(
+        "No valid predictions from any model. Using trend-based fallback method."
+      );
+
+      // Simple fallback: Use recent trend (last 30 days) with dampening
+      const startPrice = recentPrices[0];
+      const endPrice = recentPrices[recentPrices.length - 1];
+      const recentTrendPercent = (endPrice / startPrice - 1) * 100;
+
+      // Dampen the trend by 0.5 (assume trend continues but weaker)
+      const predictedChangePercent = recentTrendPercent * 0.5;
+
+      // Apply strict bounds for fallback prediction (max 5% for Nikkei)
+      const boundedChange = Math.max(Math.min(predictedChangePercent, 5), -5);
+      const predictedPrice = lastKnownPrice * (1 + boundedChange / 100);
+
+      return {
+        predictedPrice,
+        percentChange: boundedChange,
+        currentPrice: lastKnownPrice,
+        confidence: {
+          isNonModelFallback: true,
+          monthlyVolatility: historicalVolatility * Math.sqrt(30 / 252) * 100,
+          maxAllowedMove: 5,
+        },
+      };
+    }
+
+    // Average the valid ensemble predictions
+    const avgPredNormLogPrice =
+      predictions.reduce((a, b) => a + b, 0) / validPredictions;
+
+    // Inverse transformation: get predicted log-price
+    const predictedLogPrice =
+      avgPredNormLogPrice * iqrLogPrice + medianLogPrice;
+
+    // Apply realistic constraints based on historical volatility and market behavior
+    const currentLogPrice = Math.log(lastKnownPrice);
+
+    // Calculate the predicted return
+    let predictedReturn = predictedLogPrice - currentLogPrice;
+
+    // Check for NaN or infinite values and replace with safe defaults
+    if (isNaN(predictedReturn) || !isFinite(predictedReturn)) {
+      console.warn("Invalid predicted return. Using 0% change as fallback.");
+      predictedReturn = 0;
+    }
+
+    // Apply constraints based on historical return bounds
+    predictedReturn = Math.min(
+      Math.max(predictedReturn, returnConstraints.minLogReturn),
+      returnConstraints.maxLogReturn
+    );
+
+    // Apply additional volatility-based constraints (tighter for Nikkei stocks)
+    // Max monthly change = ±2.5 * monthly volatility
+    const monthlyVolatility = historicalVolatility * Math.sqrt(30 / 252); // Convert annual to monthly
+    const maxMonthlyMove = 2.5 * monthlyVolatility;
+
+    // Apply the tighter bound for Nikkei stocks (known for lower volatility)
+    predictedReturn = Math.min(
+      Math.max(predictedReturn, -maxMonthlyMove),
+      maxMonthlyMove
+    );
+
+    // Special case for extremely high/low volatility
+    if (isNaN(maxMonthlyMove) || !isFinite(maxMonthlyMove)) {
+      console.warn("Invalid volatility calculation. Using fixed ±5% bounds.");
+      predictedReturn = Math.min(Math.max(predictedReturn, -0.05), 0.05);
+    }
+
+    // Re-calculate predicted log price with constraints
+    const constrainedLogPrice = currentLogPrice + predictedReturn;
+
+    // Exponentiate to get the actual price prediction
+    let predictedPrice = Math.exp(constrainedLogPrice);
+
+    // Final check for NaN or infinity
+    if (isNaN(predictedPrice) || !isFinite(predictedPrice)) {
+      console.warn(
+        "Final prediction is invalid. Using current price as fallback."
+      );
+      predictedPrice = lastKnownPrice;
+      predictedReturn = 0;
+    }
+
+    // Calculate predicted percent change for logging
+    const percentChange = (predictedPrice / lastKnownPrice - 1) * 100;
+
+    console.log(`Current price: ${lastKnownPrice.toFixed(2)}`);
+    console.log(
+      `Predicted price in 30 days: ${predictedPrice.toFixed(
+        2
+      )} (${percentChange.toFixed(2)}%)`
+    );
+    console.log(`Monthly volatility: ${(monthlyVolatility * 100).toFixed(2)}%`);
+    console.log(
+      `Maximum allowed monthly move: ±${(maxMonthlyMove * 100).toFixed(2)}%`
+    );
+
+    return {
+      predictedPrice,
+      percentChange,
+      currentPrice: lastKnownPrice,
+      confidence: {
+        monthlyVolatility: monthlyVolatility * 100,
+        maxAllowedMove: maxMonthlyMove * 100,
+      },
+    };
   } catch (error) {
     console.error("Error in prediction:", error.message);
-    // Return just the price as fallback if error occurs
-    console.warn("Using current price as fallback due to prediction error");
-    return lastKnownPrice;
+    // If any error occurs in the prediction process, return a safe fallback (0% change)
+    return {
+      predictedPrice: lastKnownPrice,
+      percentChange: 0,
+      currentPrice: lastKnownPrice,
+      confidence: {
+        isErrorFallback: true,
+      },
+    };
   }
 }
 
-
-// This function serves as the entry point for stock prediction
-async function analyzeStock(ticker, historicalData) {
-  console.log(`Starting analysis for ${ticker} with ${historicalData.length} data points...`);
-  
+export async function analyzeStock(ticker, historicalData) {
   try {
     // Pre-process data to ensure no NaN values
-    const cleanData = [];
-    for (let i = 0; i < historicalData.length; i++) {
-      const item = historicalData[i];
-      if (item && 
-          item.price !== undefined && 
-          !isNaN(item.price) && 
-          item.volume !== undefined && 
-          !isNaN(item.volume)) {
-        cleanData.push(item);
-      }
-    }
+    const cleanData = historicalData.filter(
+      (item) =>
+        item &&
+        item.price !== undefined &&
+        !isNaN(item.price) &&
+        item.volume !== undefined &&
+        !isNaN(item.volume)
+    );
 
     if (cleanData.length < historicalData.length) {
       console.log(
@@ -2779,61 +2806,50 @@ async function analyzeStock(ticker, historicalData) {
       ticker.startsWith("JP:");
 
     // Calculate basic statistics
-    const prices = cleanData.map(item => item.price);
+    const prices = cleanData.map((item) => item.price);
     const currentPrice = prices[prices.length - 1];
 
     try {
-      // For full model training (if enough data)
+      // If we have enough data for full model training
       if (cleanData.length >= 365) {
-        console.log(`${ticker}: Sufficient data for ML model training (${cleanData.length} points)`);
-        const startTime = Date.now();
-        
-        // Train the model
         const modelObj = await trainModelFor30DayAheadPrice(cleanData);
-        
-        // Get prediction
         const prediction = await predict30DayAheadPrice(modelObj, cleanData);
-        
-        const endTime = Date.now();
-        console.log(`${ticker}: ML prediction completed in ${(endTime - startTime)/1000} seconds`);
 
         // Apply Nikkei-specific constraints if needed
         if (isNikkeiStock && prediction.percentChange > 15) {
           console.log(
-            `${ticker}: Applying Nikkei-specific constraint (max 15% monthly change)`
+            "Applying Nikkei-specific constraint (max 15% monthly change)"
           );
           return currentPrice * 1.15; // Cap at 15% increase
         }
 
-        // Validate prediction
-        if (isNaN(prediction.predictedPrice) || !isFinite(prediction.predictedPrice)) {
-          console.warn(`${ticker}: Invalid prediction result. Using current price.`);
+        // Final validation on prediction result
+        if (
+          isNaN(prediction.predictedPrice) ||
+          !isFinite(prediction.predictedPrice)
+        ) {
+          console.warn("Invalid prediction result. Using current price.");
           return currentPrice;
         }
 
-        console.log(`${ticker}: Predicted price: ${prediction.predictedPrice}`);
         return prediction.predictedPrice;
       } else {
         // Simple trend-based prediction for limited data
-        console.log(`${ticker}: Insufficient historical data for ML model. Using trend-based prediction.`);
         const lookbackPeriod = Math.min(30, prices.length - 1);
         const priorPrice = prices[prices.length - 1 - lookbackPeriod];
         const recentTrendPercent = (currentPrice / priorPrice - 1) * 100;
 
-        // Apply constraints
+        // Apply dampening and constraints
         const maxChange = isNikkeiStock ? 10 : 15; // More conservative for Nikkei
         const predictedChangePercent = Math.max(
           Math.min(recentTrendPercent * 0.3, maxChange),
           -maxChange
         );
-        
-        const predictedPrice = currentPrice * (1 + predictedChangePercent / 100);
-        console.log(`${ticker}: Trend-based prediction: ${predictedPrice} (${predictedChangePercent.toFixed(2)}% change)`);
-        
-        return predictedPrice;
+
+        return currentPrice * (1 + predictedChangePercent / 100);
       }
     } catch (modelError) {
-      console.error(`${ticker}: Error in prediction model:`, modelError.message);
+      console.error("Error in prediction model:", modelError.message);
       return currentPrice; // Return current price as fallback
     }
   } catch (error) {
@@ -2841,18 +2857,13 @@ async function analyzeStock(ticker, historicalData) {
 
     // Safe fallback if available
     if (historicalData && historicalData.length > 0) {
-      for (let i = historicalData.length - 1; i >= 0; i--) {
-        const item = historicalData[i];
-        if (item && item.price && !isNaN(item.price)) {
-          return item.price;
-        }
-      }
+      const lastValidPrice = historicalData
+        .filter((item) => item && item.price && !isNaN(item.price))
+        .map((item) => item.price)
+        .pop();
+
+      return lastValidPrice || null;
     }
     return null;
-  } finally {
-    // Force garbage collection to free memory
-    if (typeof global !== 'undefined' && global.gc) {
-      global.gc();
-    }
   }
 }
