@@ -1881,90 +1881,193 @@ function customHuberLoss(delta = 1.0) {
 }
 
 /**
- * Improved data preparation with market-specific constraints and additional features
+ * Improved Stock Analysis Module with NaN Protection
+ * 
+ * This code enhances the stock analysis model to prevent NaN issues in prediction
+ * by adding comprehensive error handling, validation, and fallback mechanisms.
  */
-function prepareDataFor30DayAheadPrice(data, sequenceLength = 60, predictionGap = 30) {
-  if (data.length < sequenceLength + predictionGap) {
-    throw new Error(`Not enough data to create sequences for prediction.`);
-  }
 
-  // Extract raw arrays.
-  const prices = data.map(item => item.price);
-  const volumes = data.map(item => item.volume);
+/**
+ * Fixed implementation of prepareDataFor30DayAheadPrice function
+ * Added safeguards against NaN, division by zero, and invalid data
+ */
+function prepareDataFor30DayAheadPrice(data, sequenceLength, predictionGap) {
+  // Filter out invalid data points
+  const validData = data.filter(item => 
+    typeof item.price === 'number' && 
+    !isNaN(item.price) && 
+    item.price > 0 &&
+    typeof item.volume === 'number' && 
+    !isNaN(item.volume) && 
+    item.volume >= 0
+  );
   
-  // Convert prices to log scale.
-  const logPrices = prices.map(p => Math.log(p));
+  if (validData.length < data.length) {
+    console.warn(`Filtered out ${data.length - validData.length} invalid data points`);
+  }
   
-  // Compute additional features on log scale.
+  // Extract features
+  const prices = validData.map(item => item.price);
+  const volumes = validData.map(item => item.volume);
+  
+  // Calculate log prices with safety check
+  const logPrices = prices.map(p => {
+    try {
+      return Math.log(Math.max(p, 0.001)); // Ensure non-zero positive value
+    } catch (e) {
+      console.warn("Error calculating log price:", e);
+      return 0;
+    }
+  });
+  
+  // Calculate technical indicators
   const sma7 = computeSMA(logPrices, 7);
   const sma20 = computeSMA(logPrices, 20);
   const sma50 = computeSMA(logPrices, 50);
-  const dailyLogReturn = computeDailyLogReturn(logPrices);
+  const returns = computeDailyLogReturn(logPrices);
   
   // Calculate volatility features
-  const volatility10 = [];
-  const volatility30 = [];
+  const vol10 = [];
+  const vol30 = [];
   
   for (let i = 0; i < logPrices.length; i++) {
     const start10 = Math.max(0, i - 10 + 1);
     const start30 = Math.max(0, i - 30 + 1);
     
-    const vol10 = calculateVolatility(dailyLogReturn.slice(start10, i + 1)) || 0;
-    const vol30 = calculateVolatility(dailyLogReturn.slice(start30, i + 1)) || 0;
+    const v10 = calculateVolatility(returns.slice(start10, i + 1)) || 0;
+    const v30 = calculateVolatility(returns.slice(start30, i + 1)) || 0;
     
-    volatility10.push(vol10);
-    volatility30.push(vol30);
+    vol10.push(v10);
+    vol30.push(v30);
   }
-
-  // Calculate monthly return statistics for constraint setting
-  const monthlyLogReturns = computeMonthlyLogReturns(logPrices);
-  const { lower: minMonthlyReturn, upper: maxMonthlyReturn } = winsorizeArray(monthlyLogReturns, 0.01, 0.99);
   
-  // Calculate typical ranges for Japanese stocks (more conservative than general markets)
-  // Japanese market historically has lower volatility than US markets
-  const japaneseMaxMonthlyReturn = Math.min(maxMonthlyReturn, Math.log(1.10)); // Max 10% monthly return
-  const japaneseMinMonthlyReturn = Math.max(minMonthlyReturn, Math.log(0.90)); // Min -10% monthly return
-
-  // Use training portion (excluding prediction gap) to compute robust parameters
-  const trainLogPricesRaw = logPrices.slice(0, logPrices.length - predictionGap);
-  const trainVolumesRaw = volumes.slice(0, volumes.length - predictionGap);
-  const trainSMA7_raw = sma7.slice(0, sma7.length - predictionGap);
-  const trainSMA20_raw = sma20.slice(0, sma20.length - predictionGap);
-  const trainSMA50_raw = sma50.slice(0, sma50.length - predictionGap);
-  const trainReturnRaw = dailyLogReturn.slice(0, dailyLogReturn.length - predictionGap);
-  const trainVol10_raw = volatility10.slice(0, volatility10.length - predictionGap);
-  const trainVol30_raw = volatility30.slice(0, volatility30.length - predictionGap);
-
-  // Winsorize each feature.
-  const { winsorized: trainLogPrices, lower: lowerLogPrice, upper: upperLogPrice } = winsorizeArray(trainLogPricesRaw);
-  const { winsorized: trainVolumes, lower: lowerVolume, upper: upperVolume } = winsorizeArray(trainVolumesRaw);
-  const { winsorized: trainSMA7, lower: lowerSMA7, upper: upperSMA7 } = winsorizeArray(trainSMA7_raw);
-  const { winsorized: trainSMA20, lower: lowerSMA20, upper: upperSMA20 } = winsorizeArray(trainSMA20_raw);
-  const { winsorized: trainSMA50, lower: lowerSMA50, upper: upperSMA50 } = winsorizeArray(trainSMA50_raw);
-  const { winsorized: trainReturn, lower: lowerReturn, upper: upperReturn } = winsorizeArray(trainReturnRaw);
-  const { winsorized: trainVol10, lower: lowerVol10, upper: upperVol10 } = winsorizeArray(trainVol10_raw);
-  const { winsorized: trainVol30, lower: lowerVol30, upper: upperVol30 } = winsorizeArray(trainVol30_raw);
-
-  // Compute robust statistics on winsorized training data.
-  const medianLogPrice = computeMedian(trainLogPrices);
-  const iqrLogPrice = computeIQR(trainLogPrices);
-  const medianVolume = computeMedian(trainVolumes);
-  const iqrVolume = computeIQR(trainVolumes);
-  const medianSMA7 = computeMedian(trainSMA7);
-  const iqrSMA7 = computeIQR(trainSMA7);
-  const medianSMA20 = computeMedian(trainSMA20);
-  const iqrSMA20 = computeIQR(trainSMA20);
-  const medianSMA50 = computeMedian(trainSMA50);
-  const iqrSMA50 = computeIQR(trainSMA50);
-  const medianReturn = computeMedian(trainReturn);
-  const iqrReturn = computeIQR(trainReturn);
-  const medianVol10 = computeMedian(trainVol10);
-  const iqrVol10 = computeIQR(trainVol10);
-  const medianVol30 = computeMedian(trainVol30);
-  const iqrVol30 = computeIQR(trainVol30);
-
-  // Store winsorization bounds.
-  const metaBounds = {
+  // Winsorize features to handle outliers
+  const { winsorized: wLogPrices, lower: lowerLogPrice, upper: upperLogPrice } = winsorizeArray(logPrices);
+  const { winsorized: wVolumes, lower: lowerVolume, upper: upperVolume } = winsorizeArray(volumes);
+  const { winsorized: wSMA7, lower: lowerSMA7, upper: upperSMA7 } = winsorizeArray(sma7);
+  const { winsorized: wSMA20, lower: lowerSMA20, upper: upperSMA20 } = winsorizeArray(sma20);
+  const { winsorized: wSMA50, lower: lowerSMA50, upper: upperSMA50 } = winsorizeArray(sma50);
+  const { winsorized: wReturns, lower: lowerReturn, upper: upperReturn } = winsorizeArray(returns);
+  const { winsorized: wVol10, lower: lowerVol10, upper: upperVol10 } = winsorizeArray(vol10);
+  const { winsorized: wVol30, lower: lowerVol30, upper: upperVol30 } = winsorizeArray(vol30);
+  
+  // Calculate normalization parameters
+  const medianLogPrice = computeMedian(wLogPrices);
+  const iqrLogPrice = Math.max(computeIQR(wLogPrices), 0.00001); // Prevent division by zero
+  
+  const medianVolume = computeMedian(wVolumes);
+  const iqrVolume = Math.max(computeIQR(wVolumes), 0.00001);
+  
+  const medianSMA7 = computeMedian(wSMA7);
+  const iqrSMA7 = Math.max(computeIQR(wSMA7), 0.00001);
+  
+  const medianSMA20 = computeMedian(wSMA20);
+  const iqrSMA20 = Math.max(computeIQR(wSMA20), 0.00001);
+  
+  const medianSMA50 = computeMedian(wSMA50);
+  const iqrSMA50 = Math.max(computeIQR(wSMA50), 0.00001);
+  
+  const medianReturn = computeMedian(wReturns);
+  const iqrReturn = Math.max(computeIQR(wReturns), 0.00001);
+  
+  const medianVol10 = computeMedian(wVol10);
+  const iqrVol10 = Math.max(computeIQR(wVol10), 0.00001);
+  
+  const medianVol30 = computeMedian(wVol30);
+  const iqrVol30 = Math.max(computeIQR(wVol30), 0.00001);
+  
+  // Bounds for constraining prediction - with safety checks
+  const monthlyLogReturns = computeMonthlyLogReturns(logPrices);
+  
+  let minMonthlyReturn = -0.5; // Default fallback (about -40%)
+  let maxMonthlyReturn = 0.5;  // Default fallback (about +65%)
+  
+  if (monthlyLogReturns && monthlyLogReturns.length > 0) {
+    try {
+      minMonthlyReturn = Math.max(Math.min(...monthlyLogReturns.filter(v => !isNaN(v))), -0.5);
+      maxMonthlyReturn = Math.min(Math.max(...monthlyLogReturns.filter(v => !isNaN(v))), 0.5);
+    } catch (e) {
+      console.warn("Error calculating monthly return bounds:", e);
+    }
+  }
+  
+  // Create sequences for training - with safety checks
+  const sequences = [];
+  const targets = [];
+  
+  for (let i = 0; i < validData.length - sequenceLength - predictionGap; i++) {
+    const sequence = [];
+    
+    let hasInvalidValues = false;
+    
+    for (let j = 0; j < sequenceLength; j++) {
+      const idx = i + j;
+      
+      try {
+        // Normalize with safety checks
+        const normalizedFeatures = [
+          (winsorizeVal(logPrices[idx], lowerLogPrice, upperLogPrice) - medianLogPrice) / iqrLogPrice,
+          (winsorizeVal(volumes[idx], lowerVolume, upperVolume) - medianVolume) / iqrVolume,
+          (winsorizeVal(sma7[idx], lowerSMA7, upperSMA7) - medianSMA7) / iqrSMA7,
+          (winsorizeVal(sma20[idx], lowerSMA20, upperSMA20) - medianSMA20) / iqrSMA20,
+          (winsorizeVal(sma50[idx], lowerSMA50, upperSMA50) - medianSMA50) / iqrSMA50,
+          (winsorizeVal(returns[idx], lowerReturn, upperReturn) - medianReturn) / iqrReturn,
+          (winsorizeVal(vol10[idx], lowerVol10, upperVol10) - medianVol10) / iqrVol10,
+          (winsorizeVal(vol30[idx], lowerVol30, upperVol30) - medianVol30) / iqrVol30
+        ];
+        
+        // Check for NaN or Infinity values
+        if (normalizedFeatures.some(v => !isFinite(v) || isNaN(v))) {
+          hasInvalidValues = true;
+          break;
+        }
+        
+        sequence.push(normalizedFeatures);
+      } catch (e) {
+        console.warn("Error creating sequence at index", idx, e);
+        hasInvalidValues = true;
+        break;
+      }
+    }
+    
+    if (hasInvalidValues) {
+      continue; // Skip this sequence
+    }
+    
+    // Target is normalized log price with predictionGap into the future
+    const targetIdx = i + sequenceLength + predictionGap;
+    
+    if (targetIdx >= logPrices.length) {
+      continue; // Skip if target is out of range
+    }
+    
+    try {
+      const normalizedTargetLogPrice = (
+        winsorizeVal(logPrices[targetIdx], lowerLogPrice, upperLogPrice) - medianLogPrice
+      ) / iqrLogPrice;
+      
+      // Check for NaN or Infinity values
+      if (!isFinite(normalizedTargetLogPrice) || isNaN(normalizedTargetLogPrice)) {
+        continue;
+      }
+      
+      sequences.push(sequence);
+      targets.push([normalizedTargetLogPrice]);
+    } catch (e) {
+      console.warn("Error creating target at index", targetIdx, e);
+    }
+  }
+  
+  if (sequences.length === 0) {
+    throw new Error("Failed to create valid sequences for training");
+  }
+  
+  // Create tensors
+  const inputTensor = tf.tensor3d(sequences);
+  const outputTensor = tf.tensor2d(targets);
+  
+  // Create bounds object for prediction
+  const bounds = {
     logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
     volume: { lower: lowerVolume, upper: upperVolume },
     sma7: { lower: lowerSMA7, upper: upperSMA7 },
@@ -1974,67 +2077,203 @@ function prepareDataFor30DayAheadPrice(data, sequenceLength = 60, predictionGap 
     vol10: { lower: lowerVol10, upper: upperVol10 },
     vol30: { lower: lowerVol30, upper: upperVol30 }
   };
-
-  // Helper normalization function: winsorize first, then robust normalize.
-  const normalize = (val, median, iqr, lower, upper) =>
-    (winsorizeVal(val, lower, upper) - median) / (iqr || 1);
-
-  const inputs = [];
-  const outputs = [];
-
-  // Build training sequences.
-  for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
-    const seq = [];
-    for (let j = 0; j < sequenceLength; j++) {
-      seq.push([
-        normalize(Math.log(prices[i + j]), medianLogPrice, iqrLogPrice, lowerLogPrice, upperLogPrice),
-        normalize(volumes[i + j], medianVolume, iqrVolume, lowerVolume, upperVolume),
-        normalize(sma7[i + j], medianSMA7, iqrSMA7, lowerSMA7, upperSMA7),
-        normalize(sma20[i + j], medianSMA20, iqrSMA20, lowerSMA20, upperSMA20),
-        normalize(sma50[i + j], medianSMA50, iqrSMA50, lowerSMA50, upperSMA50),
-        normalize(dailyLogReturn[i + j], medianReturn, iqrReturn, lowerReturn, upperReturn),
-        normalize(volatility10[i + j], medianVol10, iqrVol10, lowerVol10, upperVol10),
-        normalize(volatility30[i + j], medianVol30, iqrVol30, lowerVol30, upperVol30)
-      ]);
-    }
-    inputs.push(seq);
-
-    // Target: logPrice 30 days after sequence end.
-    const targetLogPrice = Math.log(prices[i + sequenceLength + predictionGap - 1]);
-    outputs.push(normalize(targetLogPrice, medianLogPrice, iqrLogPrice, lowerLogPrice, upperLogPrice));
-  }
-
-  // Convert inputs and outputs to tensors.
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 8]);
-  const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
-
+  
+  // Meta data for normalization and denormalization during prediction
   const meta = {
-    medianLogPrice,
-    iqrLogPrice,
-    medianVolume,
-    iqrVolume,
-    medianSMA7,
-    iqrSMA7,
-    medianSMA20,
-    iqrSMA20,
-    medianSMA50,
-    iqrSMA50,
-    medianReturn,
-    iqrReturn,
-    medianVol10,
-    iqrVol10,
-    medianVol30,
-    iqrVol30,
-    bounds: metaBounds,
-    minMonthlyReturn: japaneseMinMonthlyReturn,
-    maxMonthlyReturn: japaneseMaxMonthlyReturn,
-    // Save the last known actual price.
-    lastKnownPrice: prices[prices.length - 1]
+    medianLogPrice, iqrLogPrice,
+    medianVolume, iqrVolume,
+    medianSMA7, iqrSMA7,
+    medianSMA20, iqrSMA20,
+    medianSMA50, iqrSMA50,
+    medianReturn, iqrReturn,
+    medianVol10, iqrVol10,
+    medianVol30, iqrVol30,
+    bounds,
+    minMonthlyReturn,
+    maxMonthlyReturn
   };
-
+  
   return { inputTensor, outputTensor, meta };
 }
 
+/**
+ * Fixed version of predict30DayAheadPrice with enhanced error handling
+ */
+async function predict30DayAheadPrice(modelObj, data, maxMonthlyReturnPct = 5) {
+  try {
+    const { model, meta } = modelObj;
+    const sequenceLength = 60; // Must match the sequence length used during training
+    
+    // Extract relevant meta data
+    const {
+      medianLogPrice, iqrLogPrice,
+      medianVolume, iqrVolume,
+      medianSMA7, iqrSMA7,
+      medianSMA20, iqrSMA20,
+      medianSMA50, iqrSMA50,
+      medianReturn, iqrReturn,
+      medianVol10, iqrVol10,
+      medianVol30, iqrVol30,
+      bounds,
+      minMonthlyReturn,
+      maxMonthlyReturn
+    } = meta;
+    
+    // Validate meta data
+    if (!isFinite(medianLogPrice) || isNaN(medianLogPrice) || !isFinite(iqrLogPrice) || isNaN(iqrLogPrice) || iqrLogPrice === 0) {
+      console.error("Invalid normalization parameters:", { medianLogPrice, iqrLogPrice });
+      throw new Error("Invalid normalization parameters");
+    }
+    
+    // Use a market-specific constraint that can be adjusted
+    const userMaxMonthlyReturn = Math.log(1 + (maxMonthlyReturnPct / 100));
+    const userMinMonthlyReturn = Math.log(1 - (maxMonthlyReturnPct / 100));
+    
+    // Use the more conservative of the two constraints
+    const effectiveMaxReturn = Math.min(maxMonthlyReturn || 0.5, userMaxMonthlyReturn);
+    const effectiveMinReturn = Math.max(minMonthlyReturn || -0.5, userMinMonthlyReturn);
+    
+    // Filter out invalid data
+    const validData = data.filter(item => 
+      typeof item.price === 'number' && !isNaN(item.price) && item.price > 0 &&
+      typeof item.volume === 'number' && !isNaN(item.volume) && item.volume >= 0
+    );
+    
+    // Extract recent data
+    if (validData.length < sequenceLength) {
+      throw new Error(`Not enough valid data for prediction. Need at least ${sequenceLength} data points.`);
+    }
+    
+    const recentData = validData.slice(-sequenceLength);
+    const recentPrices = recentData.map(item => item.price);
+    const recentVolumes = recentData.map(item => item.volume);
+    
+    // Store the last price as a fallback
+    const lastPrice = recentPrices[recentPrices.length - 1];
+    
+    // Compute features for recent data
+    const recentLogPrices = recentPrices.map(p => {
+      try {
+        return Math.log(Math.max(p, 0.001)); // Ensure non-zero positive value
+      } catch (e) {
+        console.warn("Error calculating log price:", e);
+        return 0;
+      }
+    });
+    
+    const sma7Recent = computeSMA(recentLogPrices, 7);
+    const sma20Recent = computeSMA(recentLogPrices, 20);
+    const sma50Recent = computeSMA(recentLogPrices, 50);
+    const returnRecent = computeDailyLogReturn(recentLogPrices);
+    
+    // Calculate volatility features
+    const vol10Recent = [];
+    const vol30Recent = [];
+    
+    for (let i = 0; i < recentLogPrices.length; i++) {
+      const start10 = Math.max(0, i - 10 + 1);
+      const start30 = Math.max(0, i - 30 + 1);
+      
+      const vol10 = calculateVolatility(returnRecent.slice(start10, i + 1)) || 0;
+      const vol30 = calculateVolatility(returnRecent.slice(start30, i + 1)) || 0;
+      
+      vol10Recent.push(vol10);
+      vol30Recent.push(vol30);
+    }
+    
+    // Create normalized input sequence with validation
+    const normSeq = [];
+    
+    for (let idx = 0; idx < recentData.length; idx++) {
+      try {
+        const features = [
+          (winsorizeVal(recentLogPrices[idx], bounds.logPrice.lower, bounds.logPrice.upper) - medianLogPrice) / (iqrLogPrice || 0.00001),
+          (winsorizeVal(recentVolumes[idx], bounds.volume.lower, bounds.volume.upper) - medianVolume) / (iqrVolume || 0.00001),
+          (winsorizeVal(sma7Recent[idx], bounds.sma7.lower, bounds.sma7.upper) - medianSMA7) / (iqrSMA7 || 0.00001),
+          (winsorizeVal(sma20Recent[idx], bounds.sma20.lower, bounds.sma20.upper) - medianSMA20) / (iqrSMA20 || 0.00001),
+          (winsorizeVal(sma50Recent[idx], bounds.sma50.lower, bounds.sma50.upper) - medianSMA50) / (iqrSMA50 || 0.00001),
+          (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) - medianReturn) / (iqrReturn || 0.00001),
+          (winsorizeVal(vol10Recent[idx], bounds.vol10.lower, bounds.vol10.upper) - medianVol10) / (iqrVol10 || 0.00001),
+          (winsorizeVal(vol30Recent[idx], bounds.vol30.lower, bounds.vol30.upper) - medianVol30) / (iqrVol30 || 0.00001)
+        ];
+        
+        // Validate all features are finite numbers
+        if (features.some(val => !isFinite(val) || isNaN(val))) {
+          console.warn(`Invalid feature value at index ${idx}`);
+          continue;
+        }
+        
+        normSeq.push(features);
+      } catch (e) {
+        console.warn(`Error creating normalized feature at index ${idx}:`, e);
+      }
+    }
+    
+    if (normSeq.length < sequenceLength) {
+      throw new Error(`Not enough valid normalized data for prediction. Generated ${normSeq.length}/${sequenceLength} required points.`);
+    }
+    
+    // Take only the last sequenceLength points if we have more
+    const finalSeq = normSeq.slice(-sequenceLength);
+    
+    const inputTensor = tf.tensor3d([finalSeq], [1, sequenceLength, 8]);
+    
+    // Make prediction with error handling
+    let predNormLogPrice;
+    try {
+      const prediction = model.predict(inputTensor);
+      predNormLogPrice = prediction.dataSync()[0];
+      
+      // Clean up tensor to prevent memory leaks
+      prediction.dispose();
+      inputTensor.dispose();
+      
+      // Check if prediction is valid
+      if (!isFinite(predNormLogPrice) || isNaN(predNormLogPrice)) {
+        console.warn("Model returned NaN or infinite prediction:", predNormLogPrice);
+        return lastPrice; // Fallback to last known price
+      }
+    } catch (e) {
+      console.error("Error during model prediction:", e);
+      return lastPrice; // Fallback to last known price
+    }
+    
+    // Inverse transformation to get predicted log-price
+    const predictedLogPrice = predNormLogPrice * iqrLogPrice + medianLogPrice;
+    
+    // Calculate and constrain the predicted return
+    const lastLogPrice = Math.log(Math.max(lastPrice, 0.001)); // Ensure positive value
+    const predictedLogReturn = predictedLogPrice - lastLogPrice;
+    
+    // Apply market-specific constraints
+    const constrainedLogReturn = Math.min(Math.max(predictedLogReturn, effectiveMinReturn), effectiveMaxReturn);
+    
+    // Calculate the final constrained log price and convert to actual price
+    const constrainedLogPrice = lastLogPrice + constrainedLogReturn;
+    const predictedPrice = Math.exp(constrainedLogPrice);
+    
+    // Final validation
+    if (!isFinite(predictedPrice) || isNaN(predictedPrice) || predictedPrice <= 0) {
+      console.warn("Invalid final predicted price:", predictedPrice);
+      return lastPrice; // Fallback to last known price
+    }
+    
+    // Calculate percentage change for reporting
+    const percentChange = (Math.exp(constrainedLogReturn) - 1) * 100;
+    console.log(`Predicted price: ${predictedPrice.toFixed(2)}, Change: ${percentChange.toFixed(2)}%`);
+    
+    return predictedPrice;
+  } catch (error) {
+    console.error("Error in predict30DayAheadPrice:", error);
+    // Find the last valid price in the dataset
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (typeof data[i].price === 'number' && !isNaN(data[i].price) && data[i].price > 0) {
+        return data[i].price;
+      }
+    }
+    return 0; // Ultimate fallback if no valid prices exist
+  }
+}
 /**
  * Improved model training with more robust architecture and regularization
  */
@@ -2103,128 +2342,127 @@ async function trainModelFor30DayAheadPrice(data) {
   return { model, meta };
 }
 
+
+
 /**
- * Improved prediction function with realistic constraints for Japanese stocks
+ * Enhanced analyzeStock function with comprehensive error handling
+ * and debugging to prevent NaN prediction issues
  */
-async function predict30DayAheadPrice(modelObj, data, maxMonthlyReturnPct = 5) {
-  const { model, meta } = modelObj;
-  const sequenceLength = 60; // Must match the sequence length used during training
-  
-  // Extract relevant meta data
-  const {
-    medianLogPrice, iqrLogPrice,
-    medianVolume, iqrVolume,
-    medianSMA7, iqrSMA7,
-    medianSMA20, iqrSMA20,
-    medianSMA50, iqrSMA50,
-    medianReturn, iqrReturn,
-    medianVol10, iqrVol10,
-    medianVol30, iqrVol30,
-    bounds,
-    minMonthlyReturn,
-    maxMonthlyReturn
-  } = meta;
-
-  // Use a market-specific constraint that can be adjusted
-  const userMaxMonthlyReturn = Math.log(1 + (maxMonthlyReturnPct / 100));
-  const userMinMonthlyReturn = Math.log(1 - (maxMonthlyReturnPct / 100));
-  
-  // Use the more conservative of the two constraints
-  const effectiveMaxReturn = Math.min(maxMonthlyReturn, userMaxMonthlyReturn);
-  const effectiveMinReturn = Math.max(minMonthlyReturn, userMinMonthlyReturn);
-
-  // Extract recent data
-  if (data.length < sequenceLength) {
-    throw new Error(`Not enough data for prediction. Need at least ${sequenceLength} data points.`);
-  }
-
-  const recentData = data.slice(-sequenceLength);
-  const recentPrices = recentData.map(item => item.price);
-  const recentVolumes = recentData.map(item => item.volume);
-  
-  // Compute features for recent data
-  const recentLogPrices = recentPrices.map(p => Math.log(p));
-  const sma7Recent = computeSMA(recentLogPrices, 7);
-  const sma20Recent = computeSMA(recentLogPrices, 20);
-  const sma50Recent = computeSMA(recentLogPrices, 50);
-  const returnRecent = computeDailyLogReturn(recentLogPrices);
-  
-  // Calculate volatility features
-  const vol10Recent = [];
-  const vol30Recent = [];
-  
-  for (let i = 0; i < recentLogPrices.length; i++) {
-    const start10 = Math.max(0, i - 10 + 1);
-    const start30 = Math.max(0, i - 30 + 1);
-    
-    const vol10 = calculateVolatility(returnRecent.slice(start10, i + 1)) || 0;
-    const vol30 = calculateVolatility(returnRecent.slice(start30, i + 1)) || 0;
-    
-    vol10Recent.push(vol10);
-    vol30Recent.push(vol30);
-  }
-
-  // Create normalized input sequence
-  const normSeq = recentData.map((item, idx) => [
-    (winsorizeVal(Math.log(item.price), bounds.logPrice.lower, bounds.logPrice.upper) - medianLogPrice) / (iqrLogPrice || 1),
-    (winsorizeVal(item.volume, bounds.volume.lower, bounds.volume.upper) - medianVolume) / (iqrVolume || 1),
-    (winsorizeVal(sma7Recent[idx], bounds.sma7.lower, bounds.sma7.upper) - medianSMA7) / (iqrSMA7 || 1),
-    (winsorizeVal(sma20Recent[idx], bounds.sma20.lower, bounds.sma20.upper) - medianSMA20) / (iqrSMA20 || 1),
-    (winsorizeVal(sma50Recent[idx], bounds.sma50.lower, bounds.sma50.upper) - medianSMA50) / (iqrSMA50 || 1),
-    (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) - medianReturn) / (iqrReturn || 1),
-    (winsorizeVal(vol10Recent[idx], bounds.vol10.lower, bounds.vol10.upper) - medianVol10) / (iqrVol10 || 1),
-    (winsorizeVal(vol30Recent[idx], bounds.vol30.lower, bounds.vol30.upper) - medianVol30) / (iqrVol30 || 1)
-  ]);
-
-  const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 8]);
-  
-  // Make prediction
-  const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
-
-  // Inverse transformation to get predicted log-price
-  const predictedLogPrice = predNormLogPrice * iqrLogPrice + medianLogPrice;
-  
-  // Calculate and constrain the predicted return
-  const lastLogPrice = Math.log(recentPrices[recentPrices.length - 1]);
-  const predictedLogReturn = predictedLogPrice - lastLogPrice;
-  
-  // Apply market-specific constraints
-  const constrainedLogReturn = Math.min(Math.max(predictedLogReturn, effectiveMinReturn), effectiveMaxReturn);
-  
-  // Calculate the final constrained log price and convert to actual price
-  const constrainedLogPrice = lastLogPrice + constrainedLogReturn;
-  const predictedPrice = Math.exp(constrainedLogPrice);
-  
-  // Calculate percentage change for reporting
-  const percentChange = (Math.exp(constrainedLogReturn) - 1) * 100;
-  
-  return predictedPrice;
-}
-
-
 export async function analyzeStock(
   ticker,
   historicalData,
   maxMonthlyReturnPct = 5
 ) {
   try {
+    console.log(`📊 Analyzing stock ${ticker} with ${historicalData.length} data points...`);
+    
+    // Validate minimum data requirement
     if (historicalData.length < 120) {
-      throw new Error(`Not enough data to train the model for ${ticker}.`);
+      console.error(`❌ Not enough data to train the model for ${ticker}.`);
+      return null;
     }
-
-    const modelObj = await trainModelFor30DayAheadPrice(historicalData);
-    const predictedPrice = await predict30DayAheadPrice(
-      modelObj,
-      historicalData,
-      maxMonthlyReturnPct
+    
+    // Validate data integrity
+    const invalidPriceEntries = historicalData.filter(
+      item => typeof item.price !== 'number' || isNaN(item.price) || item.price <= 0
     );
-
+    
+    const invalidVolumeEntries = historicalData.filter(
+      item => typeof item.volume !== 'number' || isNaN(item.volume) || item.volume < 0
+    );
+    
+    if (invalidPriceEntries.length > 0) {
+      console.warn(`⚠️ Found ${invalidPriceEntries.length} invalid price entries in ${ticker}`);
+    }
+    
+    if (invalidVolumeEntries.length > 0) {
+      console.warn(`⚠️ Found ${invalidVolumeEntries.length} invalid volume entries in ${ticker}`);
+    }
+    
+    // If more than 20% of data is invalid, return error
+    if (invalidPriceEntries.length > historicalData.length * 0.2) {
+      console.error(`❌ Too many invalid price entries in ${ticker}.`);
+      return null;
+    }
+    
+    // Filter out any invalid data
+    const validData = historicalData.filter(
+      item => typeof item.price === 'number' && !isNaN(item.price) && item.price > 0 &&
+              typeof item.volume === 'number' && !isNaN(item.volume) && item.volume >= 0
+    );
+    
+    console.log(`ℹ️ Using ${validData.length}/${historicalData.length} valid data points for analysis`);
+    
+    // Train model with enhanced error tracing
+    console.log(`🧠 Training model for ${ticker}...`);
+    let modelObj;
+    try {
+      modelObj = await trainModelFor30DayAheadPrice(validData);
+      console.log(`✅ Model training completed for ${ticker}`);
+    } catch (error) {
+      console.error(`❌ Error training model for ${ticker}:`, error.message);
+      return null;
+    }
+    
+    // Verify model object integrity
+    if (!modelObj || !modelObj.model || !modelObj.meta) {
+      console.error(`❌ Invalid model object for ${ticker}`);
+      return null;
+    }
+    
+    // Check meta data integrity
+    const { meta } = modelObj;
+    const requiredMetaFields = [
+      'medianLogPrice', 'iqrLogPrice', 'bounds', 
+      'minMonthlyReturn', 'maxMonthlyReturn'
+    ];
+    
+    const missingFields = requiredMetaFields.filter(field => 
+      meta[field] === undefined || meta[field] === null
+    );
+    
+    if (missingFields.length > 0) {
+      console.error(`❌ Missing required meta fields for ${ticker}: ${missingFields.join(', ')}`);
+      return null;
+    }
+    
+    // Check for zero IQR values
+    if (meta.iqrLogPrice === 0) {
+      console.warn(`⚠️ Zero iqrLogPrice detected for ${ticker}, setting to minimum value`);
+      meta.iqrLogPrice = 0.00001;
+    }
+    
+    // Make prediction with enhanced logging
+    console.log(`🔮 Making prediction for ${ticker}...`);
+    let predictedPrice;
+    try {
+      predictedPrice = await predict30DayAheadPrice(
+        modelObj,
+        validData,
+        maxMonthlyReturnPct
+      );
+      
+      // Verify prediction
+      if (predictedPrice === null || predictedPrice === undefined || !isFinite(predictedPrice) || isNaN(predictedPrice)) {
+        const lastPrice = validData[validData.length - 1].price;
+        console.warn(`⚠️ Invalid prediction (${predictedPrice}) for ${ticker}, falling back to last price: ${lastPrice}`);
+        
+        // Fall back to last price
+        predictedPrice = lastPrice;
+      } else {
+        // Calculate and log percentage change
+        const lastPrice = validData[validData.length - 1].price;
+        const change = ((predictedPrice - lastPrice) / lastPrice) * 100;
+        console.log(`📈 Prediction for ${ticker}: ${predictedPrice.toFixed(2)} (${change >= 0 ? '+' : ''}${change.toFixed(2)}%)`);
+      }
+    } catch (error) {
+      console.error(`❌ Error making prediction for ${ticker}:`, error.message);
+      return null;
+    }
+    
     return predictedPrice;
-
   } catch (error) {
-    console.error(`❌ Error analyzing stock ${ticker}:`, error.message);
+    console.error(`❌ Unhandled error analyzing stock ${ticker}:`, error.message);
     return null;
   }
 }
-
-
