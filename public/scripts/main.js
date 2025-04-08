@@ -1251,6 +1251,15 @@ function getLimitOrderPrice(stock) {
     prevClosePrice, // Previous day closing price
   } = stock;
 
+  // Helper function to calculate standard deviation
+  function calculateStdDev(values) {
+    const mean = values.reduce((sum, val) => sum + val, 0) / values.length;
+    const squaredDiffs = values.map((val) => Math.pow(val - mean, 2));
+    return Math.sqrt(
+      squaredDiffs.reduce((sum, val) => sum + val, 0) / values.length
+    );
+  }
+
   // Check for significant market-wide movement
   const dailyChange = prevClosePrice ? currentPrice / prevClosePrice - 1 : 0;
   const isMarketShockDay = Math.abs(dailyChange) > 0.02; // 2% daily move threshold
