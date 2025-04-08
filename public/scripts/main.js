@@ -1532,262 +1532,292 @@ window.scan = {
 ];
 
 
-      for (const tickerObj of tickers) {
-  console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
-
-  try {
-    // 1) Fetch Yahoo data
-    const result = await fetchSingleStockData(tickerObj);
-    if (!result.success) {
-      console.error("Error fetching stock analysis:", result.error);
-      throw new Error("Failed to fetch Yahoo data.");
-    }
-
-    const { code, sector, yahooData } = result.data;
-
-    // First check if yahooData exists at all
-    if (!yahooData) {
-      console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
-      throw new Error("Yahoo data is completely missing.");
-    }
-
-    // Define critical fields that must be present
-    const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
-    const missingCriticalFields = criticalFields.filter(
-      (field) => !yahooData[field]
-    );
-
-    // Define non-critical fields to check
-    const nonCriticalFields = [
-      "openPrice",
-      "prevClosePrice",
-      "marketCap",
-      "peRatio",
-      "pbRatio",
-      "dividendYield",
-      "dividendGrowth5yr",
-      "fiftyTwoWeekHigh",
-      "fiftyTwoWeekLow",
-      "epsTrailingTwelveMonths",
-      "epsForward",
-      "epsGrowthRate",
-      "debtEquityRatio",
-      "movingAverage50d",
-      "movingAverage200d",
-      "rsi14",
-      "macd",
-      "macdSignal",
-      "bollingerMid",
-      "bollingerUpper",
-      "bollingerLower",
-      "stochasticK",
-      "stochasticD",
-      "obv",
-      "atr14",
-    ];
-    const missingNonCriticalFields = nonCriticalFields.filter(
-      (field) => yahooData[field] === undefined || yahooData[field] === null
-    );
-
-    // Check for zero values (which might indicate failures in calculations)
-    const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
-      (field) =>
-        yahooData[field] !== undefined &&
-        yahooData[field] !== null &&
-        yahooData[field] === 0 &&
-        !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
-    );
-
-    // Log detailed information
-    console.log(`Data validation for ${code}:`);
-
-    if (missingCriticalFields.length > 0) {
-      console.error(
-        `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
-      );
-      throw new Error(
-        `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
-      );
-    }
-
-    if (missingNonCriticalFields.length > 0) {
-      console.warn(
-        `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
-      );
-    }
-
-    if (zeroFields.length > 0) {
-      console.warn(
-        `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
-          ", "
-        )}`
-      );
-    }
-
-    console.log(
-      `✅ All critical fields present for ${code}. Continuing analysis...`
-    );
-    console.log("Yahoo data:", yahooData);
-
-
-    // 2) Build stock object
-    const stock = {
-      ticker: code,
-      sector,
-      currentPrice: yahooData.currentPrice,
-      highPrice: yahooData.highPrice,
-      lowPrice: yahooData.lowPrice,
-      openPrice: yahooData.openPrice,
-      prevClosePrice: yahooData.prevClosePrice,
-      marketCap: yahooData.marketCap,
-      peRatio: yahooData.peRatio,
-      pbRatio: yahooData.pbRatio,
-      dividendYield: yahooData.dividendYield,
-      dividendGrowth5yr: yahooData.dividendGrowth5yr,
-      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-      epsForward: yahooData.epsForward,
-      epsGrowthRate: yahooData.epsGrowthRate,
-      debtEquityRatio: yahooData.debtEquityRatio,
-      movingAverage50d: yahooData.movingAverage50d,
-      movingAverage200d: yahooData.movingAverage200d,
-
-      // 📈 Technical indicators
-      rsi14: yahooData.rsi14,
-      macd: yahooData.macd,
-      macdSignal: yahooData.macdSignal,
-      bollingerMid: yahooData.bollingerMid,
-      bollingerUpper: yahooData.bollingerUpper,
-      bollingerLower: yahooData.bollingerLower,
-      stochasticK: yahooData.stochasticK,
-      stochasticD: yahooData.stochasticD,
-      obv: yahooData.obv,
-      atr14: yahooData.atr14,
-    };
-
-    const historicalData = await fetchHistoricalData(stock.ticker);
-    stock.historicalData = historicalData || [];
-
-    // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
-    console.log(`Analyzing stock: ${stock.ticker}`);
-    const prediction = await analyzeStock(stock.ticker, historicalData);
-    if (prediction == null) {
-      console.error(
-        `Failed to generate prediction for ${stock.ticker}. Aborting.`
-      );
-      throw new Error("Failed to generate prediction.");
-    }
-
-    console.log("prediction: ",prediction);
-    stock.prediction = prediction;
-
-    // 5) Calculate Stop Loss & Target
-    const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-      stock,
-      prediction
-    );
-    if (stopLoss === null || targetPrice === null) {
-      console.error(
-        `Failed to calculate stop loss or target price for ${stock.ticker}.`
-      );
-      throw new Error("Stop loss or target price calculation failed.");
-    }
-    stock.stopLoss = stopLoss;
-    stock.targetPrice = targetPrice;
-
-    // 7) Compute growth potential
-    const growthPotential =
-      ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
-
-    // 8) Compute fundamental/technical score
-    stock.score = computeScore(stock, stock.sector);
-
-    // 9) Combine them => finalScore
-    const weights = { metrics: 0.7, growth: 0.3 };
-    const finalScore =
-      weights.metrics * stock.score + weights.growth * (growthPotential / 100);
-
-    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-    stock.finalScore = parseFloat(finalScore.toFixed(2));
-    stock.technicalScore = getTechnicalScore(stock);
-    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-    stock.valuationScore = getValuationScore(stock);
-    stock.entryTimingScore = getEntryTimingScore(stock);
-    stock.tier = getNumericTier(stock);
-    stock.limitOrder = getLimitOrderPrice(stock);
-
-    // 10) Send data in Bubble key format
- const stockObject = {
-   _api_c2_ticker: stock.ticker,
-   _api_c2_sector: stock.sector,
-   _api_c2_currentPrice: stock.currentPrice,
-   _api_c2_entryTimingScore: stock.entryTimingScore,
-   _api_c2_prediction: stock.prediction,
-   _api_c2_stopLoss: stock.stopLoss,
-   _api_c2_targetPrice: stock.targetPrice,
-   _api_c2_growthPotential: stock.growthPotential,
-   _api_c2_score: stock.score,
-   _api_c2_finalScore: stock.finalScore,
-   _api_c2_tier: stock.tier,
-   _api_c2_limitOrder: stock.limitOrder,
-
-   // Add complete stock data as JSON
-   _api_c2_otherData: JSON.stringify({
-     // Price data
-     highPrice: stock.highPrice,
-     lowPrice: stock.lowPrice,
-     openPrice: stock.openPrice,
-     prevClosePrice: stock.prevClosePrice,
-
-     // Fundamental metrics
-     marketCap: stock.marketCap,
-     peRatio: stock.peRatio,
-     pbRatio: stock.pbRatio,
-     dividendYield: stock.dividendYield,
-     dividendGrowth5yr: stock.dividendGrowth5yr,
-     fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-     fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-     epsForward: stock.epsForward,
-     epsGrowthRate: stock.epsGrowthRate,
-     debtEquityRatio: stock.debtEquityRatio,
-
-     // Technical indicators
-     movingAverage50d: stock.movingAverage50d,
-     movingAverage200d: stock.movingAverage200d,
-     rsi14: stock.rsi14,
-     macd: stock.macd,
-     macdSignal: stock.macdSignal,
-     bollingerMid: stock.bollingerMid,
-     bollingerUpper: stock.bollingerUpper,
-     bollingerLower: stock.bollingerLower,
-     stochasticK: stock.stochasticK,
-     stochasticD: stock.stochasticD,
-     obv: stock.obv,
-     atr14: stock.atr14,
-
-     // Calculated scores
-     technicalScore: stock.technicalScore,
-     fundamentalScore: stock.fundamentalScore,
-     valuationScore: stock.valuationScore,
-   }),
- };
-
-    console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
-    bubble_fn_result(stockObject);
-  } catch (error) {
-          console.error(
-            `❌ Error processing ticker ${tickerObj.code}:`,
-            error.message
-          );
-        }
+      // Process stocks in batches of 10
+      const BATCH_SIZE = 10;
+      const batches = [];
+      
+      // Split the tickers array into batches
+      for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
+        batches.push(tickers.slice(i, i + BATCH_SIZE));
       }
+      
+      console.log(`Processing ${tickers.length} stocks in ${batches.length} batches of up to ${BATCH_SIZE}`);
+      
+      // Process each batch sequentially, but the stocks within each batch in parallel
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`\n=== Processing Batch ${batchIndex + 1}/${batches.length} (${batch.length} stocks) ===\n`);
+        
+        // Process all stocks in the current batch in parallel
+        const batchPromises = batch.map(tickerObj => this.processStock(tickerObj));
+        
+        // Wait for all stocks in this batch to complete
+        await Promise.all(batchPromises);
+        
+        console.log(`\n=== Completed Batch ${batchIndex + 1}/${batches.length} ===\n`);
+      }
+      
+      console.log("All batches processed successfully");
     } catch (error) {
       console.error("❌ Error in fetchStockAnalysis:", error.message);
       throw new Error("Analysis aborted due to errors.");
     }
   },
+  
+  // New method to process a single stock
+  async processStock(tickerObj) {
+    console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
+
+    try {
+      // 1) Fetch Yahoo data
+      const result = await fetchSingleStockData(tickerObj);
+      if (!result.success) {
+        console.error("Error fetching stock analysis:", result.error);
+        throw new Error("Failed to fetch Yahoo data.");
+      }
+
+      const { code, sector, yahooData } = result.data;
+
+      // First check if yahooData exists at all
+      if (!yahooData) {
+        console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
+        throw new Error("Yahoo data is completely missing.");
+      }
+
+      // Define critical fields that must be present
+      const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+      const missingCriticalFields = criticalFields.filter(
+        (field) => !yahooData[field]
+      );
+
+      // Define non-critical fields to check
+      const nonCriticalFields = [
+        "openPrice",
+        "prevClosePrice",
+        "marketCap",
+        "peRatio",
+        "pbRatio",
+        "dividendYield",
+        "dividendGrowth5yr",
+        "fiftyTwoWeekHigh",
+        "fiftyTwoWeekLow",
+        "epsTrailingTwelveMonths",
+        "epsForward",
+        "epsGrowthRate",
+        "debtEquityRatio",
+        "movingAverage50d",
+        "movingAverage200d",
+        "rsi14",
+        "macd",
+        "macdSignal",
+        "bollingerMid",
+        "bollingerUpper",
+        "bollingerLower",
+        "stochasticK",
+        "stochasticD",
+        "obv",
+        "atr14",
+      ];
+      const missingNonCriticalFields = nonCriticalFields.filter(
+        (field) => yahooData[field] === undefined || yahooData[field] === null
+      );
+
+      // Check for zero values (which might indicate failures in calculations)
+      const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+        (field) =>
+          yahooData[field] !== undefined &&
+          yahooData[field] !== null &&
+          yahooData[field] === 0 &&
+          !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field) // Fields that can legitimately be zero
+      );
+
+      // Log detailed information
+      console.log(`Data validation for ${code}:`);
+
+      if (missingCriticalFields.length > 0) {
+        console.error(
+          `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+        );
+        throw new Error(
+          `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
+        );
+      }
+
+      if (missingNonCriticalFields.length > 0) {
+        console.warn(
+          `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`
+        );
+      }
+
+      if (zeroFields.length > 0) {
+        console.warn(
+          `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+            ", "
+          )}`
+        );
+      }
+
+      console.log(
+        `✅ All critical fields present for ${code}. Continuing analysis...`
+      );
+      console.log("Yahoo data:", yahooData);
+
+      // 2) Build stock object
+      const stock = {
+        ticker: code,
+        sector,
+        currentPrice: yahooData.currentPrice,
+        highPrice: yahooData.highPrice,
+        lowPrice: yahooData.lowPrice,
+        openPrice: yahooData.openPrice,
+        prevClosePrice: yahooData.prevClosePrice,
+        marketCap: yahooData.marketCap,
+        peRatio: yahooData.peRatio,
+        pbRatio: yahooData.pbRatio,
+        dividendYield: yahooData.dividendYield,
+        dividendGrowth5yr: yahooData.dividendGrowth5yr,
+        fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+        epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+        epsForward: yahooData.epsForward,
+        epsGrowthRate: yahooData.epsGrowthRate,
+        debtEquityRatio: yahooData.debtEquityRatio,
+        movingAverage50d: yahooData.movingAverage50d,
+        movingAverage200d: yahooData.movingAverage200d,
+
+        // 📈 Technical indicators
+        rsi14: yahooData.rsi14,
+        macd: yahooData.macd,
+        macdSignal: yahooData.macdSignal,
+        bollingerMid: yahooData.bollingerMid,
+        bollingerUpper: yahooData.bollingerUpper,
+        bollingerLower: yahooData.bollingerLower,
+        stochasticK: yahooData.stochasticK,
+        stochasticD: yahooData.stochasticD,
+        obv: yahooData.obv,
+        atr14: yahooData.atr14,
+      };
+
+      const historicalData = await fetchHistoricalData(stock.ticker);
+      stock.historicalData = historicalData || [];
+
+      // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
+      console.log(`Analyzing stock: ${stock.ticker}`);
+      const prediction = await analyzeStock(stock.ticker, historicalData);
+      if (prediction == null) {
+        console.error(
+          `Failed to generate prediction for ${stock.ticker}. Aborting.`
+        );
+        throw new Error("Failed to generate prediction.");
+      }
+
+      console.log("prediction: ", prediction);
+      stock.prediction = prediction;
+
+      // 5) Calculate Stop Loss & Target
+      const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+        stock,
+        prediction
+      );
+      if (stopLoss === null || targetPrice === null) {
+        console.error(
+          `Failed to calculate stop loss or target price for ${stock.ticker}.`
+        );
+        throw new Error("Stop loss or target price calculation failed.");
+      }
+      stock.stopLoss = stopLoss;
+      stock.targetPrice = targetPrice;
+
+      // 7) Compute growth potential
+      const growthPotential =
+        ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
+
+      // 8) Compute fundamental/technical score
+      stock.score = computeScore(stock, stock.sector);
+
+      // 9) Combine them => finalScore
+      const weights = { metrics: 0.7, growth: 0.3 };
+      const finalScore =
+        weights.metrics * stock.score + weights.growth * (growthPotential / 100);
+
+      stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+      stock.finalScore = parseFloat(finalScore.toFixed(2));
+      stock.technicalScore = getTechnicalScore(stock);
+      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+      stock.valuationScore = getValuationScore(stock);
+      stock.entryTimingScore = getEntryTimingScore(stock);
+      stock.tier = getNumericTier(stock);
+      stock.limitOrder = getLimitOrderPrice(stock);
+
+      // 10) Send data in Bubble key format
+      const stockObject = {
+        _api_c2_ticker: stock.ticker,
+        _api_c2_sector: stock.sector,
+        _api_c2_currentPrice: stock.currentPrice,
+        _api_c2_entryTimingScore: stock.entryTimingScore,
+        _api_c2_prediction: stock.prediction,
+        _api_c2_stopLoss: stock.stopLoss,
+        _api_c2_targetPrice: stock.targetPrice,
+        _api_c2_growthPotential: stock.growthPotential,
+        _api_c2_score: stock.score,
+        _api_c2_finalScore: stock.finalScore,
+        _api_c2_tier: stock.tier,
+        _api_c2_limitOrder: stock.limitOrder,
+
+        // Add complete stock data as JSON
+        _api_c2_otherData: JSON.stringify({
+          // Price data
+          highPrice: stock.highPrice,
+          lowPrice: stock.lowPrice,
+          openPrice: stock.openPrice,
+          prevClosePrice: stock.prevClosePrice,
+
+          // Fundamental metrics
+          marketCap: stock.marketCap,
+          peRatio: stock.peRatio,
+          pbRatio: stock.pbRatio,
+          dividendYield: stock.dividendYield,
+          dividendGrowth5yr: stock.dividendGrowth5yr,
+          fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+          epsForward: stock.epsForward,
+          epsGrowthRate: stock.epsGrowthRate,
+          debtEquityRatio: stock.debtEquityRatio,
+
+          // Technical indicators
+          movingAverage50d: stock.movingAverage50d,
+          movingAverage200d: stock.movingAverage200d,
+          rsi14: stock.rsi14,
+          macd: stock.macd,
+          macdSignal: stock.macdSignal,
+          bollingerMid: stock.bollingerMid,
+          bollingerUpper: stock.bollingerUpper,
+          bollingerLower: stock.bollingerLower,
+          stochasticK: stock.stochasticK,
+          stochasticD: stock.stochasticD,
+          obv: stock.obv,
+          atr14: stock.atr14,
+
+          // Calculated scores
+          technicalScore: stock.technicalScore,
+          fundamentalScore: stock.fundamentalScore,
+          valuationScore: stock.valuationScore,
+        }),
+      };
+
+      console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+      bubble_fn_result(stockObject);
+      
+      return { success: true, ticker: code };
+    } catch (error) {
+      console.error(
+        `❌ Error processing ticker ${tickerObj.code}:`,
+        error.message
+      );
+      return { success: false, ticker: tickerObj.code, error: error.message };
+    }
+  }
 };
 
 
