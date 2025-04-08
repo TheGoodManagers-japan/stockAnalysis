@@ -11,7 +11,19 @@ function getDateYearsAgo(years) {
   return date;
 }
 
-async function fetchYahooFinanceData(ticker) {
+// Helper function to determine if a ticker is in a financial sector
+function isFinancialSector(sector) {
+  const financialSectors = [
+    "Banking",
+    "Securities",
+    "Insurance",
+    "Other Financial Services",
+    "Real Estate",
+  ];
+  return financialSectors.some((s) => sector?.includes(s));
+}
+
+async function fetchYahooFinanceData(ticker, sector = "") {
   try {
     console.log(`Fetching data for ticker: ${ticker}`);
 
@@ -32,7 +44,15 @@ async function fetchYahooFinanceData(ticker) {
           period2: now,
           events: "dividends",
         }),
-        yahooFinance.quoteSummary(ticker, { modules: ["financialData"] }),
+        yahooFinance.quoteSummary(ticker, {
+          modules: [
+            "financialData",
+            "defaultKeyStatistics",
+            "balanceSheetHistory",
+            "incomeStatementHistory",
+            "summaryDetail",
+          ],
+        }),
       ]);
 
     if (!quote || !historicalPrices.length) {
@@ -100,7 +120,6 @@ async function fetchYahooFinanceData(ticker) {
       };
     }
 
-
     function calculateBollingerBands(closes, period = 20, multiplier = 2) {
       if (closes.length < period) return { upper: 0, lower: 0, mid: 0 };
       const recent = closes.slice(-period);
@@ -138,7 +157,6 @@ async function fetchYahooFinanceData(ticker) {
       return { k, d };
     }
 
-
     function calculateOBV(data) {
       if (data.length < 2) return 0;
       let obv = 0;
@@ -150,25 +168,26 @@ async function fetchYahooFinanceData(ticker) {
       return obv;
     }
 
-   function calculateATR(data, period = 14) {
-     if (data.length < period + 1) return 0;
+    function calculateATR(data, period = 14) {
+      if (data.length < period + 1) return 0;
 
-     const trs = [];
+      const trs = [];
 
-     for (let i = data.length - period; i < data.length; i++) {
-       const current = data[i];
-       const previous = data[i - 1];
+      for (let i = data.length - period; i < data.length; i++) {
+        const current = data[i];
+        const previous = data[i - 1];
 
-       const highLow = current.high - current.low;
-       const highClose = previous ? Math.abs(current.high - previous.close) : 0;
-       const lowClose = previous ? Math.abs(current.low - previous.close) : 0;
+        const highLow = current.high - current.low;
+        const highClose = previous
+          ? Math.abs(current.high - previous.close)
+          : 0;
+        const lowClose = previous ? Math.abs(current.low - previous.close) : 0;
 
-       trs.push(Math.max(highLow, highClose, lowClose));
-     }
+        trs.push(Math.max(highLow, highClose, lowClose));
+      }
 
-     return trs.reduce((sum, val) => sum + val, 0) / period;
-   }
-
+      return trs.reduce((sum, val) => sum + val, 0) / period;
+    }
 
     const closes = historicalPrices.map((d) => d.close);
     const movingAverage50d = calculateMA(historicalPrices, 50);
@@ -186,9 +205,38 @@ async function fetchYahooFinanceData(ticker) {
       epsTrailing && epsForward
         ? ((epsForward - epsTrailing) / Math.abs(epsTrailing)) * 100
         : 0;
-    const debtEquityRatio = toNumber(summary?.financialData?.debtToEquity);
 
-    return {
+    // Extract debt equity ratio with fallbacks
+    let debtEquityRatio = toNumber(summary?.financialData?.debtToEquity);
+    if (debtEquityRatio === 0) {
+      // Try alternative paths
+      console.log(
+        `No debtToEquity in financialData for ${ticker}, trying alternatives...`
+      );
+      const alternativeDE = toNumber(
+        summary?.defaultKeyStatistics?.debtToEquity
+      );
+
+      // Try to calculate from balance sheet if direct values aren't available
+      let calculatedDE = 0;
+      if (summary?.balanceSheetHistory?.balanceSheetStatements?.[0]) {
+        const totalDebt = toNumber(
+          summary.balanceSheetHistory.balanceSheetStatements[0].totalDebt
+        );
+        const equity = toNumber(
+          summary.balanceSheetHistory.balanceSheetStatements[0]
+            .totalStockholderEquity
+        );
+        if (equity > 0) {
+          calculatedDE = totalDebt / equity;
+        }
+      }
+
+      debtEquityRatio = alternativeDE || calculatedDE;
+    }
+
+    // Create the data object with all available values
+    const yahooData = {
       currentPrice: toNumber(quote.regularMarketPrice),
       highPrice: toNumber(quote.regularMarketDayHigh),
       lowPrice: toNumber(quote.regularMarketDayLow),
@@ -197,6 +245,9 @@ async function fetchYahooFinanceData(ticker) {
       marketCap: toNumber(quote.marketCap),
       peRatio: toNumber(quote.trailingPE),
       pbRatio: toNumber(quote.priceToBook),
+      priceToSales: toNumber(
+        summary?.summaryDetail?.priceToSalesTrailing12Months
+      ),
       dividendYield: toNumber(quote.dividendYield) * 100,
       dividendGrowth5yr: toNumber(
         dividendGrowth.length >= 2 && dividendGrowth[0].dividends
@@ -225,6 +276,71 @@ async function fetchYahooFinanceData(ticker) {
       obv: toNumber(obv),
       atr14: toNumber(atr),
     };
+
+    // Define fallback values for important metrics
+    const fallbacks = {
+      // Current price metrics should be required, no fallbacks
+
+      // Fundamental metrics
+      peRatio: isFinancialSector(sector) ? 12 : 20,
+      pbRatio: isFinancialSector(sector) ? 1.2 : 2.5,
+      priceToSales: isFinancialSector(sector) ? 3 : 2,
+      dividendYield: isFinancialSector(sector) ? 3 : 1.5,
+      dividendGrowth5yr: 0,
+      epsTrailingTwelveMonths: yahooData.currentPrice / 20, // Estimate based on typical P/E
+      epsForward: yahooData.epsTrailingTwelveMonths * 1.05, // Slight growth assumption
+      epsGrowthRate: 5, // Conservative growth estimate
+      debtEquityRatio: isFinancialSector(sector) ? 2.0 : 1.0,
+
+      // Technical indicators (these are calculated, so less likely to need fallbacks)
+      movingAverage50d: yahooData.currentPrice * 0.95, // Slight downtrend assumed
+      movingAverage200d: yahooData.currentPrice * 0.9, // Longer-term downtrend assumed
+      rsi14: 50, // Neutral
+      macd: 0,
+      macdSignal: 0,
+      bollingerMid: yahooData.currentPrice,
+      bollingerUpper: yahooData.currentPrice * 1.1,
+      bollingerLower: yahooData.currentPrice * 0.9,
+      stochasticK: 50,
+      stochasticD: 50,
+      atr14: yahooData.currentPrice * 0.02, // 2% volatility as default
+    };
+
+    // Copy of the original data before applying fallbacks (for logging)
+    const originalData = { ...yahooData };
+
+    // Apply fallbacks and log warnings for missing data
+    Object.entries(fallbacks).forEach(([key, fallbackValue]) => {
+      if (
+        yahooData[key] === undefined ||
+        yahooData[key] === null ||
+        (yahooData[key] === 0 &&
+          key !== "dividendYield" &&
+          key !== "dividendGrowth5yr")
+      ) {
+        console.warn(
+          `⚠️ Missing ${key} for ${ticker}, using fallback value of ${fallbackValue}`
+        );
+        yahooData[key] = fallbackValue;
+      }
+    });
+
+    // Log data changes after applying fallbacks
+    const changedFields = Object.entries(yahooData)
+      .filter(([key, value]) => originalData[key] !== value)
+      .map(([key]) => key);
+
+    if (changedFields.length > 0) {
+      console.log(
+        `📊 Applied fallbacks for ${ticker} on fields: ${changedFields.join(
+          ", "
+        )}`
+      );
+    } else {
+      console.log(`✅ All data present for ${ticker}, no fallbacks needed`);
+    }
+
+    return yahooData;
   } catch (error) {
     console.error(
       `Error fetching data for ${ticker}:`,
@@ -264,7 +380,14 @@ module.exports = async (req, res) => {
         .json({ success: false, error: "Missing or invalid 'ticker' in body" });
     }
 
-    const yahooData = await fetchYahooFinanceData(ticker.code);
+    const yahooData = await fetchYahooFinanceData(ticker.code, ticker.sector);
+    if (!yahooData) {
+      return res.status(404).json({
+        success: false,
+        error: `No data available for ticker ${ticker.code}`,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       data: {
