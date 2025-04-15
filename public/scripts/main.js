@@ -1446,7 +1446,14 @@ window.scan = {
   async fetchStockAnalysis() {
     try {
       const tickers = [
-        { code: "8802.T", sector: "Real Estate" }
+        { code: "8802.T", sector: "Real Estate" },
+        { code: "7912.T", sector: "Other Manufacturing" },
+        { code: "9503.T", sector: "Electric Power" },
+        { code: "8354.T", sector: "Banking" },
+        { code: "8031.T", sector: "Trading Companies" },
+        { code: "8591.T", sector: "Other Financial Services" },
+        { code: "6674.T", sector: "Electric Machinery" },
+        { code: "5714.T", sector: "Nonferrous Metals" }
       ];
 
       for (const tickerObj of tickers) {
