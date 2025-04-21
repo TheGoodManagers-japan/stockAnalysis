@@ -1445,7 +1445,7 @@ function getLimitOrderPrice(stock) {
 window.scan = {
   async fetchStockAnalysis(tickerList = []) {
     try {
-      const tickers = [
+      const allTickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
         { code: "4502.T", sector: "Pharmaceuticals" },
         { code: "4503.T", sector: "Pharmaceuticals" },
