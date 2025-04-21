@@ -1443,7 +1443,7 @@ function getLimitOrderPrice(stock) {
  * 6) SCAN LOGIC (Main Workflow)
  ***********************************************/
 window.scan = {
-  async fetchStockAnalysis() {
+  async fetchStockAnalysis(tickerList = []) {
     try {
       const tickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
@@ -1673,7 +1673,12 @@ window.scan = {
         { code: "9532.T", sector: "Gas" }
       ];
 
-      for (const tickerObj of tickers) {
+      const filteredTickers =
+        tickerList.length > 0
+          ? allTickers.filter((t) => tickerList.includes(t.code.replace(".T", "")))
+          : allTickers;
+
+      for (const tickerObj of filteredTickers) {
         console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
         try {
