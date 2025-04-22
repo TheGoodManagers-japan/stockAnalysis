@@ -1074,8 +1074,14 @@ function getNumericTier(stock) {
 
 
 
+/**
+ * Return 1‑7 timing label.
+ * 1  = Strong Buy, 7 = Strong Avoid
+ */
 function getEntryTimingScore(stock) {
-  // Extract properties with default values
+  // ───────────────────────────────────────────
+  // 1. Extract properties (defaults → 0)
+  // ───────────────────────────────────────────
   const {
     currentPrice = 0,
     openPrice = 0,
@@ -1089,140 +1095,154 @@ function getEntryTimingScore(stock) {
     atr14 = 0,
   } = stock;
 
-  // Calculate basic metrics
-  const dailyRange = highPrice - lowPrice;
-  const percentRange = currentPrice > 0 ? (dailyRange / currentPrice) * 100 : 0;
-  const percentFromHigh =
-    fiftyTwoWeekHigh > 0
-      ? ((fiftyTwoWeekHigh - currentPrice) / fiftyTwoWeekHigh) * 100
-      : 0;
-  const percentFromLow =
-    fiftyTwoWeekLow > 0
-      ? ((currentPrice - fiftyTwoWeekLow) / fiftyTwoWeekLow) * 100
-      : 0;
-  const distanceFrom50d =
-    movingAverage50d > 0
-      ? ((currentPrice - movingAverage50d) / movingAverage50d) * 100
-      : 0;
+  // ───────────────────────────────────────────
+  // 2. Basic metrics
+  // ───────────────────────────────────────────
+  const dailyRange        = highPrice - lowPrice;
+  const percentRange      = currentPrice > 0 ? (dailyRange / currentPrice) * 100 : 0;
+  const percentFromHigh   = fiftyTwoWeekHigh > 0
+                           ? ((fiftyTwoWeekHigh - currentPrice) / fiftyTwoWeekHigh) * 100
+                           : 0;
+  const percentFromLow    = fiftyTwoWeekLow > 0
+                           ? ((currentPrice - fiftyTwoWeekLow) / fiftyTwoWeekLow) * 100
+                           : 0;
+  const distanceFrom50d   = movingAverage50d > 0
+                           ? ((currentPrice - movingAverage50d) / movingAverage50d) * 100
+                           : 0;
 
-  // Pattern detection
-  const isVolatile =
-    percentRange > 5 || (atr14 > 0 && atr14 > currentPrice * 0.03);
-  const isExtremeLowVolatility = percentRange < 1.5;
-  const nearHigh = percentFromHigh <= 2;
-  const veryNearHigh = percentFromHigh <= 1;
-  const atAllTimeHigh = currentPrice >= fiftyTwoWeekHigh;
-  const nearLow = percentFromLow <= 2;
-  const veryNearLow = percentFromLow <= 1;
-  const atAllTimeLow = currentPrice <= fiftyTwoWeekLow;
+  // ───────────────────────────────────────────
+  // 3. Vol‑pattern & MA relationships
+  // ───────────────────────────────────────────
+  const isVolatile            = percentRange > 5 || (atr14 > 0 && atr14 > currentPrice * 0.03);
+  const isExtremeLowVol       = percentRange < 1.5;
+  const nearHigh              = percentFromHigh <= 2;
+  const veryNearHigh          = percentFromHigh <= 1;
+  const atAllTimeHigh         = currentPrice >= fiftyTwoWeekHigh;
+  const nearLow               = percentFromLow <= 2;
+  const veryNearLow           = percentFromLow <= 1;
+  const atAllTimeLow          = currentPrice <= fiftyTwoWeekLow;
 
-  // Candlestick patterns
-  const strongClose =
+  // Candlestick strength / reversals
+  const strongClose      =
     currentPrice > openPrice &&
     currentPrice > prevClosePrice &&
     currentPrice - Math.min(openPrice, prevClosePrice) >
       (highPrice - currentPrice) * 2;
-  const veryStrongClose =
+
+  const veryStrongClose  =
     strongClose && currentPrice > highPrice - (highPrice - lowPrice) * 0.2;
-  const weakClose =
+
+  const weakClose        =
     currentPrice < openPrice &&
     currentPrice < prevClosePrice &&
     Math.max(openPrice, prevClosePrice) - currentPrice >
       (currentPrice - lowPrice) * 2;
-  const veryWeakClose =
+
+  const veryWeakClose    =
     weakClose && currentPrice < lowPrice + (highPrice - lowPrice) * 0.2;
-  const bullishReversal =
+
+  const bullishReversal  =
     currentPrice > openPrice &&
     openPrice < prevClosePrice &&
     currentPrice > prevClosePrice;
-  const bearishReversal =
+
+  const bearishReversal  =
     currentPrice < openPrice &&
     openPrice > prevClosePrice &&
     currentPrice < prevClosePrice;
-  const doji =
+
+  const doji             =
     Math.abs(currentPrice - openPrice) < (highPrice - lowPrice) * 0.1;
 
-  // Moving average relationship
-  const aboveMA50 = currentPrice > movingAverage50d;
-  const aboveMA200 = currentPrice > movingAverage200d;
-  const nearMA50 = Math.abs(distanceFrom50d) < 1;
-  const aboveBothMAs = aboveMA50 && aboveMA200;
-  const belowBothMAs = !aboveMA50 && !aboveMA200;
+  // Moving averages
+  const aboveMA50     = currentPrice > movingAverage50d;
+  const aboveMA200    = currentPrice > movingAverage200d;
+  const nearMA50      = Math.abs(distanceFrom50d) < 1;
+  const aboveBothMAs  = aboveMA50 && aboveMA200;
+  const belowBothMAs  = !aboveMA50 && !aboveMA200;
 
-  // Compute weighted entry score
+  // ───────────────────────────────────────────
+  // 4. 🚨  Bull‑trap detection  ─ NEW ─
+  // 
+  // Idea: price breaks out ≥ 1 % above open/prev close
+  //       then gives back ≥ 70 % of that intraday range
+  //       and finishes at/below the open.
+  // ───────────────────────────────────────────
+  const breakoutSizePct   = openPrice > 0 ? ((highPrice - openPrice) / openPrice) * 100 : 0;
+  const retraceRatio      = dailyRange > 0 ? (highPrice - currentPrice) / dailyRange : 0; // 0‑1
+  const bullTrap          =
+      breakoutSizePct >= 1              // decent pop
+   && retraceRatio    >= 0.70           // gave most of it back
+   && currentPrice    <= openPrice;     // now at/under the open
+
+  // Optional stronger version
+  const strongBullTrap   = bullTrap && retraceRatio >= 0.90;
+
+  // ───────────────────────────────────────────
+  // 5. Scoring
+  // ───────────────────────────────────────────
   let score = 0;
 
-  // ✅ Bullish signals (positive score)
+  // ✅ Bullish adds
   if (veryStrongClose) score += 3;
   else if (strongClose) score += 2;
 
   if (bullishReversal) score += 1.5;
 
-  if (atAllTimeHigh) score += 2;
-  else if (veryNearHigh) score += 1.5;
-  else if (nearHigh) score += 1;
+  if (atAllTimeHigh)        score += 2;
+  else if (veryNearHigh)    score += 1.5;
+  else if (nearHigh)        score += 1;
 
-  if (aboveBothMAs) score += 1.5;
+  if (aboveBothMAs)         score += 1.5;
   else if (aboveMA50 && nearMA50) score += 1;
 
   if (nearMA50 && bullishReversal) score += 0.5;
 
-  // Volatility impacts
   if (!isVolatile && strongClose) score += 1;
-  if (isExtremeLowVolatility && currentPrice > prevClosePrice) score -= 0.5; // Too quiet
 
-  // ⚠️ Bearish signals (negative score)
+  if (isExtremeLowVol && currentPrice > prevClosePrice) score -= 0.5;
+
+  // ⚠️  Bearish deductions
   if (veryWeakClose) score -= 3;
   else if (weakClose) score -= 2;
 
   if (bearishReversal) score -= 1.5;
 
-  if (atAllTimeLow) score -= 2;
-  else if (veryNearLow) score -= 1.5;
-  else if (nearLow) score -= 1;
+  if (atAllTimeLow)        score -= 2;
+  else if (veryNearLow)    score -= 1.5;
+  else if (nearLow)        score -= 1;
 
-  if (belowBothMAs) score -= 1.5;
+  if (belowBothMAs)        score -= 1.5;
 
   if (isVolatile && weakClose) score -= 1;
 
-  // Special case for doji at key levels
+  // 🚨  Bull‑trap penalty
+  if (strongBullTrap)      score -= 3;
+  else if (bullTrap)       score -= 2;
+
+  // Doji nuance
   if (doji) {
     if (nearHigh || nearLow) {
-      score += 0; // Neutral impact - waiting for next move
+      /* neutral */
     } else if (aboveBothMAs) {
-      score += 0.5; // Slight positive in uptrend
+      score += 0.5;
     } else if (belowBothMAs) {
-      score -= 0.5; // Slight negative in downtrend
+      score -= 0.5;
     }
   }
 
-  // Return integer score (1-7)
-  if (score >= 4) {
-    return 1; // Strong Buy
-  }
-
-  if (score >= 2) {
-    return 2; // Buy
-  }
-
-  if (score >= 0.5) {
-    return 3; // Watch
-  }
-
-  if (score > -0.5 && score < 0.5) {
-    return 4; // Neutral
-  }
-
-  if (score >= -2) {
-    return 5; // Caution
-  }
-
-  if (score >= -4) {
-    return 6; // Avoid
-  }
-
-  return 7; // Strong Avoid
+  // ───────────────────────────────────────────
+  // 6. Map raw score → 1‑7 label
+  // ───────────────────────────────────────────
+  if (score >= 4)          return 1; // Strong Buy
+  if (score >= 2)          return 2; // Buy
+  if (score >= 0.5)        return 3; // Watch
+  if (score >  -0.5)       return 4; // Neutral
+  if (score >= -2)         return 5; // Caution
+  if (score >= -4)         return 6; // Avoid
+  return 7;                           // Strong Avoid
 }
+
 
 
 
@@ -1952,6 +1972,11 @@ window.scan = {
     }
   },
 };
+
+
+
+
+
 
 
 
