@@ -2432,7 +2432,6 @@ async function analyzeStock(ticker, historicalData) {
   }
 }
 
-
 /**
  * Fast Stock Analysis Function
  * 
@@ -2440,63 +2439,43 @@ async function analyzeStock(ticker, historicalData) {
  * without recomputing predictions and scores, using pre-calculated values.
  * It's designed to be used after the market opens to quickly update trade parameters.
  */
-async function fastStockAnalysis(ticker, preCalculatedData) {
+async function fastStockAnalysis(ticker, stockData) {
   try {
     console.log(`\n--- Running fast analysis for ${ticker} ---`);
     
-    // 1. Extract pre-calculated data
+    // 1. Extract data from the simplified JSON input
     const {
-      currentPrice,
+      sector,
       prediction,
       score,
       technicalScore,
       fundamentalScore,
       valuationScore,
-      sector,
-      historicalData,
-      yahooData,
-    } = preCalculatedData;
+      otherData
+    } = stockData;
     
     // 2. Build stock object with current data
     const stock = {
       ticker,
       sector,
-      currentPrice,   // Should be updated with latest price
-      prediction,     // Reuse pre-calculated prediction
-      score,          // Reuse pre-calculated metric score
-      technicalScore, // Reuse pre-calculated technical score
-      fundamentalScore, // Reuse pre-calculated fundamental score
-      valuationScore, // Reuse pre-calculated valuation score
-      historicalData, // Use updated historical data if available
+      prediction,
+      score,
+      technicalScore,
+      fundamentalScore,
+      valuationScore,
       
-      // Update with latest market data
-      highPrice: yahooData.highPrice,
-      lowPrice: yahooData.lowPrice,
-      openPrice: yahooData.openPrice,
-      prevClosePrice: yahooData.prevClosePrice,
-      marketCap: yahooData.marketCap,
-      peRatio: yahooData.peRatio,
-      pbRatio: yahooData.pbRatio,
-      dividendYield: yahooData.dividendYield,
-      dividendGrowth5yr: yahooData.dividendGrowth5yr,
-      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-      epsForward: yahooData.epsForward,
-      epsGrowthRate: yahooData.epsGrowthRate,
-      debtEquityRatio: yahooData.debtEquityRatio,
-      movingAverage50d: yahooData.movingAverage50d,
-      movingAverage200d: yahooData.movingAverage200d,
-      rsi14: yahooData.rsi14,
-      macd: yahooData.macd,
-      macdSignal: yahooData.macdSignal,
-      bollingerMid: yahooData.bollingerMid,
-      bollingerUpper: yahooData.bollingerUpper,
-      bollingerLower: yahooData.bollingerLower,
-      stochasticK: yahooData.stochasticK,
-      stochasticD: yahooData.stochasticD,
-      obv: yahooData.obv,
-      atr14: yahooData.atr14,
+      // Add all other data properties directly
+      ...otherData,
+      
+      // Current market data will be updated from Yahoo
+      currentPrice: stockData.yahooData?.currentPrice || otherData.currentPrice,
+      highPrice: stockData.yahooData?.highPrice || otherData.highPrice,
+      lowPrice: stockData.yahooData?.lowPrice || otherData.lowPrice,
+      openPrice: stockData.yahooData?.openPrice || otherData.openPrice,
+      prevClosePrice: stockData.yahooData?.prevClosePrice || otherData.prevClosePrice,
+      
+      // Historical data might be needed for some calculations
+      historicalData: stockData.historicalData || [],
     };
     
     // 3. Calculate Stop Loss & Target
@@ -2508,7 +2487,7 @@ async function fastStockAnalysis(ticker, preCalculatedData) {
     const growthPotential = ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
     stock.growthPotential = parseFloat(growthPotential.toFixed(2));
     
-    // 5. Calculate final score (reusing the metric score, but recalculating with new growth potential)
+    // 5. Calculate final score (reusing the metric score)
     const weights = { metrics: 0.7, growth: 0.3 };
     const finalScore = 
       weights.metrics * stock.score + 
@@ -2609,8 +2588,7 @@ window.fastScan = {
           // 2. Merge the fresh Yahoo data with pre-calculated data
           const analysisData = {
             ...data,
-            currentPrice: result.data.yahooData.currentPrice,
-            yahooData: result.data.yahooData,
+            yahooData: result.data.yahooData
           };
           
           // 3. Run fast analysis
@@ -2639,6 +2617,5 @@ window.fastScan = {
       throw new Error("Fast analysis aborted due to errors.");
     }
   },
-  
   // No additional methods needed
 };
