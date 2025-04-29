@@ -2124,257 +2124,164 @@ function customHuberLoss(delta = 1.0) {
   };
 }
 
+
+
+
+/* -------------------------------------------------------------------------
+   30‑Day‑Ahead utilities — but now they predict the **maximum** price that will
+   occur within the next 30 days (instead of the closing price exactly on +30).
+   Function names are kept unchanged so existing imports still work.
+   ------------------------------------------------------------------------- */
+
+/**
+ * prepareDataFor30DayAheadPrice
+ *
+ * Returns { inputTensor, outputTensor, meta }
+ *   • inputTensor  — shape  [N, 30, 4]
+ *   • outputTensor — shape  [N,  1]   (normalised max‑log‑price)
+ *   • meta         — medians / IQRs / winsorisation bounds, etc.
+ */
 function prepareDataFor30DayAheadPrice(
   data,
   sequenceLength = 30,
   predictionGap = 30
 ) {
   if (data.length < sequenceLength + predictionGap) {
-    throw new Error(`Not enough data to create sequences for prediction.`);
+    throw new Error("Not enough data to create sequences for prediction.");
   }
 
-  // Extract raw arrays.
-  const prices = data.map((item) => item.price);
-  const volumes = data.map((item) => item.volume);
+  // ───────────────────────────────────────────
+  // 1. Extract raw arrays & derived features
+  // ───────────────────────────────────────────
+  const prices  = data.map((d) => d.price);
+  const volumes = data.map((d) => d.volume);
+  const logPrices = prices.map(Math.log);
+  const sma7  = computeSMA(logPrices, 7);
+  const dLogR = computeDailyLogReturn(logPrices);
 
-  // Convert prices to log scale.
-  const logPrices = prices.map((p) => Math.log(p));
+  // ───────────────────────────────────────────
+  // 2. Winsorisation on the training segment (exclude forecast window)
+  // ───────────────────────────────────────────
+  const cutoff = prices.length - predictionGap;
+  const { winsorized: wLog, lower: loLog, upper: hiLog } = winsorizeArray(logPrices.slice(0, cutoff));
+  const { winsorized: wVol, lower: loVol, upper: hiVol } = winsorizeArray(volumes   .slice(0, cutoff));
+  const { winsorized: wSma, lower: loSma, upper: hiSma } = winsorizeArray(sma7     .slice(0, cutoff));
+  const { winsorized: wRet, lower: loRet, upper: hiRet } = winsorizeArray(dLogR    .slice(0, cutoff));
 
-  // Compute additional features on log scale.
-  const sma7 = computeSMA(logPrices, 7);
-  const dailyLogReturn = computeDailyLogReturn(logPrices);
+  // ───────────────────────────────────────────
+  // 3. Robust statistics (median & IQR)
+  // ───────────────────────────────────────────
+  const medLog = computeMedian(wLog); const iqrLog = computeIQR(wLog);
+  const medVol = computeMedian(wVol); const iqrVol = computeIQR(wVol);
+  const medSma = computeMedian(wSma); const iqrSma = computeIQR(wSma);
+  const medRet = computeMedian(wRet); const iqrRet = computeIQR(wRet);
 
-  // Use training portion (excluding prediction gap) to compute robust parameters for logPrices.
-  const trainLogPricesRaw = logPrices.slice(
-    0,
-    logPrices.length - predictionGap
-  );
-  const trainVolumesRaw = volumes.slice(0, volumes.length - predictionGap);
-  const trainSMA_raw = sma7.slice(0, sma7.length - predictionGap);
-  const trainReturnRaw = dailyLogReturn.slice(
-    0,
-    dailyLogReturn.length - predictionGap
-  );
-
-  // Winsorize each feature.
-  const {
-    winsorized: trainLogPrices,
-    lower: lowerLogPrice,
-    upper: upperLogPrice,
-  } = winsorizeArray(trainLogPricesRaw);
-  const {
-    winsorized: trainVolumes,
-    lower: lowerVolume,
-    upper: upperVolume,
-  } = winsorizeArray(trainVolumesRaw);
-  const {
-    winsorized: trainSMA,
-    lower: lowerSMA,
-    upper: upperSMA,
-  } = winsorizeArray(trainSMA_raw);
-  const {
-    winsorized: trainReturn,
-    lower: lowerReturn,
-    upper: upperReturn,
-  } = winsorizeArray(trainReturnRaw);
-
-  // Compute robust statistics on winsorized training data.
-  const medianLogPrice = computeMedian(trainLogPrices);
-  const iqrLogPrice = computeIQR(trainLogPrices);
-  const medianVolume = computeMedian(trainVolumes);
-  const iqrVolume = computeIQR(trainVolumes);
-  const medianSMA = computeMedian(trainSMA);
-  const iqrSMA = computeIQR(trainSMA);
-  const medianReturn = computeMedian(trainReturn);
-  const iqrReturn = computeIQR(trainReturn);
-
-  // Store winsorization bounds.
-  const metaBounds = {
-    logPrice: { lower: lowerLogPrice, upper: upperLogPrice },
-    volume: { lower: lowerVolume, upper: upperVolume },
-    sma: { lower: lowerSMA, upper: upperSMA },
-    return: { lower: lowerReturn, upper: upperReturn },
+  const bounds = {
+    logPrice: { lower: loLog, upper: hiLog },
+    volume  : { lower: loVol, upper: hiVol },
+    sma     : { lower: loSma, upper: hiSma },
+    return  : { lower: loRet, upper: hiRet },
   };
 
-  // Helper normalization function: winsorize first, then robust normalize.
-  const normalize = (val, median, iqr, lower, upper) =>
-    (winsorizeVal(val, lower, upper) - median) / (iqr || 1);
+  const norm = (v, m, q, lo, hi) => (winsorizeVal(v, lo, hi) - m) / (q || 1);
 
-  const inputs = [];
-  const outputs = [];
-
-  // Build training sequences.
+  // ───────────────────────────────────────────
+  // 4. Build sequences & **max‑price** targets
+  // ───────────────────────────────────────────
+  const X = []; const y = [];
   for (let i = 0; i <= data.length - sequenceLength - predictionGap; i++) {
+    // 4‑a  .. input sequence
     const seq = [];
     for (let j = 0; j < sequenceLength; j++) {
-      // Use logPrice for the price feature.
       seq.push([
-        normalize(
-          Math.log(prices[i + j]),
-          medianLogPrice,
-          iqrLogPrice,
-          lowerLogPrice,
-          upperLogPrice
-        ),
-        normalize(
-          volumes[i + j],
-          medianVolume,
-          iqrVolume,
-          lowerVolume,
-          upperVolume
-        ),
-        normalize(sma7[i + j], medianSMA, iqrSMA, lowerSMA, upperSMA),
-        normalize(
-          dailyLogReturn[i + j],
-          medianReturn,
-          iqrReturn,
-          lowerReturn,
-          upperReturn
-        ),
+        norm(Math.log(prices [i+j]), medLog, iqrLog, loLog, hiLog),
+        norm(volumes [i+j],       medVol, iqrVol, loVol, hiVol),
+        norm(sma7   [i+j],        medSma, iqrSma, loSma, hiSma),
+        norm(dLogR  [i+j],        medRet, iqrRet, loRet, hiRet),
       ]);
     }
-    inputs.push(seq);
+    X.push(seq);
 
-    // Target: logPrice 30 days after sequence end.
-    const targetLogPrice = Math.log(
-      prices[i + sequenceLength + predictionGap - 1]
-    );
-    outputs.push(
-      normalize(
-        targetLogPrice,
-        medianLogPrice,
-        iqrLogPrice,
-        lowerLogPrice,
-        upperLogPrice
-      )
-    );
+    // 4‑b  .. TARGET: max log‑price within [i+seqLen, i+seqLen+gap)
+    const windowMaxPrice = Math.max(...prices.slice(i + sequenceLength, i + sequenceLength + predictionGap));
+    y.push(norm(Math.log(windowMaxPrice), medLog, iqrLog, loLog, hiLog));
   }
 
-  // Convert inputs and outputs to tensors.
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, sequenceLength, 4]);
-  const outputTensor = tf.tensor2d(outputs, [outputs.length, 1]);
-
-  const meta = {
-    medianLogPrice,
-    iqrLogPrice,
-    medianVolume,
-    iqrVolume,
-    medianSMA,
-    iqrSMA,
-    medianReturn,
-    iqrReturn,
-    bounds: metaBounds,
-    // Save the last known actual price.
-    lastKnownPrice: prices[prices.length - 1],
+  return {
+    inputTensor : tf.tensor3d(X, [X.length, sequenceLength, 4]),
+    outputTensor: tf.tensor2d(y, [y.length, 1]),
+    meta: {
+      medianLogPrice: medLog, iqrLogPrice: iqrLog,
+      medianVolume  : medVol, iqrVolume  : iqrVol,
+      medianSMA     : medSma, iqrSMA     : iqrSma,
+      medianReturn  : medRet, iqrReturn  : iqrRet,
+      bounds,
+      lastKnownPrice: prices[prices.length-1],
+    },
   };
-
-  return { inputTensor, outputTensor, meta };
 }
 
 /**
- * Trains a model to predict the logPrice 30 days ahead.
+ * trainModelFor30DayAheadPrice ➜ **trains on the new target** (max‑price).
  */
 async function trainModelFor30DayAheadPrice(data) {
-  const sequenceLength = 30;
-  const predictionGap = 30;
-  const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(
-    data,
-    sequenceLength,
-    predictionGap
-  );
+  const seqLen = 30, gap = 30;
+  const { inputTensor, outputTensor, meta } = prepareDataFor30DayAheadPrice(data, seqLen, gap);
 
   const model = tf.sequential();
-  model.add(
-    tf.layers.lstm({
-      units: 64,
-      inputShape: [sequenceLength, 4],
-      returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-      recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
-    })
-  );
+  model.add(tf.layers.lstm({ units: 64, inputShape: [seqLen, 4],
+    kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+    recurrentRegularizer: tf.regularizers.l2({ l2: 0.01 }),
+  }));
   model.add(tf.layers.dropout({ rate: 0.2 }));
   model.add(tf.layers.dense({ units: 1 }));
 
-  model.compile({ optimizer: tf.train.adam(), loss: customHuberLoss(1.0) });
-
-  console.log(
-    "Training model for 30-day ahead log-price prediction with robust preprocessing..."
-  );
-  const earlyStopping = tf.callbacks.earlyStopping({
-    monitor: "val_loss",
-    patience: 5,
-  });
-
+  model.compile({ optimizer: tf.train.adam(), loss: customHuberLoss(2.0) });
   await model.fit(inputTensor, outputTensor, {
-    epochs: 50,
-    batchSize: 32,
-    validationSplit: 0.2,
-    callbacks: [earlyStopping],
+    epochs: 50, batchSize: 32, validationSplit: 0.2,
+    callbacks: [tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 5, restoreBestWeight: true })],
   });
-  console.log("Training completed.");
 
   return { model, meta };
 }
 
 /**
- * Predicts the stock price 30 days ahead using the trained model.
- * Applies the same winsorization and robust normalization on log-prices.
+ * predict30DayAheadPrice ➜ returns estimated **highest** price in next 30 days.
  */
 async function predict30DayAheadPrice(modelObj, data) {
   const { model, meta } = modelObj;
   const {
-    medianLogPrice,
-    iqrLogPrice,
-    medianVolume,
-    iqrVolume,
-    medianSMA,
-    iqrSMA,
-    medianReturn,
-    iqrReturn,
+    medianLogPrice, iqrLogPrice,
+    medianVolume,   iqrVolume,
+    medianSMA,      iqrSMA,
+    medianReturn,   iqrReturn,
     bounds,
-    lastKnownPrice,
   } = meta;
-  const sequenceLength = 30;
 
-  // Extract recent data.
-  const recentData = data.slice(-sequenceLength);
-  const recentPrices = recentData.map((item) => item.price);
-  const recentVolumes = recentData.map((item) => item.volume);
+  const seqLen = 30;
+  const recent = data.slice(-seqLen);
+  const prices  = recent.map((d) => d.price);
+  const volumes = recent.map((d) => d.volume);
+  const logPrices = prices.map(Math.log);
+  const sma7  = computeSMA(logPrices, 7);
+  const dLogR = computeDailyLogReturn(logPrices);
 
-  // Compute logPrices, SMA, and daily log return for recent data.
-  const recentLogPrices = recentPrices.map((p) => Math.log(p));
-  const smaRecent = computeSMA(recentLogPrices, 7);
-  const returnRecent = computeDailyLogReturn(recentLogPrices);
-
-  const normSeq = recentData.map((item, idx) => [
-    (winsorizeVal(
-      Math.log(item.price),
-      bounds.logPrice.lower,
-      bounds.logPrice.upper
-    ) -
-      medianLogPrice) /
-      (iqrLogPrice || 1),
-    (winsorizeVal(item.volume, bounds.volume.lower, bounds.volume.upper) -
-      medianVolume) /
-      (iqrVolume || 1),
-    (winsorizeVal(smaRecent[idx], bounds.sma.lower, bounds.sma.upper) -
-      medianSMA) /
-      (iqrSMA || 1),
-    (winsorizeVal(returnRecent[idx], bounds.return.lower, bounds.return.upper) -
-      medianReturn) /
-      (iqrReturn || 1),
+  const norm = (v, m, q, lo, hi) => (winsorizeVal(v, lo, hi) - m) / (q || 1);
+  const seq = recent.map((_, i) => [
+    norm(Math.log(prices [i]), medianLogPrice, iqrLogPrice, bounds.logPrice.lower, bounds.logPrice.upper),
+    norm(volumes [i],         medianVolume,   iqrVolume,   bounds.volume.lower,   bounds.volume.upper),
+    norm(sma7    [i],         medianSMA,      iqrSMA,      bounds.sma.lower,      bounds.sma.upper),
+    norm(dLogR   [i],         medianReturn,   iqrReturn,   bounds.return.lower,   bounds.return.upper),
   ]);
 
-  const inputTensor = tf.tensor3d([normSeq], [1, sequenceLength, 4]);
-  const predNormLogPrice = model.predict(inputTensor).dataSync()[0];
-
-  // Inverse transformation: get predicted log-price, then exponentiate.
-  const predictedLogPrice = predNormLogPrice * iqrLogPrice + medianLogPrice;
-  const predictedPrice = Math.exp(predictedLogPrice);
-
-  return predictedPrice;
+  const predNorm = model.predict(tf.tensor3d([seq], [1, seqLen, 4])).dataSync()[0];
+  const predLog  = predNorm * iqrLogPrice + medianLogPrice;
+  return Math.exp(predLog);
 }
+
+// If you are using modules:
+// export { prepareDataFor30DayAheadPrice, trainModelFor30DayAheadPrice, predict30DayAheadPrice };
+
 
 
 
@@ -2524,3 +2431,214 @@ async function analyzeStock(ticker, historicalData) {
     }
   }
 }
+
+
+/**
+ * Fast Stock Analysis Function
+ * 
+ * This function calculates trade parameters (stop loss, target price, limit order, etc.) 
+ * without recomputing predictions and scores, using pre-calculated values.
+ * It's designed to be used after the market opens to quickly update trade parameters.
+ */
+async function fastStockAnalysis(ticker, preCalculatedData) {
+  try {
+    console.log(`\n--- Running fast analysis for ${ticker} ---`);
+    
+    // 1. Extract pre-calculated data
+    const {
+      currentPrice,
+      prediction,
+      score,
+      technicalScore,
+      fundamentalScore,
+      valuationScore,
+      sector,
+      historicalData,
+      yahooData,
+    } = preCalculatedData;
+    
+    // 2. Build stock object with current data
+    const stock = {
+      ticker,
+      sector,
+      currentPrice,   // Should be updated with latest price
+      prediction,     // Reuse pre-calculated prediction
+      score,          // Reuse pre-calculated metric score
+      technicalScore, // Reuse pre-calculated technical score
+      fundamentalScore, // Reuse pre-calculated fundamental score
+      valuationScore, // Reuse pre-calculated valuation score
+      historicalData, // Use updated historical data if available
+      
+      // Update with latest market data
+      highPrice: yahooData.highPrice,
+      lowPrice: yahooData.lowPrice,
+      openPrice: yahooData.openPrice,
+      prevClosePrice: yahooData.prevClosePrice,
+      marketCap: yahooData.marketCap,
+      peRatio: yahooData.peRatio,
+      pbRatio: yahooData.pbRatio,
+      dividendYield: yahooData.dividendYield,
+      dividendGrowth5yr: yahooData.dividendGrowth5yr,
+      fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+      fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+      epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+      epsForward: yahooData.epsForward,
+      epsGrowthRate: yahooData.epsGrowthRate,
+      debtEquityRatio: yahooData.debtEquityRatio,
+      movingAverage50d: yahooData.movingAverage50d,
+      movingAverage200d: yahooData.movingAverage200d,
+      rsi14: yahooData.rsi14,
+      macd: yahooData.macd,
+      macdSignal: yahooData.macdSignal,
+      bollingerMid: yahooData.bollingerMid,
+      bollingerUpper: yahooData.bollingerUpper,
+      bollingerLower: yahooData.bollingerLower,
+      stochasticK: yahooData.stochasticK,
+      stochasticD: yahooData.stochasticD,
+      obv: yahooData.obv,
+      atr14: yahooData.atr14,
+    };
+    
+    // 3. Calculate Stop Loss & Target
+    const { stopLoss, targetPrice } = calculateStopLossAndTarget(stock, stock.prediction);
+    stock.stopLoss = stopLoss;
+    stock.targetPrice = targetPrice;
+    
+    // 4. Compute growth potential
+    const growthPotential = ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
+    stock.growthPotential = parseFloat(growthPotential.toFixed(2));
+    
+    // 5. Calculate final score (reusing the metric score, but recalculating with new growth potential)
+    const weights = { metrics: 0.7, growth: 0.3 };
+    const finalScore = 
+      weights.metrics * stock.score + 
+      weights.growth * (growthPotential / 100);
+    stock.finalScore = parseFloat(finalScore.toFixed(2));
+    
+    // 6. Recalculate only the timing-dependent parameters
+    stock.entryTimingScore = getEntryTimingScore(stock);
+    stock.tier = getNumericTier(stock);
+    stock.limitOrder = getLimitOrderPrice(stock);
+    
+    // 7. Return data in Bubble key format (same as original function)
+    const stockObject = {
+      _api_c2_ticker: stock.ticker,
+      _api_c2_sector: stock.sector,
+      _api_c2_currentPrice: stock.currentPrice,
+      _api_c2_entryTimingScore: stock.entryTimingScore,
+      _api_c2_prediction: stock.prediction,
+      _api_c2_stopLoss: stock.stopLoss,
+      _api_c2_targetPrice: stock.targetPrice,
+      _api_c2_growthPotential: stock.growthPotential,
+      _api_c2_score: stock.score,
+      _api_c2_finalScore: stock.finalScore,
+      _api_c2_tier: stock.tier,
+      _api_c2_limitOrder: stock.limitOrder,
+      
+      // Add complete stock data as JSON
+      _api_c2_otherData: JSON.stringify({
+        // Price data
+        highPrice: stock.highPrice,
+        lowPrice: stock.lowPrice,
+        openPrice: stock.openPrice,
+        prevClosePrice: stock.prevClosePrice,
+        
+        // Fundamental metrics
+        marketCap: stock.marketCap,
+        peRatio: stock.peRatio,
+        pbRatio: stock.pbRatio,
+        dividendYield: stock.dividendYield,
+        dividendGrowth5yr: stock.dividendGrowth5yr,
+        fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+        epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+        epsForward: stock.epsForward,
+        epsGrowthRate: stock.epsGrowthRate,
+        debtEquityRatio: stock.debtEquityRatio,
+        
+        // Technical indicators
+        movingAverage50d: stock.movingAverage50d,
+        movingAverage200d: stock.movingAverage200d,
+        rsi14: stock.rsi14,
+        macd: stock.macd,
+        macdSignal: stock.macdSignal,
+        bollingerMid: stock.bollingerMid,
+        bollingerUpper: stock.bollingerUpper,
+        bollingerLower: stock.bollingerLower,
+        stochasticK: stock.stochasticK,
+        stochasticD: stock.stochasticD,
+        obv: stock.obv,
+        atr14: stock.atr14,
+        
+        // Calculated scores
+        technicalScore: stock.technicalScore,
+        fundamentalScore: stock.fundamentalScore,
+        valuationScore: stock.valuationScore,
+      }),
+    };
+    
+    console.log(`📤 Fast analysis for ${stock.ticker} complete.`);
+    return stockObject;
+  } catch (error) {
+    console.error(`❌ Error in fastStockAnalysis for ${ticker}:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Main function to run fast analysis for multiple tickers.
+ * This integrates with your existing scan workflow.
+ */
+window.fastScan = {
+  async fastAnalyzeStocks(tickersWithData = []) {
+    try {
+      const results = [];
+      
+      for (const item of tickersWithData) {
+        try {
+          const { ticker, data } = item;
+          console.log(`Processing fast analysis for ${ticker}`);
+          
+          // 1. Fetch latest Yahoo data to get current prices
+          const result = await fetchSingleStockData({ code: ticker });
+          if (!result.success) {
+            console.error(`Error fetching latest data for ${ticker}:`, result.error);
+            continue;
+          }
+          
+          // 2. Merge the fresh Yahoo data with pre-calculated data
+          const analysisData = {
+            ...data,
+            currentPrice: result.data.yahooData.currentPrice,
+            yahooData: result.data.yahooData,
+          };
+          
+          // 3. Run fast analysis
+          const analysisResult = await fastStockAnalysis(ticker, analysisData);
+          
+          // 4. Send the result to Bubble to override previous data
+          console.log(`📤 Sending updated ${ticker} to Bubble:`, analysisResult);
+          bubble_fn_result(analysisResult);
+          results.push(analysisResult);
+        } catch (error) {
+          console.error(`❌ Error processing ticker ${item.ticker}:`, error.message);
+        }
+      }
+      
+      // ✅ Finished processing all tickers (success or some errors)
+      console.log(`✅ Fast analysis completed for ${results.length} tickers`);
+      bubble_fn_finish();
+      
+      return results;
+    } catch (error) {
+      console.error("❌ Error in fastAnalyzeStocks:", error.message);
+      
+      // 🔴 If outer error (like JSON parse or logic bug), still call finish
+      bubble_fn_finish();
+      
+      throw new Error("Fast analysis aborted due to errors.");
+    }
+  },
+  
+  // No additional methods needed
+};
