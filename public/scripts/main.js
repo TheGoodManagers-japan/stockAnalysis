@@ -2431,7 +2431,6 @@ async function analyzeStock(ticker, historicalData) {
     }
   }
 }
-
 /**
  * Fast Stock Analysis Function
  * 
@@ -2499,17 +2498,22 @@ async function fastStockAnalysis(ticker, stockData) {
     stock.tier = getNumericTier(stock);
     stock.limitOrder = getLimitOrderPrice(stock);
     
-    // 7. Return data in Bubble key format (same as original function)
+    // 7. Recalculate all scores except prediction
+    stock.technicalScore = getTechnicalScore(stock);
+    stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+    stock.valuationScore = getValuationScore(stock);
+    
+    // 8. Return data in Bubble key format (same as original function)
     const stockObject = {
       _api_c2_ticker: stock.ticker,
       _api_c2_sector: stock.sector,
       _api_c2_currentPrice: stock.currentPrice,
       _api_c2_entryTimingScore: stock.entryTimingScore,
-      _api_c2_prediction: stock.prediction,
+      _api_c2_prediction: stock.prediction,  // Reuse the prediction
       _api_c2_stopLoss: stock.stopLoss,
       _api_c2_targetPrice: stock.targetPrice,
       _api_c2_growthPotential: stock.growthPotential,
-      _api_c2_score: stock.score,
+      _api_c2_score: computeScore(stock, stock.sector),  // Recalculate score
       _api_c2_finalScore: stock.finalScore,
       _api_c2_tier: stock.tier,
       _api_c2_limitOrder: stock.limitOrder,
@@ -2549,7 +2553,7 @@ async function fastStockAnalysis(ticker, stockData) {
         obv: stock.obv,
         atr14: stock.atr14,
         
-        // Calculated scores
+        // Recalculated scores
         technicalScore: stock.technicalScore,
         fundamentalScore: stock.fundamentalScore,
         valuationScore: stock.valuationScore,
