@@ -2432,7 +2432,7 @@ async function analyzeStock(ticker, historicalData) {
   }
 }
 
-window.scan = {
+window.fastscan = {
   async fastfetchStockAnalysis(tickerList = []) {
     try {
       for (const tickerObj of tickerList) {
