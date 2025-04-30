@@ -496,406 +496,253 @@ async function fetchHistoricalData(ticker) {
   }
 }
 
-function getTechnicalScore(stock) {
-  // Extract only the properties we know are available
+/**
+ *  getTechnicalScoreV2(stock [, customWeights])
+ *  ------------------------------------------------
+ *  • Returns { score: Number, bullish: Number, bearish: Number, tags: String[] }
+ *  • `score` is logistic-normalised to ­-50 … +50   (0 ⇒ neutral)
+ *  • Pass a `customWeights` object if you want to tweak the defaults on the fly:
+ *      { trend: 3, momentum: 2.5, volatility: 1.3, special: 1.7 }
+ */
+/**
+ * getTechnicalScore(stock [, customWeights])
+ * ------------------------------------------
+ * • Numeric output only   →   –50 … +50  (0 = neutral)
+ * • Sector-agnostic, momentum/trend/volatility blend with safety guards
+ * • Pass an optional { trend, momentum, volatility, special } override
+ */
+function getTechnicalScore(stock, customWeights = {}) {
+  const n = v => (Number.isFinite(v) ? v : 0);           // safe number
+  /* ---------- pull metrics ---------- */
   const {
-    currentPrice = 0,
-    movingAverage50d = 0,
-    movingAverage200d = 0,
-    rsi14 = 50,
-    macd = 0,
-    macdSignal = 0,
-    bollingerMid = 0,
-    bollingerUpper = 0,
-    bollingerLower = 0,
-    stochasticK = 50,
-    stochasticD = 50,
-    atr14 = 0,
-    obv = 0,
+    currentPrice           = 0,
+    movingAverage50d       = 0,
+    movingAverage200d      = 0,
+    rsi14                  = 50,
+    macd                   = 0,
+    macdSignal             = 0,
+    bollingerMid           = currentPrice,
+    bollingerUpper         = currentPrice * 1.1,
+    bollingerLower         = currentPrice * 0.9,
+    stochasticK            = 50,
+    stochasticD            = 50,
+    atr14                  = currentPrice * 0.02,
+    obv                    = 0,
+    obvMA20                = 0          // supply if available
   } = stock;
 
-  // === TREND SIGNALS ===
-  const goldCross =
-    movingAverage50d > movingAverage200d &&
-    movingAverage50d - movingAverage200d < movingAverage50d * 0.05;
-  const deathCross =
-    movingAverage50d < movingAverage200d &&
-    movingAverage200d - movingAverage50d < movingAverage200d * 0.05;
-  const strongBullishTrend = movingAverage50d > movingAverage200d * 1.05;
-  const strongBearishTrend = movingAverage50d < movingAverage200d * 0.95;
-  const moderateBullishTrend =
-    movingAverage50d > movingAverage200d && !goldCross && !strongBullishTrend;
-  const moderateBearishTrend =
-    movingAverage50d < movingAverage200d && !deathCross && !strongBearishTrend;
-
-  // === MOMENTUM SIGNALS ===
-  // MACD
-  const isBullishMACD = macd > macdSignal;
-  const isBearishMACD = macd < macdSignal;
-  const macdCrossover = Math.abs(macd - macdSignal) < Math.abs(macd * 0.1);
-  const macdDivergence = Math.abs(macd - macdSignal) > Math.abs(macd * 0.25);
-
-  // RSI
-  const isOverbought = rsi14 >= 70;
-  const isOverboughtExtreme = rsi14 >= 80;
-  const isOversold = rsi14 <= 30;
-  const isOversoldExtreme = rsi14 <= 20;
-  const isBullishRSI = rsi14 >= 55 && rsi14 < 70;
-  const isBearishRSI = rsi14 <= 45 && rsi14 > 30;
-
-  // Stochastic
-  const isStochOverbought = stochasticK >= 80 && stochasticD >= 80;
-  const isStochOversold = stochasticK <= 20 && stochasticD <= 20;
-  const isBullishStochastic = stochasticK > stochasticD;
-  const isBearishStochastic = stochasticK < stochasticD;
-  const stochCrossover = Math.abs(stochasticK - stochasticD) < 5;
-
-  // === VOLATILITY AND PRICE ACTION ===
-  // Bollinger Bands
-  const isBullishBB = currentPrice > bollingerMid;
-  const isBearishBB = currentPrice < bollingerMid;
-  const isUpperBreakout = currentPrice > bollingerUpper;
-  const isLowerBreakout = currentPrice < bollingerLower;
-  const isNarrowBands =
-    bollingerUpper &&
-    bollingerLower &&
-    (bollingerUpper - bollingerLower) / bollingerMid < 0.05;
-  const isWideBands =
-    bollingerUpper &&
-    bollingerLower &&
-    (bollingerUpper - bollingerLower) / bollingerMid > 0.08;
-
-  // ATR (Volatility)
-  const isHighVolatility = atr14 >= currentPrice * 0.03;
-  const isVeryHighVolatility = atr14 >= currentPrice * 0.04;
-  const isLowVolatility = atr14 <= currentPrice * 0.015;
-  const isVeryLowVolatility = atr14 <= currentPrice * 0.01;
-
-  // === SCORING SYSTEM ===
-  // Base weights for different signal categories
-  const weights = {
-    trend: 2.5,
-    momentum: 2.0,
-    volatility: 1.5,
-    special: 1.5,
+  /* ---------- weights ---------- */
+  const W = {
+    trend      : 2.5,
+    momentum   : 2.0,
+    volatility : 1.5,
+    special    : 1.5,
+    ...customWeights
   };
 
-  // Initialize bullish and bearish scores
-  let bullishScore = 0;
-  let bearishScore = 0;
+  /* ---------- helpers ---------- */
+  const pctDiff = (a, b) => Math.abs(a - b) / (Math.abs(b) || 1e-6);
 
-  // === CALCULATE BULLISH SIGNALS ===
-  // Trend signals
-  if (strongBullishTrend) bullishScore += weights.trend * 1.2;
-  else if (moderateBullishTrend) bullishScore += weights.trend;
-  else if (goldCross) bullishScore += weights.special * 1.5;
+  /* ---------- scoring ---------- */
+  let bull = 0, bear = 0;
 
-  // Momentum signals
-  if (isBullishMACD) {
-    bullishScore += weights.momentum * 0.7;
-    if (macdDivergence) bullishScore += weights.momentum * 0.3;
-  } else if (macdCrossover && macd > 0) {
-    bullishScore += weights.special * 0.7;
+  /* --- TREND ---------------------------------------------------------- */
+  const gc  = movingAverage50d > movingAverage200d &&
+              pctDiff(movingAverage50d, movingAverage200d) < 0.05;
+  const dc  = movingAverage50d < movingAverage200d &&
+              pctDiff(movingAverage50d, movingAverage200d) < 0.05;
+  const sbt = movingAverage50d > movingAverage200d * 1.05;
+  const sbr = movingAverage50d < movingAverage200d * 0.95;
+  const mbt = movingAverage50d > movingAverage200d && !gc && !sbt;
+  const mbr = movingAverage50d < movingAverage200d && !dc && !sbr;
+
+  if (sbt) bull += W.trend * 1.3;        else if (mbt) bull += W.trend;
+  if (gc)  bull += W.special * 2;
+  if (sbr) bear += W.trend * 1.3;        else if (mbr) bear += W.trend;
+  if (dc)  bear += W.special * 2;
+
+  /* --- MOMENTUM ------------------------------------------------------- */
+  const macdBase = Math.max(Math.abs(macd), 1e-4);
+  const macdCross= Math.abs(macd - macdSignal) < macdBase * 0.1;
+  const macdDiv  = Math.abs(macd - macdSignal) > macdBase * 0.25;
+
+  if (macd > macdSignal) {
+    bull += W.momentum * 0.8;
+    if (macdDiv) bull += W.momentum * 0.4;
+  } else {
+    bear += W.momentum * 0.8;
+    if (macdDiv) bear += W.momentum * 0.4;
+  }
+  if (macdCross && macd > 0) bull += W.special * 0.8;
+  if (macdCross && macd < 0) bear += W.special * 0.8;
+
+  if (rsi14 >= 70)            bear += W.special;
+  else if (rsi14 <= 30)       bull += W.special;
+  else if (rsi14 >= 55)       bull += W.momentum * 0.7;
+  else if (rsi14 <= 45)       bear += W.momentum * 0.7;
+
+  if (stochasticK > stochasticD) {
+    bull += W.momentum * 0.6;
+    if (stochasticK <= 20) bull += W.special * 0.8;
+  } else {
+    bear += W.momentum * 0.6;
+    if (stochasticK >= 80) bear += W.special * 0.8;
   }
 
-  if (isOversold) {
-    bullishScore += weights.special * 0.8;
-    if (isOversoldExtreme) bullishScore += weights.special * 0.4;
-  } else if (isBullishRSI) {
-    bullishScore += weights.momentum * 0.7;
+  if (obvMA20) {
+    if (obv > obvMA20)  bull += W.momentum * 0.5;
+    else if (obv < obvMA20) bear += W.momentum * 0.5;
   }
 
-  if (isBullishStochastic) {
-    bullishScore += weights.momentum * 0.6;
-    if (isStochOversold && stochCrossover)
-      bullishScore += weights.special * 0.8;
-  }
+  /* --- PRICE ACTION / VOLATILITY ------------------------------------- */
+  const mid = Math.max(bollingerMid, 1e-6);
+  const bandW = (bollingerUpper - bollingerLower) / mid;
+  const upperBreak = currentPrice > bollingerUpper;
+  const lowerBreak = currentPrice < bollingerLower;
 
-  // Volatility signals
-  if (isUpperBreakout) bullishScore += weights.volatility * 0.8;
-  else if (isBullishBB) bullishScore += weights.volatility * 0.6;
+  if (upperBreak)       bull += W.volatility * 0.9;
+  else if (currentPrice > bollingerMid) bull += W.volatility * 0.6;
 
-  if (isNarrowBands && moderateBullishTrend)
-    bullishScore += weights.special * 0.7;
+  if (lowerBreak)       bear += W.volatility * 0.9;
+  else if (currentPrice < bollingerMid) bear += W.volatility * 0.6;
 
-  // === CALCULATE BEARISH SIGNALS ===
-  // Trend signals
-  if (strongBearishTrend) bearishScore += weights.trend * 1.2;
-  else if (moderateBearishTrend) bearishScore += weights.trend;
-  else if (deathCross) bearishScore += weights.special * 1.5;
+  if (bandW < 0.05 && mbt) bull += W.special * 0.7;
+  if (bandW < 0.05 && mbr) bear += W.special * 0.7;
 
-  // Momentum signals
-  if (isBearishMACD) {
-    bearishScore += weights.momentum * 0.7;
-    if (macdDivergence) bearishScore += weights.momentum * 0.3;
-  } else if (macdCrossover && macd < 0) {
-    bearishScore += weights.special * 0.7;
-  }
+  if (bandW > 0.08 && sbt) bull += W.volatility * 0.4;
+  if (bandW > 0.08 && sbr) bear += W.volatility * 0.4;
 
-  if (isOverbought) {
-    bearishScore += weights.special * 0.8;
-    if (isOverboughtExtreme) bearishScore += weights.special * 0.4;
-  } else if (isBearishRSI) {
-    bearishScore += weights.momentum * 0.7;
-  }
+  /* --- ATR scaling ---------------------------------------------------- */
+  if (atr14 >= currentPrice * 0.04) { bull *= 1.1; bear *= 1.2; }
+  else if (atr14 >= currentPrice * 0.03) { bull *= 1.05; bear *= 1.1; }
+  else if (atr14 <= currentPrice * 0.01) { bull *= 0.9; bear *= 0.9; }
+  else if (atr14 <= currentPrice * 0.015){ bull *= 0.95; bear *= 0.95; }
 
-  if (isBearishStochastic) {
-    bearishScore += weights.momentum * 0.6;
-    if (isStochOverbought && stochCrossover)
-      bearishScore += weights.special * 0.8;
-  }
+  /* ---------- –50 … +50 logistic score ---------- */
+  const raw      = bull - bear;
+  const logistic = 1 / (1 + Math.exp(-raw));     // 0 … 1
+  const score    = Math.round((logistic - 0.5) * 1000) / 10;
 
-  // Volatility signals
-  if (isLowerBreakout) bearishScore += weights.volatility * 0.8;
-  else if (isBearishBB) bearishScore += weights.volatility * 0.6;
-
-  if (isNarrowBands && moderateBearishTrend)
-    bearishScore += weights.special * 0.7;
-
-  // === VOLATILITY ADJUSTMENTS ===
-  // Adjust scores based on volatility conditions
-  if (isVeryHighVolatility) {
-    bullishScore *= 1.1;
-    bearishScore *= 1.2;
-  } else if (isHighVolatility) {
-    bullishScore *= 1.05;
-    bearishScore *= 1.1;
-  } else if (isLowVolatility) {
-    bullishScore *= 0.95;
-    bearishScore *= 0.95;
-  } else if (isVeryLowVolatility) {
-    bullishScore *= 0.9;
-    bearishScore *= 0.9;
-  }
-
-  // === NET SCORE ===
-  // Calculate net score (bullish - bearish)
-  const netScore = bullishScore - bearishScore;
-
-  // Return just the score, rounded to one decimal place
-  return Math.round(netScore * 10) / 10;
+  return score;                                  // only the score
 }
 
 
+
+
+/**
+ * Advanced fundamental score  (0 = very weak, 10 = very strong)
+ * — sector-aware weights (high-growth vs dividend vs normal)
+ * — uses P/E, P/B, P/S, EPS growth, fwd/ttm EPS, D/E, yield & div-growth
+ * — clamps & guards against NaN / divide-by-zero
+ */
 function getAdvancedFundamentalScore(stock) {
-  const sector = stock.sector;
-  // Extract metrics safely with defaults
-  const {
-    // Growth metrics
-    epsGrowthRate = 0,
-    epsForward = 0,
-    epsTrailingTwelveMonths = 0,
+  const n = v => (Number.isFinite(v) ? v : 0);           // safe number
 
-    // Value metrics
-    peRatio = 0,
-    pbRatio = 0,
+  /* ---------- canonical sector buckets ---------- */
+  const HIGH_GROWTH_SECTORS = new Set([
+    "Technology","Communications","Pharmaceuticals",
+    "Electric Machinery","Precision Instruments","Machinery",
+    "Automobiles & Auto parts"
+  ]);
+  const DIVIDEND_FOCUS_SECTORS = new Set([
+    "Utilities","Electric Power","Gas","Banking","Insurance","Real Estate"
+  ]);
+  const FINANCIAL_SECTORS = new Set([
+    "Banking","Insurance","Other Financial Services","Securities"
+  ]);
 
-    // Financial health metrics
-    debtEquityRatio = 1,
+  const sector        = stock.sector || "";
+  const isHGrowth     = HIGH_GROWTH_SECTORS.has(sector);
+  const isDivFocus    = DIVIDEND_FOCUS_SECTORS.has(sector);
+  const isFinancial   = FINANCIAL_SECTORS.has(sector);
+  /* ---------- pull metrics ---------- */
+  const pe   = n(stock.peRatio);
+  const pb   = n(stock.pbRatio);
+  const ps   = n(stock.priceToSales);
+  const d2e  = Math.max(n(stock.debtEquityRatio), 0);
+  const dy   = n(stock.dividendYield);          // %
+  const dg5  = n(stock.dividendGrowth5yr);      // %
+  const epsG = n(stock.epsGrowthRate);          // %
+  const epsF = n(stock.epsForward);
+  const epsT = n(stock.epsTrailingTwelveMonths);
+  /* ---------- pillar scores ---------- */
+  let g = 0, v = 0, h = 0, d = 0;
 
-    // Dividend metrics
-    dividendYield = 0,
-    dividendGrowth5yr = 0,
+  /* --- GROWTH ------------------------------------------------------------ */
+  if (epsG >= 20) g += 3;         else if (epsG >= 10) g += 2;
+  else if (epsG >=  5) g += 1;    else if (epsG <  0)  g -= 2;
 
-    // Price data
-    currentPrice = 0,
-    marketCap = 0,
-  } = stock;
+  const epsRatio = epsT ? epsF / epsT : 1;
+  if      (epsRatio >= 1.20) g += 2;
+  else if (epsRatio >= 1.05) g += 1;
+  else if (epsRatio <= 0.95) g -= 1;
 
-  // Initialize scores
-  let growthScore = 0;
-  let valueScore = 0;
-  let financialHealthScore = 0;
-  let dividendScore = 0;
-  let totalScore = 0;
+  g = Math.max(0, Math.min(10, g * 2));        // 0-10
 
-  // Track key characteristics
-  let isStrongGrowth = false;
-  let isStrongValue = false;
-  let isStrongDividend = false;
-  let isStrongBalance = false;
+  /* --- VALUE ------------------------------------------------------------- */
+  /* P/E */
+  if (pe > 0 && pe < 10)      v += 3;
+  else if (pe < 15)           v += 2;
+  else if (pe < 20)           v += 1;
+  else if (pe > 30 || pe <= 0) v -= 1;
 
-  // Industry-specific adjustments (simplified)
-  const isHighGrowthSector =
-    sector &&
-    (sector.includes("Technology") ||
-      sector.includes("Communications") ||
-      sector.includes("Pharmaceutical") ||
-      sector.includes("Electric Machinery"));
+  /* P/B */
+  if (pb > 0 && pb < 1)       v += 3;
+  else if (pb < 2)            v += 2;
+  else if (pb < 3)            v += 1;
+  else if (pb > 5)            v -= 1;
 
-  const isDividendFocusSector =
-    sector &&
-    (sector.includes("Utilities") ||
-      sector.includes("Electric Power") ||
-      sector.includes("Gas") ||
-      sector.includes("Banking") ||
-      sector.includes("Insurance") ||
-      sector.includes("Real Estate"));
-
-  // === GROWTH SCORE ===
-  // EPS Growth Rate
-  if (epsGrowthRate >= 20) {
-    growthScore += 3;
-    isStrongGrowth = true;
-  } else if (epsGrowthRate >= 10) {
-    growthScore += 2;
-    isStrongGrowth = true;
-  } else if (epsGrowthRate >= 5) {
-    growthScore += 1;
-  } else if (epsGrowthRate < 0) {
-    growthScore -= 2;
+  /* P/S (skip most financials) */
+  if (!isFinancial) {
+    if (ps > 0 && ps < 2)     v += 1.5;
+    else if (ps > 6)          v -= 1;
   }
 
-  // Forward vs Trailing EPS
-  if (epsForward > epsTrailingTwelveMonths * 1.2) {
-    growthScore += 2;
-    isStrongGrowth = true;
-  } else if (epsForward > epsTrailingTwelveMonths * 1.05) {
-    growthScore += 1;
-  } else if (epsForward < epsTrailingTwelveMonths * 0.95) {
-    growthScore -= 1;
+  /* growth-sector premium tolerance */
+  if (isHGrowth && pe > 0 && pe < 25) v += 1;
+
+  v = Math.max(0, Math.min(10, v * 1.5));
+
+  /* --- FINANCIAL HEALTH -------------------------------------------------- */
+  if      (d2e < 0.25) h += 3;
+  else if (d2e < 0.5)  h += 2;
+  else if (d2e < 1.0)  h += 1;
+  else if (d2e > 2.0)  h -= 2;
+  else if (d2e > 1.5)  h -= 1;
+
+  if (isFinancial && d2e < 1.5) h += 1;        // capital-intensive leeway
+
+  h = Math.max(0, Math.min(10, (h + 2) * 2));
+
+  /* --- DIVIDEND ---------------------------------------------------------- */
+  if (dy > 0) {
+    if      (dy >= 6) d += 3;
+    else if (dy >= 4) d += 2;
+    else if (dy >= 2) d += 1;
+
+    if      (dg5 >= 10) d += 2;
+    else if (dg5 >=  5) d += 1;
+    else if (dg5 <   0) d -= 1;
+
+    d = Math.max(0, Math.min(10, d * 2));
   }
 
-  // Normalize growth score (0-10)
-  growthScore = Math.max(0, Math.min(10, growthScore * 2));
-
-  // === VALUE SCORE ===
-  // P/E Ratio (lower is better for value)
-  if (peRatio > 0 && peRatio < 10) {
-    valueScore += 3;
-    isStrongValue = true;
-  } else if (peRatio > 0 && peRatio < 15) {
-    valueScore += 2;
-    isStrongValue = true;
-  } else if (peRatio > 0 && peRatio < 20) {
-    valueScore += 1;
-  } else if (peRatio > 30) {
-    valueScore -= 1;
-  } else if (peRatio <= 0) {
-    valueScore -= 1; // Negative earnings
-  }
-
-  // Adjust for high growth sectors
-  if (isHighGrowthSector && peRatio > 0 && peRatio < 25) {
-    valueScore += 1;
-  }
-
-  // P/B Ratio (lower is better for value)
-  if (pbRatio > 0 && pbRatio < 1) {
-    valueScore += 3;
-    isStrongValue = true;
-  } else if (pbRatio > 0 && pbRatio < 2) {
-    valueScore += 2;
-  } else if (pbRatio > 0 && pbRatio < 3) {
-    valueScore += 1;
-  } else if (pbRatio > 5) {
-    valueScore -= 1;
-  }
-
-  // Normalize value score (0-10)
-  valueScore = Math.max(0, Math.min(10, valueScore * 1.67));
-
-  // === FINANCIAL HEALTH SCORE ===
-  // Debt-to-Equity Ratio
-  if (debtEquityRatio < 0.25) {
-    financialHealthScore += 3;
-    isStrongBalance = true;
-  } else if (debtEquityRatio < 0.5) {
-    financialHealthScore += 2;
-    isStrongBalance = true;
-  } else if (debtEquityRatio < 1.0) {
-    financialHealthScore += 1;
-  } else if (debtEquityRatio > 2.0) {
-    financialHealthScore -= 2;
-  } else if (debtEquityRatio > 1.5) {
-    financialHealthScore -= 1;
-  }
-
-  // Adjust for sector (financial sectors typically have higher debt)
-  if (
-    sector &&
-    (sector.includes("Banking") ||
-      sector.includes("Financial") ||
-      sector.includes("Insurance")) &&
-    debtEquityRatio < 1.5
-  ) {
-    financialHealthScore += 1;
-  }
-
-  // Normalize financial health score (0-10)
-  financialHealthScore = Math.max(
-    0,
-    Math.min(10, (financialHealthScore + 2) * 2)
-  );
-
-  // === DIVIDEND SCORE ===
-  // Skip dividend evaluation if no dividend
-  if (dividendYield === 0) {
-    dividendScore = 0;
-  } else {
-    // Dividend Yield
-    if (dividendYield >= 6) {
-      dividendScore += 3;
-      isStrongDividend = true;
-    } else if (dividendYield >= 4) {
-      dividendScore += 2;
-      isStrongDividend = true;
-    } else if (dividendYield >= 2) {
-      dividendScore += 1;
-    }
-
-    // Dividend Growth
-    if (dividendGrowth5yr >= 10) {
-      dividendScore += 2;
-      isStrongDividend = true;
-    } else if (dividendGrowth5yr >= 5) {
-      dividendScore += 1;
-    } else if (dividendGrowth5yr < 0) {
-      dividendScore -= 1;
-    }
-
-    // Normalize dividend score (0-10)
-    dividendScore = Math.max(0, Math.min(10, dividendScore * 2));
-  }
-
-  // === CALCULATE TOTAL SCORE ===
-  // Set weights based on sector type
-  let weights = {
-    growth: 0.35,
-    value: 0.3,
-    financialHealth: 0.25,
-    dividend: 0.1,
+  /* ---------- sector-adjusted weights ---------- */
+  const w = {
+    growth : isHGrowth   ? 0.45 : isDivFocus ? 0.20 : 0.35,
+    value  : isHGrowth   ? 0.20 :                0.30,
+    health :                0.25,
+    dividend : isDivFocus ? 0.25 : 0.10
   };
 
-  // Adjust weights for dividend-focused sectors
-  if (isDividendFocusSector) {
-    weights = {
-      growth: 0.2,
-      value: 0.3,
-      financialHealth: 0.25,
-      dividend: 0.25,
-    };
-  }
+  /* ---------- composite 0-10 ---------- */
+  const score =
+    g * w.growth +
+    v * w.value +
+    h * w.health +
+    d * w.dividend;
 
-  // Adjust weights for high-growth sectors
-  if (isHighGrowthSector) {
-    weights = {
-      growth: 0.45,
-      value: 0.2,
-      financialHealth: 0.25,
-      dividend: 0.1,
-    };
-  }
-
-  // Calculate final score
-  totalScore =
-    growthScore * weights.growth +
-    valueScore * weights.value +
-    financialHealthScore * weights.financialHealth +
-    dividendScore * weights.dividend;
-
-  // Round to one decimal place and return just the score
-  return Math.round(totalScore * 10) / 10;
+  return Math.round(score * 10) / 10;          // one-decimal 0-10
 }
 
 
@@ -903,173 +750,163 @@ function getAdvancedFundamentalScore(stock) {
 
 
 
-function getValuationScore(stock) {
-  const sector = stock.sector;
 
-  const {
-    peRatio = 0,
-    pbRatio = 0,
-    marketCap = 0,
-    priceToSales = 0,
-    epsGrowthRate = 0,
-    dividendYield = 0,
-  } = stock;
+/**
+ *  getValuationScore(stock [, weightOverrides])
+ *  -------------------------------------------
+ *  • Returns ONE number in the 0‒10 range
+ *  • Sector-aware bands for P/E, P/B, P/S  + PEG, Yield, Size
+ *  • Optional weightOverrides = { pe, pb, ps, peg, yield, size }
+ */
+function getValuationScore(stock, weightOverrides = {}) {
+  const n = v => (Number.isFinite(v) ? v : 0);        // NaN-safe
 
-  // Determine sector category for adjusted valuation metrics
-  const isHighGrowthSector =
-    sector &&
-    (sector.includes("Technology") ||
-      sector.includes("Communications") ||
-      sector.includes("Pharmaceutical") ||
-      sector.includes("Electric Machinery"));
+  /* 1 ─ Sector buckets ────────────────────────────────────────────── */
+  const HG = new Set([
+    "Technology","Communications","Pharmaceuticals",
+    "Electric Machinery","Precision Instruments","Machinery",
+    "Automobiles & Auto parts"
+  ]);
+  const VAL = new Set(["Banking","Insurance","Utilities","Real Estate"]);
 
-  const isValueSector =
-    sector &&
-    (sector.includes("Bank") ||
-      sector.includes("Insurance") ||
-      sector.includes("Utilities") ||
-      sector.includes("Real Estate"));
+  const sector = stock.sector || "";
+  const isHG   = HG.has(sector);
+  const isVAL  = VAL.has(sector);
 
-  // Adjust thresholds based on sector
-  const peThresholds = isHighGrowthSector
-    ? [0, 25, 40, 60] // [very low, low, fair, high] for growth sectors
-    : isValueSector
-    ? [0, 8, 15, 20] // for value sectors
-    : [0, 10, 18, 30]; // default
+  /* 2 ─ Extract metrics ───────────────────────────────────────────── */
+  const pe   = n(stock.peRatio);
+  const pb   = n(stock.pbRatio);
+  const ps   = n(stock.priceToSales);
+  const mc   = n(stock.marketCap);             // local currency
+  const gEPS = n(stock.epsGrowthRate);         // %
+  const dy   = n(stock.dividendYield);         // %
 
-  const pbThresholds = isHighGrowthSector
-    ? [0, 2, 4, 6]
-    : isValueSector
-    ? [0, 0.8, 1.5, 2.5]
-    : [0, 1, 2.5, 4];
+  /* 3 ─ Helper: linear score low-better metric ---------------------- */
+  const scaleLowBetter = (val, good, ok, bad) => {
+    if (val <= good) return  2;                        // very cheap
+    if (val <= ok)   return  1;                        // cheap
+    if (val <= bad)  return -1;                        // expensive
+    return -2;                                         // very expensive
+  };
 
-  // Initialize score components
-  let peScore = 0;
-  let pbScore = 0;
-  let psScore = 0;
-  let marketCapScore = 0;
-  let growthAdjustment = 0;
-  let yieldBonus = 0;
+  /* 4 ─ P/E, P/B, P/S ---------------------------------------------- */
+  const peS = pe <= 0
+    ? -2
+    : scaleLowBetter(
+        pe,
+        isHG ? 25 : isVAL ? 8  : 10,
+        isHG ? 40 : isVAL ? 15 : 18,
+        isHG ? 60 : isVAL ? 20 : 30
+      );
 
-  // Calculate PE Score
-  if (peRatio <= 0) {
-    peScore = -2; // Negative earnings
-  } else if (peRatio <= peThresholds[1]) {
-    peScore = 2; // Very low PE
-  } else if (peRatio <= peThresholds[2]) {
-    peScore = 1; // Low PE
-  } else if (peRatio <= peThresholds[3]) {
-    peScore = -1; // High PE
-  } else {
-    peScore = -2; // Very high PE
+  const pbS = pb <= 0
+    ? -1
+    : scaleLowBetter(
+        pb,
+        isHG ? 2  : isVAL ? 0.8 : 1,
+        isHG ? 4  : isVAL ? 1.5 : 2.5,
+        isHG ? 6  : isVAL ? 2.5 : 4
+      );
+
+  const psS = ps <= 0
+    ? 0
+    : scaleLowBetter(
+        ps,
+        isHG ? 3 : 1,
+        isHG ? 8 : 2,
+        isHG ? 12 : 5
+      );
+
+  /* 5 ─ PEG ratio (only if positive growth) ------------------------- */
+  let pegS = 0;
+  if (pe > 0 && gEPS > 0) {
+    const peg = pe / gEPS;            // crude, gEPS is % so PEG≈PE/Δ%
+    if (peg < 1)      pegS =  1.5;
+    else if (peg < 2) pegS =  0.5;
+    else if (peg > 3) pegS = -1;
   }
 
-  // Calculate PB Score
-  if (pbRatio <= 0) {
-    pbScore = -1; // Negative book value
-  } else if (pbRatio < pbThresholds[1]) {
-    pbScore = 2; // Very low PB
-  } else if (pbRatio <= pbThresholds[2]) {
-    pbScore = 1; // Low PB
-  } else if (pbRatio <= pbThresholds[3]) {
-    pbScore = 0; // Fair PB
-  } else {
-    pbScore = -1; // High PB
-  }
+  /* 6 ─ Dividend yield bonus --------------------------------------- */
+  const yieldS = dy >= 4 ? 0.6 : dy >= 2 ? 0.3 : 0;
 
-  // P/S ratio evaluation if available
-  if (priceToSales > 0) {
-    if (isHighGrowthSector) {
-      if (priceToSales < 3) psScore = 1;
-      else if (priceToSales > 10) psScore = -1;
-    } else {
-      if (priceToSales < 1) psScore = 1;
-      else if (priceToSales > 3) psScore = -1;
-    }
-  }
+  /* 7 ─ Size premium / discount ------------------------------------ */
+  const sizeS =
+    mc >= 1e12 ?  0.5 :
+    mc >= 1e11 ?  0.3 :
+    mc >= 1e10 ?  0.0 :
+    mc >= 2e9  ? -0.2 :
+                 -0.5;
 
-  // Market Cap evaluation
-  if (marketCap >= 1_000_000_000_000) {
-    // Trillion dollar
-    marketCapScore = 0.5; // Large stable company
-  } else if (marketCap >= 100_000_000_000) {
-    // 100B+
-    marketCapScore = 0.3;
-  } else if (marketCap >= 10_000_000_000) {
-    // 10B+
-    marketCapScore = 0;
-  } else if (marketCap >= 2_000_000_000) {
-    // 2B+
-    marketCapScore = -0.1;
-  } else {
-    marketCapScore = -0.3; // Small cap risk
-  }
+  /* 8 ─ Combine with weights --------------------------------------- */
+  const W = {
+    pe   : 1.6,
+    pb   : 1.2,
+    ps   : 1.0,
+    peg  : 1.1,
+    yield: 0.6,
+    size : 0.5,
+    ...weightOverrides          // caller tweaks on the fly
+  };
 
-  // Growth adjustment - high growth can justify higher valuations
-  if (epsGrowthRate >= 25) {
-    growthAdjustment = 1;
-  } else if (epsGrowthRate >= 15) {
-    growthAdjustment = 0.5;
-  } else if (epsGrowthRate <= -10) {
-    growthAdjustment = -1;
-  } else if (epsGrowthRate < 0) {
-    growthAdjustment = -0.5;
-  }
+  const raw =
+      peS   * W.pe   +
+      pbS   * W.pb   +
+      psS   * W.ps   +
+      pegS  * W.peg  +
+      yieldS* W.yield+
+      sizeS * W.size;
 
-  // Dividend yield can add value for income investors
-  if (dividendYield >= 4) {
-    yieldBonus = 0.5;
-  } else if (dividendYield >= 2) {
-    yieldBonus = 0.3;
-  }
+  /* 9 ─ Map raw (-8 … +8) → 0 … 10 --------------------------------- */
+  const score = Math.max(0, Math.min(10, (raw + 8) * (10 / 16)));
 
-  // Calculate total score with weights
-  const totalScore =
-    peScore * 1.5 + // PE has highest weight
-    pbScore * 1.2 + // PB has second highest
-    psScore * 0.8 + // PS has medium weight
-    marketCapScore + // Market cap has low weight
-    growthAdjustment + // Growth adjustment
-    yieldBonus; // Dividend bonus
-
-  // Return rounded score
-  return Math.round(totalScore * 10) / 10;
+  return Math.round(score * 10) / 10;          // 1-dp numeric
 }
 
 
 
-function getNumericTier(stock) {
-  // Extract numerical scores directly
-  const technicalScore = stock.technicalScore || 0;
-  const fundamentalScore = stock.fundamentalScore || 0;
-  const valuationScore = stock.valuationScore || 0;
 
-  // Apply contextual rules for tier adjustment
-  let adjustedScore = technicalScore + fundamentalScore + valuationScore;
+/**
+ *  getNumericTier(stock [, weights])
+ *  ---------------------------------
+ *  • stock must contain technicalScore, fundamentalScore, valuationScore
+ *  • returns an integer Tier 1 … 6  (1 = best)
+ *  • weights default to { tech:0.4, fund:0.35, val:0.25 }  – override if needed
+ */
+function getNumericTier(stock, weights = {}) {
+  const w = { tech: 0.40, fund: 0.35, val: 0.25, ...weights };
 
-  // Special case: Great fundamentals but terrible valuation
-  if (fundamentalScore >= 7.5 && valuationScore <= -2) {
-    adjustedScore -= 0.5; // Penalize overvalued good companies
-  }
+  /* ----------- safe pulls ------------- */
+  const tRaw = Number.isFinite(stock.technicalScore)   ? stock.technicalScore   : 0;
+  const fRaw = Number.isFinite(stock.fundamentalScore) ? stock.fundamentalScore : 0;
+  const vRaw = Number.isFinite(stock.valuationScore)   ? stock.valuationScore   : 0;
 
-  // Special case: Great valuation but terrible fundamentals
-  if (valuationScore >= 3.5 && fundamentalScore <= 3) {
-    adjustedScore -= 0.5; // Value trap warning
-  }
+  /* ----------- normalise to 0–10 ------ */
+  const tech = Math.max(0, Math.min(10, (tRaw + 50) * 0.1));   // –50…+50 → 0…10
 
-  // Special case: Excellent technical setup with good fundamentals
-  if (technicalScore >= 3.5 && fundamentalScore >= 7) {
-    adjustedScore += 0.5; // Bonus for alignment
-  }
+  const fund = fRaw > 10 || fRaw < 0           // detect –50…+50 style input
+               ? Math.max(0, Math.min(10, (fRaw + 50) * 0.1))
+               : Math.max(0, Math.min(10, fRaw));               // already 0…10
 
-  // Assign tier based on adjusted total score
-  if (adjustedScore >= 8) return 1; // TIER 1: Dream
-  if (adjustedScore >= 6.5) return 2; // TIER 2: Elite
-  if (adjustedScore >= 5) return 3; // TIER 3: Solid
-  if (adjustedScore >= 3.5) return 4; // TIER 4: Speculative
-  if (adjustedScore >= 2) return 5; // TIER 5: Risky
-  return 6; // TIER 6: Red Flag
+  const val  = Math.max(0, Math.min(10, vRaw));                 // clamp
+
+  /* ----------- base composite --------- */
+  let score = tech * w.tech + fund * w.fund + val * w.val;      // 0…10
+
+  /* ----------- contextual tweaks ------ */
+  if (fund >= 7.5 && val <= 2)  score -= 0.4;   // Over-valued quality
+  if (val  >= 7   && fund <= 3) score -= 0.4;   // Value trap
+  if (tech >= 7   && fund >= 7) score += 0.4;   // Everything aligned
+  if (tech <= 2   && fund >= 7) score -= 0.4;   // Great co. but chart ugly
+
+  /* ----------- assign tier ------------ */
+  if (score >= 8 ) return 1;   // Dream
+  if (score >= 6.5) return 2;  // Elite
+  if (score >= 5 ) return 3;   // Solid
+  if (score >= 3.5) return 4;  // Speculative
+  if (score >= 2 ) return 5;   // Risky
+  return 6;                    // Red Flag
 }
+
 
 
 
@@ -1078,170 +915,141 @@ function getNumericTier(stock) {
  * Return 1‑7 timing label.
  * 1  = Strong Buy, 7 = Strong Avoid
  */
-function getEntryTimingScore(stock) {
-  // ───────────────────────────────────────────
-  // 1. Extract properties (defaults → 0)
-  // ───────────────────────────────────────────
-  const {
-    currentPrice = 0,
-    openPrice = 0,
-    highPrice = 0,
-    lowPrice = 0,
-    prevClosePrice = 0,
-    fiftyTwoWeekHigh = 0,
-    fiftyTwoWeekLow = 0,
-    movingAverage50d = 0,
-    movingAverage200d = 0,
-    atr14 = 0,
-  } = stock;
+/**
+ *  getEntryTimingScore(stock [, opts])
+ *  -----------------------------------
+ *  • Returns a Tier 1 … 7 (1 = “Strong Buy”, 7 = “Strong Avoid”)
+ *  • Adds gap-up/gap-down logic, inside-day squeeze bonus, and safer
+ *    ATR / 52-week handling.
+ *  • `opts` lets you tweak pillar weights or tier cut-offs if desired.
+ */
+function getEntryTimingScore(stock, opts = {}) {
+  const n = v => (Number.isFinite(v) ? v : 0);          // NaN-safe
 
-  // ───────────────────────────────────────────
-  // 2. Basic metrics
-  // ───────────────────────────────────────────
-  const dailyRange        = highPrice - lowPrice;
-  const percentRange      = currentPrice > 0 ? (dailyRange / currentPrice) * 100 : 0;
-  const percentFromHigh   = fiftyTwoWeekHigh > 0
-                           ? ((fiftyTwoWeekHigh - currentPrice) / fiftyTwoWeekHigh) * 100
-                           : 0;
-  const percentFromLow    = fiftyTwoWeekLow > 0
-                           ? ((currentPrice - fiftyTwoWeekLow) / fiftyTwoWeekLow) * 100
-                           : 0;
-  const distanceFrom50d   = movingAverage50d > 0
-                           ? ((currentPrice - movingAverage50d) / movingAverage50d) * 100
-                           : 0;
+  /* ──────────── 1. pull prices ──────────── */
+  const cur   = n(stock.currentPrice);
+  const open  = n(stock.openPrice);
+  const high  = n(stock.highPrice);
+  const low   = n(stock.lowPrice);
+  const prev  = n(stock.prevClosePrice);
+  const hi52  = n(stock.fiftyTwoWeekHigh);
+  const lo52  = n(stock.fiftyTwoWeekLow);
+  const ma50  = n(stock.movingAverage50d);
+  const ma200 = n(stock.movingAverage200d);
+  const atr   = n(stock.atr14);
 
-  // ───────────────────────────────────────────
-  // 3. Vol‑pattern & MA relationships
-  // ───────────────────────────────────────────
-  const isVolatile            = percentRange > 5 || (atr14 > 0 && atr14 > currentPrice * 0.03);
-  const isExtremeLowVol       = percentRange < 1.5;
-  const nearHigh              = percentFromHigh <= 2;
-  const veryNearHigh          = percentFromHigh <= 1;
-  const atAllTimeHigh         = currentPrice >= fiftyTwoWeekHigh;
-  const nearLow               = percentFromLow <= 2;
-  const veryNearLow           = percentFromLow <= 1;
-  const atAllTimeLow          = currentPrice <= fiftyTwoWeekLow;
+  /* ──────────── 2. derived pct moves ─────── */
+  const dailyRangePct   = cur ? ((high - low) / cur) * 100 : 0;
+  const pctFromHi52     = hi52 ? ((hi52 - cur) / hi52) * 100 : 0;
+  const pctFromLo52     = lo52 ? ((cur - lo52) / lo52) * 100 : 0;
+  const pctFromMA50     = ma50 ? ((cur - ma50) / ma50) * 100 : 0;
+  const gapPct          = prev ? ((open - prev) / prev) * 100 : 0;
 
-  // Candlestick strength / reversals
-  const strongClose      =
-    currentPrice > openPrice &&
-    currentPrice > prevClosePrice &&
-    currentPrice - Math.min(openPrice, prevClosePrice) >
-      (highPrice - currentPrice) * 2;
+  /* ──────────── 3. pattern flags ─────────── */
+  const strongClose   = cur > open && cur > prev &&
+                        cur - Math.min(open, prev) >
+                        (high - cur) * 2;
 
-  const veryStrongClose  =
-    strongClose && currentPrice > highPrice - (highPrice - lowPrice) * 0.2;
+  const weakClose     = cur < open && cur < prev &&
+                        Math.max(open, prev) - cur >
+                        (cur - low) * 2;
 
-  const weakClose        =
-    currentPrice < openPrice &&
-    currentPrice < prevClosePrice &&
-    Math.max(openPrice, prevClosePrice) - currentPrice >
-      (currentPrice - lowPrice) * 2;
+  const bullishRev    = cur > open && open < prev && cur > prev;
+  const bearishRev    = cur < open && open > prev && cur < prev;
 
-  const veryWeakClose    =
-    weakClose && currentPrice < lowPrice + (highPrice - lowPrice) * 0.2;
+  const doji          = Math.abs(cur - open) < (high - low) * 0.1;
 
-  const bullishReversal  =
-    currentPrice > openPrice &&
-    openPrice < prevClosePrice &&
-    currentPrice > prevClosePrice;
+  const gapUp         = gapPct >= 2;
+  const gapDown       = gapPct <= -2;
 
-  const bearishReversal  =
-    currentPrice < openPrice &&
-    openPrice > prevClosePrice &&
-    currentPrice < prevClosePrice;
+  const insideDay     = high <= prev && low >= prev;      // “NR7”-style squeeze
+  const bullTrap      = cur <= open &&
+                        high - open >= Math.abs(open * 0.01) &&
+                        (high - cur) / (high - low || 1e-6) >= 0.7;
 
-  const doji             =
-    Math.abs(currentPrice - openPrice) < (highPrice - lowPrice) * 0.1;
+  /* ──────────── 4. weights ──────────────── */
+  const W = {
+    close   : 2.0,          // strong / weak close
+    hiLo    : 1.2,          // 52-week position
+    ma      : 1.0,          // MA alignment
+    gap     : 1.0,          // gap behaviour
+    pattern : 1.0,          // rev / doji / inside
+    vol     : 0.7,          // volatility context
+    penalty : 2.0,          // bull-trap, very weak etc.
+    ...opts.weights
+  };
 
-  // Moving averages
-  const aboveMA50     = currentPrice > movingAverage50d;
-  const aboveMA200    = currentPrice > movingAverage200d;
-  const nearMA50      = Math.abs(distanceFrom50d) < 1;
-  const aboveBothMAs  = aboveMA50 && aboveMA200;
-  const belowBothMAs  = !aboveMA50 && !aboveMA200;
+  /* ──────────── 5. score accumulation ───── */
+  let s = 0;
 
-  // ───────────────────────────────────────────
-  // 4. 🚨  Bull‑trap detection  ─ NEW ─
-  // 
-  // Idea: price breaks out ≥ 1 % above open/prev close
-  //       then gives back ≥ 70 % of that intraday range
-  //       and finishes at/below the open.
-  // ───────────────────────────────────────────
-  const breakoutSizePct   = openPrice > 0 ? ((highPrice - openPrice) / openPrice) * 100 : 0;
-  const retraceRatio      = dailyRange > 0 ? (highPrice - currentPrice) / dailyRange : 0; // 0‑1
-  const bullTrap          =
-      breakoutSizePct >= 1              // decent pop
-   && retraceRatio    >= 0.70           // gave most of it back
-   && currentPrice    <= openPrice;     // now at/under the open
+  // -- close strength
+  if (strongClose)            s += 1 * W.close;
+  else if (weakClose)         s -= 1 * W.close;
 
-  // Optional stronger version
-  const strongBullTrap   = bullTrap && retraceRatio >= 0.90;
+  // -- reversal bars
+  if (bullishRev)             s += 0.7 * W.pattern;
+  if (bearishRev)             s -= 0.7 * W.pattern;
 
-  // ───────────────────────────────────────────
-  // 5. Scoring
-  // ───────────────────────────────────────────
-  let score = 0;
+  // -- 52-week positioning
+  if      (cur >= hi52)       s += 1.0 * W.hiLo;
+  else if (pctFromHi52 <= 1)  s += 0.8 * W.hiLo;
+  else if (cur <= lo52)       s -= 1.0 * W.hiLo;
+  else if (pctFromLo52 <= 1)  s -= 0.8 * W.hiLo;
 
-  // ✅ Bullish adds
-  if (veryStrongClose) score += 3;
-  else if (strongClose) score += 2;
-
-  if (bullishReversal) score += 1.5;
-
-  if (atAllTimeHigh)        score += 2;
-  else if (veryNearHigh)    score += 1.5;
-  else if (nearHigh)        score += 1;
-
-  if (aboveBothMAs)         score += 1.5;
-  else if (aboveMA50 && nearMA50) score += 1;
-
-  if (nearMA50 && bullishReversal) score += 0.5;
-
-  if (!isVolatile && strongClose) score += 1;
-
-  if (isExtremeLowVol && currentPrice > prevClosePrice) score -= 0.5;
-
-  // ⚠️  Bearish deductions
-  if (veryWeakClose) score -= 3;
-  else if (weakClose) score -= 2;
-
-  if (bearishReversal) score -= 1.5;
-
-  if (atAllTimeLow)        score -= 2;
-  else if (veryNearLow)    score -= 1.5;
-  else if (nearLow)        score -= 1;
-
-  if (belowBothMAs)        score -= 1.5;
-
-  if (isVolatile && weakClose) score -= 1;
-
-  // 🚨  Bull‑trap penalty
-  if (strongBullTrap)      score -= 3;
-  else if (bullTrap)       score -= 2;
-
-  // Doji nuance
-  if (doji) {
-    if (nearHigh || nearLow) {
-      /* neutral */
-    } else if (aboveBothMAs) {
-      score += 0.5;
-    } else if (belowBothMAs) {
-      score -= 0.5;
-    }
+  // -- moving-average confluence
+  if (ma50 && ma200) {
+    const above50 = cur > ma50;
+    const above200= cur > ma200;
+    if (above50 && above200)       s += 1.0 * W.ma;
+    else if (!above50 && !above200)s -= 1.0 * W.ma;
+    else if (Math.abs(pctFromMA50) <= 1)  s += 0.3 * W.ma;
   }
 
-  // ───────────────────────────────────────────
-  // 6. Map raw score → 1‑7 label
-  // ───────────────────────────────────────────
-  if (score >= 4)          return 1; // Strong Buy
-  if (score >= 2)          return 2; // Buy
-  if (score >= 0.5)        return 3; // Watch
-  if (score >  -0.5)       return 4; // Neutral
-  if (score >= -2)         return 5; // Caution
-  if (score >= -4)         return 6; // Avoid
-  return 7;                           // Strong Avoid
+  // -- gap logic
+  if (gapUp && cur > open)    s += 0.7 * W.gap;      // held the gap
+  if (gapDown && cur < open)  s -= 0.7 * W.gap;
+
+  // -- inside-day squeeze
+  if (insideDay && cur > prev)  s += 0.5 * W.pattern;
+  if (insideDay && cur < prev)  s -= 0.5 * W.pattern;
+
+  // -- doji nuance
+  if (doji) {
+    if (cur > ma50 && cur > ma200) s += 0.3 * W.pattern;
+    else if (cur < ma50 && cur < ma200) s -= 0.3 * W.pattern;
+  }
+
+  // -- volatility context
+  const hiVol = atr > 0 && atr > cur * 0.04;
+  const loVol = atr > 0 && atr < cur * 0.015;
+  if (hiVol && strongClose)   s += 0.3 * W.vol;      // range expansion
+  if (hiVol && weakClose)     s -= 0.3 * W.vol;
+  if (loVol && insideDay)     s += 0.3 * W.vol;      // volatility squeeze
+
+  // -- penalties
+  if (bullTrap)               s -= 1.0 * W.penalty;
+  if (weakClose && gapUp)     s -= 0.7 * W.penalty;  // island reversal risk
+
+  /* ──────────── 6. map to tier (customisable) ─ */
+  const cut = {               // upper bound for each tier
+    t1:  4,
+    t2:  2,
+    t3:  0.5,
+    t4: -0.5,
+    t5: -2,
+    t6: -4,
+    ...opts.cutoffs           // override per strategy
+  };
+
+  if (s >= cut.t1) return 1;       // Strong Buy
+  if (s >= cut.t2) return 2;       // Buy
+  if (s >= cut.t3) return 3;       // Watch
+  if (s >= cut.t4) return 4;       // Neutral
+  if (s >= cut.t5) return 5;       // Caution
+  if (s >= cut.t6) return 6;       // Avoid
+  return 7;                        // Strong Avoid
 }
+
 
 
 
