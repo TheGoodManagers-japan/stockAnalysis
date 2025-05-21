@@ -909,20 +909,133 @@ function getNumericTier(stock, weights = {}) {
 
 
 
+function getEntryTimingScore(stock, opts = {}) {
+  const n = (v) => (Number.isFinite(v) ? v : 0); // NaN-safe
 
+  /* ──────────── 1. pull prices ──────────── */
+  const cur = n(stock.currentPrice);
+  const open = n(stock.openPrice);
+  const high = n(stock.highPrice);
+  const low = n(stock.lowPrice);
+  const prev = n(stock.prevClosePrice);
+  const hi52 = n(stock.fiftyTwoWeekHigh);
+  const lo52 = n(stock.fiftyTwoWeekLow);
+  const ma50 = n(stock.movingAverage50d);
+  const ma200 = n(stock.movingAverage200d);
+  const atr = n(stock.atr14);
 
-/**
- * Return 1‑7 timing label.
- * 1  = Strong Buy, 7 = Strong Avoid
- */
-/**
- *  getEntryTimingScore(stock [, opts])
- *  -----------------------------------
- *  • Returns a Tier 1 … 7 (1 = “Strong Buy”, 7 = “Strong Avoid”)
- *  • Adds gap-up/gap-down logic, inside-day squeeze bonus, and safer
- *    ATR / 52-week handling.
- *  • `opts` lets you tweak pillar weights or tier cut-offs if desired.
- */
+  /* ──────────── 2. derived pct moves ─────── */
+  const dailyRangePct = cur ? ((high - low) / cur) * 100 : 0;
+  const pctFromHi52 = hi52 ? ((hi52 - cur) / hi52) * 100 : 0;
+  const pctFromLo52 = lo52 ? ((cur - lo52) / lo52) * 100 : 0;
+  const pctFromMA50 = ma50 ? ((cur - ma50) / ma50) * 100 : 0;
+  const gapPct = prev ? ((open - prev) / prev) * 100 : 0;
+
+  /* ──────────── 3. pattern flags ─────────── */
+  const strongClose =
+    cur > open && cur > prev && cur - Math.min(open, prev) > (high - cur) * 2;
+
+  const weakClose =
+    cur < open && cur < prev && Math.max(open, prev) - cur > (cur - low) * 2;
+
+  const bullishRev = cur > open && open < prev && cur > prev;
+  const bearishRev = cur < open && open > prev && cur < prev;
+
+  const doji = Math.abs(cur - open) < (high - low) * 0.1;
+
+  const gapUp = gapPct >= 2;
+  const gapDown = gapPct <= -2;
+
+  const insideDay = high <= prev && low >= prev; // "NR7"-style squeeze
+  const bullTrap =
+    cur <= open &&
+    high - open >= Math.abs(open * 0.01) &&
+    (high - cur) / (high - low || 1e-6) >= 0.7;
+
+  /* ──────────── 4. weights ──────────────── */
+  const W = {
+    close: 2.0, // strong / weak close
+    hiLo: 1.2, // 52-week position
+    ma: 1.0, // MA alignment
+    gap: 1.0, // gap behaviour
+    pattern: 1.0, // rev / doji / inside
+    vol: 0.7, // volatility context
+    penalty: 2.0, // bull-trap, very weak etc.
+    ...opts.weights,
+  };
+
+  /* ──────────── 5. score accumulation ───── */
+  let s = 0;
+
+  // -- close strength
+  if (strongClose) s += 1 * W.close;
+  else if (weakClose) s -= 1 * W.close;
+
+  // -- reversal bars
+  if (bullishRev) s += 0.7 * W.pattern;
+  if (bearishRev) s -= 0.7 * W.pattern;
+
+  // -- 52-week positioning
+  if (cur >= hi52) s += 1.0 * W.hiLo;
+  else if (pctFromHi52 <= 1) s += 0.8 * W.hiLo;
+  else if (cur <= lo52) s -= 1.0 * W.hiLo;
+  else if (pctFromLo52 <= 1) s -= 0.8 * W.hiLo;
+
+  // -- moving-average confluence
+  if (ma50 && ma200) {
+    const above50 = cur > ma50;
+    const above200 = cur > ma200;
+    if (above50 && above200) s += 1.0 * W.ma;
+    else if (!above50 && !above200) s -= 1.0 * W.ma;
+    else if (Math.abs(pctFromMA50) <= 1) s += 0.3 * W.ma;
+  }
+
+  // -- gap logic
+  if (gapUp && cur > open) s += 0.7 * W.gap; // held the gap
+  if (gapDown && cur < open) s -= 0.7 * W.gap;
+
+  // -- inside-day squeeze
+  if (insideDay && cur > prev) s += 0.5 * W.pattern;
+  if (insideDay && cur < prev) s -= 0.5 * W.pattern;
+
+  // -- doji nuance
+  if (doji) {
+    if (cur > ma50 && cur > ma200) s += 0.3 * W.pattern;
+    else if (cur < ma50 && cur < ma200) s -= 0.3 * W.pattern;
+  }
+
+  // -- volatility context
+  const hiVol = atr > 0 && atr > cur * 0.04;
+  const loVol = atr > 0 && atr < cur * 0.015;
+  if (hiVol && strongClose) s += 0.3 * W.vol; // range expansion
+  if (hiVol && weakClose) s -= 0.3 * W.vol;
+  if (loVol && insideDay) s += 0.3 * W.vol; // volatility squeeze
+
+  // -- penalties
+  if (bullTrap) s -= 1.0 * W.penalty;
+  if (weakClose && gapUp) s -= 0.7 * W.penalty; // island reversal risk
+
+  /* ──────────── 6. map to tier (customisable) ─ */
+  const cut = {
+    // upper bound for each tier
+    t1: 4,
+    t2: 2,
+    t3: 0.5,
+    t4: -0.5,
+    t5: -2,
+    t6: -4,
+    ...opts.cutoffs, // override per strategy
+  };
+
+  if (s >= cut.t1) return 1; // Strong Buy
+  if (s >= cut.t2) return 2; // Buy
+  if (s >= cut.t3) return 3; // Watch
+  if (s >= cut.t4) return 4; // Neutral
+  if (s >= cut.t5) return 5; // Caution
+  if (s >= cut.t6) return 6; // Avoid
+  return 7; // Strong Avoid
+}
+
 function getEnhancedEntryTimingScore(stock, opts = {}) {
   // Original single-day scoring
   const singleDayScore = getEntryTimingScore(stock, opts);
@@ -936,8 +1049,8 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
     return singleDayScore;
   }
 
-  // Get the last 10 trading days (2 weeks)
-  const recentData = historicalData.slice(-10);
+  // Get the last 15 trading days (3 weeks) - EXTENDED FROM 10
+  const recentData = historicalData.slice(-15);
   if (recentData.length < 5) {
     console.warn(
       `Insufficient historical data for ${stock.ticker}, using basic entry timing only.`
@@ -956,56 +1069,63 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
   // Calculate recent price momentum
   const closes = recentData.map((day) => day.close);
   const volumes = recentData.map((day) => day.volume);
+  const highs = recentData.map((day) => day.high);
+  const lows = recentData.map((day) => day.low);
 
-  // 1. Recent momentum - last 5 days vs previous 5 days
+  // 1. Recent momentum - last 5 days vs previous 10 days (CHANGED FROM 5 vs 5)
   let recentMomentum = 0;
-  if (recentData.length >= 10) {
+  if (recentData.length >= 15) {
     const last5Avg =
       closes.slice(-5).reduce((sum, price) => sum + price, 0) / 5;
-    const prev5Avg =
-      closes.slice(-10, -5).reduce((sum, price) => sum + price, 0) / 5;
-    recentMomentum = ((last5Avg - prev5Avg) / prev5Avg) * 100;
+    const prev10Avg =
+      closes.slice(-15, -5).reduce((sum, price) => sum + price, 0) / 10;
+    recentMomentum = ((last5Avg - prev10Avg) / prev10Avg) * 100;
   }
 
-  // 2. Volume trend - are volumes increasing?
+  // 2. Volume trend - are volumes increasing? (EXTENDED TO 5-DAY PERIODS)
   let volumeTrend = 0;
-  if (recentData.length >= 6) {
-    const last3VolAvg =
-      volumes.slice(-3).reduce((sum, vol) => sum + vol, 0) / 3;
-    const prev3VolAvg =
-      volumes.slice(-6, -3).reduce((sum, vol) => sum + vol, 0) / 3;
-    volumeTrend = ((last3VolAvg - prev3VolAvg) / prev3VolAvg) * 100;
+  if (recentData.length >= 10) {
+    const last5VolAvg =
+      volumes.slice(-5).reduce((sum, vol) => sum + vol, 0) / 5;
+    const prev5VolAvg =
+      volumes.slice(-10, -5).reduce((sum, vol) => sum + vol, 0) / 5;
+    volumeTrend = ((last5VolAvg - prev5VolAvg) / prev5VolAvg) * 100;
   }
 
-  // 3. Detect if we have higher lows forming (bullish)
+  // 3. Detect if we have higher lows forming (bullish) - NOW CHECKS LAST 7 DAYS
   let higherLows = false;
-  if (recentData.length >= 5) {
-    const last5Lows = recentData.slice(-5).map((day) => day.low);
-    higherLows =
-      last5Lows[1] > last5Lows[0] &&
-      last5Lows[2] > last5Lows[1] &&
-      last5Lows[3] > last5Lows[2] &&
-      last5Lows[4] > last5Lows[3];
+  if (recentData.length >= 7) {
+    const last7Lows = recentData.slice(-7).map((day) => day.low);
+    // Count how many sequential higher lows we have
+    let higherLowsCount = 0;
+    for (let i = 1; i < last7Lows.length; i++) {
+      if (last7Lows[i] > last7Lows[i - 1]) higherLowsCount++;
+    }
+    // Consider it a pattern if at least 5 of 6 comparisons show higher lows
+    higherLows = higherLowsCount >= 5;
   }
 
-  // 4. Detect if we have lower highs forming (bearish)
+  // 4. Detect if we have lower highs forming (bearish) - NOW CHECKS LAST 7 DAYS
   let lowerHighs = false;
-  if (recentData.length >= 5) {
-    const last5Highs = recentData.slice(-5).map((day) => day.high);
-    lowerHighs =
-      last5Highs[1] < last5Highs[0] &&
-      last5Highs[2] < last5Highs[1] &&
-      last5Highs[3] < last5Highs[2] &&
-      last5Highs[4] < last5Highs[3];
+  if (recentData.length >= 7) {
+    const last7Highs = recentData.slice(-7).map((day) => day.high);
+    // Count how many sequential lower highs we have
+    let lowerHighsCount = 0;
+    for (let i = 1; i < last7Highs.length; i++) {
+      if (last7Highs[i] < last7Highs[i - 1]) lowerHighsCount++;
+    }
+    // Consider it a pattern if at least 5 of 6 comparisons show lower highs
+    lowerHighs = lowerHighsCount >= 5;
   }
 
-  // 5. Price compression - narrowing range can precede breakouts
+  // 5. Price compression - narrowing range can precede breakouts (EXTENDED TO 7 DAYS)
   let priceCompression = false;
-  if (recentData.length >= 5) {
-    const ranges = recentData.slice(-5).map((day) => day.high - day.low);
-    const rangeAvg = ranges.reduce((sum, range) => sum + range, 0) / 5;
-    const latestRange = ranges[ranges.length - 1];
-    priceCompression = latestRange < rangeAvg * 0.7;
+  if (recentData.length >= 7) {
+    const ranges = recentData.slice(-7).map((day) => day.high - day.low);
+    const rangeAvg = ranges.reduce((sum, range) => sum + range, 0) / 7;
+    const last3RangeAvg =
+      ranges.slice(-3).reduce((sum, range) => sum + range, 0) / 3;
+    priceCompression = last3RangeAvg < rangeAvg * 0.7;
   }
 
   // 6. Check for bullish engulfing pattern (last two days)
@@ -1056,12 +1176,13 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
 
   // 9. Recent support test - price bounced off a recent low
   let supportTest = false;
-  if (recentData.length >= 5) {
+  if (recentData.length >= 10) {
+    // EXTENDED TO 10 DAYS to find more significant support
     const lowestDay = recentData
-      .slice(-5)
+      .slice(-10)
       .reduce(
         (lowest, day) => (day.low < lowest.low ? day : lowest),
-        recentData[recentData.length - 5]
+        recentData[recentData.length - 10]
       );
 
     const today = recentData[recentData.length - 1];
@@ -1074,9 +1195,10 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
 
   // 10. Gap fill check - did we fill a recent gap?
   let recentGapFilled = false;
-  if (recentData.length >= 5) {
-    // Look for gaps in the last 5 days
-    for (let i = recentData.length - 5; i < recentData.length - 1; i++) {
+  if (recentData.length >= 10) {
+    // EXTENDED TO 10 DAYS to catch more gaps
+    // Look for gaps in the last 10 days
+    for (let i = recentData.length - 10; i < recentData.length - 1; i++) {
       const gapUp = recentData[i + 1].open > recentData[i].close * 1.01;
       const gapDown = recentData[i + 1].open < recentData[i].close * 0.99;
 
@@ -1100,6 +1222,85 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
     }
   }
 
+  // 11. NEW: Check for pullback to key moving averages (20/50 day)
+  let pullbackToMA = false;
+  if (n(stock.movingAverage20d) > 0) {
+    const ma20 = n(stock.movingAverage20d);
+    const ma50 = n(stock.movingAverage50d);
+
+    // Check if price recently pulled back to touch the 20 or 50 day MA
+    pullbackToMA =
+      (low <= ma20 * 1.01 && cur > ma20 && cur > open) || // Bounce off 20MA
+      (low <= ma50 * 1.01 && cur > ma50 && cur > open); // Bounce off 50MA
+  }
+
+  // 12. NEW: Check for breakout from consolidation
+  let breakoutFromConsolidation = false;
+  if (recentData.length >= 15) {
+    // Calculate the average true range of the last 10 days (excluding last 2)
+    const last10Ranges = recentData
+      .slice(-12, -2)
+      .map((day, i, arr) =>
+        i === 0
+          ? day.high - day.low
+          : Math.max(
+              day.high - day.low,
+              Math.abs(day.high - arr[i - 1].close),
+              Math.abs(day.low - arr[i - 1].close)
+            )
+      );
+    const atrLast10 = last10Ranges.reduce((sum, range) => sum + range, 0) / 10;
+
+    // Calculate the average range of the last 3 days
+    const last3Ranges = recentData.slice(-3).map((day) => day.high - day.low);
+    const avgRangeLast3 =
+      last3Ranges.reduce((sum, range) => sum + range, 0) / 3;
+
+    // Check if the latest day shows a range expansion with a strong directional move
+    const latestDay = recentData[recentData.length - 1];
+    const rangeExpansion = latestDay.high - latestDay.low > atrLast10 * 1.5;
+    const directionalStrength =
+      Math.abs(latestDay.close - latestDay.open) >
+      (latestDay.high - latestDay.low) * 0.6;
+
+    // Breakout if we see range expansion after compressed price action
+    breakoutFromConsolidation =
+      priceCompression &&
+      rangeExpansion &&
+      directionalStrength &&
+      avgRangeLast3 > atrLast10 * 1.3;
+  }
+
+  // 13. NEW: Detect cup and handle pattern (bullish)
+  let cupAndHandle = false;
+  if (recentData.length >= 15) {
+    // Cup: A U-shaped pattern with similar highs on both sides
+    const cupLeft = recentData.slice(-15, -10); // First 5 days
+    const cupBottom = recentData.slice(-10, -5); // Middle 5 days
+    const cupRight = recentData.slice(-5); // Last 5 days
+
+    const leftHighs = cupLeft.map((day) => day.high);
+    const bottomLows = cupBottom.map((day) => day.low);
+    const rightHighs = cupRight.map((day) => day.high);
+
+    const maxLeftHigh = Math.max(...leftHighs);
+    const minBottomLow = Math.min(...bottomLows);
+    const maxRightHigh = Math.max(...rightHighs);
+
+    // Check for U shape (similar highs on both sides, with a lower bottom)
+    const similarHighs =
+      Math.abs(maxLeftHigh - maxRightHigh) < maxLeftHigh * 0.03;
+    const properBottom =
+      minBottomLow < Math.min(maxLeftHigh, maxRightHigh) * 0.95;
+
+    // Handle: A small consolidation/pullback after reaching the right side high
+    const recentPullback =
+      cupRight[3].close < cupRight[2].close &&
+      cupRight[4].close > cupRight[3].close;
+
+    cupAndHandle = similarHighs && properBottom && recentPullback;
+  }
+
   /* ──────────── 2. Weights for historical patterns ──────────── */
   const W = {
     momentum: 1.5, // Recent price momentum
@@ -1111,6 +1312,9 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
     doji: 0.7, // Doji after trend
     support: 1.3, // Support test
     gapFill: 0.9, // Gap filled
+    pullbackMA: 1.4, // NEW: Pullback to MA
+    breakout: 1.6, // NEW: Breakout from consolidation
+    cupHandle: 1.7, // NEW: Cup and handle pattern
     ...opts.histWeights,
   };
 
@@ -1150,12 +1354,23 @@ function getEnhancedEntryTimingScore(stock, opts = {}) {
   // Gap fill
   if (recentGapFilled && recentMomentum > 0) histScore += 0.7 * W.gapFill;
 
+  // NEW: Pullback to key moving averages
+  if (pullbackToMA) histScore += 1.0 * W.pullbackMA;
+
+  // NEW: Breakout from consolidation
+  if (breakoutFromConsolidation && cur > open) histScore += 1.0 * W.breakout;
+  else if (breakoutFromConsolidation && cur < open)
+    histScore -= 1.0 * W.breakout;
+
+  // NEW: Cup and handle pattern
+  if (cupAndHandle) histScore += 1.0 * W.cupHandle;
+
   /* ──────────── 4. Combine with single-day score ──────────── */
 
-  // Balance between current conditions and recent history
+  // ADJUSTED Balance between current conditions and recent history for swing trading
   const combinedWeights = {
-    current: 0.6, // Weight for single-day analysis
-    history: 0.4, // Weight for historical pattern analysis
+    current: 0.2, // Weight for single-day analysis - REDUCED FROM 0.3
+    history: 0.8, // Weight for historical pattern analysis - INCREASED FROM 0.7
     ...opts.combinedWeights,
   };
 
@@ -1835,7 +2050,7 @@ window.scan = {
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
           stock.valuationScore = getValuationScore(stock);
-          stock.entryTimingScore = getEntryTimingScore(stock);
+          stock.entryTimingScore = getEnhancedEntryTimingScore(stock);
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock);
 
