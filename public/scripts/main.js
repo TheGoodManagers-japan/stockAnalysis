@@ -1512,6 +1512,302 @@ function scoreExhaustionPatterns(patterns, weights, recentMomentum) {
 }
 
 
+function getEnhancedEntryTimingWithTargets(stock, opts = {}) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+
+  // Get the entry timing score
+  const entryTimingScore = getEnhancedEntryTimingScore(stock, opts);
+
+  // Get current price and ATR for calculations
+  const currentPrice = n(stock.currentPrice);
+  const atr = n(stock.atr14) || currentPrice * 0.02; // Default to 2% if no ATR
+
+  // Validate we have minimum data
+  if (!currentPrice || currentPrice <= 0) {
+    return {
+      score: entryTimingScore,
+      stopLoss: null,
+      priceTarget: null,
+      riskRewardRatio: null,
+    };
+  }
+
+  // Calculate support and resistance levels
+  const levels = calculateKeyLevels(stock);
+
+  // Calculate smart stop loss
+  const stopLoss = calculateSmartStopLoss(
+    stock,
+    levels,
+    atr,
+    entryTimingScore,
+    opts
+  );
+
+  // Calculate smart price target
+  const priceTarget = calculateSmartPriceTarget(
+    stock,
+    levels,
+    atr,
+    entryTimingScore,
+    stopLoss,
+    opts
+  );
+
+  // Calculate risk/reward ratio
+  const riskRewardRatio =
+    stopLoss && priceTarget
+      ? (priceTarget - currentPrice) / (currentPrice - stopLoss)
+      : null;
+
+  return {
+    score: entryTimingScore,
+    stopLoss: stopLoss ? Math.round(stopLoss * 100) / 100 : null,
+    priceTarget: priceTarget ? Math.round(priceTarget * 100) / 100 : null,
+    riskRewardRatio: riskRewardRatio
+      ? Math.round(riskRewardRatio * 100) / 100
+      : null,
+  };
+}
+
+function calculateKeyLevels(stock) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const historicalData = stock.historicalData || [];
+
+  const levels = {
+    supports: [],
+    resistances: [],
+    pivotPoint: null,
+    recentSwingHigh: null,
+    recentSwingLow: null,
+  };
+
+  // Calculate pivot point from today's data
+  if (stock.highPrice && stock.lowPrice && stock.currentPrice) {
+    levels.pivotPoint =
+      (n(stock.highPrice) + n(stock.lowPrice) + n(stock.currentPrice)) / 3;
+  }
+
+  // Find recent swing highs and lows from historical data
+  if (historicalData.length >= 10) {
+    const recentData = historicalData.slice(-20);
+
+    // Find swing highs (higher than 2 days before and after)
+    for (let i = 2; i < recentData.length - 2; i++) {
+      const current = recentData[i];
+      const isSwingHigh =
+        current.high > recentData[i - 1].high &&
+        current.high > recentData[i - 2].high &&
+        current.high > recentData[i + 1].high &&
+        current.high > recentData[i + 2].high;
+
+      if (isSwingHigh) {
+        levels.resistances.push(current.high);
+        if (!levels.recentSwingHigh || current.high > levels.recentSwingHigh) {
+          levels.recentSwingHigh = current.high;
+        }
+      }
+
+      const isSwingLow =
+        current.low < recentData[i - 1].low &&
+        current.low < recentData[i - 2].low &&
+        current.low < recentData[i + 1].low &&
+        current.low < recentData[i + 2].low;
+
+      if (isSwingLow) {
+        levels.supports.push(current.low);
+        if (!levels.recentSwingLow || current.low < levels.recentSwingLow) {
+          levels.recentSwingLow = current.low;
+        }
+      }
+    }
+  }
+
+  // Add moving averages as potential support/resistance
+  if (stock.movingAverage20d) levels.supports.push(n(stock.movingAverage20d));
+  if (stock.movingAverage50d) levels.supports.push(n(stock.movingAverage50d));
+  if (stock.movingAverage200d) levels.supports.push(n(stock.movingAverage200d));
+
+  // Sort levels
+  levels.supports.sort((a, b) => b - a); // Descending order
+  levels.resistances.sort((a, b) => a - b); // Ascending order
+
+  return levels;
+}
+
+function calculateSmartStopLoss(stock, levels, atr, entryScore, opts = {}) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const currentPrice = n(stock.currentPrice);
+  const lowPrice = n(stock.lowPrice);
+
+  // Base stop loss multipliers based on entry score
+  const stopMultipliers = {
+    1: 1.5, // Strong Buy - tighter stop
+    2: 1.8, // Buy
+    3: 2.0, // Watch
+    4: 2.2, // Neutral
+    5: 2.5, // Caution
+    6: 2.8, // Avoid
+    7: 3.0, // Strong Avoid - wider stop
+  };
+
+  const baseMultiplier = stopMultipliers[entryScore] || 2.0;
+  const atrMultiplier = opts.stopLossATRMultiplier || baseMultiplier;
+
+  // Method 1: ATR-based stop
+  const atrStop = currentPrice - atr * atrMultiplier;
+
+  // Method 2: Support-based stop
+  let supportStop = null;
+  const nearestSupport = levels.supports.find(
+    (s) => s < currentPrice && s > currentPrice * 0.95
+  );
+  if (nearestSupport) {
+    supportStop = nearestSupport - atr * 0.5; // Small buffer below support
+  }
+
+  // Method 3: Recent low-based stop
+  let recentLowStop = null;
+  if (levels.recentSwingLow && levels.recentSwingLow < currentPrice) {
+    recentLowStop = levels.recentSwingLow - atr * 0.3;
+  }
+
+  // Choose the most appropriate stop loss
+  const candidates = [atrStop, supportStop, recentLowStop].filter(
+    (s) => s !== null && s > 0
+  );
+
+  if (candidates.length === 0) {
+    return currentPrice * 0.95; // Default 5% stop
+  }
+
+  // For bullish setups (scores 1-3), prefer tighter stops
+  // For bearish setups (scores 5-7), prefer wider stops
+  if (entryScore <= 3) {
+    // Use the highest (tightest) stop for bullish setups
+    return Math.max(...candidates);
+  } else {
+    // Use a balanced approach for neutral/bearish setups
+    return candidates.reduce((a, b) => a + b) / candidates.length;
+  }
+}
+
+function calculateSmartPriceTarget(
+  stock,
+  levels,
+  atr,
+  entryScore,
+  stopLoss,
+  opts = {}
+) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const currentPrice = n(stock.currentPrice);
+  const highPrice = n(stock.highPrice);
+
+  // Minimum risk/reward ratios based on entry score
+  const minRRRatios = {
+    1: 2.5, // Strong Buy - higher targets
+    2: 2.0, // Buy
+    3: 1.8, // Watch
+    4: 1.5, // Neutral
+    5: 1.2, // Caution
+    6: 1.0, // Avoid
+    7: 0.8, // Strong Avoid - conservative targets
+  };
+
+  const minRR = opts.minRiskReward || minRRRatios[entryScore] || 1.5;
+  const risk = currentPrice - (stopLoss || currentPrice * 0.95);
+  const minTarget = currentPrice + risk * minRR;
+
+  // Method 1: ATR-based target
+  const targetMultipliers = {
+    1: 3.0, // Strong Buy
+    2: 2.5, // Buy
+    3: 2.0, // Watch
+    4: 1.5, // Neutral
+    5: 1.2, // Caution
+    6: 1.0, // Avoid
+    7: 0.8, // Strong Avoid
+  };
+
+  const atrMultiplier =
+    opts.targetATRMultiplier || targetMultipliers[entryScore] || 2.0;
+  const atrTarget = currentPrice + atr * atrMultiplier;
+
+  // Method 2: Resistance-based target
+  let resistanceTarget = null;
+  const nearestResistance = levels.resistances.find(
+    (r) => r > currentPrice * 1.02
+  );
+  if (nearestResistance) {
+    resistanceTarget = nearestResistance - atr * 0.2; // Small buffer below resistance
+  }
+
+  // Method 3: Fibonacci extension
+  if (levels.recentSwingLow && levels.recentSwingHigh) {
+    const swingRange = levels.recentSwingHigh - levels.recentSwingLow;
+    const fib1618 = currentPrice + swingRange * 0.618;
+    const fib1000 = currentPrice + swingRange;
+
+    // Choose fibonacci level based on entry score
+    resistanceTarget =
+      resistanceTarget || (entryScore <= 2 ? fib1000 : fib1618);
+  }
+
+  // Method 4: Percentage-based targets
+  const percentTargets = {
+    1: currentPrice * 1.08, // 8% for strong buy
+    2: currentPrice * 1.06, // 6% for buy
+    3: currentPrice * 1.04, // 4% for watch
+    4: currentPrice * 1.03, // 3% for neutral
+    5: currentPrice * 1.02, // 2% for caution
+    6: currentPrice * 1.015, // 1.5% for avoid
+    7: currentPrice * 1.01, // 1% for strong avoid
+  };
+  const percentTarget = percentTargets[entryScore] || currentPrice * 1.03;
+
+  // Method 5: 52-week high target (for bullish setups)
+  let yearHighTarget = null;
+  if (entryScore <= 3 && stock.fiftyTwoWeekHigh) {
+    const hi52 = n(stock.fiftyTwoWeekHigh);
+    if (hi52 > currentPrice && hi52 < currentPrice * 1.2) {
+      yearHighTarget = hi52;
+    }
+  }
+
+  // Collect all valid targets
+  const candidates = [
+    atrTarget,
+    resistanceTarget,
+    percentTarget,
+    yearHighTarget,
+    minTarget,
+  ].filter((t) => t !== null && t > currentPrice);
+
+  if (candidates.length === 0) {
+    return currentPrice * 1.05; // Default 5% target
+  }
+
+  // For bullish setups, be more aggressive with targets
+  if (entryScore <= 2) {
+    // Use the highest reasonable target (but cap at 20% gain)
+    const maxReasonable = Math.min(Math.max(...candidates), currentPrice * 1.2);
+    return Math.max(maxReasonable, minTarget);
+  } else if (entryScore <= 4) {
+    // Use average of targets for neutral setups
+    const avgTarget = candidates.reduce((a, b) => a + b) / candidates.length;
+    return Math.max(avgTarget, minTarget);
+  } else {
+    // Use conservative target for bearish setups
+    return Math.max(Math.min(...candidates), minTarget);
+  }
+}
+
+// Export the function if using modules
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { getEnhancedEntryTimingWithTargets };
+}
+
 
 
 /**
@@ -2157,7 +2453,13 @@ window.scan = {
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
           stock.valuationScore = getValuationScore(stock);
-          stock.entryTimingScore = getEnhancedEntryTimingScore(stock);
+
+          const entryAnalysis = getEnhancedEntryTimingWithTargets(stock);
+
+          // Assign each value to the stock object
+          stock.entryTimingScore = entryAnalysis.score;
+          stock.smartsStopLoss = entryAnalysis.stopLoss;
+          stock.smartPriceTarget = entryAnalysis.priceTarget;
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock);
 
@@ -2174,6 +2476,8 @@ window.scan = {
             _api_c2_score: stock.score,
             _api_c2_finalScore: stock.finalScore,
             _api_c2_tier: stock.tier,
+            _api_c2_smartStopLoss : stock.smartStopLoss,
+            _api_c2_smartPriceTarget : stock.smartPriceTarget,
             _api_c2_limitOrder: stock.limitOrder,
 
             // Add complete stock data as JSON
@@ -2834,7 +3138,12 @@ window.fastscan = {
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
           stock.valuationScore = getValuationScore(stock);
-          stock.entryTimingScore = getEntryTimingScore(stock);
+          const entryAnalysis = getEnhancedEntryTimingWithTargets(stock);
+
+          // Assign each value to the stock object
+          stock.entryTimingScore = entryAnalysis.score;
+          stock.smartStopLoss = entryAnalysis.stopLoss;
+          stock.smartPriceTarget = entryAnalysis.priceTarget;
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock);
 
@@ -2849,6 +3158,8 @@ window.fastscan = {
             _api_c2_growthPotential: stock.growthPotential,
             _api_c2_score: stock.score,
             _api_c2_finalScore: stock.finalScore,
+            _api_c2_smartStopLoss: stock.smartStopLoss,
+            _api_c2_smartPriceTarget: stock.smartPriceTarget,
             _api_c2_tier: stock.tier,
             _api_c2_limitOrder: stock.limitOrder,
             _api_c2_otherData: JSON.stringify({
