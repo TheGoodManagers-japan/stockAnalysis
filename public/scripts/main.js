@@ -3073,6 +3073,7 @@ window.fastscan = {
 
           console.log(`✅ All critical fields present for ${code}. Continuing analysis...`);
 
+
           const stock = {
             ticker: code,
             sector,
@@ -3107,6 +3108,9 @@ window.fastscan = {
           };
 
           console.log(`Analyzing stock: ${stock.ticker}`);
+
+          const historicalData = await fetchHistoricalData(stock.ticker);
+          stock.historicalData = historicalData || [];
           const prediction = previousprediction;
           if (prediction == null) {
             console.error(`Failed to generate prediction for ${stock.ticker}. Aborting.`);
