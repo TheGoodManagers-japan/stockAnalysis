@@ -1512,64 +1512,6 @@ function scoreExhaustionPatterns(patterns, weights, recentMomentum) {
 }
 
 
-function getEnhancedEntryTimingWithTargets(stock, opts = {}) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-
-  // Get the entry timing score
-  const entryTimingScore = getEnhancedEntryTimingScore(stock, opts);
-
-  // Get current price and ATR for calculations
-  const currentPrice = n(stock.currentPrice);
-  const atr = n(stock.atr14) || currentPrice * 0.02; // Default to 2% if no ATR
-
-  // Validate we have minimum data
-  if (!currentPrice || currentPrice <= 0) {
-    return {
-      score: entryTimingScore,
-      stopLoss: null,
-      priceTarget: null,
-      riskRewardRatio: null,
-    };
-  }
-
-  // Calculate support and resistance levels
-  const levels = calculateKeyLevels(stock);
-
-  // Calculate smart stop loss
-  const stopLoss = calculateSmartStopLoss(
-    stock,
-    levels,
-    atr,
-    entryTimingScore,
-    opts
-  );
-
-  // Calculate smart price target
-  const priceTarget = calculateSmartPriceTarget(
-    stock,
-    levels,
-    atr,
-    entryTimingScore,
-    stopLoss,
-    opts
-  );
-
-  // Calculate risk/reward ratio
-  const riskRewardRatio =
-    stopLoss && priceTarget
-      ? (priceTarget - currentPrice) / (currentPrice - stopLoss)
-      : null;
-
-  return {
-    score: entryTimingScore,
-    stopLoss: stopLoss ? Math.round(stopLoss * 100) / 100 : null,
-    priceTarget: priceTarget ? Math.round(priceTarget * 100) / 100 : null,
-    riskRewardRatio: riskRewardRatio
-      ? Math.round(riskRewardRatio * 100) / 100
-      : null,
-  };
-}
-
 function calculateKeyLevels(stock) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const historicalData = stock.historicalData || [];
@@ -1803,10 +1745,6 @@ function calculateSmartPriceTarget(
   }
 }
 
-// Export the function if using modules
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { getEnhancedEntryTimingWithTargets };
-}
 
 
 function getEnhancedEntryTimingV2(stock, opts = {}) {
@@ -1816,8 +1754,8 @@ function getEnhancedEntryTimingV2(stock, opts = {}) {
   // Validate historical data for Layer 2 analysis
   const historicalData = stock.historicalData || [];
   if (historicalData.length < 20) {
-    // Not enough data for Layer 2, return Layer 1 score
-    return { score: layer1Score };
+    // Not enough data for Layer 2, use Layer 1 and calculate targets
+    return getTargetsFromScore(stock, layer1Score, opts);
   }
 
   // Prepare data
@@ -1901,7 +1839,47 @@ function getEnhancedEntryTimingV2(stock, opts = {}) {
   // Map back to 1-7 scale
   const finalScore = mapToFinalScore(combinedScore);
 
-  return { score: finalScore };
+  // Calculate stop loss and price target with the enhanced score
+  return getTargetsFromScore(stock, finalScore, opts);
+}
+
+/* ──────────── Helper function to calculate targets ──────────── */
+
+function getTargetsFromScore(stock, score, opts = {}) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const currentPrice = n(stock.currentPrice);
+  const atr = n(stock.atr14) || currentPrice * 0.02;
+
+  // Validate we have minimum data
+  if (!currentPrice || currentPrice <= 0) {
+    return {
+      score: score,
+      stopLoss: null,
+      priceTarget: null,
+    };
+  }
+
+  // Calculate support and resistance levels
+  const levels = calculateKeyLevels(stock);
+
+  // Calculate smart stop loss
+  const stopLoss = calculateSmartStopLoss(stock, levels, atr, score, opts);
+
+  // Calculate smart price target
+  const priceTarget = calculateSmartPriceTarget(
+    stock,
+    levels,
+    atr,
+    score,
+    stopLoss,
+    opts
+  );
+
+  return {
+    score: score,
+    stopLoss: stopLoss ? Math.round(stopLoss * 100) / 100 : null,
+    priceTarget: priceTarget ? Math.round(priceTarget * 100) / 100 : null,
+  };
 }
 
 /* ──────────── Chart Pattern Detection ──────────── */
