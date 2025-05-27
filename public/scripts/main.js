@@ -1817,7 +1817,7 @@ function getEnhancedEntryTimingV2(stock, opts = {}) {
   const historicalData = stock.historicalData || [];
   if (historicalData.length < 20) {
     // Not enough data for Layer 2, return Layer 1 score
-    return layer1Score;
+    return { score: layer1Score };
   }
 
   // Prepare data
@@ -1901,7 +1901,7 @@ function getEnhancedEntryTimingV2(stock, opts = {}) {
   // Map back to 1-7 scale
   const finalScore = mapToFinalScore(combinedScore);
 
-  return finalScore;
+  return { score: finalScore };
 }
 
 /* ──────────── Chart Pattern Detection ──────────── */
