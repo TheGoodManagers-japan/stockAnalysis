@@ -1809,6 +1809,642 @@ if (typeof module !== "undefined" && module.exports) {
 }
 
 
+function getEnhancedEntryTimingV2(stock, opts = {}) {
+  // Get Layer 1 score from existing function
+  const layer1Score = getEnhancedEntryTimingScore(stock, opts);
+
+  // Validate historical data for Layer 2 analysis
+  const historicalData = stock.historicalData || [];
+  if (historicalData.length < 20) {
+    // Not enough data for Layer 2, return Layer 1 score
+    return layer1Score;
+  }
+
+  // Prepare data
+  const recentData = historicalData
+    .slice(-30)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  /* ──────────── Layer 2: Advanced Pattern Recognition ──────────── */
+
+  // 1. Chart Patterns
+  const chartPatterns = detectChartPatterns(recentData);
+
+  // 2. Volume Analysis
+  const volumeSignals = analyzeVolumeSignals(recentData);
+
+  // 3. Candlestick Patterns
+  const candlePatterns = detectCandlePatterns(recentData);
+
+  // 4. Trend Strength
+  const trendStrength = calculateTrendStrength(recentData);
+
+  // 5. Breakout Quality
+  const breakoutQuality = evaluateBreakoutQuality(stock, recentData);
+
+  /* ──────────── Layer 2 Scoring ──────────── */
+
+  let layer2Score = 0;
+
+  // Score Chart Patterns
+  if (chartPatterns.doubleBottom) layer2Score += 1.5;
+  if (chartPatterns.inverseHeadAndShoulders) layer2Score += 1.8;
+  if (chartPatterns.ascendingTriangle) layer2Score += 1.2;
+  if (chartPatterns.bullFlag) layer2Score += 1.0;
+  if (chartPatterns.doubleTop) layer2Score -= 1.5;
+  if (chartPatterns.headAndShoulders) layer2Score -= 1.8;
+  if (chartPatterns.descendingTriangle) layer2Score -= 1.2;
+  if (chartPatterns.bearFlag) layer2Score -= 1.0;
+
+  // Score Volume Signals
+  if (volumeSignals.bullishVolumeSpike) layer2Score += 1.2;
+  if (volumeSignals.accumulation) layer2Score += 0.8;
+  if (volumeSignals.bullishOBVDivergence) layer2Score += 1.0;
+  if (volumeSignals.positiveCMF) layer2Score += 0.6;
+  if (volumeSignals.distribution) layer2Score -= 0.8;
+  if (volumeSignals.bearishOBVDivergence) layer2Score -= 1.0;
+  if (volumeSignals.negativeCMF) layer2Score -= 0.6;
+
+  // Score Candlestick Patterns
+  if (candlePatterns.hammer) layer2Score += 0.8;
+  if (candlePatterns.morningStar) layer2Score += 1.2;
+  if (candlePatterns.bullishMarubozu) layer2Score += 0.6;
+  if (candlePatterns.shootingStar) layer2Score -= 0.8;
+  if (candlePatterns.eveningStar) layer2Score -= 1.2;
+  if (candlePatterns.bearishMarubozu) layer2Score -= 0.6;
+
+  // Score Trend Strength
+  if (trendStrength.strongUptrend) layer2Score += 1.0;
+  else if (trendStrength.weakUptrend) layer2Score += 0.4;
+  else if (trendStrength.strongDowntrend) layer2Score -= 1.0;
+  else if (trendStrength.weakDowntrend) layer2Score -= 0.4;
+
+  // Score Breakout Quality
+  if (breakoutQuality.confirmed) layer2Score += 1.5;
+  else if (breakoutQuality.falseBreakout) layer2Score -= 1.5;
+
+  /* ──────────── Combine Scores ──────────── */
+
+  // Convert Layer 1 score (1-7) to normalized scale
+  const normalizedLayer1 = 4 - (layer1Score - 1);
+
+  // Combine with configurable weights
+  const weights = {
+    layer1: 0.6,
+    layer2: 0.4,
+    ...opts.layerWeights,
+  };
+
+  const combinedScore =
+    normalizedLayer1 * weights.layer1 + layer2Score * weights.layer2;
+
+  // Map back to 1-7 scale
+  const finalScore = mapToFinalScore(combinedScore);
+
+  return finalScore;
+}
+
+/* ──────────── Chart Pattern Detection ──────────── */
+
+function detectChartPatterns(recentData) {
+  const patterns = {
+    doubleBottom: false,
+    doubleTop: false,
+    headAndShoulders: false,
+    inverseHeadAndShoulders: false,
+    ascendingTriangle: false,
+    descendingTriangle: false,
+    bullFlag: false,
+    bearFlag: false,
+  };
+
+  if (recentData.length < 20) return patterns;
+
+  // Double Bottom
+  patterns.doubleBottom = detectDoubleBottom(recentData);
+
+  // Double Top
+  patterns.doubleTop = detectDoubleTop(recentData);
+
+  // Head and Shoulders
+  patterns.headAndShoulders = detectHeadAndShoulders(recentData);
+  patterns.inverseHeadAndShoulders = detectInverseHeadAndShoulders(recentData);
+
+  // Triangles
+  patterns.ascendingTriangle = detectAscendingTriangle(recentData);
+  patterns.descendingTriangle = detectDescendingTriangle(recentData);
+
+  // Flags
+  patterns.bullFlag = detectBullFlag(recentData);
+  patterns.bearFlag = detectBearFlag(recentData);
+
+  return patterns;
+}
+
+function detectDoubleBottom(data) {
+  if (data.length < 15) return false;
+
+  // Find two lows with similar prices
+  const lows = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    if (
+      data[i].low < data[i - 1].low &&
+      data[i].low < data[i - 2].low &&
+      data[i].low < data[i + 1].low &&
+      data[i].low < data[i + 2].low
+    ) {
+      lows.push({ index: i, price: data[i].low });
+    }
+  }
+
+  if (lows.length < 2) return false;
+
+  // Check if two lows are similar (within 3%)
+  const lastTwo = lows.slice(-2);
+  const priceDiff =
+    Math.abs(lastTwo[0].price - lastTwo[1].price) / lastTwo[0].price;
+
+  // Check for neckline break
+  if (priceDiff < 0.03) {
+    const neckline = Math.max(
+      ...data.slice(lastTwo[0].index, lastTwo[1].index + 1).map((d) => d.high)
+    );
+    const currentPrice = data[data.length - 1].close;
+    return currentPrice > neckline;
+  }
+
+  return false;
+}
+
+function detectDoubleTop(data) {
+  if (data.length < 15) return false;
+
+  const highs = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    if (
+      data[i].high > data[i - 1].high &&
+      data[i].high > data[i - 2].high &&
+      data[i].high > data[i + 1].high &&
+      data[i].high > data[i + 2].high
+    ) {
+      highs.push({ index: i, price: data[i].high });
+    }
+  }
+
+  if (highs.length < 2) return false;
+
+  const lastTwo = highs.slice(-2);
+  const priceDiff =
+    Math.abs(lastTwo[0].price - lastTwo[1].price) / lastTwo[0].price;
+
+  if (priceDiff < 0.03) {
+    const neckline = Math.min(
+      ...data.slice(lastTwo[0].index, lastTwo[1].index + 1).map((d) => d.low)
+    );
+    const currentPrice = data[data.length - 1].close;
+    return currentPrice < neckline;
+  }
+
+  return false;
+}
+
+function detectHeadAndShoulders(data) {
+  if (data.length < 15) return false;
+
+  // Find three peaks
+  const peaks = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    if (data[i].high > data[i - 1].high && data[i].high > data[i + 1].high) {
+      peaks.push({ index: i, price: data[i].high });
+    }
+  }
+
+  if (peaks.length < 3) return false;
+
+  // Check if middle peak is highest (head)
+  const lastThree = peaks.slice(-3);
+  const isHead =
+    lastThree[1].price > lastThree[0].price &&
+    lastThree[1].price > lastThree[2].price;
+
+  // Check if shoulders are similar
+  const shoulderDiff =
+    Math.abs(lastThree[0].price - lastThree[2].price) / lastThree[0].price;
+
+  return isHead && shoulderDiff < 0.03;
+}
+
+function detectInverseHeadAndShoulders(data) {
+  if (data.length < 15) return false;
+
+  const troughs = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    if (data[i].low < data[i - 1].low && data[i].low < data[i + 1].low) {
+      troughs.push({ index: i, price: data[i].low });
+    }
+  }
+
+  if (troughs.length < 3) return false;
+
+  const lastThree = troughs.slice(-3);
+  const isInverseHead =
+    lastThree[1].price < lastThree[0].price &&
+    lastThree[1].price < lastThree[2].price;
+
+  const shoulderDiff =
+    Math.abs(lastThree[0].price - lastThree[2].price) / lastThree[0].price;
+
+  return isInverseHead && shoulderDiff < 0.03;
+}
+
+function detectAscendingTriangle(data) {
+  if (data.length < 10) return false;
+
+  const highs = data.slice(-10).map((d) => d.high);
+  const lows = data.slice(-10).map((d) => d.low);
+
+  // Check if highs are relatively flat
+  const highsRange = Math.max(...highs) - Math.min(...highs);
+  const avgHigh = highs.reduce((a, b) => a + b) / highs.length;
+  const highsFlat = highsRange / avgHigh < 0.02;
+
+  // Check if lows are rising
+  const lowsRising = lows[lows.length - 1] > lows[0] * 1.02;
+
+  return highsFlat && lowsRising;
+}
+
+function detectDescendingTriangle(data) {
+  if (data.length < 10) return false;
+
+  const highs = data.slice(-10).map((d) => d.high);
+  const lows = data.slice(-10).map((d) => d.low);
+
+  // Check if lows are relatively flat
+  const lowsRange = Math.max(...lows) - Math.min(...lows);
+  const avgLow = lows.reduce((a, b) => a + b) / lows.length;
+  const lowsFlat = lowsRange / avgLow < 0.02;
+
+  // Check if highs are falling
+  const highsFalling = highs[highs.length - 1] < highs[0] * 0.98;
+
+  return lowsFlat && highsFalling;
+}
+
+function detectBullFlag(data) {
+  if (data.length < 10) return false;
+
+  // Check for strong upward move followed by consolidation
+  const poleStart = data.length - 10;
+  const poleEnd = data.length - 5;
+
+  const poleMove =
+    (data[poleEnd].close - data[poleStart].close) / data[poleStart].close;
+  const strongPole = poleMove > 0.05; // 5% move
+
+  // Check for tight consolidation in last 5 days
+  const flagData = data.slice(-5);
+  const flagRange =
+    Math.max(...flagData.map((d) => d.high)) -
+    Math.min(...flagData.map((d) => d.low));
+  const avgPrice = flagData.reduce((sum, d) => sum + d.close, 0) / 5;
+  const tightFlag = flagRange / avgPrice < 0.03;
+
+  return strongPole && tightFlag;
+}
+
+function detectBearFlag(data) {
+  if (data.length < 10) return false;
+
+  const poleStart = data.length - 10;
+  const poleEnd = data.length - 5;
+
+  const poleMove =
+    (data[poleEnd].close - data[poleStart].close) / data[poleStart].close;
+  const strongPole = poleMove < -0.05; // -5% move
+
+  const flagData = data.slice(-5);
+  const flagRange =
+    Math.max(...flagData.map((d) => d.high)) -
+    Math.min(...flagData.map((d) => d.low));
+  const avgPrice = flagData.reduce((sum, d) => sum + d.close, 0) / 5;
+  const tightFlag = flagRange / avgPrice < 0.03;
+
+  return strongPole && tightFlag;
+}
+
+/* ──────────── Volume Analysis ──────────── */
+
+function analyzeVolumeSignals(data) {
+  const signals = {
+    bullishVolumeSpike: false,
+    bearishVolumeSpike: false,
+    accumulation: false,
+    distribution: false,
+    bullishOBVDivergence: false,
+    bearishOBVDivergence: false,
+    positiveCMF: false,
+    negativeCMF: false,
+  };
+
+  if (data.length < 20) return signals;
+
+  // Volume spike detection
+  const avgVolume =
+    data.slice(-20, -1).reduce((sum, d) => sum + d.volume, 0) / 19;
+  const latestVolume = data[data.length - 1].volume;
+  const volumeSpike = latestVolume > avgVolume * 1.5;
+
+  if (volumeSpike) {
+    const priceChange =
+      data[data.length - 1].close - data[data.length - 1].open;
+    signals.bullishVolumeSpike = priceChange > 0;
+    signals.bearishVolumeSpike = priceChange < 0;
+  }
+
+  // Accumulation/Distribution
+  const adRatio = calculateAccumulationDistribution(data.slice(-10));
+  signals.accumulation = adRatio > 0.6;
+  signals.distribution = adRatio < 0.4;
+
+  // OBV Divergence
+  const obvDivergence = calculateOBVDivergence(data.slice(-20));
+  signals.bullishOBVDivergence = obvDivergence > 0;
+  signals.bearishOBVDivergence = obvDivergence < 0;
+
+  // Chaikin Money Flow
+  const cmf = calculateCMF(data.slice(-20));
+  signals.positiveCMF = cmf > 0.1;
+  signals.negativeCMF = cmf < -0.1;
+
+  return signals;
+}
+
+function calculateAccumulationDistribution(data) {
+  let upVolume = 0;
+  let downVolume = 0;
+
+  data.forEach((day) => {
+    if (day.close > day.open) {
+      upVolume += day.volume;
+    } else {
+      downVolume += day.volume;
+    }
+  });
+
+  const totalVolume = upVolume + downVolume;
+  return totalVolume > 0 ? upVolume / totalVolume : 0.5;
+}
+
+function calculateOBVDivergence(data) {
+  // Calculate OBV
+  const obv = [0];
+  for (let i = 1; i < data.length; i++) {
+    if (data[i].close > data[i - 1].close) {
+      obv.push(obv[i - 1] + data[i].volume);
+    } else if (data[i].close < data[i - 1].close) {
+      obv.push(obv[i - 1] - data[i].volume);
+    } else {
+      obv.push(obv[i - 1]);
+    }
+  }
+
+  // Check for divergence
+  const priceTrend =
+    (data[data.length - 1].close - data[0].close) / data[0].close;
+  const obvTrend = (obv[obv.length - 1] - obv[0]) / Math.abs(obv[0] || 1);
+
+  if (priceTrend < -0.05 && obvTrend > 0) return 1; // Bullish divergence
+  if (priceTrend > 0.05 && obvTrend < 0) return -1; // Bearish divergence
+  return 0;
+}
+
+function calculateCMF(data) {
+  let mfVolume = 0;
+  let totalVolume = 0;
+
+  data.forEach((day) => {
+    const mfMultiplier =
+      (day.close - day.low - (day.high - day.close)) /
+      (day.high - day.low || 1);
+    mfVolume += mfMultiplier * day.volume;
+    totalVolume += day.volume;
+  });
+
+  return totalVolume > 0 ? mfVolume / totalVolume : 0;
+}
+
+/* ──────────── Candlestick Patterns ──────────── */
+
+function detectCandlePatterns(data) {
+  const patterns = {
+    hammer: false,
+    shootingStar: false,
+    morningStar: false,
+    eveningStar: false,
+    bullishMarubozu: false,
+    bearishMarubozu: false,
+  };
+
+  if (data.length < 3) return patterns;
+
+  const latest = data[data.length - 1];
+  const prev = data[data.length - 2];
+  const prev2 = data[data.length - 3];
+
+  // Hammer
+  patterns.hammer = detectHammer(latest, prev);
+
+  // Shooting Star
+  patterns.shootingStar = detectShootingStar(latest, prev);
+
+  // Morning Star
+  patterns.morningStar = detectMorningStar(prev2, prev, latest);
+
+  // Evening Star
+  patterns.eveningStar = detectEveningStar(prev2, prev, latest);
+
+  // Marubozu
+  patterns.bullishMarubozu = detectBullishMarubozu(latest);
+  patterns.bearishMarubozu = detectBearishMarubozu(latest);
+
+  return patterns;
+}
+
+function detectHammer(candle, prevCandle) {
+  const body = Math.abs(candle.close - candle.open);
+  const lowerShadow = Math.min(candle.open, candle.close) - candle.low;
+  const upperShadow = candle.high - Math.max(candle.open, candle.close);
+
+  return (
+    prevCandle.close > prevCandle.open && // Previous was bearish
+    body > 0 &&
+    lowerShadow > body * 2 &&
+    upperShadow < body * 0.3
+  );
+}
+
+function detectShootingStar(candle, prevCandle) {
+  const body = Math.abs(candle.close - candle.open);
+  const upperShadow = candle.high - Math.max(candle.open, candle.close);
+  const lowerShadow = Math.min(candle.open, candle.close) - candle.low;
+
+  return (
+    prevCandle.close < prevCandle.open && // Previous was bullish
+    body > 0 &&
+    upperShadow > body * 2 &&
+    lowerShadow < body * 0.3
+  );
+}
+
+function detectMorningStar(first, second, third) {
+  const firstBearish = first.close < first.open;
+  const secondSmall =
+    Math.abs(second.close - second.open) <
+    Math.abs(first.close - first.open) * 0.3;
+  const thirdBullish = third.close > third.open;
+  const thirdCloses = third.close > (first.close + first.open) / 2;
+
+  return firstBearish && secondSmall && thirdBullish && thirdCloses;
+}
+
+function detectEveningStar(first, second, third) {
+  const firstBullish = first.close > first.open;
+  const secondSmall =
+    Math.abs(second.close - second.open) <
+    Math.abs(first.close - first.open) * 0.3;
+  const thirdBearish = third.close < third.open;
+  const thirdCloses = third.close < (first.close + first.open) / 2;
+
+  return firstBullish && secondSmall && thirdBearish && thirdCloses;
+}
+
+function detectBullishMarubozu(candle) {
+  const body = Math.abs(candle.close - candle.open);
+  const totalRange = candle.high - candle.low;
+
+  return candle.close > candle.open && body > totalRange * 0.95;
+}
+
+function detectBearishMarubozu(candle) {
+  const body = Math.abs(candle.close - candle.open);
+  const totalRange = candle.high - candle.low;
+
+  return candle.close < candle.open && body > totalRange * 0.95;
+}
+
+/* ──────────── Trend Strength (ADX-like) ──────────── */
+
+function calculateTrendStrength(data) {
+  const strength = {
+    strongUptrend: false,
+    weakUptrend: false,
+    strongDowntrend: false,
+    weakDowntrend: false,
+    choppy: false,
+  };
+
+  if (data.length < 14) return strength;
+
+  // Simple trend strength calculation
+  const closes = data.map((d) => d.close);
+  const sma14 = closes.slice(-14).reduce((a, b) => a + b) / 14;
+  const currentPrice = closes[closes.length - 1];
+
+  // Calculate directional movement
+  let upMoves = 0;
+  let downMoves = 0;
+
+  for (let i = data.length - 14; i < data.length; i++) {
+    if (data[i].close > data[i - 1].close) upMoves++;
+    if (data[i].close < data[i - 1].close) downMoves++;
+  }
+
+  const trendRatio = Math.max(upMoves, downMoves) / 14;
+  const pricePosition = (currentPrice - sma14) / sma14;
+
+  if (trendRatio > 0.7 && pricePosition > 0.02) {
+    strength.strongUptrend = true;
+  } else if (trendRatio > 0.5 && pricePosition > 0) {
+    strength.weakUptrend = true;
+  } else if (trendRatio > 0.7 && pricePosition < -0.02) {
+    strength.strongDowntrend = true;
+  } else if (trendRatio > 0.5 && pricePosition < 0) {
+    strength.weakDowntrend = true;
+  } else {
+    strength.choppy = true;
+  }
+
+  return strength;
+}
+
+/* ──────────── Breakout Quality ──────────── */
+
+function evaluateBreakoutQuality(stock, data) {
+  const quality = {
+    confirmed: false,
+    falseBreakout: false,
+    pending: false,
+  };
+
+  if (data.length < 5) return quality;
+
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const currentPrice = n(stock.currentPrice);
+  const recentHigh = Math.max(...data.slice(-20).map((d) => d.high));
+  const recentLow = Math.min(...data.slice(-20).map((d) => d.low));
+
+  // Check if we're near a breakout level
+  const nearResistance = currentPrice > recentHigh * 0.98;
+  const nearSupport = currentPrice < recentLow * 1.02;
+
+  if (nearResistance || nearSupport) {
+    const latestCandle = data[data.length - 1];
+    const volumeSpike =
+      latestCandle.volume >
+      (data.slice(-20, -1).reduce((sum, d) => sum + d.volume, 0) / 19) * 1.5;
+
+    if (nearResistance && currentPrice > recentHigh) {
+      // Breakout above resistance
+      if (volumeSpike && latestCandle.close > latestCandle.open) {
+        quality.confirmed = true;
+      } else {
+        quality.falseBreakout = true;
+      }
+    } else if (nearSupport && currentPrice < recentLow) {
+      // Breakdown below support
+      if (volumeSpike && latestCandle.close < latestCandle.open) {
+        quality.confirmed = true;
+      } else {
+        quality.falseBreakout = true;
+      }
+    } else {
+      quality.pending = true;
+    }
+  }
+
+  return quality;
+}
+
+/* ──────────── Final Score Mapping ──────────── */
+
+function mapToFinalScore(combinedScore) {
+  // Enhanced cutoffs for better distribution
+  if (combinedScore >= 3.0) return 1; // Strong Buy
+  if (combinedScore >= 2.0) return 2; // Buy
+  if (combinedScore >= 1.0) return 3; // Watch
+  if (combinedScore >= 0) return 4; // Neutral
+  if (combinedScore >= -1.0) return 5; // Caution
+  if (combinedScore >= -2.0) return 6; // Avoid
+  return 7; // Strong Avoid
+}
+
+// Export if using modules
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { getEnhancedEntryTimingV2 };
+}
+
+
 
 /**
  * Determine Buying Urgency and Risk Level
@@ -2454,7 +3090,7 @@ window.scan = {
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
           stock.valuationScore = getValuationScore(stock);
 
-          const entryAnalysis = getEnhancedEntryTimingWithTargets(stock);
+          const entryAnalysis = getEnhancedEntryTimingV2(stock);
 
           // Assign each value to the stock object
           stock.entryTimingScore = entryAnalysis.score;
@@ -3142,7 +3778,7 @@ window.fastscan = {
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
           stock.valuationScore = getValuationScore(stock);
-          const entryAnalysis = getEnhancedEntryTimingWithTargets(stock);
+          const entryAnalysis = getEnhancedEntryTimingV2(stock);
 
           // Assign each value to the stock object
           stock.entryTimingScore = entryAnalysis.score;
