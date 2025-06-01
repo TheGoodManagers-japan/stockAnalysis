@@ -3072,7 +3072,7 @@ window.scan = {
 
           // Assign each value to the stock object
           stock.entryTimingScore = entryAnalysis.score;
-          stock.smartsStopLoss = entryAnalysis.stopLoss;
+          stock.smartStopLoss = entryAnalysis.stopLoss;
           stock.smartPriceTarget = entryAnalysis.priceTarget;
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock);
