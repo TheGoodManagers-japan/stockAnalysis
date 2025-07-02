@@ -1816,16 +1816,23 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
 
   /* ──────────── Advanced Contextual Adjustments ──────────── */
 
-  // Regime-specific adjustments
+  // Regime-specific adjustments - VERSION 2 (Stricter)
   if (marketRegime.type === "TRENDING" && !extensionAnalysis.parabolicMove) {
-    mlScore *= 1.2;
+    // Reward a healthy trend, but with addition for more controlled impact
+    mlScore += 1.5;
   } else if (marketRegime.type === "RANGE_BOUND") {
-    // Adjust for mean reversion
+    // In a range, only reward buys near the absolute bottom, otherwise penalize
     if (priceActionQuality.nearRangeLow) {
-      mlScore += 2.0;
-    } else if (priceActionQuality.nearRangeHigh) {
-      mlScore -= 2.0;
+      mlScore += 2.0; // Buy signal is valid ONLY at range lows
+    } else {
+      mlScore -= 2.5; // Penalize if it's anywhere else in the range
     }
+  } else if (
+    marketRegime.type === "CHOPPY" ||
+    marketRegime.type === "UNKNOWN"
+  ) {
+    // Harshly penalize unpredictable, choppy conditions
+    mlScore -= 3.0;
   }
 
   // Microstructure insights
@@ -2598,6 +2605,18 @@ function extractFeatureVector(...analyses) {
 function calculateMLScore(features) {
   // Simulate a gradient boosted tree scoring mechanism
   let score = 0;
+
+  let qualityHurdle = 0;
+  // Note: These feature numbers (f2, f9, f4) correspond to the order you pass them into extractFeatureVector.
+  // f2 = priceActionQuality, f9 = trendQuality, f4 = marketRegime
+  if (features.f2_clean) qualityHurdle++; // Is the price action smooth?
+  if (features.f9_isHealthyTrend) qualityHurdle++; // Is the ADX strong?
+  if (features.f4_type_TRENDING) qualityHurdle++; // Is the regime trending?
+
+  if (qualityHurdle < 2) {
+    // If it fails 2 or more quality checks, start with a penalty.
+    score -= 2.0;
+  }
 
   // High-impact feature combinations (learned patterns)
   if (
