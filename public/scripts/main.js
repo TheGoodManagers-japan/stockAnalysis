@@ -3566,6 +3566,11 @@ window.scan = {
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock);
 
+          // --- THIS IS THE MISSING STEP ---
+          stock.isBuyNow = entryAnalysis.isBuyNow;
+          stock.buyNowReason = entryAnalysis.buyNowReason;
+          // ---------------------------------
+
           // 10) Send data in Bubble key format
           const stockObject = {
             _api_c2_ticker: stock.ticker,
@@ -3579,11 +3584,11 @@ window.scan = {
             _api_c2_score: stock.score,
             _api_c2_finalScore: stock.finalScore,
             _api_c2_tier: stock.tier,
-            _api_c2_smartStopLoss : stock.smartStopLoss,
-            _api_c2_smartPriceTarget : stock.smartPriceTarget,
+            _api_c2_smartStopLoss: stock.smartStopLoss,
+            _api_c2_smartPriceTarget: stock.smartPriceTarget,
             _api_c2_limitOrder: stock.limitOrder,
-          _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
-          _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
+            _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
+            _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
 
             // Add complete stock data as JSON
             _api_c2_otherData: JSON.stringify({
