@@ -1793,9 +1793,22 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   const momentumAnalysis = analyzeMomentumPersistence(stock, recentData);
   const institutionalPatterns = detectInstitutionalActivity(recentData);
 
-  /* ──────────── Machine Learning-Inspired Scoring ──────────── */
 
-  // Create feature vector
+  const veto = applySanityCheckVeto(stock, recentData);
+  if (veto.isVetoed) {
+    // If a veto is triggered, bypass all other scoring and return immediately.
+    console.warn(
+      `Execution for ${stock.ticker} HALTED by VETO: ${veto.vetoReason}`
+    );
+    const result = getTargetsFromScore(stock, veto.finalScore, opts);
+    result.isBuyNow = false;
+    result.buyNowReason = veto.vetoReason;
+    result.keyInsights = [veto.vetoReason];
+    result.confidence = 0.9; // High confidence in the avoid signal
+    result.marketRegime = "BROKEN"; // Custom status
+    return result;
+  }
+
   const features = extractFeatureVector(
     microstructure,
     volumeProfile,
@@ -2804,6 +2817,49 @@ function findPushes(prices) {
   return pushes;
 }
 
+
+/**
+ * A non-negotiable sanity check that can veto any bullish signal
+ * if severe, single-day technical damage is detected.
+ * @param {object} stock - The stock object.
+ * @param {array} recentData - The array of historical daily data.
+ * @returns {{isVetoed: boolean, vetoReason: string, finalScore: number}}
+ */
+function applySanityCheckVeto(stock, recentData) {
+  if (recentData.length < 2) {
+    return { isVetoed: false }; // Not enough data to check
+  }
+
+  const today = recentData[recentData.length - 1];
+  const yesterday = recentData[recentData.length - 2];
+  const avgVolume20 = recentData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
+
+  const percentChange = ((today.close - yesterday.close) / yesterday.close) * 100;
+
+  // VETO 1: Catastrophic Price Drop
+  // A drop of more than 5% on volume 50% higher than average.
+  if (percentChange < -5 && today.volume > (avgVolume20 * 1.5)) {
+    return { 
+      isVetoed: true, 
+      vetoReason: "VETO: Severe price drop on high volume.",
+      finalScore: 7 // Strong Avoid
+    };
+  }
+
+  // VETO 2: Decisive Break of Key Support
+  // A clean break below the 50-day moving average (a major trend indicator).
+  const ma50 = stock.movingAverage50d;
+  if (ma50 && today.close < ma50 && yesterday.close > ma50) {
+    return {
+      isVetoed: true,
+      vetoReason: "VETO: Price broke decisively below the 50-day moving average.",
+      finalScore: 7 // Strong Avoid
+    };
+  }
+
+  // If no veto conditions are met, do nothing.
+  return { isVetoed: false };
+}
 
 /**
  * Analyzes the most recent price action to find an immediate "Buy Now" signal.
