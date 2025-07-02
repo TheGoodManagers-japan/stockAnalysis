@@ -1888,6 +1888,12 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   result.marketRegime = marketRegime.type;
   result.keyInsights = generateKeyInsights(features);
 
+  // --- ADD THIS NEW SECTION ---
+  const buyNowSignal = checkForBuyNowSignal(stock, recentData);
+  result.isBuyNow = buyNowSignal.isBuyNow;
+  result.buyNowReason = buyNowSignal.reason;
+  // --------------------------
+
   return result;
 }
 
@@ -2799,6 +2805,71 @@ function findPushes(prices) {
 }
 
 
+/**
+ * Analyzes the most recent price action to find an immediate "Buy Now" signal.
+ * This should be called AFTER the main V5 analysis confirms the stock is a high-quality candidate.
+ * @param {object} stock - The stock object with current data like moving averages.
+ * @param {array} recentData - The array of historical daily data.
+ * @returns {{isBuyNow: boolean, reason: string}}
+ */
+function checkForBuyNowSignal(stock, recentData) {
+  if (recentData.length < 3) {
+    return { isBuyNow: false, reason: "Not enough data" };
+  }
+
+  const today = recentData[recentData.length - 1];
+  const yesterday = recentData[recentData.length - 2];
+  const avgVolume10 = recentData.slice(-11, -1).reduce((sum, day) => sum + day.volume, 0) / 10;
+  
+  // --- Trigger 1: Powerful Bullish Engulfing Candle ---
+  const isDownDay = yesterday.close < yesterday.open;
+  const isUpDay = today.close > today.open;
+  const isEngulfing = isUpDay && isDownDay && today.close > yesterday.open && today.open < yesterday.close;
+  
+  if (isEngulfing) {
+    // Is the engulfing candle happening near a key support level?
+    const ma25 = stock.movingAverage25d || recentData.slice(-25).reduce((sum, day) => sum + day.close, 0) / 25;
+    const isNearSupport = Math.abs(today.low - ma25) / ma25 < 0.03; // Within 3% of 25-day MA
+    const hasVolume = today.volume > avgVolume10 * 1.3; // Volume is at least 30% above average
+
+    if (isNearSupport && hasVolume) {
+        return { isBuyNow: true, reason: "Bullish Engulfing on high volume near 25-day MA." };
+    }
+    if (isNearSupport) {
+        return { isBuyNow: true, reason: "Bullish Engulfing near 25-day MA." };
+    }
+  }
+
+  // --- Trigger 2: Hammer Candle Confirmation ---
+  const body = Math.abs(today.close - today.open);
+  const lowerWick = Math.min(today.open, today.close) - today.low;
+  const upperWick = today.high - Math.max(today.open, today.close);
+  const isHammer = lowerWick > (body * 2) && upperWick < body;
+
+  if (isHammer && isUpDay) {
+    // A green hammer at a support level is a strong signal
+    const ma25 = stock.movingAverage25d || recentData.slice(-25).reduce((sum, day) => sum + day.close, 0) / 25;
+    const isAtSupport = Math.abs(today.low - ma25) / ma25 < 0.02; // Within 2% of 25-day MA
+
+    if (isAtSupport) {
+      return { isBuyNow: true, reason: "Hammer candle formed at 25-day MA support." };
+    }
+  }
+
+  // --- Trigger 3: Breakout from a Consolidation ---
+  // A close above the high of the last 3 days signals a breakout from a small pullback.
+  const highOfLast3Days = Math.max(yesterday.high, recentData[recentData.length - 3].high);
+  const isBreakout = today.close > highOfLast3Days;
+  const onHighVolume = today.volume > avgVolume10 * 1.5;
+
+  if (isBreakout && onHighVolume) {
+      return { isBuyNow: true, reason: "High-volume breakout from a 3-day consolidation." };
+  }
+
+  return { isBuyNow: false, reason: "No immediate buy signal detected." };
+}
+
+
 /* ──────────── Helper function to calculate targets ──────────── */
 
 function getTargetsFromScore(stock, score, opts = {}) {
@@ -3511,6 +3582,8 @@ window.scan = {
             _api_c2_smartStopLoss : stock.smartStopLoss,
             _api_c2_smartPriceTarget : stock.smartPriceTarget,
             _api_c2_limitOrder: stock.limitOrder,
+          _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
+          _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
 
             // Add complete stock data as JSON
             _api_c2_otherData: JSON.stringify({
@@ -4198,6 +4271,8 @@ window.fastscan = {
             _api_c2_smartPriceTarget: stock.smartPriceTarget,
             _api_c2_tier: stock.tier,
             _api_c2_limitOrder: stock.limitOrder,
+            _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
+            _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
             _api_c2_otherData: JSON.stringify({
               highPrice: stock.highPrice,
               lowPrice: stock.lowPrice,
