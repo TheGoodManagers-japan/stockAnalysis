@@ -1884,6 +1884,224 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   return result;
 }
 
+
+/* ──────────── V4 ANALYSIS FUNCTIONS (IMPLEMENTATION) ──────────── */
+
+/**
+ * Analyzes how far a stock's price has extended from its mean.
+ * @returns {{isExtended: boolean, parabolicMove: boolean}}
+ */
+function analyzeExtension(stock, recentData) {
+  if (recentData.length < 20) {
+    return { isExtended: false, parabolicMove: false };
+  }
+
+  const closes = recentData.map(d => d.close);
+  const currentPrice = closes[closes.length - 1];
+  
+  // Calculate 20-day Simple Moving Average
+  const sma20 = closes.slice(-20).reduce((sum, val) => sum + val, 0) / 20;
+
+  // 1. Check if price is "extended" from its 20-day average
+  const distanceFromMean = ((currentPrice - sma20) / sma20) * 100;
+  const isExtended = distanceFromMean > 15; // Extended if >15% above 20-day SMA
+
+  // 2. Check for a parabolic (accelerating) move
+  const changeLast5Days = (closes[closes.length - 1] / closes[closes.length - 6] - 1);
+  const changePrev5Days = (closes[closes.length - 6] / closes[closes.length - 11] - 1);
+  const parabolicMove = changeLast5Days > (changePrev5Days * 2) && changeLast5Days > 0.08; // Recent 5-day gain is >2x the previous and >8%
+
+  return { isExtended, parabolicMove };
+}
+
+
+/**
+ * Assesses the quality and strength of the current trend using ADX.
+ * @returns {{isHealthyTrend: boolean, trendStrength: number}}
+ */
+function analyzeTrendQuality(stock, recentData) {
+  if (recentData.length < 30) { // ADX needs at least 28 periods
+    return { isHealthyTrend: false, trendStrength: 0 };
+  }
+
+  // Calculate ADX (Average Directional Index)
+  const adxResult = _calculateADX(recentData.slice(-30), 14);
+  const currentADX = adxResult[adxResult.length - 1].adx;
+
+  const trendStrength = currentADX || 0;
+  const isHealthyTrend = trendStrength > 25; // ADX > 25 indicates a strong trend
+
+  return { isHealthyTrend, trendStrength };
+}
+
+
+/**
+ * Checks if momentum has been persistent over time.
+ * @returns {{persistentStrength: number}}
+ */
+function analyzeMomentumPersistence(stock, recentData) {
+  if (recentData.length < 20) {
+    return { persistentStrength: 0 };
+  }
+  
+  const closes = recentData.map(d => d.close);
+  
+  // Calculate RSI for the recent period
+  const rsiValues = _calculateRSI(closes, 14);
+  const recentRSI = rsiValues.slice(-10); // Look at last 10 days of RSI
+  
+  // Calculate how many of the last 10 days RSI was above 55 (sign of bullish momentum)
+  const daysRsiBullish = recentRSI.filter(rsi => rsi > 55).length;
+
+  // A score from 0 to 1 based on how persistent the bullish RSI has been
+  const persistentStrength = daysRsiBullish / 10.0;
+  
+  return { persistentStrength };
+}
+
+
+/**
+ * Detects signs of institutional buying (accumulation).
+ * @returns {{accumulationDays: number, distributionDays: number, isAccumulating: boolean}}
+ */
+function detectInstitutionalActivity(recentData) {
+  if (recentData.length < 51) {
+    return { accumulationDays: 0, distributionDays: 0, isAccumulating: false };
+  }
+  
+  const relevantData = recentData.slice(-51); // Need 50 days for moving average + 1 day
+  const avgVolume50 = relevantData.slice(0, 50).reduce((sum, day) => sum + day.volume, 0) / 50;
+
+  let accumulationDays = 0;
+  let distributionDays = 0;
+  
+  // Analyze the last 25 days for institutional activity
+  const checkData = recentData.slice(-25);
+  
+  checkData.forEach((day, i) => {
+    if (i === 0) return;
+    const prevDay = checkData[i-1];
+    
+    // Check for high volume
+    if (day.volume > (avgVolume50 * 1.5)) {
+      if (day.close > prevDay.close) {
+        accumulationDays++;
+      } else if (day.close < prevDay.close) {
+        distributionDays++;
+      }
+    }
+  });
+
+  const isAccumulating = accumulationDays > distributionDays + 2;
+
+  return { accumulationDays, distributionDays, isAccumulating };
+}
+
+
+/* ──────────── HELPER FUNCTIONS FOR V4 ANALYSIS ──────────── */
+
+/**
+ * Calculates Relative Strength Index (RSI).
+ */
+function _calculateRSI(prices, period) {
+  let gains = 0;
+  let losses = 0;
+  const rsi = [];
+
+  // Calculate initial average gains and losses
+  for (let i = 1; i <= period; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff >= 0) {
+      gains += diff;
+    } else {
+      losses -= diff;
+    }
+  }
+
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+
+  for (let i = period; i < prices.length; i++) {
+    const rs = avgGain / (avgLoss || 1);
+    rsi.push(100 - (100 / (1 + rs)));
+
+    const diff = prices[i] - prices[i - 1];
+    let currentGain = 0;
+    let currentLoss = 0;
+
+    if (diff >= 0) {
+      currentGain = diff;
+    } else {
+      currentLoss = -diff;
+    }
+
+    avgGain = (avgGain * (period - 1) + currentGain) / period;
+    avgLoss = (avgLoss * (period - 1) + currentLoss) / period;
+  }
+  return rsi;
+}
+
+/**
+ * Calculates Average Directional Index (ADX).
+ */
+function _calculateADX(data, period) {
+  const trs = [];
+  const plusDMs = [];
+  const minusDMs = [];
+
+  // Step 1: Calculate True Range (TR), +DM, -DM
+  for (let i = 1; i < data.length; i++) {
+    const high = data[i].high;
+    const low = data[i].low;
+    const close = data[i].close;
+    const prevHigh = data[i - 1].high;
+    const prevLow = data[i - 1].low;
+    const prevClose = data[i - 1].close;
+
+    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    trs.push(tr);
+
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+
+    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  }
+
+  // Helper for Wilder's Smoothing
+  const wilderSmooth = (arr, p) => {
+    const smoothed = [];
+    let sum = arr.slice(0, p).reduce((a, b) => a + b, 0);
+    smoothed.push(sum);
+    for (let i = p; i < arr.length; i++) {
+        sum = smoothed[smoothed.length - 1] - (smoothed[smoothed.length - 1] / p) + arr[i];
+        smoothed.push(sum);
+    }
+    return smoothed;
+  };
+
+  const smoothedTR = wilderSmooth(trs, period);
+  const smoothedPlusDM = wilderSmooth(plusDMs, period);
+  const smoothedMinusDM = wilderSmooth(minusDMs, period);
+  
+  const plusDIs = [];
+  const minusDIs = [];
+  
+  for(let i = 0; i < smoothedTR.length; i++) {
+    plusDIs.push(100 * (smoothedPlusDM[i] / (smoothedTR[i] || 1)));
+    minusDIs.push(100 * (smoothedMinusDM[i] / (smoothedTR[i] || 1)));
+  }
+
+  const dxs = [];
+  for (let i = 0; i < plusDIs.length; i++) {
+      const dx = 100 * (Math.abs(plusDIs[i] - minusDIs[i]) / ((plusDIs[i] + minusDIs[i]) || 1));
+      dxs.push(dx);
+  }
+  
+  const adxValues = wilderSmooth(dxs, period).map(val => val / period);
+
+  return data.slice(-adxValues.length).map((d, i) => ({ ...d, adx: adxValues[i] }));
+}
 /* ──────────── NEW: Microstructure Analysis ──────────── */
 
 function analyzeMicrostructure(data) {
