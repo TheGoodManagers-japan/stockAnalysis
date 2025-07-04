@@ -2813,24 +2813,26 @@ function findPushes(prices) {
  * @param {array} recentData - The array of historical daily data.
  * @returns {{isVetoed: boolean, vetoReason: string, finalScore: number}}
  */
-function applySanityCheckVeto(stock, recentData) {
+function applySanityCheckVeto(stock, recentData, historicalData) {
   if (recentData.length < 2) {
     return { isVetoed: false }; // Not enough data to check
   }
 
   const today = recentData[recentData.length - 1];
   const yesterday = recentData[recentData.length - 2];
-  const avgVolume20 = recentData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
+  const avgVolume20 =
+    recentData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
 
-  const percentChange = ((today.close - yesterday.close) / yesterday.close) * 100;
+  const percentChange =
+    ((today.close - yesterday.close) / yesterday.close) * 100;
 
   // VETO 1: Catastrophic Price Drop
   // A drop of more than 5% on volume 50% higher than average.
-  if (percentChange < -5 && today.volume > (avgVolume20 * 1.5)) {
-    return { 
-      isVetoed: true, 
+  if (percentChange < -5 && today.volume > avgVolume20 * 1.5) {
+    return {
+      isVetoed: true,
       vetoReason: "VETO: Severe price drop on high volume.",
-      finalScore: 7 // Strong Avoid
+      finalScore: 7, // Strong Avoid
     };
   }
 
@@ -2840,8 +2842,9 @@ function applySanityCheckVeto(stock, recentData) {
   if (ma50 && today.close < ma50 && yesterday.close > ma50) {
     return {
       isVetoed: true,
-      vetoReason: "VETO: Price broke decisively below the 50-day moving average.",
-      finalScore: 7 // Strong Avoid
+      vetoReason:
+        "VETO: Price broke decisively below the 50-day moving average.",
+      finalScore: 7, // Strong Avoid
     };
   }
 
@@ -2850,8 +2853,9 @@ function applySanityCheckVeto(stock, recentData) {
   if (isNearMajorResistance(stock, historicalData)) {
     return {
       isVetoed: true,
-      vetoReason: "VETO: Price is approaching a major long-term resistance level.",
-      finalScore: 7 // Strong Avoid
+      vetoReason:
+        "VETO: Price is approaching a major long-term resistance level.",
+      finalScore: 7, // Strong Avoid
     };
   }
 
