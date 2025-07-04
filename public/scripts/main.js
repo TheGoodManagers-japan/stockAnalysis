@@ -1750,10 +1750,12 @@ function calculateSmartPriceTarget(
  * @returns {boolean}
  */
 function isNearMajorResistance(stock, historicalData) {
-  if (historicalData.length < 100) return false;
+  if (!historicalData || historicalData.length < 100) return false;
 
-  // Look at the last year of data, but exclude the most recent 10 days
+  // Look at the last year of data, but exclude the most recent 10 days to find a "prior" high
   const lookbackData = historicalData.slice(0, -10); 
+  if (lookbackData.length === 0) return false;
+  
   const highestHighInPastYear = Math.max(...lookbackData.map(d => d.high));
 
   // Check if the current price is within 2% of that major historical high
@@ -2811,51 +2813,45 @@ function findPushes(prices) {
  * if severe, single-day technical damage is detected.
  * @param {object} stock - The stock object.
  * @param {array} recentData - The array of historical daily data.
+ * @param {array} historicalData - The FULL array of historical data for long-term checks.
  * @returns {{isVetoed: boolean, vetoReason: string, finalScore: number}}
  */
-function applySanityCheckVeto(stock, recentData, historicalData) {
+function applySanityCheckVeto(stock, recentData, historicalData) { // <<< THE FIX IS HERE
   if (recentData.length < 2) {
     return { isVetoed: false }; // Not enough data to check
   }
 
   const today = recentData[recentData.length - 1];
   const yesterday = recentData[recentData.length - 2];
-  const avgVolume20 =
-    recentData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
+  const avgVolume20 = recentData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
 
-  const percentChange =
-    ((today.close - yesterday.close) / yesterday.close) * 100;
+  const percentChange = ((today.close - yesterday.close) / yesterday.close) * 100;
 
   // VETO 1: Catastrophic Price Drop
-  // A drop of more than 5% on volume 50% higher than average.
-  if (percentChange < -5 && today.volume > avgVolume20 * 1.5) {
-    return {
-      isVetoed: true,
+  if (percentChange < -5 && today.volume > (avgVolume20 * 1.5)) {
+    return { 
+      isVetoed: true, 
       vetoReason: "VETO: Severe price drop on high volume.",
-      finalScore: 7, // Strong Avoid
+      finalScore: 7 // Strong Avoid
     };
   }
 
   // VETO 2: Decisive Break of Key Support
-  // A clean break below the 50-day moving average (a major trend indicator).
   const ma50 = stock.movingAverage50d;
   if (ma50 && today.close < ma50 && yesterday.close > ma50) {
     return {
       isVetoed: true,
-      vetoReason:
-        "VETO: Price broke decisively below the 50-day moving average.",
-      finalScore: 7, // Strong Avoid
+      vetoReason: "VETO: Price broke decisively below the 50-day moving average.",
+      finalScore: 7 // Strong Avoid
     };
   }
 
   // VETO 3: Approaching Major Resistance
-  // Checks if the price is hitting a major price ceiling from the past year.
   if (isNearMajorResistance(stock, historicalData)) {
     return {
       isVetoed: true,
-      vetoReason:
-        "VETO: Price is approaching a major long-term resistance level.",
-      finalScore: 7, // Strong Avoid
+      vetoReason: "VETO: Price is approaching a major long-term resistance level.",
+      finalScore: 7 // Strong Avoid
     };
   }
 
