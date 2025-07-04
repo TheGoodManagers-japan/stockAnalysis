@@ -1745,6 +1745,23 @@ function calculateSmartPriceTarget(
   }
 }
 
+/**
+ * Checks if the current price is near a major resistance level from the past year.
+ * @returns {boolean}
+ */
+function isNearMajorResistance(stock, historicalData) {
+  if (historicalData.length < 100) return false;
+
+  // Look at the last year of data, but exclude the most recent 10 days
+  const lookbackData = historicalData.slice(0, -10); 
+  const highestHighInPastYear = Math.max(...lookbackData.map(d => d.high));
+
+  // Check if the current price is within 2% of that major historical high
+  const isNearResistance = stock.currentPrice >= (highestHighInPastYear * 0.98);
+
+  return isNearResistance;
+}
+
 
 function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Get Layer 1 score from existing function
@@ -1753,50 +1770,38 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Validate historical data
   const historicalData = stock.historicalData || [];
   if (historicalData.length < 60) {
+    // Fallback to simpler scoring if history is insufficient
     return getTargetsFromScore(stock, layer1Score, opts);
   }
 
-  // Prepare extended data window for better analysis
+  // Prepare data windows for analysis
   const recentData = historicalData
-    .slice(-90) // More data for pattern recognition
+    .slice(-90)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  /* ──────────── Advanced Multi-Layer Analysis ──────────── */
-
-  // 1. Microstructure Analysis
+  /* ──────────── 1. GATHER ALL DATA & ANALYSIS ──────────── */
   const microstructure = analyzeMicrostructure(recentData);
-
-  // 2. Advanced Volume Profile
   const volumeProfile = analyzeVolumeProfile(recentData);
-
-  // 3. Price Action Quality
   const priceActionQuality = analyzePriceActionQuality(recentData);
-
-  // 4. Hidden Divergences
   const hiddenDivergences = detectHiddenDivergences(stock, recentData);
-
-  // 5. Market Regime Detection
-  const marketRegime = detectMarketRegime(recentData);
-
-  // 6. Volatility Regime Analysis (SINGLE SOURCE OF TRUTH)
   const volatilityRegime = analyzeVolatilityRegime(stock, recentData);
-
-  // 7. Advanced Pattern Recognition (now uses volatilityRegime)
   const advancedPatterns = detectAdvancedPatterns(recentData, volatilityRegime);
-
-  // 8. Order Flow Inference
   const orderFlow = inferOrderFlow(recentData);
-
-  // Previous analyses (from V4)
   const extensionAnalysis = analyzeExtension(stock, recentData);
   const trendQuality = analyzeTrendQuality(stock, recentData);
   const momentumAnalysis = analyzeMomentumPersistence(stock, recentData);
   const institutionalPatterns = detectInstitutionalActivity(recentData);
 
+  // --- HYBRID REGIME ANALYSIS ---
+  // The strategic, long-term view (1-year)
+  const longTermRegime = detectMarketRegime(historicalData);
+  // The tactical, short-term view (~90-day)
+  const shortTermRegime = detectMarketRegime(recentData);
 
+  /* ──────────── 2. APPLY SANITY CHECK VETO ──────────── */
   const veto = applySanityCheckVeto(stock, recentData);
   if (veto.isVetoed) {
-    // If a veto is triggered, bypass all other scoring and return immediately.
+    // If a veto is triggered, bypass all other scoring and return an immediate "Avoid" signal.
     console.warn(
       `Execution for ${stock.ticker} HALTED by VETO: ${veto.vetoReason}`
     );
@@ -1805,16 +1810,19 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
     result.buyNowReason = veto.vetoReason;
     result.keyInsights = [veto.vetoReason];
     result.confidence = 0.9; // High confidence in the avoid signal
-    result.marketRegime = "BROKEN"; // Custom status
+    result.longTermRegime = "BROKEN";
+    result.shortTermRegime = "BROKEN";
     return result;
   }
 
+  /* ──────────── 3. CALCULATE ML-INSPIRED SCORE ──────────── */
+  // Create feature vector
   const features = extractFeatureVector(
     microstructure,
     volumeProfile,
     priceActionQuality,
     hiddenDivergences,
-    marketRegime,
+    longTermRegime, // Use the long-term view for scoring
     advancedPatterns,
     volatilityRegime,
     orderFlow,
@@ -1827,85 +1835,56 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Apply non-linear scoring with interaction effects
   let mlScore = calculateMLScore(features);
 
-  /* ──────────── Advanced Contextual Adjustments ──────────── */
-
-  // Regime-specific adjustments - VERSION 2 (Stricter)
-  if (marketRegime.type === "TRENDING" && !extensionAnalysis.parabolicMove) {
-    // Reward a healthy trend, but with addition for more controlled impact
+  /* ──────────── 4. APPLY CONTEXTUAL ADJUSTMENTS ──────────── */
+  // Use the LONG-TERM regime for the most important penalties and bonuses
+  if (longTermRegime.type === "TRENDING" && !extensionAnalysis.parabolicMove) {
     mlScore += 1.5;
-  } else if (marketRegime.type === "RANGE_BOUND") {
-    // In a range, only reward buys near the absolute bottom, otherwise penalize
+  } else if (longTermRegime.type === "RANGE_BOUND") {
     if (priceActionQuality.nearRangeLow) {
-      mlScore += 2.0; // Buy signal is valid ONLY at range lows
+      mlScore += 2.0;
     } else {
-      mlScore -= 2.5; // Penalize if it's anywhere else in the range
+      mlScore -= 2.5;
     }
   } else if (
-    marketRegime.type === "CHOPPY" ||
-    marketRegime.type === "UNKNOWN"
+    longTermRegime.type === "CHOPPY" ||
+    longTermRegime.type === "UNKNOWN"
   ) {
-    // Harshly penalize unpredictable, choppy conditions
     mlScore -= 3.0;
   }
 
-  // Microstructure insights
-  if (microstructure.bullishAuction && volumeProfile.pocRising) {
-    mlScore += 2.5; // Very bullish combination
-  }
-
-  if (microstructure.sellerExhaustion && orderFlow.buyingPressure) {
-    mlScore += 3.0; // Reversal setup
-  }
-
-  // Hidden divergence bonus (trend continuation signal)
-  if (hiddenDivergences.bullishHidden && trendQuality.isHealthyTrend) {
+  // Other contextual adjustments...
+  if (microstructure.bullishAuction && volumeProfile.pocRising) mlScore += 2.5;
+  if (microstructure.sellerExhaustion && orderFlow.buyingPressure)
+    mlScore += 3.0;
+  if (hiddenDivergences.bullishHidden && trendQuality.isHealthyTrend)
     mlScore += 2.0;
-  }
+  if (advancedPatterns.wyckoffSpring) mlScore += 3.5;
+  if (advancedPatterns.threePushes && extensionAnalysis.isExtended)
+    mlScore -= 3.0;
+  if (volatilityRegime.compression && advancedPatterns.coiledSpring)
+    mlScore += 2.5;
 
-  // Advanced pattern recognition
-  if (advancedPatterns.wyckoffSpring) {
-    mlScore += 3.5; // High probability reversal
-  }
-
-  if (advancedPatterns.threePushes && extensionAnalysis.isExtended) {
-    mlScore -= 3.0; // Exhaustion pattern
-  }
-
-  // Volatility regime adjustments (SINGLE SCORING POINT)
-  if (volatilityRegime.compression && advancedPatterns.coiledSpring) {
-    mlScore += 2.5; // Breakout imminent
-  }
-
-  /* ──────────── Final Score Calculation ──────────── */
-
+  /* ──────────── 5. CALCULATE FINAL OUTPUT ──────────── */
   const normalizedLayer1 = 4 - (layer1Score - 1);
-
-  const weights = {
-    layer1: 0.25,
-    mlAnalysis: 0.75, // Heavy weight on advanced analysis
-    ...opts.layerWeights,
-  };
-
+  const weights = { layer1: 0.25, mlAnalysis: 0.75, ...opts.layerWeights };
   const combinedScore =
     normalizedLayer1 * weights.layer1 + mlScore * weights.mlAnalysis;
 
-  // Advanced final mapping with confidence levels
   const { finalScore, confidence } = mapToFinalScoreWithConfidence(
     combinedScore,
     features,
-    marketRegime
+    longTermRegime // Use long-term regime for confidence mapping
   );
 
   const result = getTargetsFromScore(stock, finalScore, opts);
   result.confidence = confidence;
-  result.marketRegime = marketRegime.type;
+  result.longTermRegime = longTermRegime.type;
+  result.shortTermRegime = shortTermRegime.type;
   result.keyInsights = generateKeyInsights(features);
 
-  // --- ADD THIS NEW SECTION ---
   const buyNowSignal = checkForBuyNowSignal(stock, recentData);
   result.isBuyNow = buyNowSignal.isBuyNow;
   result.buyNowReason = buyNowSignal.reason;
-  // --------------------------
 
   return result;
 }
@@ -2391,56 +2370,65 @@ function detectHiddenDivergences(stock, data) {
 
 /* ──────────── NEW: Market Regime Detection ──────────── */
 
-function detectMarketRegime(data) {
+/* ──────────── NEW: Market Regime Detection (Version 2 - Long-Term View) ──────────── */
+
+function detectMarketRegime(historicalData) {
   const regime = {
     type: "UNKNOWN",
     strength: 0,
     volatility: "NORMAL",
-    characteristics: [],
+    characteristics: []
   };
 
-  if (data.length < 40) return regime;
+  // We need at least 60 days of data for a meaningful regime assessment.
+  if (historicalData.length < 60) {
+      regime.type = "UNKNOWN";
+      regime.characteristics.push("INSUFFICIENT_HISTORY");
+      return regime;
+  };
 
-  const prices = data.map((d) => d.close);
+  // Use up to 1 year of data for the analysis
+  const data = historicalData.slice(-252);
+  const prices = data.map(d => d.close);
   const returns = [];
 
   for (let i = 1; i < prices.length; i++) {
     returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
   }
 
-  // Calculate regime metrics
   const avgReturn = returns.reduce((a, b) => a + b) / returns.length;
-  const volatility = Math.sqrt(
-    returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) /
-      returns.length
+  // Calculate standard deviation of daily returns
+  const dailyVolatility = Math.sqrt(
+    returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / (returns.length -1)
   );
+  // Annualize it for a more stable metric
+  const annualVolatility = dailyVolatility * Math.sqrt(252);
 
-  // Trend detection using linear regression
   const xValues = Array.from({ length: prices.length }, (_, i) => i);
   const { slope, r2 } = linearRegression(xValues, prices);
 
-  // Classify regime
-  if (r2 > 0.7 && slope > 0) {
+  // Classify regime based on the provided data's timeframe
+  if (r2 > 0.4 && slope > 0) {
     regime.type = "TRENDING";
     regime.strength = r2;
     regime.characteristics.push("UPTREND");
-  } else if (r2 > 0.7 && slope < 0) {
+  } else if (r2 > 0.4 && slope < 0) {
     regime.type = "TRENDING";
     regime.strength = r2;
     regime.characteristics.push("DOWNTREND");
-  } else if (volatility < 0.01) {
+  } else if (annualVolatility < 0.25) { // Volatility less than 25% annually
     regime.type = "RANGE_BOUND";
-    regime.strength = 1 - volatility * 100;
+    regime.strength = 1 - annualVolatility;
     regime.characteristics.push("LOW_VOLATILITY");
   } else {
     regime.type = "CHOPPY";
-    regime.strength = volatility * 100;
+    regime.strength = annualVolatility;
     regime.characteristics.push("HIGH_VOLATILITY");
   }
 
   // Volatility classification
-  if (volatility > 0.025) regime.volatility = "HIGH";
-  else if (volatility < 0.01) regime.volatility = "LOW";
+  if (annualVolatility > 0.45) regime.volatility = "HIGH";
+  else if (annualVolatility < 0.25) regime.volatility = "LOW";
 
   return regime;
 }
@@ -2853,6 +2841,16 @@ function applySanityCheckVeto(stock, recentData) {
     return {
       isVetoed: true,
       vetoReason: "VETO: Price broke decisively below the 50-day moving average.",
+      finalScore: 7 // Strong Avoid
+    };
+  }
+
+  // VETO 3: Approaching Major Resistance
+  // Checks if the price is hitting a major price ceiling from the past year.
+  if (isNearMajorResistance(stock, historicalData)) {
+    return {
+      isVetoed: true,
+      vetoReason: "VETO: Price is approaching a major long-term resistance level.",
       finalScore: 7 // Strong Avoid
     };
   }
