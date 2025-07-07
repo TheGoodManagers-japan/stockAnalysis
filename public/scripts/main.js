@@ -1746,20 +1746,28 @@ function calculateSmartPriceTarget(
 }
 
 /**
- * Checks if the current price is near a major resistance level from the past year.
+ * Checks if the current price is entering a major resistance zone from the past year.
+ * A "zone" is used instead of a single price point for more realistic risk management.
  * @returns {boolean}
  */
 function isNearMajorResistance(stock, historicalData) {
   if (!historicalData || historicalData.length < 100) return false;
 
-  // Look at the last year of data, but exclude the most recent 10 days to find a "prior" high
-  const lookbackData = historicalData.slice(0, -10); 
+  const lookbackData = historicalData.slice(0, -22); 
   if (lookbackData.length === 0) return false;
-  
-  const highestHighInPastYear = Math.max(...lookbackData.map(d => d.high));
 
-  // Check if the current price is within 2% of that major historical high
-  const isNearResistance = stock.currentPrice >= (highestHighInPastYear * 0.98);
+  const highestHighInPast = Math.max(...lookbackData.map(d => d.high));
+
+  // REVISED LOGIC: The "caution zone" begins when the price is within 15% of the old high.
+  const resistanceZoneStart = highestHighInPast * 0.85;
+
+  const isNearResistance = stock.currentPrice >= resistanceZoneStart;
+
+  if (isNearResistance) {
+    console.warn(
+      `VETO WARNING for ${stock.ticker}: Current price ${stock.currentPrice} is entering the major resistance zone starting at ${resistanceZoneStart} (below the peak of ${highestHighInPast}).`
+    );
+  }
 
   return isNearResistance;
 }
