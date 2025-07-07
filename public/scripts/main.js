@@ -1837,10 +1837,20 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Apply non-linear scoring with interaction effects
   let mlScore = calculateMLScore(features);
 
-  /* ──────────── 4. APPLY CONTEXTUAL ADJUSTMENTS ──────────── */
   // Use the LONG-TERM regime for the most important penalties and bonuses
-  if (longTermRegime.type === "TRENDING" && !extensionAnalysis.parabolicMove) {
+  if (
+    longTermRegime.type === "TRENDING" &&
+    longTermRegime.characteristics.includes("UPTREND") &&
+    !extensionAnalysis.parabolicMove
+  ) {
+    // Only reward a healthy UPTREND
     mlScore += 1.5;
+  } else if (
+    longTermRegime.type === "TRENDING" &&
+    longTermRegime.characteristics.includes("DOWNTREND")
+  ) {
+    // Heavily penalize any rally that occurs within a major DOWNTREND
+    mlScore -= 4.0;
   } else if (longTermRegime.type === "RANGE_BOUND") {
     if (priceActionQuality.nearRangeLow) {
       mlScore += 2.0;
@@ -2866,7 +2876,17 @@ function applySanityCheckVeto(stock, recentData, historicalData) { // <<< THE FI
  * @returns {{isBuyNow: boolean, reason: string}}
  */
 function checkForBuyNowSignal(stock, recentData) {
-  if (recentData.length < 10) { // Increased data requirement for new patterns
+  // --- ADD THIS FOR DEBUGGING ---
+  const todayForDebug = recentData[recentData.length - 1];
+  console.log(
+    `DEBUGGING "Buy Now": Analyzing data for date: ${new Date(
+      todayForDebug.date
+    ).toLocaleDateString()}`
+  );
+  // -----------------------------
+
+  if (recentData.length < 10) {
+    // Increased data requirement for new patterns
     return { isBuyNow: false, reason: "Not enough data" };
   }
 
@@ -2874,9 +2894,10 @@ function checkForBuyNowSignal(stock, recentData) {
   const today = recentData[recentData.length - 1];
   const yesterday = recentData[recentData.length - 2];
   const prior = recentData[recentData.length - 3];
-  
-  const avgVolume10 = recentData.slice(-11, -1).reduce((sum, day) => sum + day.volume, 0) / 10;
-  
+
+  const avgVolume10 =
+    recentData.slice(-11, -1).reduce((sum, day) => sum + day.volume, 0) / 10;
+
   const ma5 = stock.movingAverage5d;
   const ma25 = stock.movingAverage25d;
 
@@ -2887,24 +2908,43 @@ function checkForBuyNowSignal(stock, recentData) {
 
   // --- Reversal & Momentum Triggers (from V4) ---
   const isUpDay = today.close > today.open;
-  if (isUpDay && yesterday.close < yesterday.open && today.close > yesterday.open && today.open < yesterday.close) bullishSigns.push("Bullish Engulfing");
-  
+  if (
+    isUpDay &&
+    yesterday.close < yesterday.open &&
+    today.close > yesterday.open &&
+    today.open < yesterday.close
+  )
+    bullishSigns.push("Bullish Engulfing");
+
   const body = Math.abs(today.close - today.open);
   const lowerWick = Math.min(today.open, today.close) - today.low;
-  if (lowerWick > body * 2 && (today.high - Math.max(today.open, today.close)) < body) bullishSigns.push("Hammer Candle");
-  
-  if (ma25 && Math.abs(today.low - ma25) / ma25 < 0.03) bullishSigns.push("at 25-day MA support");
-  
-  if (ma5 && today.low <= ma5 && today.close > ma5 && isUpDay) bullishSigns.push("bounced off 5-day MA");
+  if (
+    lowerWick > body * 2 &&
+    today.high - Math.max(today.open, today.close) < body
+  )
+    bullishSigns.push("Hammer Candle");
+
+  if (ma25 && Math.abs(today.low - ma25) / ma25 < 0.03)
+    bullishSigns.push("at 25-day MA support");
+
+  if (ma5 && today.low <= ma5 && today.close > ma5 && isUpDay)
+    bullishSigns.push("bounced off 5-day MA");
 
   // --- NEW Trigger: Bull Flag / Consolidation Breakout ---
   // Looks for a breakout after at least 3 days of sideways consolidation.
   const consolidationPeriod = recentData.slice(-5, -1); // Look at the 4 days before today
-  if(consolidationPeriod.length === 4){
-    const consolidationHigh = Math.max(...consolidationPeriod.map(d => d.high));
-    const consolidationLow = Math.min(...consolidationPeriod.map(d => d.low));
-    const isTightRange = (consolidationHigh - consolidationLow) / consolidationLow < 0.05; // Range is less than 5%
-    if(isTightRange && today.close > consolidationHigh && today.volume > avgVolume10 * 1.5) {
+  if (consolidationPeriod.length === 4) {
+    const consolidationHigh = Math.max(
+      ...consolidationPeriod.map((d) => d.high)
+    );
+    const consolidationLow = Math.min(...consolidationPeriod.map((d) => d.low));
+    const isTightRange =
+      (consolidationHigh - consolidationLow) / consolidationLow < 0.05; // Range is less than 5%
+    if (
+      isTightRange &&
+      today.close > consolidationHigh &&
+      today.volume > avgVolume10 * 1.5
+    ) {
       bullishSigns.push("Bull Flag Breakout");
     }
   }
@@ -2912,42 +2952,52 @@ function checkForBuyNowSignal(stock, recentData) {
   // --- NEW Trigger: Bollinger Band Squeeze Breakout ---
   const bbUpper = stock.bollingerUpper;
   const bbLower = stock.bollingerLower;
-  if(bbUpper && bbLower) {
-      const bbWidth = (bbUpper - bbLower) / stock.bollingerMid;
-      // You would need to calculate historical BB Width to find a true squeeze,
-      // but a simple proxy is to look for a breakout after a very narrow width.
-      const isSqueezed = bbWidth < 0.08; // Example threshold for a tight band
-      if(isSqueezed && today.close > bbUpper && isUpDay){
-          bullishSigns.push("Bollinger Band Squeeze Breakout");
-      }
+  if (bbUpper && bbLower) {
+    const bbWidth = (bbUpper - bbLower) / stock.bollingerMid;
+    // You would need to calculate historical BB Width to find a true squeeze,
+    // but a simple proxy is to look for a breakout after a very narrow width.
+    const isSqueezed = bbWidth < 0.08; // Example threshold for a tight band
+    if (isSqueezed && today.close > bbUpper && isUpDay) {
+      bullishSigns.push("Bollinger Band Squeeze Breakout");
+    }
   }
 
   // Other Evidence (Volume, Closing Range, etc.)
   if (today.volume > avgVolume10 * 2) bullishSigns.push("on very high volume");
-  else if (today.volume > avgVolume10 * 1.5) bullishSigns.push("on high volume");
-  
+  else if (today.volume > avgVolume10 * 1.5)
+    bullishSigns.push("on high volume");
+
   const dailyRange = today.high - today.low;
   if (dailyRange > 0) {
-      const closePosition = (today.close - today.low) / dailyRange;
-      if (closePosition > 0.8) bullishSigns.push("very strong close");
-      else if (closePosition < 0.2) bearishSigns.push("very weak close");
+    const closePosition = (today.close - today.low) / dailyRange;
+    if (closePosition > 0.8) bullishSigns.push("very strong close");
+    else if (closePosition < 0.2) bearishSigns.push("very weak close");
   }
 
   // --- 3. MAKE THE FINAL DECISION ---
-  const hasStrongBullishPattern = bullishSigns.some(s => s.includes('Engulfing') || s.includes('Hammer') || s.includes('Breakout') || s.includes('Flag'));
+  const hasStrongBullishPattern = bullishSigns.some(
+    (s) =>
+      s.includes("Engulfing") ||
+      s.includes("Hammer") ||
+      s.includes("Breakout") ||
+      s.includes("Flag")
+  );
   const hasNoMajorBearishSignal = bearishSigns.length === 0;
 
   const isBuyNow = hasStrongBullishPattern && hasNoMajorBearishSignal;
 
   let reason = "No immediate buy signal detected.";
   if (isBuyNow) {
-    reason = "Buy Now: " + bullishSigns.join(' | ');
+    reason = "Buy Now: " + bullishSigns.join(" | ");
   } else if (bearishSigns.length > 0) {
-    reason = "No Buy: " + bearishSigns.join(' | ');
+    reason = "No Buy: " + bearishSigns.join(" | ");
   } else if (bullishSigns.length > 0) {
-      reason = "No Buy: Minor bullish signs but lacks a strong trigger. (" + bullishSigns.join(', ') + ")";
+    reason =
+      "No Buy: Minor bullish signs but lacks a strong trigger. (" +
+      bullishSigns.join(", ") +
+      ")";
   }
-  
+
   return { isBuyNow, reason };
 }
 
