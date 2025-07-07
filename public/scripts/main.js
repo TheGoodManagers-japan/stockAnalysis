@@ -1801,7 +1801,7 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   const shortTermRegime = detectMarketRegime(recentData);
 
   /* ──────────── 2. APPLY SANITY CHECK VETO ──────────── */
-  const veto = applySanityCheckVeto(stock, recentData);
+  const veto = applySanityCheckVeto(stock, recentData, historicalData);
   if (veto.isVetoed) {
     // If a veto is triggered, bypass all other scoring and return an immediate "Avoid" signal.
     console.warn(
