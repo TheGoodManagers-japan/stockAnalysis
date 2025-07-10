@@ -2924,13 +2924,21 @@ function checkForBuyNowSignal(stock, recentData) {
   )
     bullishSigns.push("Bullish Engulfing");
 
-  const body = Math.abs(today.close - today.open);
+  // --- Hammer Candle Logic (Corrected) ---
+  // FIX: Add a check to ensure the body is not insignificantly small compared to the range.
+  // This prevents dojis from being misread as hammers.
+  const isNotDoji = dailyRange > 0 && body > dailyRange * 0.1; // Body must be at least 10% of the candle's total range.
+
   const lowerWick = Math.min(today.open, today.close) - today.low;
+  const upperWick = today.high - Math.max(today.open, today.close);
+
   if (
+    isNotDoji && // <-- THE FIX IS HERE
     lowerWick > body * 2 &&
-    today.high - Math.max(today.open, today.close) < body
-  )
+    upperWick < body
+  ) {
     bullishSigns.push("Hammer Candle");
+  }
 
   if (ma25 && Math.abs(today.low - ma25) / ma25 < 0.03)
     bullishSigns.push("at 25-day MA support");
