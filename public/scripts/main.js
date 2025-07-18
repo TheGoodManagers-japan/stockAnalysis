@@ -1522,19 +1522,16 @@ function calculateKeyLevels(stock) {
     pivotPoint: null,
     recentSwingHigh: null,
     recentSwingLow: null,
-  };
+  }; // Calculate pivot point from today's data
 
-  // Calculate pivot point from today's data
   if (stock.highPrice && stock.lowPrice && stock.currentPrice) {
     levels.pivotPoint =
       (n(stock.highPrice) + n(stock.lowPrice) + n(stock.currentPrice)) / 3;
-  }
+  } // Find recent swing highs and lows from historical data
 
-  // Find recent swing highs and lows from historical data
   if (historicalData.length >= 10) {
     const recentData = historicalData.slice(-20);
 
-    // Find swing highs (higher than 2 days before and after)
     for (let i = 2; i < recentData.length - 2; i++) {
       const current = recentData[i];
       const isSwingHigh =
@@ -1563,16 +1560,18 @@ function calculateKeyLevels(stock) {
         }
       }
     }
-  }
+  } // Add moving averages as potential support levels
 
-  // Add moving averages as potential support/resistance
-  if (stock.movingAverage20d) levels.supports.push(n(stock.movingAverage20d));
   if (stock.movingAverage50d) levels.supports.push(n(stock.movingAverage50d));
   if (stock.movingAverage200d) levels.supports.push(n(stock.movingAverage200d));
 
-  // Sort levels
-  levels.supports.sort((a, b) => b - a); // Descending order
-  levels.resistances.sort((a, b) => a - b); // Ascending order
+  // *** ADDED FROM FUNCTION 2 ***
+  // Add 52-week high as a major resistance level
+  if (stock.fiftyTwoWeekHigh)
+    levels.resistances.push(n(stock.fiftyTwoWeekHigh)); // Sort levels
+
+  levels.supports.sort((a, b) => b - a); // Descending order (highest support first)
+  levels.resistances.sort((a, b) => a - b); // Ascending order (lowest resistance first)
 
   return levels;
 }
@@ -2877,48 +2876,6 @@ function applySanityCheckVeto(stock, recentData, historicalData) { // <<< THE FI
   return { isVetoed: false };
 }
 
-
-function calculateKeyLevels(stock) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const historicalData = stock.historicalData || [];
-
-  const levels = {
-    supports: [],
-    resistances: [],
-    pivotPoint: null,
-    recentSwingHigh: null,
-    recentSwingLow: null,
-  }; // Calculate pivot point from today's data
-
-  if (stock.highPrice && stock.lowPrice && stock.currentPrice) {
-    levels.pivotPoint =
-      (n(stock.highPrice) + n(stock.lowPrice) + n(stock.currentPrice)) / 3;
-  } // Find recent swing highs and lows from historical data
-
-  if (historicalData.length >= 10) {
-    const recentData = historicalData.slice(-20);
-    for (let i = 2; i < recentData.length - 2; i++) {
-      const current = recentData[i];
-      const isSwingHigh =
-        current.high > recentData[i - 1].high &&
-        current.high > recentData[i - 2].high &&
-        current.high > recentData[i + 1].high &&
-        current.high > recentData[i + 2].high;
-
-      if (isSwingHigh) {
-        levels.resistances.push(current.high);
-        if (!levels.recentSwingHigh || current.high > levels.recentSwingHigh) {
-          levels.recentSwingHigh = current.high;
-        }
-      }
-    }
-  }
-  // Add 52-week high as a major resistance
-  if (stock.fiftyTwoWeekHigh)
-    levels.resistances.push(n(stock.fiftyTwoWeekHigh));
-  levels.resistances.sort((a, b) => a - b);
-  return levels;
-}
 
 function checkForTrendReversal_V2(stock, historicalData) {
   if (
