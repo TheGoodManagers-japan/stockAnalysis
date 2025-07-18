@@ -2934,6 +2934,57 @@ function applySanityCheckVeto(stock, recentData, historicalData) { // <<< THE FI
 }
 
 
+/**
+ * (V2 - Enhanced) Analyzes a stock you own to provide a "Hold," "Protect Profit," or "Sell Now" signal.
+ * @param {object} stock - The full, updated stock object.
+ * @param {object} trade - An object with your trade details: { entryPrice, stopLoss, priceTarget }.
+ * @param {array} historicalData - The array of historical data.
+ * @returns {{status: string, reason: string}} - The recommended action and the reason why.
+ */
+function getTradeManagementSignal_V2(stock, trade, historicalData) {
+  const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
+  const { entryPrice, stopLoss, priceTarget } = trade;
+
+  // --- 1. Check for Hard Sell Rules (Target or Stop-Loss) ---
+  if (currentPrice >= priceTarget) {
+    return { status: "Sell Now", reason: `Take Profit: Price reached target of ¥${priceTarget}.` };
+  }
+  if (currentPrice <= stopLoss) {
+    return { status: "Sell Now", reason: `Stop-Loss: Price hit stop-loss at ¥${stopLoss}.` };
+  }
+
+  // --- 2. NEW: Check for "Protect Profit" Warnings (only if the trade is profitable) ---
+  const isProfitable = currentPrice > entryPrice;
+  if (isProfitable) {
+    // Warning 1: Has momentum turned negative?
+    const hasMacdBearishCross = macd < macdSignal;
+    if (hasMacdBearishCross) {
+        return { status: "Protect Profit", reason: "Warning: Momentum (MACD) has turned bearish. Consider taking profits." };
+    }
+
+    // Warning 2: Has the medium-term trend support broken?
+    const below25dMA = currentPrice < movingAverage25d;
+    if (below25dMA) {
+        return { status: "Protect Profit", reason: "Warning: Price broke below 25-day MA support. Consider taking profits." };
+    }
+  }
+
+  // --- 3. Check for Bearish Reversal Patterns (another reason to sell) ---
+  if (historicalData.length >= 2) {
+    const today = historicalData[historicalData.length - 1];
+    const yesterday = historicalData[historicalData.length - 2];
+    const isBearishEngulfing = today.close < today.open && yesterday.close > yesterday.open &&
+                               today.close < yesterday.open && today.open > yesterday.close;
+    if (isBearishEngulfing) {
+        return { status: "Sell Now", reason: "Trend Reversal: Strong bearish engulfing pattern appeared." };
+    }
+  }
+
+  // --- 4. If no sell signals are found, the signal is to Hold ---
+  return { status: "Hold", reason: "Uptrend remains intact. Price is above key support." };
+}
+
+
 function checkForTrendReversal_V2(stock, historicalData) {
   if (
     !stock.movingAverage75d ||
@@ -3477,16 +3528,7 @@ function getLimitOrderPrice(stock) {
   return parseFloat(limitOrderPrice.toFixed(2));
 }
 
-
-
-
-/***********************************************
- * 6) SCAN LOGIC (Main Workflow)
- ***********************************************/
-window.scan = {
-  async fetchStockAnalysis(tickerList = []) {
-    try {
-      const allTickers = [
+const allTickers = [
         { code: "4151.T", sector: "Pharmaceuticals" },
         { code: "4502.T", sector: "Pharmaceuticals" },
         { code: "4503.T", sector: "Pharmaceuticals" },
@@ -3714,6 +3756,13 @@ window.scan = {
         { code: "9532.T", sector: "Gas" },
       ];
 
+
+/***********************************************
+ * 6) SCAN LOGIC (Main Workflow)
+ ***********************************************/
+window.scan = {
+  async fetchStockAnalysis(tickerList = [], myPortfolio) {
+    try {
       const filteredTickers =
         tickerList.length > 0
           ? allTickers.filter((t) =>
@@ -3900,6 +3949,27 @@ window.scan = {
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
 
+          // Check if current stock exists in myPortfolio
+          const portfolioEntry = myPortfolio.find(
+            (p) => p.ticker === stock.ticker
+          );
+
+          if (portfolioEntry) {
+            // Stock exists in portfolio, run trade management analysis
+            const managementSignal = getTradeManagementSignal_V2(
+              stock,
+              portfolioEntry.trade, // Pass the trade object from portfolio
+              historicalData
+            );
+
+            stock.managementSignalStatus = managementSignal.status;
+            stock.managementSignalReason = managementSignal.reason;
+          } else {
+            // Stock not in portfolio, set management signals to null
+            stock.managementSignalStatus = null;
+            stock.managementSignalReason = null; // Added 'null' value here
+          }
+
           const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
@@ -3917,6 +3987,8 @@ window.scan = {
             _api_c2_limitOrder: stock.limitOrder,
             _api_c2_isBuyNow: stock.isBuyNow,
             _api_c2_buyNowReason: stock.buyNowReason,
+            _api_c2_managementSignalStatus: stock.managementSignalStatus,
+            _api_c2_managementSignalReason: stock.managementSignalReason,
             _api_c2_otherData: JSON.stringify({
               highPrice: stock.highPrice,
               lowPrice: stock.lowPrice,
@@ -4432,7 +4504,7 @@ async function analyzeStock(ticker, historicalData) {
 }
 
 window.fastscan = {
-  async fastfetchStockAnalysis(tickerList = []) {
+  async fastfetchStockAnalysis(tickerList = [], myPortfolio) {
     try {
       for (const tickerObj of tickerList) {
         const { ticker, data } = tickerObj;
@@ -4523,7 +4595,30 @@ window.fastscan = {
           stock.buyNowReason = finalSignal.reason; // 4. Calculate Final Tier and Limit Order
 
           stock.tier = getNumericTier(stock);
-          stock.limitOrder = getLimitOrderPrice(stock); // 5) Prepare the final object for output
+          stock.limitOrder = getLimitOrderPrice(stock);
+
+          // 5. Check if stock is in portfolio and get management signals
+          const portfolioEntry = myPortfolio.find(
+            (p) => p.ticker === stock.ticker
+          );
+
+          if (portfolioEntry) {
+            // Stock exists in portfolio, run trade management analysis
+            const managementSignal = getTradeManagementSignal_V2(
+              stock,
+              portfolioEntry.trade,
+              historicalData
+            );
+
+            stock.managementSignalStatus = managementSignal.status;
+            stock.managementSignalReason = managementSignal.reason;
+          } else {
+            // Stock not in portfolio, set management signals to null
+            stock.managementSignalStatus = null;
+            stock.managementSignalReason = null;
+          }
+
+          // 6) Prepare the final object for output
 
           /*******************************************************
            * END OF ANALYSIS BLOCK
@@ -4541,6 +4636,8 @@ window.fastscan = {
             _api_c2_limitOrder: stock.limitOrder,
             _api_c2_isBuyNow: stock.isBuyNow,
             _api_c2_buyNowReason: stock.buyNowReason,
+            _api_c2_managementSignalStatus: stock.managementSignalStatus,
+            _api_c2_managementSignalReason: stock.managementSignalReason,
             _api_c2_otherData: JSON.stringify({
               highPrice: stock.highPrice,
               lowPrice: stock.lowPrice,
