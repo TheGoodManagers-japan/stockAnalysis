@@ -2877,6 +2877,204 @@ function applySanityCheckVeto(stock, recentData, historicalData) { // <<< THE FI
   return { isVetoed: false };
 }
 
+
+function calculateKeyLevels(stock) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const historicalData = stock.historicalData || [];
+
+  const levels = {
+    supports: [],
+    resistances: [],
+    pivotPoint: null,
+    recentSwingHigh: null,
+    recentSwingLow: null,
+  }; // Calculate pivot point from today's data
+
+  if (stock.highPrice && stock.lowPrice && stock.currentPrice) {
+    levels.pivotPoint =
+      (n(stock.highPrice) + n(stock.lowPrice) + n(stock.currentPrice)) / 3;
+  } // Find recent swing highs and lows from historical data
+
+  if (historicalData.length >= 10) {
+    const recentData = historicalData.slice(-20);
+    for (let i = 2; i < recentData.length - 2; i++) {
+      const current = recentData[i];
+      const isSwingHigh =
+        current.high > recentData[i - 1].high &&
+        current.high > recentData[i - 2].high &&
+        current.high > recentData[i + 1].high &&
+        current.high > recentData[i + 2].high;
+
+      if (isSwingHigh) {
+        levels.resistances.push(current.high);
+        if (!levels.recentSwingHigh || current.high > levels.recentSwingHigh) {
+          levels.recentSwingHigh = current.high;
+        }
+      }
+    }
+  }
+  // Add 52-week high as a major resistance
+  if (stock.fiftyTwoWeekHigh)
+    levels.resistances.push(n(stock.fiftyTwoWeekHigh));
+  levels.resistances.sort((a, b) => a - b);
+  return levels;
+}
+
+function checkForTrendReversal_V2(stock, historicalData) {
+  if (
+    !stock.movingAverage75d ||
+    !stock.movingAverage25d ||
+    !stock.macd ||
+    stock.macdSignal === undefined ||
+    historicalData.length < 80
+  ) {
+    return {
+      isReversing: false,
+      reason: "Insufficient data for V2 trend analysis.",
+    };
+  }
+
+  const today = historicalData[historicalData.length - 1];
+  const yesterday = historicalData[historicalData.length - 2];
+  const avgVolume20 =
+    historicalData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) /
+    20;
+
+  const priceTrigger =
+    today.close > stock.movingAverage75d &&
+    yesterday.close <= stock.movingAverage75d;
+  if (!priceTrigger) {
+    return {
+      isReversing: false,
+      reason: "Price has not broken the long-term trendline.",
+    };
+  }
+
+  const ma25History = [];
+  for (let i = 0; i < 5; i++) {
+    ma25History.push(
+      historicalData
+        .slice(
+          historicalData.length - 5 - 25 + i,
+          historicalData.length - 5 + i
+        )
+        .reduce((sum, day) => sum + day.close, 0) / 25
+    );
+  }
+  const ma25Slope = stock.movingAverage25d > ma25History[0];
+  const trendTrigger = ma25Slope;
+
+  const momentumTrigger = stock.macd > stock.macdSignal;
+  const volumeTrigger = today.volume > avgVolume20 * 1.5;
+
+  const confirmations = [trendTrigger, momentumTrigger, volumeTrigger].filter(
+    Boolean
+  ).length;
+
+  if (priceTrigger && confirmations >= 2) {
+    const reasons = [];
+    if (trendTrigger) reasons.push("25-day MA turning up");
+    if (momentumTrigger) reasons.push("MACD is bullish");
+    if (volumeTrigger) reasons.push("high volume");
+
+    return {
+      isReversing: true,
+      reason: `Trend Reversal: Price broke 75-day MA, confirmed by: ${reasons.join(
+        ", "
+      )}.`,
+    };
+  }
+
+  return {
+    isReversing: false,
+    reason: "Breakout lacked sufficient confirmation.",
+  };
+}
+
+function getUnifiedBuySignal_V2(stock, historicalData) {
+  let buyScore = 0;
+  const reasons = [];
+
+  if (historicalData.length < 2) {
+    return { isBuyNow: false, reason: "Insufficient data.", score: 0 };
+  }
+
+  const today = historicalData[historicalData.length - 1];
+  const yesterday = historicalData[historicalData.length - 2];
+
+  const reversalSignal = checkForTrendReversal_V2(stock, historicalData);
+  if (reversalSignal.isReversing) {
+    buyScore += 3;
+    reasons.push(reversalSignal.reason);
+  }
+
+  const isEngulfing =
+    today.close > today.open &&
+    yesterday.close < yesterday.open &&
+    today.close > yesterday.open &&
+    today.open < yesterday.close;
+  if (isEngulfing) {
+    buyScore += 2;
+    reasons.push("Bullish Engulfing");
+  }
+
+  const dailyRange = today.high - today.low;
+  const body = Math.abs(today.close - today.open);
+  const lowerWick = Math.min(today.open, today.close) - today.low;
+  const upperWick = today.high - Math.max(today.open, today.close);
+  const isNotDoji = dailyRange > 0 && body > dailyRange * 0.1;
+  const isHammer = isNotDoji && lowerWick > body * 2 && upperWick < body;
+  if (isHammer) {
+    buyScore += 2;
+    reasons.push("Hammer Candle");
+  }
+
+  const isStrongClose =
+    dailyRange > 0 && (today.close - today.low) / dailyRange > 0.8;
+  if (isStrongClose) {
+    if (!isEngulfing && !isHammer) buyScore += 1;
+    if (!reasons.includes("strong close")) reasons.push("strong close");
+  }
+
+  let vetoReason = "";
+
+  if (stock.rsi14 && stock.rsi14 > 75) {
+    vetoReason = "Vetoed: RSI is overbought (> 75).";
+  }
+
+  if (vetoReason === "") {
+    const levels = calculateKeyLevels(stock);
+    const highestResistance =
+      levels.resistances.length > 0
+        ? levels.resistances[levels.resistances.length - 1]
+        : stock.fiftyTwoWeekHigh;
+    if (highestResistance && stock.currentPrice > highestResistance * 0.98) {
+      vetoReason = `Vetoed: Price is within 2% of major resistance at ¥${highestResistance}.`;
+    }
+  }
+
+  const buyThreshold = 3;
+  let isBuyNow = buyScore >= buyThreshold;
+  let finalReason = "No immediate buy signal detected.";
+
+  if (isBuyNow) {
+    if (vetoReason !== "") {
+      isBuyNow = false;
+      finalReason = `Pattern found (${reasons.join(
+        " | "
+      )}), but signal ${vetoReason}`;
+    } else {
+      finalReason = "Buy Now: " + reasons.join(" | ");
+    }
+  }
+
+  return {
+    isBuyNow: isBuyNow,
+    reason: finalReason,
+    score: buyScore,
+  };
+}
+
 /**
  * Analyzes recent price action to generate a "Buy Now" signal.
  * This version corrects a bug where Doji candles could be misread as Hammer candles.
@@ -3451,12 +3649,14 @@ window.scan = {
         { code: "9502.T", sector: "Electric Power" },
         { code: "9503.T", sector: "Electric Power" },
         { code: "9531.T", sector: "Gas" },
-        { code: "9532.T", sector: "Gas" }
+        { code: "9532.T", sector: "Gas" },
       ];
 
       const filteredTickers =
         tickerList.length > 0
-          ? allTickers.filter((t) => tickerList.includes(t.code.replace(".T", "")))
+          ? allTickers.filter((t) =>
+              tickerList.includes(t.code.replace(".T", ""))
+            )
           : allTickers;
 
       for (const tickerObj of filteredTickers) {
@@ -3470,23 +3670,20 @@ window.scan = {
             throw new Error("Failed to fetch Yahoo data.");
           }
 
-          const { code, sector, yahooData } = result.data;
+          const { code, sector, yahooData } = result.data; // First check if yahooData exists at all
 
-          // First check if yahooData exists at all
           if (!yahooData) {
             console.error(
               `Missing Yahoo data for ${code}. Aborting calculation.`
             );
             throw new Error("Yahoo data is completely missing.");
-          }
+          } // Define critical fields that must be present
 
-          // Define critical fields that must be present
           const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
           const missingCriticalFields = criticalFields.filter(
             (field) => !yahooData[field]
-          );
+          ); // Define non-critical fields to check
 
-          // Define non-critical fields to check
           const nonCriticalFields = [
             "openPrice",
             "prevClosePrice",
@@ -3517,9 +3714,8 @@ window.scan = {
           const missingNonCriticalFields = nonCriticalFields.filter(
             (field) =>
               yahooData[field] === undefined || yahooData[field] === null
-          );
+          ); // Check for zero values (which might indicate failures in calculations)
 
-          // Check for zero values (which might indicate failures in calculations)
           const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
             (field) =>
               yahooData[field] !== undefined &&
@@ -3528,9 +3724,8 @@ window.scan = {
               !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(
                 field
               ) // Fields that can legitimately be zero
-          );
+          ); // Log detailed information
 
-          // Log detailed information
           console.log(`Data validation for ${code}:`);
 
           if (missingCriticalFields.length > 0) {
@@ -3563,9 +3758,8 @@ window.scan = {
           console.log(
             `✅ All critical fields present for ${code}. Continuing analysis...`
           );
-          console.log("Yahoo data:", yahooData);
+          console.log("Yahoo data:", yahooData); // 2) Build stock object
 
-          // 2) Build stock object
           const stock = {
             ticker: code,
             sector,
@@ -3586,9 +3780,8 @@ window.scan = {
             epsGrowthRate: yahooData.epsGrowthRate,
             debtEquityRatio: yahooData.debtEquityRatio,
             movingAverage50d: yahooData.movingAverage50d,
-            movingAverage200d: yahooData.movingAverage200d,
+            movingAverage200d: yahooData.movingAverage200d, // 📈 Technical indicators
 
-            // 📈 Technical indicators
             rsi14: yahooData.rsi14,
             macd: yahooData.macd,
             macdSignal: yahooData.macdSignal,
@@ -3602,9 +3795,8 @@ window.scan = {
           };
 
           const historicalData = await fetchHistoricalData(stock.ticker);
-          stock.historicalData = historicalData || [];
+          stock.historicalData = historicalData || []; // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
 
-          // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
           console.log(`Analyzing stock: ${stock.ticker}`);
           const prediction = await analyzeStock(stock.ticker, historicalData);
           if (prediction == null) {
@@ -3615,9 +3807,8 @@ window.scan = {
           }
 
           console.log("prediction: ", prediction);
-          stock.prediction = prediction;
+          stock.prediction = prediction; // 5) Calculate Stop Loss & Target
 
-          // 5) Calculate Stop Loss & Target
           const { stopLoss, targetPrice } = calculateStopLossAndTarget(
             stock,
             prediction
@@ -3629,43 +3820,24 @@ window.scan = {
             throw new Error("Stop loss or target price calculation failed.");
           }
           stock.stopLoss = stopLoss;
-          stock.targetPrice = targetPrice;
+          stock.targetPrice = targetPrice; // --- 1. Calculate All Component Scores --- // These are needed for the Tier calculation and overall analysis.
 
-          // 7) Compute growth potential
-          const growthPotential =
-            ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) *
-            100;
-
-          // 8) Compute fundamental/technical score
-          stock.score = computeScore(stock, stock.sector);
-
-          // 9) Combine them => finalScore
-          const weights = { metrics: 0.7, growth: 0.3 };
-          const finalScore =
-            weights.metrics * stock.score +
-            weights.growth * (growthPotential / 100);
-
-          stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-          stock.finalScore = parseFloat(finalScore.toFixed(2));
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-          stock.valuationScore = getValuationScore(stock);
+          stock.valuationScore = getValuationScore(stock); // --- 2. Run Advanced Analysis for Scores, Targets, and Vetoes --- // This function calculates the entry score, targets, and runs the "Emergency Brake" veto.
 
           const entryAnalysis = getEnhancedEntryTimingV5(stock);
-
-          // Assign each value to the stock object
           stock.entryTimingScore = entryAnalysis.score;
           stock.smartStopLoss = entryAnalysis.stopLoss;
-          stock.smartPriceTarget = entryAnalysis.priceTarget;
+          stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
+
+          const finalSignal = getUnifiedBuySignal_V2(stock, historicalData);
+          stock.isBuyNow = finalSignal.isBuyNow;
+          stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
+
           stock.tier = getNumericTier(stock);
-          stock.limitOrder = getLimitOrderPrice(stock);
+          stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
 
-          // --- THIS IS THE MISSING STEP ---
-          stock.isBuyNow = entryAnalysis.isBuyNow;
-          stock.buyNowReason = entryAnalysis.buyNowReason;
-          // ---------------------------------
-
-          // 10) Send data in Bubble key format
           const stockObject = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
@@ -3681,18 +3853,13 @@ window.scan = {
             _api_c2_smartStopLoss: stock.smartStopLoss,
             _api_c2_smartPriceTarget: stock.smartPriceTarget,
             _api_c2_limitOrder: stock.limitOrder,
-            _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
-            _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
-
-            // Add complete stock data as JSON
+            _api_c2_isBuyNow: stock.isBuyNow,
+            _api_c2_buyNowReason: stock.buyNowReason,
             _api_c2_otherData: JSON.stringify({
-              // Price data
               highPrice: stock.highPrice,
               lowPrice: stock.lowPrice,
               openPrice: stock.openPrice,
               prevClosePrice: stock.prevClosePrice,
-
-              // Fundamental metrics
               marketCap: stock.marketCap,
               peRatio: stock.peRatio,
               pbRatio: stock.pbRatio,
@@ -3704,8 +3871,6 @@ window.scan = {
               epsForward: stock.epsForward,
               epsGrowthRate: stock.epsGrowthRate,
               debtEquityRatio: stock.debtEquityRatio,
-
-              // Technical indicators
               movingAverage50d: stock.movingAverage50d,
               movingAverage200d: stock.movingAverage200d,
               rsi14: stock.rsi14,
@@ -3718,8 +3883,6 @@ window.scan = {
               stochasticD: stock.stochasticD,
               obv: stock.obv,
               atr14: stock.atr14,
-
-              // Calculated scores
               technicalScore: stock.technicalScore,
               fundamentalScore: stock.fundamentalScore,
               valuationScore: stock.valuationScore,
@@ -3734,14 +3897,12 @@ window.scan = {
             error.message
           );
         }
-      }
+      } // ✅ Finished processing all tickers (success or some errors)
 
-      // ✅ Finished processing all tickers (success or some errors)
       bubble_fn_finish();
     } catch (error) {
-      console.error("❌ Error in fetchStockAnalysis:", error.message);
+      console.error("❌ Error in fetchStockAnalysis:", error.message); // 🔴 If outer error (like JSON parse or logic bug), still call finish
 
-      // 🔴 If outer error (like JSON parse or logic bug), still call finish
       bubble_fn_finish();
 
       throw new Error("Analysis aborted due to errors.");
@@ -4215,68 +4376,33 @@ window.fastscan = {
         const { ticker, data } = tickerObj;
         const { prediction: previousprediction, sector } = data;
 
-        console.log(`\n--- Fetching data for ${ticker} ---`);
+        console.log(`\n--- [Fast Scan] Fetching data for ${ticker} ---`);
 
         try {
-          // 1) Fetch Yahoo data
+          // 1) Fetch latest Yahoo data
           const result = await fetchSingleStockData({ code: ticker });
-          if (!result.success) {
-            console.error("Error fetching stock analysis:", result.error);
-            throw new Error("Failed to fetch Yahoo data.");
+          if (!result.success || !result.data.yahooData) {
+            console.error(
+              `Error or missing Yahoo data for ${ticker}:`,
+              result.error
+            );
+            continue; // Skip to the next ticker
           }
-
           const { code, yahooData } = result.data;
 
-          // Check if yahooData exists
-          if (!yahooData) {
-            console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
-            throw new Error("Yahoo data is completely missing.");
-          }
-
-          // Define critical fields that must be present
+          // Data validation for critical fields
           const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
           const missingCriticalFields = criticalFields.filter(
             (field) => !yahooData[field]
           );
-
-          const nonCriticalFields = [
-            "openPrice", "prevClosePrice", "marketCap", "peRatio", "pbRatio",
-            "dividendYield", "dividendGrowth5yr", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
-            "epsTrailingTwelveMonths", "epsForward", "epsGrowthRate", "debtEquityRatio",
-            "movingAverage50d", "movingAverage200d", "rsi14", "macd", "macdSignal",
-            "bollingerMid", "bollingerUpper", "bollingerLower", "stochasticK",
-            "stochasticD", "obv", "atr14"
-          ];
-          const missingNonCriticalFields = nonCriticalFields.filter(
-            (field) =>
-              yahooData[field] === undefined || yahooData[field] === null
-          );
-
-          const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
-            (field) =>
-              yahooData[field] !== undefined &&
-              yahooData[field] !== null &&
-              yahooData[field] === 0 &&
-              !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(field)
-          );
-
-          console.log(`Data validation for ${code}:`);
-
           if (missingCriticalFields.length > 0) {
-            console.error(`❌ Missing critical fields: ${missingCriticalFields.join(", ")}`);
-            throw new Error(`Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`);
-          }
-
-          if (missingNonCriticalFields.length > 0) {
-            console.warn(`⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(", ")}`);
-          }
-
-          if (zeroFields.length > 0) {
-            console.warn(`⚠️ Fields with zero values: ${zeroFields.join(", ")}`);
-          }
-
-          console.log(`✅ All critical fields present for ${code}. Continuing analysis...`);
-
+            console.error(
+              `❌ Missing critical fields for ${ticker}: ${missingCriticalFields.join(
+                ", "
+              )}`
+            );
+            continue; // Skip to the next ticker
+          } // 2) Build the stock object with the latest data
 
           const stock = {
             ticker: code,
@@ -4311,49 +4437,35 @@ window.fastscan = {
             atr14: yahooData.atr14,
           };
 
-          console.log(`Analyzing stock: ${stock.ticker}`);
+          // 3) Use the PREVIOUS prediction (this is what makes it "fast")
+          stock.prediction = previousprediction; // 4) Fetch historical data needed for analysis
 
           const historicalData = await fetchHistoricalData(stock.ticker);
-          stock.historicalData = historicalData || [];
-          const prediction = previousprediction;
-          if (prediction == null) {
-            console.error(`Failed to generate prediction for ${stock.ticker}. Aborting.`);
-            throw new Error("Failed to generate prediction.");
-          }
+          stock.historicalData = historicalData || []; // 1. Calculate All Component Scores
 
-          stock.prediction = prediction;
+          /*******************************************************
+           * FINAL, UNIFIED ANALYSIS LOGIC BLOCK
+           *******************************************************/
 
-          const { stopLoss, targetPrice } = calculateStopLossAndTarget(stock, prediction);
-          if (stopLoss === null || targetPrice === null) {
-            console.error(`Failed to calculate stop loss or target price for ${stock.ticker}.`);
-            throw new Error("Stop loss or target price calculation failed.");
-          }
-
-          stock.stopLoss = stopLoss;
-          stock.targetPrice = targetPrice;
-
-          const growthPotential =
-            ((stock.targetPrice - stock.currentPrice) / stock.currentPrice) * 100;
-
-          stock.score = computeScore(stock, stock.sector);
-
-          const weights = { metrics: 0.7, growth: 0.3 };
-          const finalScore =
-            weights.metrics * stock.score + weights.growth * (growthPotential / 100);
-
-          stock.growthPotential = parseFloat(growthPotential.toFixed(2));
-          stock.finalScore = parseFloat(finalScore.toFixed(2));
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-          stock.valuationScore = getValuationScore(stock);
-          const entryAnalysis = getEnhancedEntryTimingV5(stock);
+          stock.valuationScore = getValuationScore(stock); // 2. Run Advanced Analysis for Scores, Targets, and Vetoes
 
-          // Assign each value to the stock object
+          const entryAnalysis = getEnhancedEntryTimingV5(stock);
           stock.entryTimingScore = entryAnalysis.score;
           stock.smartStopLoss = entryAnalysis.stopLoss;
-          stock.smartPriceTarget = entryAnalysis.priceTarget;
+          stock.smartPriceTarget = entryAnalysis.priceTarget; // 3. Generate the Final, Unified "Buy Now" Signal
+
+          const finalSignal = getUnifiedBuySignal_V2(stock, historicalData);
+          stock.isBuyNow = finalSignal.isBuyNow;
+          stock.buyNowReason = finalSignal.reason; // 4. Calculate Final Tier and Limit Order
+
           stock.tier = getNumericTier(stock);
-          stock.limitOrder = getLimitOrderPrice(stock);
+          stock.limitOrder = getLimitOrderPrice(stock); // 5) Prepare the final object for output
+
+          /*******************************************************
+           * END OF ANALYSIS BLOCK
+           *******************************************************/
 
           const stockObject = {
             _api_c2_ticker: stock.ticker,
@@ -4361,63 +4473,47 @@ window.fastscan = {
             _api_c2_currentPrice: stock.currentPrice,
             _api_c2_entryTimingScore: stock.entryTimingScore,
             _api_c2_prediction: stock.prediction,
-            _api_c2_stopLoss: stock.stopLoss,
-            _api_c2_targetPrice: stock.targetPrice,
-            _api_c2_growthPotential: stock.growthPotential,
-            _api_c2_score: stock.score,
-            _api_c2_finalScore: stock.finalScore,
+            _api_c2_tier: stock.tier,
             _api_c2_smartStopLoss: stock.smartStopLoss,
             _api_c2_smartPriceTarget: stock.smartPriceTarget,
-            _api_c2_tier: stock.tier,
             _api_c2_limitOrder: stock.limitOrder,
-            _api_c2_isBuyNow: stock.isBuyNow, // --- NEW ---
-            _api_c2_buyNowReason: stock.buyNowReason, // --- NEW ---
+            _api_c2_isBuyNow: stock.isBuyNow,
+            _api_c2_buyNowReason: stock.buyNowReason,
             _api_c2_otherData: JSON.stringify({
               highPrice: stock.highPrice,
               lowPrice: stock.lowPrice,
               openPrice: stock.openPrice,
               prevClosePrice: stock.prevClosePrice,
               marketCap: stock.marketCap,
-              peRatio: stock.peRatio,
-              pbRatio: stock.pbRatio,
-              dividendYield: stock.dividendYield,
-              dividendGrowth5yr: stock.dividendGrowth5yr,
               fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
               fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-              epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-              epsForward: stock.epsForward,
-              epsGrowthRate: stock.epsGrowthRate,
-              debtEquityRatio: stock.debtEquityRatio,
-              movingAverage50d: stock.movingAverage50d,
-              movingAverage200d: stock.movingAverage200d,
               rsi14: stock.rsi14,
-              macd: stock.macd,
-              macdSignal: stock.macdSignal,
-              bollingerMid: stock.bollingerMid,
-              bollingerUpper: stock.bollingerUpper,
-              bollingerLower: stock.bollingerLower,
-              stochasticK: stock.stochasticK,
-              stochasticD: stock.stochasticD,
-              obv: stock.obv,
-              atr14: stock.atr14,
+              movingAverage50d: stock.movingAverage50d,
+              // Add the other scores to the JSON blob
               technicalScore: stock.technicalScore,
               fundamentalScore: stock.fundamentalScore,
               valuationScore: stock.valuationScore,
             }),
           };
 
-          console.log(`📤 Sending ${stock.ticker} to Bubble:`, stockObject);
+          console.log(
+            `📤 [Fast Scan] Sending ${stock.ticker} to Bubble:`,
+            stockObject
+          );
           bubble_fn_result(stockObject);
         } catch (error) {
-          console.error(`❌ Error processing ticker ${ticker}:`, error.message);
+          console.error(
+            `❌ [Fast Scan] Error processing ticker ${ticker}:`,
+            error.message
+          );
         }
       }
 
       bubble_fn_finish();
     } catch (error) {
-      console.error("❌ Error in fetchStockAnalysis:", error.message);
+      console.error("❌ Error in fastfetchStockAnalysis:", error.message);
       bubble_fn_finish();
-      throw new Error("Analysis aborted due to errors.");
+      throw new Error("Fast analysis aborted due to errors.");
     }
   },
 };
