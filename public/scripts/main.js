@@ -2562,6 +2562,63 @@ function analyzeVolatilityRegime(stock, data) {
   return analysis;
 }
 
+
+
+/**
+ * Checks for a breakout from a Bollinger Band Squeeze.
+ * @param {object} stock - The stock object.
+ * @returns {{isSqueezing: boolean, reason: string}}
+ */
+function checkForVolatilitySqueeze(stock) {
+  // Check for the necessary Bollinger Band data.
+  if (!stock.bollingerUpper || !stock.bollingerLower || !stock.bollingerMid) {
+    return { isSqueezing: false, reason: "No Bollinger Band data." };
+  }
+
+  // Calculate Bollinger Band Width. A very low value indicates a "squeeze".
+  const bandWidth = (stock.bollingerUpper - stock.bollingerLower) / stock.bollingerMid;
+  const isSqueezed = bandWidth < 0.08; // Squeeze is on if width is less than 8%
+
+  // Check for a bullish breakout: price must close above the upper band.
+  const isBreakingOut = stock.currentPrice > stock.bollingerUpper;
+
+  if (isSqueezed && isBreakingOut) {
+    return {
+      isSqueezing: true,
+      reason: "Breakout from Volatility Squeeze"
+    };
+  }
+
+  return { isSqueezing: false, reason: "No squeeze breakout." };
+}
+
+
+
+/**
+ * Checks for a pullback to the 25-day MA within an existing uptrend.
+ * @param {object} stock - The stock object.
+ * @returns {{isPullbackEntry: boolean, reason: string}}
+ */
+function checkForPullbackEntry(stock) {
+  // 1. Confirm the stock is in a healthy uptrend.
+  const isInUptrend = stock.currentPrice > stock.movingAverage75d && stock.movingAverage25d > stock.movingAverage75d;
+  if (!isInUptrend) {
+    return { isPullbackEntry: false, reason: "Not in a confirmed uptrend." };
+  }
+
+  // 2. Check if the price is near the 25-day moving average.
+  const priceNearMA25 = Math.abs(stock.currentPrice - stock.movingAverage25d) / stock.movingAverage25d < 0.02; // Within 2% of the MA
+
+  if (priceNearMA25) {
+    return {
+      isPullbackEntry: true,
+      reason: "Pullback to 25-day MA support"
+    };
+  }
+
+  return { isPullbackEntry: false, reason: "Not at a pullback level." };
+}
+
 /* ──────────── NEW: Order Flow Inference ──────────── */
 
 function inferOrderFlow(data) {
@@ -2948,68 +3005,65 @@ function checkForTrendReversal_V2(stock, historicalData) {
   };
 }
 
+/**
+ * (V2 - Final) Combines all signals and applies vetoes.
+ * Now includes Volatility Squeeze and Pullback Entry checks.
+ * @param {object} stock - The stock object.
+ * @param {array} historicalData - Array of previous daily data.
+ * @returns {{isBuyNow: boolean, reason: string, score: number}}
+ */
 function getUnifiedBuySignal_V2(stock, historicalData) {
   let buyScore = 0;
   const reasons = [];
-
+  
   if (historicalData.length < 2) {
-    return { isBuyNow: false, reason: "Insufficient data.", score: 0 };
+      return { isBuyNow: false, reason: "Insufficient data.", score: 0 };
   }
 
+  // --- 1. Calculate Bullish Score ---
   const today = historicalData[historicalData.length - 1];
   const yesterday = historicalData[historicalData.length - 2];
 
+  // Check for high-impact patterns (+3 points)
   const reversalSignal = checkForTrendReversal_V2(stock, historicalData);
   if (reversalSignal.isReversing) {
     buyScore += 3;
     reasons.push(reversalSignal.reason);
   }
 
-  const isEngulfing =
-    today.close > today.open &&
-    yesterday.close < yesterday.open &&
-    today.close > yesterday.open &&
-    today.open < yesterday.close;
+  // Check for strong breakout & continuation patterns (+2 points)
+  const resistanceBreakSignal = checkForResistanceBreak(stock, historicalData);
+  if (resistanceBreakSignal.didBreak) {
+    buyScore += 2;
+    reasons.push(resistanceBreakSignal.reason);
+  }
+
+  const squeezeSignal = checkForVolatilitySqueeze(stock);
+  if (squeezeSignal.isSqueezing) {
+    buyScore += 2;
+    reasons.push(squeezeSignal.reason);
+  }
+
+  const pullbackSignal = checkForPullbackEntry(stock);
+  if (pullbackSignal.isPullbackEntry) {
+    buyScore += 2;
+    reasons.push(pullbackSignal.reason);
+  }
+
+  const isEngulfing = today.close > today.open && yesterday.close < yesterday.open &&
+                      today.close > yesterday.open && today.open < yesterday.close;
   if (isEngulfing) {
     buyScore += 2;
     reasons.push("Bullish Engulfing");
   }
 
-  const dailyRange = today.high - today.low;
-  const body = Math.abs(today.close - today.open);
-  const lowerWick = Math.min(today.open, today.close) - today.low;
-  const upperWick = today.high - Math.max(today.open, today.close);
-  const isNotDoji = dailyRange > 0 && body > dailyRange * 0.1;
-  const isHammer = isNotDoji && lowerWick > body * 2 && upperWick < body;
-  if (isHammer) {
-    buyScore += 2;
-    reasons.push("Hammer Candle");
-  }
-
-  const isStrongClose =
-    dailyRange > 0 && (today.close - today.low) / dailyRange > 0.8;
-  if (isStrongClose) {
-    if (!isEngulfing && !isHammer) buyScore += 1;
-    if (!reasons.includes("strong close")) reasons.push("strong close");
-  }
-
+  // --- 2. Contextual Veto Checks ---
   let vetoReason = "";
-
   if (stock.rsi14 && stock.rsi14 > 75) {
     vetoReason = "Vetoed: RSI is overbought (> 75).";
   }
-
-  if (vetoReason === "") {
-    const levels = calculateKeyLevels(stock);
-    const highestResistance =
-      levels.resistances.length > 0
-        ? levels.resistances[levels.resistances.length - 1]
-        : stock.fiftyTwoWeekHigh;
-    if (highestResistance && stock.currentPrice > highestResistance * 0.98) {
-      vetoReason = `Vetoed: Price is within 2% of major resistance at ¥${highestResistance}.`;
-    }
-  }
-
+  
+  // --- 3. Final Decision ---
   const buyThreshold = 3;
   let isBuyNow = buyScore >= buyThreshold;
   let finalReason = "No immediate buy signal detected.";
@@ -3017,9 +3071,7 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
   if (isBuyNow) {
     if (vetoReason !== "") {
       isBuyNow = false;
-      finalReason = `Pattern found (${reasons.join(
-        " | "
-      )}), but signal ${vetoReason}`;
+      finalReason = `Pattern found (${reasons.join(" | ")}), but signal ${vetoReason}`;
     } else {
       finalReason = "Buy Now: " + reasons.join(" | ");
     }
@@ -3030,6 +3082,59 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
     reason: finalReason,
     score: buyScore,
   };
+}
+
+
+/**
+ * Checks if the stock has just broken through a key resistance level.
+ * @param {object} stock - The stock object.
+ * @param {array} historicalData - Array of previous daily data.
+ * @returns {{didBreak: boolean, reason: string}}
+ */
+function checkForResistanceBreak(stock, historicalData) {
+  if (historicalData.length < 2) {
+    return { didBreak: false, reason: "Insufficient data." };
+  }
+
+  const today = historicalData[historicalData.length - 1];
+  const yesterday = historicalData[historicalData.length - 2];
+
+  // 1. Find the most relevant resistance level to check against.
+  const levels = calculateKeyLevels(stock);
+  // Find the first (lowest) resistance level that was above yesterday's price.
+  const immediateResistance = levels.resistances.find(r => r > yesterday.close);
+
+  if (!immediateResistance) {
+    return { didBreak: false, reason: "No immediate resistance found." };
+  }
+
+  // 2. Check if the price was below resistance yesterday and is above it today.
+  const priceBrokeResistance = yesterday.close < immediateResistance && today.close > immediateResistance;
+
+  if (!priceBrokeResistance) {
+    return { didBreak: false, reason: "Price did not cross resistance." };
+  }
+
+  // 3. Check for volume confirmation for a higher quality signal.
+  const avgVolume20 = historicalData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) / 20;
+  const volumeConfirms = today.volume > avgVolume20 * 1.5;
+
+  if (priceBrokeResistance && volumeConfirms) {
+    return {
+      didBreak: true,
+      reason: `Broke Resistance at ¥${immediateResistance.toFixed(0)} on high volume`
+    };
+  }
+  
+  // A break without high volume is still a break, but less powerful.
+  if (priceBrokeResistance) {
+     return {
+      didBreak: true,
+      reason: `Broke Resistance at ¥${immediateResistance.toFixed(0)}`
+    };
+  }
+
+  return { didBreak: false, reason: "Conditions not met." };
 }
 
 /**
