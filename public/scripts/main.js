@@ -431,7 +431,7 @@ function computeScore(stock, sector) {
   return clamp(rawScore);
 }
 
-/**********************************************
+/***********************************************
  * 4) FETCH SINGLE STOCK DATA
  ***********************************************/
 async function fetchSingleStockData(tickerObj) {
@@ -864,46 +864,46 @@ function getValuationScore(stock, weightOverrides = {}) {
 
 
 
+
 /**
- * (v2) Calculates a stock's Tier (1-6) by combining technical, fundamental,
- * valuation, AND news sentiment scores into a single weighted average.
+ *  getNumericTier(stock [, weights])
+ *  ---------------------------------
+ *  • stock must contain technicalScore, fundamentalScore, valuationScore
+ *  • returns an integer Tier 1 … 6  (1 = best)
+ *  • weights default to { tech:0.4, fund:0.35, val:0.25 }  – override if needed
  */
 function getNumericTier(stock, weights = {}) {
-  // Define the weights for each component. News is now included.
-  const w = { tech: 0.35, fund: 0.30, val: 0.15, news: 0.20, ...weights };
+  const w = { tech: 0.40, fund: 0.35, val: 0.25, ...weights };
 
-  /* ----------- Safe Pulls & Normalization ------------- */
-  // Technical Score (-50 to +50 -> 0 to 10)
-  const tRaw = stock.technicalScore || 0;
-  const tech = Math.max(0, Math.min(10, (tRaw + 50) * 0.1));
+  /* ----------- safe pulls ------------- */
+  const tRaw = Number.isFinite(stock.technicalScore)   ? stock.technicalScore   : 0;
+  const fRaw = Number.isFinite(stock.fundamentalScore) ? stock.fundamentalScore : 0;
+  const vRaw = Number.isFinite(stock.valuationScore)   ? stock.valuationScore   : 0;
 
-  // Fundamental Score (0 to 10)
-  const fRaw = stock.fundamentalScore || 0;
-  const fund = Math.max(0, Math.min(10, fRaw));
+  /* ----------- normalise to 0–10 ------ */
+  const tech = Math.max(0, Math.min(10, (tRaw + 50) * 0.1));   // –50…+50 → 0…10
 
-  // Valuation Score (0 to 10)
-  const vRaw = stock.valuationScore || 0;
-  const val = Math.max(0, Math.min(10, vRaw));
+  const fund = fRaw > 10 || fRaw < 0           // detect –50…+50 style input
+               ? Math.max(0, Math.min(10, (fRaw + 50) * 0.1))
+               : Math.max(0, Math.min(10, fRaw));               // already 0…10
 
-  // News Sentiment Score (-1.0 to +1.0 -> 0 to 10)
-  const nRaw = stock.newsSentimentScore || 0;
-  const news = Math.max(0, Math.min(10, (nRaw + 1) * 5));
+  const val  = Math.max(0, Math.min(10, vRaw));                 // clamp
 
-  /* ----------- Base Composite Score --------- */
-  let score = (tech * w.tech) + (fund * w.fund) + (val * w.val) + (news * w.news);
+  /* ----------- base composite --------- */
+  let score = tech * w.tech + fund * w.fund + val * w.val;      // 0…10
 
-  /* ----------- Contextual Tweaks ------ */
-  if (fund >= 7.5 && val <= 2) score -= 0.4; // Over-valued quality
-  if (val >= 7 && fund <= 3) score -= 0.4;   // Value trap
-  if (tech >= 7 && fund >= 7) score += 0.4;   // Everything aligned
-  if (tech <= 2 && fund >= 7) score -= 0.4;   // Great co. but chart ugly
+  /* ----------- contextual tweaks ------ */
+  if (fund >= 7.5 && val <= 2)  score -= 0.4;   // Over-valued quality
+  if (val  >= 7   && fund <= 3) score -= 0.4;   // Value trap
+  if (tech >= 7   && fund >= 7) score += 0.4;   // Everything aligned
+  if (tech <= 2   && fund >= 7) score -= 0.4;   // Great co. but chart ugly
 
-  /* ----------- Assign Tier ------------ */
-  if (score >= 8) return 1;    // Dream
+  /* ----------- assign tier ------------ */
+  if (score >= 8 ) return 1;   // Dream
   if (score >= 6.5) return 2;  // Elite
-  if (score >= 5) return 3;    // Solid
+  if (score >= 5 ) return 3;   // Solid
   if (score >= 3.5) return 4;  // Speculative
-  if (score >= 2) return 5;    // Risky
+  if (score >= 2 ) return 5;   // Risky
   return 6;                    // Red Flag
 }
 
@@ -3966,35 +3966,6 @@ window.scan = {
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || []; // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
 
-          // --- NEW: Call the News Analysis API Route ---
-          const tickerCodeOnly = stock.ticker.replace(".T", "");
-          let newsAnalysis = {
-            sentiment_score: 0.0,
-            summary: "News analysis skipped.",
-          }; // Default value
-
-          try {
-            const newsResponse = await fetch(
-              `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/stock-news?ticker=${tickerCodeOnly}`
-            );
-            if (newsResponse.ok) {
-              newsAnalysis = await newsResponse.json();
-            } else {
-              console.error(
-                `Failed to fetch news for ${tickerCodeOnly}:`,
-                await newsResponse.text()
-              );
-            }
-          } catch (newsError) {
-            console.error(
-              `Network error fetching news for ${tickerCodeOnly}:`,
-              newsError
-            );
-          }
-
-          stock.newsSentimentScore = newsAnalysis.sentiment_score;
-          stock.newsSummary = newsAnalysis.summary;
-          // --- END OF NEW CALL ---
           console.log(`Analyzing stock: ${stock.ticker}`);
           const prediction = await analyzeStock(stock.ticker, historicalData);
           if (prediction == null) {
@@ -4036,22 +4007,6 @@ window.scan = {
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
 
-          // --- NEW: Add a final News-Based VETO ---
-          if (stock.newsSentimentScore <= -0.7) {
-            // If news is very bearish
-            if (stock.isBuyNow) {
-              console.warn(
-                `NEWS VETO for ${stock.ticker}: 'isBuyNow' was true but overridden by bearish news.`
-              );
-              stock.isBuyNow = false;
-              stock.buyNowReason = `VETO: Overridden by negative news: ${stock.newsSummary}`;
-            }
-            // Optionally, you could also worsen the tier
-            if (stock.tier < 5) {
-              stock.tier = 5; // Set to at least "Risky"
-            }
-          }
-          // --- END OF NEWS VETO ---
           // Check if current stock exists in myPortfolio
           const portfolioEntry = myPortfolio.find(
             (p) => p.ticker === stock.ticker
@@ -4780,212 +4735,5 @@ window.fastscan = {
   },
 };
 
-/**
- * =================================================================================
- * J-Quants & Gemini News Analysis - Full Workflow (Vercel Environment Variables)
- * =================================================================================
- * This script is designed to run in a serverless environment like Vercel.
- * It performs the following actions:
- * 1. Reads J-Quants and Gemini credentials securely from environment variables.
- * 2. Authenticates with the J-Quants API to get a valid token.
- * 3. Fetches the latest official timely disclosures (TDnet) for a specific stock ticker.
- * 4. Sends the disclosure information to the Gemini API for sentiment analysis.
- * 5. Returns a structured JSON object with the sentiment, key story, and summary.
- *
- * VERCEL SETUP:
- * You must set the following environment variables in your Vercel project settings:
- * - JQUANTS_EMAIL: Your J-Quants account email address.
- * - JQUANTS_PASSWORD: Your J-Quants account password.
- * - GEMINI_API_KEY: Your API key for the Google Gemini API.
- * =================================================================================
- */
 
-/**
- * Main orchestrator function to perform the entire analysis.
- * @param {string} ticker - The 5-digit stock code (e.g., "72030" for Toyota).
- * @returns {Promise<object>} A comprehensive analysis object.
- */
-async function getJQuantsNewsAnalysis(ticker) {
-  console.log(`🚀 Starting news analysis for ticker: ${ticker}`);
 
-  // Check if environment variables are set (assuming this runs in a Node.js/Vercel environment)
-  const jquantsEmail = typeof process !== 'undefined' ? process.env.JQUANTS_EMAIL : null;
-  const jquantsPassword = typeof process !== 'undefined' ? process.env.JQUANTS_PASSWORD : null;
-  const geminiApiKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : null;
-
-  if (!jquantsEmail || !jquantsPassword || !geminiApiKey) {
-      console.error("❌ ERROR: JQUANTS_EMAIL, JQUANTS_PASSWORD, and GEMINI_API_KEY environment variables must be set in your Vercel project.");
-      return {
-          sentiment: "Neutral",
-          sentiment_score: 0.0,
-          key_story: "Configuration Error",
-          summary: "Required API credentials are not set in the environment variables."
-      };
-  }
-
-  try {
-      const idToken = await getJQuantsIdToken(jquantsEmail, jquantsPassword);
-      if (!idToken) throw new Error("Failed to authenticate with J-Quants.");
-
-      const disclosures = await fetchJQuantsDisclosures(ticker, idToken);
-      if (!disclosures || disclosures.length === 0) {
-          return {
-              sentiment: "Neutral",
-              sentiment_score: 0.0,
-              key_story: "No recent disclosures found.",
-              summary: "No official disclosures in the last 7 days."
-          };
-      }
-
-      const analysis = await analyzeDisclosuresWithGemini(ticker, disclosures, geminiApiKey);
-      console.log(`✅ News analysis for ${ticker} complete: ${analysis.sentiment} (${analysis.sentiment_score})`);
-      return analysis;
-
-  } catch (error) {
-      console.error(`❌ An error occurred during the news analysis for ${ticker}: ${error.message}`);
-      return { sentiment: "Neutral", sentiment_score: 0.0, key_story: "Analysis Failed", summary: error.message };
-  }
-}
-
-/**
-* Authenticates with J-Quants to get a short-lived ID Token.
-* @param {string} email - The J-Quants email from environment variables.
-* @param {string} password - The J-Quants password from environment variables.
-* @returns {Promise<string|null>} The ID Token, or null if authentication fails.
-*/
-async function getJQuantsIdToken(email, password) {
-  console.log("Authenticating with J-Quants...");
-  try {
-      // Step 1: Get Refresh Token
-      const refreshResponse = await fetch("https://api.jquants.com/v1/token/auth_user", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mailaddress: email, password: password })
-      });
-
-      if (!refreshResponse.ok) {
-          console.error("J-Quants login failed. Check your environment variables.");
-          return null;
-      }
-      const { refreshToken } = await refreshResponse.json();
-
-      // Step 2: Use Refresh Token to get ID Token
-      const idTokenResponse = await fetch(`https://api.jquants.com/v1/token/auth_refresh?refreshtoken=${refreshToken}`, {
-          method: "POST"
-      });
-
-      if (!idTokenResponse.ok) {
-          console.error("Failed to get ID Token from refresh token.");
-          return null;
-      }
-      const { idToken } = await idTokenResponse.json();
-      console.log("Authentication successful.");
-      return idToken;
-
-  } catch (error) {
-      console.error("Error during J-Quants authentication:", error);
-      return null;
-  }
-}
-
-/**
-* Fetches timely disclosures from the J-Quants API for a specific ticker.
-* @param {string} ticker - The 5-digit stock code.
-* @param {string} idToken - The valid J-Quants ID Token.
-* @returns {Promise<Array<object>>} A list of disclosure objects.
-*/
-async function fetchJQuantsDisclosures(ticker, idToken) {
-  console.log(`Fetching disclosures for ${ticker}...`);
-  const today = new Date();
-  const sevenDaysAgo = new Date(today);
-  sevenDaysAgo.setDate(today.getDate() - 7);
-  const fromDate = sevenDaysAgo.toISOString().split('T')[0];
-  const toDate = today.toISOString().split('T')[0];
-
-  const url = `https://api.jquants.com/v1/fins/timely_disclosure?code=${ticker}&from=${fromDate}&to=${toDate}`;
-
-  try {
-      const response = await fetch(url, {
-          method: "GET",
-          headers: { "Authorization": `Bearer ${idToken}` }
-      });
-      if (!response.ok) {
-          throw new Error(`J-Quants API error! Status: ${response.status}`);
-      }
-      const data = await response.json();
-      return data.timely_disclosure || [];
-  } catch (error) {
-      console.error("Error fetching J-Quants disclosures:", error);
-      return [];
-  }
-}
-
-/**
-* Analyzes J-Quants disclosure data using the Gemini API (v2 with Score).
-* @param {string} ticker - The stock ticker being analyzed.
-* @param {Array<object>} disclosures - The array of disclosure data from J-Quants.
-* @param {string} geminiApiKey - The Gemini API key from environment variables.
-* @returns {Promise<object>} A structured analysis object from Gemini.
-*/
-async function analyzeDisclosuresWithGemini(ticker, disclosures, geminiApiKey) {
-  console.log("Analyzing disclosures with Gemini...");
-  const disclosureText = disclosures.map(d =>
-      `- Date: ${d.Date}, Title: "${d.Title}", Type: ${d.TypeCodeName}`
-  ).join('\n');
-
-  const prompt = `
-    As a financial analyst for Japanese stocks, analyze the following official company disclosures (TDnet) for stock code ${ticker}.
-    Focus only on these specific, factual announcements.
-
-    Provide your analysis in a JSON object with the following keys:
-    - "sentiment": A string, must be one of: 'Bullish', 'Bearish', or 'Neutral'.
-    - "sentiment_score": A number between -1.0 (extremely bearish) and 1.0 (extremely bullish).
-    - "key_story": A string with the title of the most impactful disclosure.
-    - "summary": A one-sentence explanation for your sentiment.
-
-    Disclosures:
-    ${disclosureText}
-  `;
-
-  const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-  const payload = {
-      contents: chatHistory,
-      generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-              type: "OBJECT",
-              properties: {
-                  "sentiment": { "type": "STRING", "enum": ["Bullish", "Bearish", "Neutral"] },
-                  "sentiment_score": { "type": "NUMBER" },
-                  "key_story": { "type": "STRING" },
-                  "summary": { "type": "STRING" }
-              },
-              required: ["sentiment", "sentiment_score", "key_story", "summary"]
-          }
-      }
-  };
-
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
-
-  try {
-      const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-          throw new Error(`Gemini API error! Status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-          return JSON.parse(result.candidates[0].content.parts[0].text);
-      } else {
-          throw new Error("Invalid response structure from Gemini API.");
-      }
-  } catch (error) {
-      console.error("Error during Gemini analysis:", error);
-      return { sentiment: "Neutral", sentiment_score: 0.0, key_story: "Analysis failed.", summary: error.message };
-  }
-}
