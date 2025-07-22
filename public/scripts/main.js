@@ -3975,7 +3975,7 @@ window.scan = {
 
           try {
             const newsResponse = await fetch(
-              `/api/stock-news?ticker=${tickerCodeOnly}`
+              `https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app/api/stock-news?ticker=${tickerCodeOnly}`
             );
             if (newsResponse.ok) {
               newsAnalysis = await newsResponse.json();
