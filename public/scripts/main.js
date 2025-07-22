@@ -1752,26 +1752,54 @@ function calculateSmartPriceTarget(
 function isNearMajorResistance(stock, historicalData) {
   if (!historicalData || historicalData.length < 100) return false;
 
-  const lookbackData = historicalData.slice(0, -22); 
+  const lookbackData = historicalData.slice(0, -22);
   if (lookbackData.length === 0) return false;
 
-  const highestHighInPast = Math.max(...lookbackData.map(d => d.high));
+  const highestHighInPast = Math.max(...lookbackData.map((d) => d.high));
 
-  // REVISED LOGIC: The "caution zone" begins when the price is within 15% of the old high.
-  const resistanceZoneStart = highestHighInPast * 0.85;
+  // 1. A moderate 7% buffer zone (tighter than 15%, looser than 5%)
+  const resistanceZoneStart = highestHighInPast * 0.93;
 
   const isNearResistance = stock.currentPrice >= resistanceZoneStart;
-
-  if (isNearResistance) {
-    console.warn(
-      `VETO WARNING for ${stock.ticker}: Current price ${stock.currentPrice} is entering the major resistance zone starting at ${resistanceZoneStart} (below the peak of ${highestHighInPast}).`
-    );
+  if (!isNearResistance) {
+    return false; // Not in the zone, no veto
   }
 
-  return isNearResistance;
+  // 2. Require VERY high conviction to bypass the veto
+  const avgVolume50 =
+    historicalData.slice(-72, -22).reduce((sum, day) => sum + day.volume, 0) /
+    50;
+  const lastDayVolume = historicalData[historicalData.length - 1].volume;
+
+  // Stricter requirements than the "Aggressive" version
+  const hasEXCEPTIONALVolume = lastDayVolume > avgVolume50 * 2.5; // Demand 2.5x average volume
+  const hasVERYStrongRSI = stock.rsi14 > 70; // Demand RSI > 70 (deep in overbought territory)
+
+  if (hasEXCEPTIONALVolume && hasVERYStrongRSI) {
+    console.warn(
+      `VETO BYPASSED (Balanced) for ${stock.ticker}: Near resistance, but conviction is very high.`
+    );
+    return false; // Do NOT trigger the veto
+  }
+
+  // If we are near resistance and conviction is not exceptional, trigger the veto.
+  console.warn(
+    `VETO WARNING (Balanced) for ${stock.ticker}: Current price ${
+      stock.currentPrice
+    } is in the major resistance zone starting at ${resistanceZoneStart.toFixed(
+      0
+    )}.`
+  );
+  return true; // Trigger the veto
 }
 
-
+/**
+ * (V5 - Updated) - A multi-layered technical analysis engine that determines the best time to enter a stock trade.
+ * This version incorporates a more nuanced regime-transition logic to better identify major trend reversals.
+ * @param {object} stock - The full stock data object.
+ * @param {object} opts - Optional configuration overrides.
+ * @returns {object} A comprehensive analysis result including score, targets, confidence, and insights.
+ */
 function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Get Layer 1 score from existing function
   const layer1Score = getEnhancedEntryTimingScore(stock, opts);
@@ -1808,21 +1836,23 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   const shortTermRegime = detectMarketRegime(recentData);
 
   /* ──────────── 2. APPLY SANITY CHECK VETO ──────────── */
-  const veto = applySanityCheckVeto(stock, recentData, historicalData);
-  if (veto.isVetoed) {
-    // If a veto is triggered, bypass all other scoring and return an immediate "Avoid" signal.
+  // NOTE: You can choose which version of the veto function to use here.
+  // Using the balanced version as recommended.
+  const veto = isNearMajorResistance_BALANCED(stock, historicalData);
+  if (veto) { // Simplified check, assuming the function returns true for a veto
     console.warn(
-      `Execution for ${stock.ticker} HALTED by VETO: ${veto.vetoReason}`
+      `Execution for ${stock.ticker} HALTED by VETO: Near major resistance.`
     );
-    const result = getTargetsFromScore(stock, veto.finalScore, opts);
+    const result = getTargetsFromScore(stock, 7, opts); // Force score to 7
     result.isBuyNow = false;
-    result.buyNowReason = veto.vetoReason;
-    result.keyInsights = [veto.vetoReason];
+    result.buyNowReason = "VETO: Near major long-term resistance.";
+    result.keyInsights = ["VETO: Near major long-term resistance."];
     result.confidence = 0.9; // High confidence in the avoid signal
     result.longTermRegime = "BROKEN";
     result.shortTermRegime = "BROKEN";
     return result;
   }
+
 
   /* ──────────── 3. CALCULATE ML-INSPIRED SCORE ──────────── */
   // Create feature vector
@@ -1831,7 +1861,7 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
     volumeProfile,
     priceActionQuality,
     hiddenDivergences,
-    longTermRegime, // Use the long-term view for scoring
+    longTermRegime,
     advancedPatterns,
     volatilityRegime,
     orderFlow,
@@ -1844,32 +1874,53 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   // Apply non-linear scoring with interaction effects
   let mlScore = calculateMLScore(features);
 
-  // Use the LONG-TERM regime for the most important penalties and bonuses
-  if (
-    longTermRegime.type === "TRENDING" &&
-    longTermRegime.characteristics.includes("UPTREND") &&
-    !extensionAnalysis.parabolicMove
-  ) {
-    // Only reward a healthy UPTREND
-    mlScore += 1.5;
-  } else if (
-    longTermRegime.type === "TRENDING" &&
-    longTermRegime.characteristics.includes("DOWNTREND")
-  ) {
-    // Heavily penalize any rally that occurs within a major DOWNTREND
-    mlScore -= 4.0;
-  } else if (longTermRegime.type === "RANGE_BOUND") {
-    if (priceActionQuality.nearRangeLow) {
-      mlScore += 2.0;
-    } else {
-      mlScore -= 2.5;
+  // --- NEW, SMARTER REGIME-BASED SCORING ---
+  let regimeAdjustment = 0;
+  const isLongDown = longTermRegime.type === "TRENDING" && longTermRegime.characteristics.includes("DOWNTREND");
+  const isLongUp = longTermRegime.type === "TRENDING" && longTermRegime.characteristics.includes("UPTREND");
+  const isShortDown = shortTermRegime.type === "TRENDING" && shortTermRegime.characteristics.includes("DOWNTREND");
+  const isShortRange = shortTermRegime.type === "RANGE_BOUND";
+  const isShortUp = shortTermRegime.type === "TRENDING" && shortTermRegime.characteristics.includes("UPTREND");
+
+  if (isLongDown) {
+    if (isShortDown) {
+      // Both long and short-term are in a confirmed downtrend. Maximum penalty.
+      regimeAdjustment = -4.0;
+    } else if (isShortRange) {
+      // The long-term downtrend is weakening and entering a potential bottoming range. Less penalty.
+      regimeAdjustment = -1.5;
+    } else if (isShortUp) {
+      // DIVERGENCE! The long-term trend is down, but the short-term has already reversed.
+      // This is a high-potential major reversal signal. REWARD IT.
+      regimeAdjustment = 2.0;
     }
-  } else if (
-    longTermRegime.type === "CHOPPY" ||
-    longTermRegime.type === "UNKNOWN"
-  ) {
-    mlScore -= 3.0;
+  } else if (isLongUp) {
+      if (isShortUp && !extensionAnalysis.parabolicMove) {
+        // Healthy, confirmed uptrend.
+        regimeAdjustment = 1.5;
+      } else if (isShortRange) {
+        // Long-term uptrend is pausing. Neutral.
+        regimeAdjustment = 0;
+      } else if (isShortDown) {
+        // Pullback within a major uptrend. Small bonus if not severe.
+        regimeAdjustment = 0.5;
+      }
+  } else if (longTermRegime.type === "RANGE_BOUND") {
+      if (priceActionQuality.nearRangeLow) {
+        // Buying at the bottom of a long-term range. Good risk/reward.
+        regimeAdjustment = 2.0;
+      } else if (priceActionQuality.nearRangeHigh) {
+        // Buying at the top of a long-term range. Bad risk/reward.
+        regimeAdjustment = -2.5;
+      }
+  } else if (longTermRegime.type === "CHOPPY" || longTermRegime.type === "UNKNOWN") {
+      // Unpredictable market, penalize.
+      regimeAdjustment = -3.0;
   }
+
+  mlScore += regimeAdjustment;
+  // --- END OF NEW REGIME LOGIC ---
+
 
   // Other contextual adjustments...
   if (microstructure.bullishAuction && volumeProfile.pocRising) mlScore += 2.5;
@@ -1905,8 +1956,15 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   result.isBuyNow = buyNowSignal.isBuyNow;
   result.buyNowReason = buyNowSignal.reason;
 
+  // Final override: A high-risk score should never be a "Buy Now"
+  if (result.score >= 6 && result.isBuyNow) {
+    result.isBuyNow = false;
+    result.buyNowReason = `Signal overridden by high-risk score (${result.score}).`;
+  }
+
   return result;
 }
+
 
 
 /* ──────────── V4 ANALYSIS FUNCTIONS (IMPLEMENTATION) ──────────── */
