@@ -6,16 +6,22 @@
  * It receives a stock ticker, fetches official disclosures from J-Quants,
  * gets a sentiment analysis from Gemini, and returns the result.
  * All secret keys are securely accessed from Vercel Environment Variables.
+ *
+ * CORS headers have been added to allow requests from your specific domain.
  * =================================================================================
  */
 
 // This is the main handler Vercel will run.
 export default async function handler(req, res) {
-  // Allow requests from any origin (useful for development, can be restricted later)
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // --- CORS HEADERS ---
+  // Set the specific origin allowed to access this API
+  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com");
+  // Set allowed methods
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  // Set allowed headers
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Handle pre-flight OPTIONS request
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
