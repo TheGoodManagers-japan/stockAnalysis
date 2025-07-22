@@ -4758,49 +4758,51 @@ window.fastscan = {
   },
 };
 
-
-
 /**
  * =================================================================================
- * J-Quants & Gemini News Analysis - Full Workflow
+ * J-Quants & Gemini News Analysis - Full Workflow (Vercel Environment Variables)
  * =================================================================================
- * This script performs the following actions:
- * 1. Authenticates with the J-Quants API using your email and password to get a valid token.
- * 2. Fetches the latest official timely disclosures (TDnet) for a specific stock ticker.
- * 3. Sends the disclosure information to the Gemini API for sentiment analysis.
- * 4. Returns a structured JSON object with the sentiment, key story, and summary.
+ * This script is designed to run in a serverless environment like Vercel.
+ * It performs the following actions:
+ * 1. Reads J-Quants and Gemini credentials securely from environment variables.
+ * 2. Authenticates with the J-Quants API to get a valid token.
+ * 3. Fetches the latest official timely disclosures (TDnet) for a specific stock ticker.
+ * 4. Sends the disclosure information to the Gemini API for sentiment analysis.
+ * 5. Returns a structured JSON object with the sentiment, key story, and summary.
  *
- * INSTRUCTIONS:
- * 1. Fill in your J-Quants email and password in the CONFIG section below.
- * 2. Call the main function `getJQuantsNewsAnalysis` with a stock ticker.
- * 3. The final analysis will be logged to the console.
+ * VERCEL SETUP:
+ * You must set the following environment variables in your Vercel project settings:
+ * - JQUANTS_EMAIL: Your J-Quants account email address.
+ * - JQUANTS_PASSWORD: Your J-Quants account password.
+ * - GEMINI_API_KEY: Your API key for the Google Gemini API.
  * =================================================================================
  */
 
-// --- 1. CONFIGURATION ---
-// IMPORTANT: Replace these placeholders with your actual J-Quants credentials.
-const JQUANTS_CONFIG = {
-  email: "info@thegoodmanagers.com",
-  password: "tgt9HuZS5kwCbSt5",
-};
-
-
 /**
-* Main orchestrator function to perform the entire analysis.
-* @param {string} ticker - The 5-digit stock code (e.g., "72030" for Toyota).
-* @returns {Promise<object>} A comprehensive analysis object.
-*/
+ * Main orchestrator function to perform the entire analysis.
+ * @param {string} ticker - The 5-digit stock code (e.g., "72030" for Toyota).
+ * @returns {Promise<object>} A comprehensive analysis object.
+ */
 async function getJQuantsNewsAnalysis(ticker) {
   console.log(`🚀 Starting news analysis for ticker: ${ticker}`);
 
-  if (JQUANTS_CONFIG.email === "YOUR_JQUANTS_EMAIL" || JQUANTS_CONFIG.password === "YOUR_JQUANTS_PASSWORD") {
-      console.error("❌ ERROR: Please enter your J-Quants email and password.");
-      // Return a neutral state to avoid breaking the main loop
-      return { sentiment: "Neutral", sentiment_score: 0.0, key_story: "Configuration Missing", summary: "J-Quants credentials not set." };
+  // Check if environment variables are set (assuming this runs in a Node.js/Vercel environment)
+  const jquantsEmail = typeof process !== 'undefined' ? process.env.JQUANTS_EMAIL : null;
+  const jquantsPassword = typeof process !== 'undefined' ? process.env.JQUANTS_PASSWORD : null;
+  const geminiApiKey = typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : null;
+
+  if (!jquantsEmail || !jquantsPassword || !geminiApiKey) {
+      console.error("❌ ERROR: JQUANTS_EMAIL, JQUANTS_PASSWORD, and GEMINI_API_KEY environment variables must be set in your Vercel project.");
+      return {
+          sentiment: "Neutral",
+          sentiment_score: 0.0,
+          key_story: "Configuration Error",
+          summary: "Required API credentials are not set in the environment variables."
+      };
   }
 
   try {
-      const idToken = await getJQuantsIdToken();
+      const idToken = await getJQuantsIdToken(jquantsEmail, jquantsPassword);
       if (!idToken) throw new Error("Failed to authenticate with J-Quants.");
 
       const disclosures = await fetchJQuantsDisclosures(ticker, idToken);
@@ -4813,7 +4815,7 @@ async function getJQuantsNewsAnalysis(ticker) {
           };
       }
 
-      const analysis = await analyzeDisclosuresWithGemini(ticker, disclosures);
+      const analysis = await analyzeDisclosuresWithGemini(ticker, disclosures, geminiApiKey);
       console.log(`✅ News analysis for ${ticker} complete: ${analysis.sentiment} (${analysis.sentiment_score})`);
       return analysis;
 
@@ -4825,25 +4827,86 @@ async function getJQuantsNewsAnalysis(ticker) {
 
 /**
 * Authenticates with J-Quants to get a short-lived ID Token.
+* @param {string} email - The J-Quants email from environment variables.
+* @param {string} password - The J-Quants password from environment variables.
+* @returns {Promise<string|null>} The ID Token, or null if authentication fails.
 */
-async function getJQuantsIdToken() {
-  // This function remains the same as before...
-  // (Code for authentication is omitted for brevity but is included in your main file)
+async function getJQuantsIdToken(email, password) {
+  console.log("Authenticating with J-Quants...");
+  try {
+      // Step 1: Get Refresh Token
+      const refreshResponse = await fetch("https://api.jquants.com/v1/token/auth_user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mailaddress: email, password: password })
+      });
+
+      if (!refreshResponse.ok) {
+          console.error("J-Quants login failed. Check your environment variables.");
+          return null;
+      }
+      const { refreshToken } = await refreshResponse.json();
+
+      // Step 2: Use Refresh Token to get ID Token
+      const idTokenResponse = await fetch(`https://api.jquants.com/v1/token/auth_refresh?refreshtoken=${refreshToken}`, {
+          method: "POST"
+      });
+
+      if (!idTokenResponse.ok) {
+          console.error("Failed to get ID Token from refresh token.");
+          return null;
+      }
+      const { idToken } = await idTokenResponse.json();
+      console.log("Authentication successful.");
+      return idToken;
+
+  } catch (error) {
+      console.error("Error during J-Quants authentication:", error);
+      return null;
+  }
 }
 
 /**
 * Fetches timely disclosures from the J-Quants API for a specific ticker.
+* @param {string} ticker - The 5-digit stock code.
+* @param {string} idToken - The valid J-Quants ID Token.
+* @returns {Promise<Array<object>>} A list of disclosure objects.
 */
 async function fetchJQuantsDisclosures(ticker, idToken) {
-  // This function remains the same as before...
-  // (Code for fetching disclosures is omitted for brevity but is included in your main file)
+  console.log(`Fetching disclosures for ${ticker}...`);
+  const today = new Date();
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(today.getDate() - 7);
+  const fromDate = sevenDaysAgo.toISOString().split('T')[0];
+  const toDate = today.toISOString().split('T')[0];
+
+  const url = `https://api.jquants.com/v1/fins/timely_disclosure?code=${ticker}&from=${fromDate}&to=${toDate}`;
+
+  try {
+      const response = await fetch(url, {
+          method: "GET",
+          headers: { "Authorization": `Bearer ${idToken}` }
+      });
+      if (!response.ok) {
+          throw new Error(`J-Quants API error! Status: ${response.status}`);
+      }
+      const data = await response.json();
+      return data.timely_disclosure || [];
+  } catch (error) {
+      console.error("Error fetching J-Quants disclosures:", error);
+      return [];
+  }
 }
 
 /**
 * Analyzes J-Quants disclosure data using the Gemini API (v2 with Score).
+* @param {string} ticker - The stock ticker being analyzed.
+* @param {Array<object>} disclosures - The array of disclosure data from J-Quants.
+* @param {string} geminiApiKey - The Gemini API key from environment variables.
 * @returns {Promise<object>} A structured analysis object from Gemini.
 */
-async function analyzeDisclosuresWithGemini(ticker, disclosures) {
+async function analyzeDisclosuresWithGemini(ticker, disclosures, geminiApiKey) {
+  console.log("Analyzing disclosures with Gemini...");
   const disclosureText = disclosures.map(d =>
       `- Date: ${d.Date}, Title: "${d.Title}", Type: ${d.TypeCodeName}`
   ).join('\n');
@@ -4879,21 +4942,28 @@ async function analyzeDisclosuresWithGemini(ticker, disclosures) {
           }
       }
   };
-  const apiKey = "";
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
-  const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-  });
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
 
-  if (!response.ok) throw new Error(`Gemini API error! Status: ${response.status}`);
+  try {
+      const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+      });
 
-  const result = await response.json();
-  if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-      return JSON.parse(result.candidates[0].content.parts[0].text);
-  } else {
-      throw new Error("Invalid response structure from Gemini API.");
+      if (!response.ok) {
+          throw new Error(`Gemini API error! Status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+          return JSON.parse(result.candidates[0].content.parts[0].text);
+      } else {
+          throw new Error("Invalid response structure from Gemini API.");
+      }
+  } catch (error) {
+      console.error("Error during Gemini analysis:", error);
+      return { sentiment: "Neutral", sentiment_score: 0.0, key_story: "Analysis failed.", summary: error.message };
   }
 }
