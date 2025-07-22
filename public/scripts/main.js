@@ -3966,10 +3966,32 @@ window.scan = {
           const historicalData = await fetchHistoricalData(stock.ticker);
           stock.historicalData = historicalData || []; // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
 
-          // --- NEW: Call the News Analysis Function ---
-          // Convert the 4-digit ticker to the 5-digit J-Quants code
-          const jquantsTicker = `${stock.ticker.replace(".T", "")}0`;
-          const newsAnalysis = await getJQuantsNewsAnalysis(jquantsTicker);
+          // --- NEW: Call the News Analysis API Route ---
+          const tickerCodeOnly = stock.ticker.replace(".T", "");
+          let newsAnalysis = {
+            sentiment_score: 0.0,
+            summary: "News analysis skipped.",
+          }; // Default value
+
+          try {
+            const newsResponse = await fetch(
+              `/api/stock-news?ticker=${tickerCodeOnly}`
+            );
+            if (newsResponse.ok) {
+              newsAnalysis = await newsResponse.json();
+            } else {
+              console.error(
+                `Failed to fetch news for ${tickerCodeOnly}:`,
+                await newsResponse.text()
+              );
+            }
+          } catch (newsError) {
+            console.error(
+              `Network error fetching news for ${tickerCodeOnly}:`,
+              newsError
+            );
+          }
+
           stock.newsSentimentScore = newsAnalysis.sentiment_score;
           stock.newsSummary = newsAnalysis.summary;
           // --- END OF NEW CALL ---
