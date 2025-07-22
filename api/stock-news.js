@@ -3,22 +3,24 @@
  * Vercel Serverless Function: /api/stock-news
  * =================================================================================
  * This function runs on the server and acts as a secure endpoint for news analysis.
- * It receives a stock ticker, fetches official disclosures from J-Quants,
- * gets a sentiment analysis from Gemini, and returns the result.
- * All secret keys are securely accessed from Vercel Environment Variables.
- *
- * CORS headers have been added to allow requests from your specific domain.
+ * It uses the same structure as your working /api/stocks endpoint to ensure compatibility.
  * =================================================================================
  */
 
-// This is the main handler Vercel will run.
-export default async function handler(req, res) {
+// Use CommonJS module exports to match your working example
+module.exports = async (req, res) => {
   // --- CORS HEADERS ---
-  // Set the specific origin allowed to access this API
-  res.setHeader("Access-Control-Allow-Origin", "https://thegoodmanagers.com");
-  // Set allowed methods
+  // Use the exact same CORS logic from your working file
+  const allowedOrigins = [
+    "https://thegoodmanagers.com",
+    "https://www.thegoodmanagers.com",
+    "http://localhost:3000", // Added for local development
+  ];
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  // Set allowed headers
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   // Handle pre-flight OPTIONS request
@@ -26,12 +28,19 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
+  // This is a GET endpoint
+  if (req.method !== "GET") {
+    return res
+      .status(405)
+      .json({ success: false, error: "Method not allowed" });
+  }
+
   const { ticker } = req.query; // e.g., ticker="7203"
 
   if (!ticker) {
     return res
       .status(400)
-      .json({ error: "Ticker query parameter is required." });
+      .json({ success: false, error: "Ticker query parameter is required." });
   }
 
   // Convert the 4-digit ticker to the 5-digit J-Quants code
@@ -45,19 +54,15 @@ export default async function handler(req, res) {
     return res
       .status(500)
       .json({
+        success: false,
         error: "Failed to perform news analysis.",
         details: error.message,
       });
   }
-}
+};
 
-// --- All helper functions are now contained within this server-side file ---
+// --- All helper functions are now self-contained within this server-side file ---
 
-/**
- * Main orchestrator function to perform the entire analysis on the server.
- * @param {string} ticker - The 5-digit stock code.
- * @returns {Promise<object>} A comprehensive analysis object.
- */
 async function getJQuantsNewsAnalysis(ticker) {
   console.log(`[API] 🚀 Starting news analysis for ticker: ${ticker}`);
 
@@ -96,9 +101,6 @@ async function getJQuantsNewsAnalysis(ticker) {
   return analysis;
 }
 
-/**
- * Authenticates with J-Quants.
- */
 async function getJQuantsIdToken(email, password) {
   const refreshResponse = await fetch(
     "https://api.jquants.com/v1/token/auth_user",
@@ -124,9 +126,6 @@ async function getJQuantsIdToken(email, password) {
   return idToken;
 }
 
-/**
- * Fetches timely disclosures from the J-Quants API.
- */
 async function fetchJQuantsDisclosures(ticker, idToken) {
   const today = new Date();
   const sevenDaysAgo = new Date(today);
@@ -145,9 +144,6 @@ async function fetchJQuantsDisclosures(ticker, idToken) {
   return data.timely_disclosure || [];
 }
 
-/**
- * Analyzes disclosures using the Gemini API.
- */
 async function analyzeDisclosuresWithGemini(ticker, disclosures, geminiApiKey) {
   const disclosureText = disclosures
     .map(
