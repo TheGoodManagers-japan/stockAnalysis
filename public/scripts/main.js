@@ -431,7 +431,7 @@ function computeScore(stock, sector) {
   return clamp(rawScore);
 }
 
-/***********************************************
+/**********************************************
  * 4) FETCH SINGLE STOCK DATA
  ***********************************************/
 async function fetchSingleStockData(tickerObj) {
