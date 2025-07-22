@@ -161,6 +161,62 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       return trs.reduce((sum, val) => sum + val, 0) / trs.length;
     }
 
+    function calculateStochastic(data, kPeriod = 14, dPeriod = 3) {
+      if (data.length < kPeriod + dPeriod - 1) {
+        return { k: 50, d: 50 }; // Default neutral values
+      }
+
+      // Calculate %K values
+      const kValues = [];
+      for (let i = kPeriod - 1; i < data.length; i++) {
+        const period = data.slice(i - kPeriod + 1, i + 1);
+        const high = Math.max(...period.map((d) => d.high));
+        const low = Math.min(...period.map((d) => d.low));
+        const close = data[i].close;
+
+        const k = high !== low ? ((close - low) / (high - low)) * 100 : 50;
+        kValues.push(k);
+      }
+
+      // Calculate %D (moving average of %K)
+      if (kValues.length < dPeriod) {
+        return { k: kValues[kValues.length - 1] || 50, d: 50 };
+      }
+
+      const dValues = [];
+      for (let i = dPeriod - 1; i < kValues.length; i++) {
+        const sum = kValues
+          .slice(i - dPeriod + 1, i + 1)
+          .reduce((a, b) => a + b, 0);
+        dValues.push(sum / dPeriod);
+      }
+
+      return {
+        k: kValues[kValues.length - 1],
+        d: dValues[dValues.length - 1],
+      };
+    }
+
+    function calculateOBV(data) {
+      if (data.length < 2) return 0;
+
+      let obv = 0;
+      for (let i = 1; i < data.length; i++) {
+        const currentClose = data[i].close;
+        const previousClose = data[i - 1].close;
+        const volume = data[i].volume || 0;
+
+        if (currentClose > previousClose) {
+          obv += volume;
+        } else if (currentClose < previousClose) {
+          obv -= volume;
+        }
+        // If prices are equal, OBV stays the same
+      }
+
+      return obv;
+    }
+
     // --- DATA CALCULATION ---
     const closes = historicalPrices.map((d) => d.close);
     const movingAverage5d = calculateMA(historicalPrices, 5);
@@ -172,6 +228,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const { macd, signal } = calculateMACD(closes);
     const bollinger = calculateBollingerBands(closes);
     const atr = calculateATR(historicalPrices);
+    const stochastic = calculateStochastic(historicalPrices);
+    const obv = calculateOBV(historicalPrices);
 
     const epsTrailing = toNumber(quote.epsTrailingTwelveMonths);
     const epsForward = toNumber(quote.epsForward);
@@ -218,6 +276,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       bollingerMid: toNumber(bollinger.mid),
       bollingerUpper: toNumber(bollinger.upper),
       bollingerLower: toNumber(bollinger.lower),
+      stochasticK: toNumber(stochastic.k),
+      stochasticD: toNumber(stochastic.d),
+      obv: toNumber(obv),
       atr14: toNumber(atr),
     };
 
@@ -238,6 +299,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       "movingAverage200d",
       "rsi14",
       "atr14",
+      "stochasticK",
+      "stochasticD",
+      "obv",
     ];
 
     const missingFields = requiredFields.filter((field) => {
@@ -245,9 +309,17 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       return value === undefined || value === null || value === 0;
     });
 
-    if (missingFields.length > 0) {
+    // OBV can legitimately be 0, so remove it from the check if it's the only "missing" field
+    const filteredMissingFields = missingFields.filter((field) => {
+      if (field === "obv" && yahooData[field] === 0) {
+        return false; // OBV of 0 is valid
+      }
+      return true;
+    });
+
+    if (filteredMissingFields.length > 0) {
       console.warn(
-        `⚠️ Disqualifying ${ticker} due to missing or zero-value critical data: ${missingFields.join(
+        `⚠️ Disqualifying ${ticker} due to missing or zero-value critical data: ${filteredMissingFields.join(
           ", "
         )}`
       );
@@ -299,12 +371,10 @@ module.exports = async (req, res) => {
     const yahooData = await fetchYahooFinanceData(ticker.code, ticker.sector);
 
     if (!yahooData) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          error: `No data available for ticker ${ticker.code}`,
-        });
+      return res.status(404).json({
+        success: false,
+        error: `No data available for ticker ${ticker.code}`,
+      });
     }
 
     return res.status(200).json({
