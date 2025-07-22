@@ -1838,7 +1838,7 @@ function getEnhancedEntryTimingV5(stock, opts = {}) {
   /* ──────────── 2. APPLY SANITY CHECK VETO ──────────── */
   // NOTE: You can choose which version of the veto function to use here.
   // Using the balanced version as recommended.
-  const veto = isNearMajorResistance_BALANCED(stock, historicalData);
+  const veto = isNearMajorResistance(stock, historicalData);
   if (veto) { // Simplified check, assuming the function returns true for a veto
     console.warn(
       `Execution for ${stock.ticker} HALTED by VETO: Near major resistance.`
