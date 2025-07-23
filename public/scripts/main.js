@@ -329,9 +329,6 @@ window.scan = {
           stock.isBuyNow = finalSignal.isBuyNow;
           stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
 
-          
-          stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
-
           // Check if current stock exists in myPortfolio
           const portfolioEntry = myPortfolio.find(
             (p) => p.ticker === stock.ticker
