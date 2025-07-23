@@ -352,8 +352,7 @@ function getPatternWeights(opts) {
     exhaustionGap: 1.2,
     volumeClimax: 1.0,
     overboughtDiv: 1.3,
-    resistance: 0.8,
-    ...opts.histWeights,
+    resistance: 0.8
   };
 }
 
