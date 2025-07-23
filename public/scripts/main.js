@@ -746,6 +746,94 @@ function getAdvancedFundamentalScore(stock) {
 }
 
 
+/**
+ * =================================================================================
+ * NEW: Balanced Approach Signal Adjuster
+ * =================================================================================
+ * This function takes the base signal and applies "bonus points" for positive
+ * conditions, making the system smarter and more responsive to momentum without
+ * removing the core safety checks.
+ * =================================================================================
+ */
+function getAdjustedBuySignal(stock, baseSignal, historicalData) {
+  let adjustedScore = baseSignal.score;
+  const today = historicalData[historicalData.length - 1];
+
+  // 1. Momentum Bonus: Reward stocks with healthy, but not overbought, momentum.
+  if (stock.rsi14 > 50 && stock.rsi14 < 75) {
+      adjustedScore += 0.5;
+      console.log(`[Adjusted Signal] +0.5 bonus for healthy RSI (${stock.rsi14.toFixed(1)})`);
+  }
+
+  // 2. Trend Alignment Bonus: Reward stocks where all key trends are aligned.
+  if (stock.currentPrice > stock.movingAverage50d && stock.movingAverage50d > stock.movingAverage200d) {
+      adjustedScore += 0.5;
+      console.log(`[Adjusted Signal] +0.5 bonus for strong trend alignment.`);
+  }
+
+  // 3. Recent Performance Bonus: Reward stocks that have started to move recently.
+  if (historicalData.length >= 6) {
+      const weekAgoPrice = historicalData[historicalData.length - 6].close; // Price 5 trading days ago
+      const weeklyGain = (stock.currentPrice / weekAgoPrice - 1) * 100;
+      if (weeklyGain > 3 && weeklyGain < 15) { // Gaining but not parabolic
+          adjustedScore += 0.5;
+          console.log(`[Adjusted Signal] +0.5 bonus for recent performance (+${weeklyGain.toFixed(1)}%).`);
+      }
+  }
+
+  // 4. Volume Confirmation Bonus: Reward increased interest
+  if (historicalData.length >= 20) {
+      const avgVolume20 = historicalData.slice(-20).reduce((sum, d) => sum + d.volume, 0) / 20;
+      const recentVolume = today.volume;
+      if (recentVolume > avgVolume20 * 1.3 && recentVolume < avgVolume20 * 3) {
+          adjustedScore += 0.3;
+          console.log(`[Adjusted Signal] +0.3 bonus for healthy volume increase.`);
+      }
+  }
+
+  // 5. Smart Price Position: Not at extremes
+  const range = stock.fiftyTwoWeekHigh - stock.fiftyTwoWeekLow;
+  if (range > 0) {
+      const pricePosition = (stock.currentPrice - stock.fiftyTwoWeekLow) / range;
+      if (pricePosition > 0.3 && pricePosition < 0.8) {
+          adjustedScore += 0.3;
+          console.log(`[Adjusted Signal] +0.3 bonus for favorable price position (${(pricePosition * 100).toFixed(1)}%).`);
+      }
+  }
+
+  // 6. Oversold Bounce Bonus
+  if (stock.rsi14 < 40 && today.close > today.open) {
+      adjustedScore += 0.5;
+      console.log(`[Adjusted Signal] +0.5 bonus for oversold bounce`);
+  }
+
+  // 7. Moving Average Bounce
+  if (stock.currentPrice > stock.movingAverage50d &&
+      stock.lowPrice <= stock.movingAverage50d * 1.02) {
+      adjustedScore += 0.5;
+      console.log(`[Adjusted Signal] +0.5 bonus for MA50 bounce`);
+  }
+
+  // 8. Breakout Momentum
+  if (stock.currentPrice > stock.fiftyTwoWeekHigh * 0.95 &&
+      stock.rsi14 > 50 && stock.rsi14 < 70) {
+      adjustedScore += 0.5;
+      console.log(`[Adjusted Signal] +0.5 bonus for approaching 52-week high with healthy RSI`);
+  }
+
+
+  // A more achievable threshold for the final signal
+  const newBuyThreshold = 2.0;
+
+  return {
+      ...baseSignal,
+      score: adjustedScore,
+      isBuyNow: adjustedScore >= newBuyThreshold
+  };
+}
+
+
+
 
 
 
@@ -3113,85 +3201,193 @@ function checkForTrendReversal_V2(stock, historicalData) {
     reason: "Breakout lacked sufficient confirmation.",
   };
 }
-
 /**
- * (V2 - Final) Combines all signals and applies vetoes.
- * Now includes Volatility Squeeze and Pullback Entry checks.
- * @param {object} stock - The stock object.
- * @param {array} historicalData - Array of previous daily data.
- * @returns {{isBuyNow: boolean, reason: string, score: number}}
+ * =================================================================================
+ * V3 - Balanced & Responsive Buy Signal Detection
+ * =================================================================================
+ * This function replaces the previous signal logic with a multi-tiered scoring
+ * system. It identifies high-impact patterns, continuation signals, and momentum
+ * to catch opportunities earlier while still being aware of risk.
+ * =================================================================================
  */
 function getUnifiedBuySignal_V2(stock, historicalData) {
   let buyScore = 0;
   const reasons = [];
-  
+
   if (historicalData.length < 2) {
-      return { isBuyNow: false, reason: "Insufficient data.", score: 0 };
+      return { isBuyNow: false, reason: "Insufficient data.", score: 0, signals: [] };
   }
 
-  // --- 1. Calculate Bullish Score ---
   const today = historicalData[historicalData.length - 1];
   const yesterday = historicalData[historicalData.length - 2];
+  const avgVolume20 = historicalData.length >= 20 ? historicalData.slice(-20).reduce((sum, d) => sum + d.volume, 0) / 20 : 0;
 
-  // Check for high-impact patterns (+3 points)
+
+  // --- 1. HIGH-IMPACT PATTERNS (3 points each) ---
+
+  // Major trend reversal
   const reversalSignal = checkForTrendReversal_V2(stock, historicalData);
   if (reversalSignal.isReversing) {
-    buyScore += 3;
-    reasons.push(reversalSignal.reason);
+      buyScore += 3;
+      reasons.push(reversalSignal.reason);
   }
 
-  // Check for strong breakout & continuation patterns (+2 points)
+  // Early stage breakout (catches moves before they're obvious)
+  const earlyBreakout =
+      stock.currentPrice > stock.movingAverage50d &&
+      stock.currentPrice > stock.movingAverage200d &&
+      stock.movingAverage50d > stock.movingAverage200d * 0.98 && // About to golden cross
+      stock.rsi14 > 50 && stock.rsi14 < 65; // Not overbought yet
+
+  if (earlyBreakout) {
+      buyScore += 3;
+      reasons.push("Early Stage Breakout");
+  }
+
+  // --- 2. STRONG CONTINUATION PATTERNS (2 points each) ---
+
+  // Resistance break
   const resistanceBreakSignal = checkForResistanceBreak(stock, historicalData);
   if (resistanceBreakSignal.didBreak) {
-    buyScore += 2;
-    reasons.push(resistanceBreakSignal.reason);
+      buyScore += 2;
+      reasons.push(resistanceBreakSignal.reason);
   }
 
+  // Volatility squeeze
   const squeezeSignal = checkForVolatilitySqueeze(stock);
   if (squeezeSignal.isSqueezing) {
-    buyScore += 2;
-    reasons.push(squeezeSignal.reason);
+      buyScore += 2;
+      reasons.push(squeezeSignal.reason);
   }
 
+  // Pullback entry
   const pullbackSignal = checkForPullbackEntry(stock);
   if (pullbackSignal.isPullbackEntry) {
-    buyScore += 2;
-    reasons.push(pullbackSignal.reason);
+      buyScore += 2;
+      reasons.push(pullbackSignal.reason);
   }
 
-  const isEngulfing = today.close > today.open && yesterday.close < yesterday.open &&
-                      today.close > yesterday.open && today.open < yesterday.close;
+  // Bullish engulfing
+  const isEngulfing =
+      today.close > today.open &&
+      yesterday.close < yesterday.open &&
+      today.close > yesterday.open &&
+      today.open < yesterday.close;
+
   if (isEngulfing) {
-    buyScore += 2;
-    reasons.push("Bullish Engulfing");
+      buyScore += 2;
+      reasons.push("Bullish Engulfing");
   }
 
-  // --- 2. Contextual Veto Checks ---
-  let vetoReason = "";
-  if (stock.rsi14 && stock.rsi14 > 75) {
-    vetoReason = "Vetoed: RSI is overbought (> 75).";
+  // --- 3. MOMENTUM SIGNALS (1.5 points each) ---
+
+  // Momentum acceleration
+  if (stock.macd > 0 && stock.macd > stock.macdSignal &&
+      stock.rsi14 > 50 && stock.rsi14 < 70) {
+      buyScore += 1.5;
+      reasons.push("Momentum Accelerating");
   }
-  
-  // --- 3. Final Decision ---
-  const buyThreshold = 3;
-  let isBuyNow = buyScore >= buyThreshold;
+
+  // Volume surge with price advance
+  if (today.close > yesterday.close && today.volume > avgVolume20 * 1.3) {
+      buyScore += 1.5;
+      reasons.push("Volume Surge");
+  }
+
+  // --- 4. SUPPORT SIGNALS (1 point each) ---
+
+  // Bounce off key moving average
+  const ma50Bounce =
+      stock.lowPrice <= stock.movingAverage50d * 1.02 &&
+      stock.currentPrice > stock.movingAverage50d &&
+      today.close > today.open;
+
+  if (ma50Bounce) {
+      buyScore += 1;
+      reasons.push("MA50 Bounce");
+  }
+
+  // Oversold bounce
+  if (stock.rsi14 < 40 && today.close > today.open &&
+      today.close > yesterday.close) {
+      buyScore += 1;
+      reasons.push("Oversold Bounce");
+  }
+
+  // Higher low formation
+  if (historicalData.length >= 10) {
+      const recentLow = Math.min(...historicalData.slice(-5).map(d => d.low));
+      const priorLow = Math.min(...historicalData.slice(-10, -5).map(d => d.low));
+      if (recentLow > priorLow * 1.01 && today.close > today.open) {
+          buyScore += 1;
+          reasons.push("Higher Low");
+      }
+  }
+
+  // --- 5. CONTEXTUAL ADJUSTMENTS (not vetoes, just score modifiers) ---
+
+  // Mild overbought adjustment (not a hard veto)
+  if (stock.rsi14 > 70 && stock.rsi14 <= 75) {
+      buyScore -= 0.5;
+      reasons.push("(RSI elevated)");
+  }
+
+  // Extreme overbought warning
+  if (stock.rsi14 > 75) {
+      buyScore -= 1.5;
+      reasons.push("(RSI very high)");
+  }
+
+  // Near resistance caution (not a veto)
+  const nearResistance = stock.currentPrice > stock.fiftyTwoWeekHigh * 0.95;
+  if (nearResistance && !resistanceBreakSignal.didBreak) {
+      buyScore -= 0.5;
+      reasons.push("(near resistance)");
+  }
+
+  // Declining volume warning
+  if (today.volume < avgVolume20 * 0.7 && today.close > yesterday.close) {
+      buyScore -= 0.5;
+      reasons.push("(weak volume)");
+  }
+
+  // --- 6. FINAL DECISION ---
+
+  // Lower threshold for more opportunities
+  const buyThreshold = 2; // Down from 3
+
+  // Special case: Strong single signal can trigger buy
+  const hasVeryStrongSignal = reasons.some(r =>
+      r.includes("Early Stage Breakout") ||
+      r.includes("Trend Reversal") ||
+      (r.includes("Broke Resistance") && r.includes("high volume"))
+  );
+
+  let isBuyNow = buyScore >= buyThreshold || (hasVeryStrongSignal && buyScore >= 1.5);
   let finalReason = "No immediate buy signal detected.";
 
   if (isBuyNow) {
-    if (vetoReason !== "") {
-      isBuyNow = false;
-      finalReason = `Pattern found (${reasons.join(" | ")}), but signal ${vetoReason}`;
-    } else {
-      finalReason = "Buy Now: " + reasons.join(" | ");
-    }
+      // Final safety check (not a hard veto, just a downgrade)
+      if (stock.rsi14 > 80 ||
+          (stock.currentPrice > stock.bollingerUpper && stock.atr14 > stock.currentPrice * 0.03)) {
+          isBuyNow = false;
+          finalReason = `Pattern found (${reasons.join(" | ")}), but extreme overbought conditions`;
+      } else {
+          finalReason = "Buy Now: " + reasons.join(" | ");
+      }
+  } else if (buyScore >= 1.5) {
+      // Near-miss signals for watchlist
+      finalReason = `Watch closely (score: ${buyScore.toFixed(1)}): ${reasons.join(" | ")}`;
   }
 
   return {
-    isBuyNow: isBuyNow,
-    reason: finalReason,
-    score: buyScore,
+      isBuyNow: isBuyNow,
+      reason: finalReason,
+      score: buyScore,
+      signals: reasons // Include this for debugging
   };
 }
+
 
 
 /**
@@ -4000,10 +4196,27 @@ window.scan = {
           stock.smartStopLoss = entryAnalysis.stopLoss;
           stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
 
-          const finalSignal = getUnifiedBuySignal_V2(stock, historicalData);
-          stock.isBuyNow = finalSignal.isBuyNow;
-          stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
+          // --- MODIFIED SIGNAL LOGIC ---
+          // 1. Get the base signal from the original conservative function
+          const baseSignal = getUnifiedBuySignal_V2(stock, historicalData);
 
+          // 2. Pass the base signal to the new adjuster function to get the final, smarter signal
+          const finalSignal = getAdjustedBuySignal(
+            stock,
+            baseSignal,
+            historicalData
+          );
+
+          stock.isBuyNow = finalSignal.isBuyNow;
+          // Update the reason if the signal was adjusted to true
+          if (baseSignal.isBuyNow === false && finalSignal.isBuyNow === true) {
+            stock.buyNowReason = `Adjusted Buy Signal: ${
+              baseSignal.reason
+            } (Score boosted to ${finalSignal.score.toFixed(1)})`;
+          } else {
+            stock.buyNowReason = finalSignal.reason;
+          }
+          // --- END OF MODIFIED LOGIC ---
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
 
