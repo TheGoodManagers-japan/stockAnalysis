@@ -9,7 +9,7 @@ import { getLayer2MLAnalysis } from './layer2Analysis.js';
  * @param {object} [opts={}] - Optional configuration for weights and cutoffs.
  * @returns {object} The final analysis result.
  */
-export function getComprehensiveEntryTiming(stock, historicalData) {
+export function getComprehensiveEntryTiming(stock, historicalData, opts) {
   // --- 1. GET LAYER 1 SCORE ---
   // Calls the short-term pattern analysis.
   const layer1Score = getLayer1PatternScore(stock, historicalData);
