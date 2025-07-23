@@ -6,7 +6,7 @@
  * @param {object} [opts={}] - Optional configuration.
  * @returns {object} An object containing the mlScore and other key analytical features.
  */
-export function getLayer2MLAnalysis(stock, historicalData) {
+export function getLayer2MLAnalysis(stock, historicalData, opts) {
   if (historicalData.length < 90) {
     return {
       mlScore: -5,

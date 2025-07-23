@@ -5,7 +5,7 @@
  * @param {object} [opts={}] - Optional configuration.
  * @returns {number} A score from 1 (Strong Buy) to 7 (Strong Avoid).
  */
-export function getLayer1PatternScore(stock, historicalData) {
+export function getLayer1PatternScore(stock, historicalData, opts) {
   if (historicalData.length < 15) return 7; // Not enough data, return Strong Avoid
 
   const recentData = historicalData
