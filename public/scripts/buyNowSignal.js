@@ -318,9 +318,8 @@ function checkConsolidationBreakout(stock, context, config) {
   return { detected: false };
 }
 
-// FIXED: This function now passes the context to its helper.
 function checkEntryTimingScore(stock, context, config) {
-  const scoreTier = getEntryTimingScore_Helper(stock, context); // Pass context
+  const scoreTier = getEntryTimingScore_Helper(stock, context);
 
   if (scoreTier <= 2) {
     // Tier 1 is "Strong Buy", Tier 2 is "Buy"
@@ -446,8 +445,8 @@ function calculateKeyLevels(enrichedStock) {
   return levels;
 }
 
-// FIXED: This helper now accepts and uses the context object, eliminating "hidden coupling" and "double work".
-function getEntryTimingScore_Helper(stock, context, opts = {}) {
+// FIXED: This helper has been refactored to remove the 'opts' parameter.
+function getEntryTimingScore_Helper(stock, context) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const { today, yesterday } = context;
 
@@ -517,7 +516,6 @@ function getEntryTimingScore_Helper(stock, context, opts = {}) {
     pattern: 1.0,
     vol: 0.7,
     penalty: 2.0,
-    ...opts.weights,
   };
   let score = 0;
 
@@ -565,7 +563,6 @@ function getEntryTimingScore_Helper(stock, context, opts = {}) {
     t4: -0.5,
     t5: -2,
     t6: -4,
-    ...opts.cutoffs,
   };
 
   if (score >= cutoffs.t1) return 1; // Strong Buy

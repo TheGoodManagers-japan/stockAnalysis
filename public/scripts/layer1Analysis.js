@@ -1,13 +1,18 @@
 /**
  * Analyzes short-term (15-day) price action, patterns, and momentum.
+ * This version has been refactored to remove the optional 'opts' parameter,
+ * relying on internal default configurations for weights and cutoffs.
  *
  * @param {object} stock - The stock object.
- * @param {object} [opts={}] - Optional configuration.
+ * @param {array} historicalData - The last 15+ days of historical data.
  * @returns {number} A score from 1 (Strong Buy) to 7 (Strong Avoid).
  */
-export function getLayer1PatternScore(stock, historicalData, opts) {
-  if (historicalData.length < 15) return 7; // Not enough data, return Strong Avoid
+export function getLayer1PatternScore(stock, historicalData) {
+  if (!historicalData || historicalData.length < 15) {
+    return 7; // Not enough data, return Strong Avoid
+  }
 
+  // Ensure data is sorted chronologically and get the last 15 days.
   const recentData = historicalData
     .slice(-15)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -22,6 +27,7 @@ export function getLayer1PatternScore(stock, historicalData, opts) {
     lows: recentData.map((day) => day.low),
   };
 
+  // --- Pattern & Momentum Detection ---
   const momentum = calculateMomentumMetrics(historical, recentData);
   const bullishPatterns = detectBullishPatterns(
     recentData,
@@ -37,7 +43,8 @@ export function getLayer1PatternScore(stock, historicalData, opts) {
     momentum.recent
   );
 
-  const weights = getPatternWeights(opts);
+  // --- Scoring ---
+  const weights = getPatternWeights(); // No longer needs opts
   let histScore = 0;
   histScore += scoreMomentum(momentum, weights);
   histScore += scoreBullishPatterns(bullishPatterns, weights);
@@ -48,6 +55,8 @@ export function getLayer1PatternScore(stock, historicalData, opts) {
     momentum.recent
   );
 
+  // --- Tier Mapping ---
+  // Cutoffs are now hardcoded within the function.
   const cutoffs = {
     t1: 2.5,
     t2: 1.5,
@@ -55,7 +64,6 @@ export function getLayer1PatternScore(stock, historicalData, opts) {
     t4: -0.5,
     t5: -1.5,
     t6: -2.5,
-    ...opts.combinedCutoffs,
   };
 
   if (histScore >= cutoffs.t1) return 1; // Strong Buy
@@ -67,8 +75,11 @@ export function getLayer1PatternScore(stock, historicalData, opts) {
   return 7; // Strong Avoid
 }
 
-
-
+/**
+ * -----------------------------------------------------------------
+ * HELPER FUNCTIONS
+ * -----------------------------------------------------------------
+ */
 
 function calculateMomentumMetrics(historical, recentData) {
   let recentMomentum = 0,
@@ -216,12 +227,10 @@ function detectExhaustionPatterns(
   const patterns = {};
 
   // Trend maturity
-  if (recentData.length >= 15) {
+  if (recentData.length >= 14) {
     const upDaysCount = recentData.slice(-14).reduce((count, day, i) => {
-      const prevDay =
-        i === 0
-          ? recentData[recentData.length - 15]
-          : recentData[recentData.length - 14 + i - 1];
+      // Compare with the previous day in the full recentData array
+      const prevDay = recentData[i]; // i is index in slice, so need to adjust
       return day.close > prevDay.close ? count + 1 : count;
     }, 0);
     patterns.trendTooMature = upDaysCount >= 10;
@@ -313,9 +322,9 @@ function detectBreakoutPattern(recentData, priceCompression) {
 function detectCupAndHandle(recentData) {
   if (recentData.length < 15) return false;
 
-  const cupLeft = recentData.slice(-15, -10);
-  const cupBottom = recentData.slice(-10, -5);
-  const cupRight = recentData.slice(-5);
+  const cupLeft = recentData.slice(0, 5);
+  const cupBottom = recentData.slice(5, 10);
+  const cupRight = recentData.slice(10);
 
   const maxLeftHigh = Math.max(...cupLeft.map((day) => day.high));
   const minBottomLow = Math.min(...cupBottom.map((day) => day.low));
@@ -325,14 +334,18 @@ function detectCupAndHandle(recentData) {
     Math.abs(maxLeftHigh - maxRightHigh) < maxLeftHigh * 0.03;
   const properBottom =
     minBottomLow < Math.min(maxLeftHigh, maxRightHigh) * 0.95;
+
+  if (cupRight.length < 5) return false; // Ensure there are enough days for a handle
+
   const recentPullback =
-    cupRight[3].close < cupRight[2].close &&
-    cupRight[4].close > cupRight[3].close;
+    cupRight[cupRight.length - 2].close < cupRight[cupRight.length - 3].close &&
+    cupRight[cupRight.length - 1].close > cupRight[cupRight.length - 2].close;
 
   return similarHighs && properBottom && recentPullback;
 }
 
-function getPatternWeights(opts) {
+// This function now returns a static object of weights.
+function getPatternWeights() {
   return {
     momentum: 1.5,
     volume: 1.0,
@@ -352,7 +365,7 @@ function getPatternWeights(opts) {
     exhaustionGap: 1.2,
     volumeClimax: 1.0,
     overboughtDiv: 1.3,
-    resistance: 0.8
+    resistance: 0.8,
   };
 }
 
@@ -409,4 +422,3 @@ function scoreExhaustionPatterns(patterns, weights, recentMomentum) {
 
   return score;
 }
-  
