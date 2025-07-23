@@ -4194,27 +4194,12 @@ window.scan = {
           stock.smartStopLoss = entryAnalysis.stopLoss;
           stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
 
-          // --- MODIFIED SIGNAL LOGIC ---
-          // 1. Get the base signal from the original conservative function
-          const baseSignal = getUnifiedBuySignal_V2(stock, historicalData);
-
-          // 2. Pass the base signal to the new adjuster function to get the final, smarter signal
-          const finalSignal = getAdjustedBuySignal(
-            stock,
-            baseSignal,
-            historicalData
-          );
-
+          // --- NEW UNIFIED SIGNAL LOGIC ---
+          // A single call to the new, more responsive function
+          const finalSignal = getUnifiedBuySignal_V2(stock, historicalData);
           stock.isBuyNow = finalSignal.isBuyNow;
-          // Update the reason if the signal was adjusted to true
-          if (baseSignal.isBuyNow === false && finalSignal.isBuyNow === true) {
-            stock.buyNowReason = `Adjusted Buy Signal: ${
-              baseSignal.reason
-            } (Score boosted to ${finalSignal.score.toFixed(1)})`;
-          } else {
-            stock.buyNowReason = finalSignal.reason;
-          }
-          // --- END OF MODIFIED LOGIC ---
+          stock.buyNowReason = finalSignal.reason;
+          // --- END OF NEW LOGIC ---
           stock.tier = getNumericTier(stock);
           stock.limitOrder = getLimitOrderPrice(stock); // (The old scores like growthPotential, finalScore, etc., are now superseded by this more advanced system) // 10) Send data in Bubble key format
 
