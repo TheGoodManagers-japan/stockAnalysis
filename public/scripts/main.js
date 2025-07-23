@@ -3203,187 +3203,184 @@ function checkForTrendReversal_V2(stock, historicalData) {
 }
 /**
  * =================================================================================
- * V3 - Balanced & Responsive Buy Signal Detection (Re-tuned)
- * =================================================================================
- * This function has been re-tuned to be more selective. The buy threshold and
- * risk penalties have been increased to filter for higher-quality setups and
- * avoid generating an excessive number of signals on strong market days.
+ * V3.1 – “Smartly Stricter” Buy‑Now Signal
+ * • Higher base hurdle (5 pts)
+ * • Bypass now needs BOTH “Early Stage Breakout” & “Trend Reversal” (AND) + ≥ 4.5 pts
+ * • Volume filters on breakout / pullback
+ * • Softer 1‑pt bonuses (+0.5) with stricter oversold level
+ * • Wider / harsher near‑resistance penalty (‑1.5, 5 % band)
+ * • Optional Tier gate: skips if longer‑term Entry‑Timing Tier ≥ 4
  * =================================================================================
  */
 function getUnifiedBuySignal_V2(stock, historicalData) {
   let buyScore = 0;
   const reasons = [];
 
-  if (historicalData.length < 2) {
-      return { isBuyNow: false, reason: "Insufficient data.", score: 0, signals: [] };
+  /* ─────────────── Input sanity ─────────────── */
+  if (!historicalData || historicalData.length < 2) {
+    return { isBuyNow: false, reason: "Insufficient data.", score: 0, signals: [] };
   }
 
-  const today = historicalData[historicalData.length - 1];
-  const yesterday = historicalData[historicalData.length - 2];
-  const avgVolume20 = historicalData.length >= 20 ? historicalData.slice(-20).reduce((sum, d) => sum + d.volume, 0) / 20 : 0;
+  // Optional gate: require the longer‑term engine (V5) to like the chart
+  if (stock.entryTimingScore !== undefined && stock.entryTimingScore >= 4) {   // Tier 4‒7
+    return {
+      isBuyNow: false,
+      reason  : `Entry‑Timing Tier ${stock.entryTimingScore} is not strong enough for an immediate entry.`,
+      score   : 0,
+      signals : []
+    };
+  }
 
+  const today       = historicalData[historicalData.length - 1];
+  const yesterday   = historicalData[historicalData.length - 2];
+  const avgVolume20 = historicalData.length >= 20
+        ? historicalData.slice(-20).reduce((s, d) => s + d.volume, 0) / 20
+        : 0;
 
-  // --- 1. HIGH-IMPACT PATTERNS (3 points each) ---
+  /* ───────────── 1. HIGH‑IMPACT (3 pts) ───────────── */
 
   // Major trend reversal
   const reversalSignal = checkForTrendReversal_V2(stock, historicalData);
-  if (reversalSignal.isReversing) {
-      buyScore += 3;
-      reasons.push(reversalSignal.reason);
+  const isReversal     = reversalSignal.isReversing;
+  if (isReversal) {
+    buyScore += 3;
+    reasons.push(reversalSignal.reason);
   }
 
-  // Early stage breakout (catches moves before they're obvious)
+  // Early‑stage breakout + volume
   const earlyBreakout =
-      stock.currentPrice > stock.movingAverage50d &&
-      stock.currentPrice > stock.movingAverage200d &&
-      stock.movingAverage50d > stock.movingAverage200d * 0.98 && // About to golden cross
-      stock.rsi14 > 50 && stock.rsi14 < 65; // Not overbought yet
-
+        stock.currentPrice  > stock.movingAverage50d &&
+        stock.currentPrice  > stock.movingAverage200d &&
+        stock.movingAverage50d > stock.movingAverage200d * 1.02 &&          // tighter: +2%
+        stock.rsi14 > 50 && stock.rsi14 < 65 &&
+        today.volume > avgVolume20 * 1.5;                                    // new vol filter
   if (earlyBreakout) {
-      buyScore += 3;
-      reasons.push("Early Stage Breakout");
+    buyScore += 3;
+    reasons.push("Early Stage Breakout");
   }
 
-  // --- 2. STRONG CONTINUATION PATTERNS (2 points each) ---
+  /* ───────────── 2. CONTINUATION (2 pts) ──────────── */
 
-  // Resistance break
   const resistanceBreakSignal = checkForResistanceBreak(stock, historicalData);
   if (resistanceBreakSignal.didBreak) {
-      buyScore += 2;
-      reasons.push(resistanceBreakSignal.reason);
+    buyScore += 2;
+    reasons.push(resistanceBreakSignal.reason);
   }
 
-  // Volatility squeeze
   const squeezeSignal = checkForVolatilitySqueeze(stock);
   if (squeezeSignal.isSqueezing) {
-      buyScore += 2;
-      reasons.push(squeezeSignal.reason);
+    buyScore += 2;
+    reasons.push(squeezeSignal.reason);
   }
 
-  // Pullback entry
   const pullbackSignal = checkForPullbackEntry(stock);
-  if (pullbackSignal.isPullbackEntry) {
-      buyScore += 2;
-      reasons.push(pullbackSignal.reason);
+  if (pullbackSignal.isPullbackEntry && today.volume > avgVolume20) {         // vol filter
+    buyScore += 2;
+    reasons.push(pullbackSignal.reason);
   }
 
-  // Bullish engulfing
   const isEngulfing =
-      today.close > today.open &&
-      yesterday.close < yesterday.open &&
-      today.close > yesterday.open &&
-      today.open < yesterday.close;
-
+        today.close > today.open &&
+        yesterday.close < yesterday.open &&
+        today.close > yesterday.open &&
+        today.open  < yesterday.close;
   if (isEngulfing) {
-      buyScore += 2;
-      reasons.push("Bullish Engulfing");
+    buyScore += 2;
+    reasons.push("Bullish Engulfing");
   }
 
-  // --- 3. MOMENTUM SIGNALS (1.5 points each) ---
+  /* ───────────── 3. MOMENTUM (1.5 pts) ───────────── */
 
-  // Momentum acceleration
   if (stock.macd > 0 && stock.macd > stock.macdSignal &&
       stock.rsi14 > 50 && stock.rsi14 < 70) {
-      buyScore += 1.5;
-      reasons.push("Momentum Accelerating");
+    buyScore += 1.5;
+    reasons.push("Momentum Accelerating");
   }
 
-  // Volume surge with price advance
   if (today.close > yesterday.close && today.volume > avgVolume20 * 1.3) {
-      buyScore += 1.5;
-      reasons.push("Volume Surge");
+    buyScore += 1.5;
+    reasons.push("Volume Surge");
   }
 
-  // --- 4. SUPPORT SIGNALS (1 point each) ---
+  /* ───────────── 4. SUPPORT (0.5 pts) ────────────── */
 
-  // Bounce off key moving average
   const ma50Bounce =
-      stock.lowPrice <= stock.movingAverage50d * 1.02 &&
-      stock.currentPrice > stock.movingAverage50d &&
-      today.close > today.open;
-
+        stock.lowPrice <= stock.movingAverage50d * 1.02 &&
+        stock.currentPrice > stock.movingAverage50d &&
+        today.close > today.open;
   if (ma50Bounce) {
-      buyScore += 1;
-      reasons.push("MA50 Bounce");
+    buyScore += 0.5;
+    reasons.push("MA50 Bounce");
   }
 
-  // Oversold bounce
-  if (stock.rsi14 < 40 && today.close > today.open &&
-      today.close > yesterday.close) {
-      buyScore += 1;
-      reasons.push("Oversold Bounce");
+  if (stock.rsi14 < 35 && today.close > today.open && today.close > yesterday.close) {
+    buyScore += 0.5;
+    reasons.push("Oversold Bounce");
   }
 
-  // Higher low formation
   if (historicalData.length >= 10) {
-      const recentLow = Math.min(...historicalData.slice(-5).map(d => d.low));
-      const priorLow = Math.min(...historicalData.slice(-10, -5).map(d => d.low));
-      if (recentLow > priorLow * 1.01 && today.close > today.open) {
-          buyScore += 1;
-          reasons.push("Higher Low");
-      }
+    const recentLow = Math.min(...historicalData.slice(-5).map(d => d.low));
+    const priorLow  = Math.min(...historicalData.slice(-10, -5).map(d => d.low));
+    if (recentLow > priorLow * 1.01 && today.close > today.open) {
+      buyScore += 0.5;
+      reasons.push("Higher Low");
+    }
   }
 
-  // --- 5. CONTEXTUAL ADJUSTMENTS (Penalties for risk factors) ---
+  /* ───────────── 5. RISK PENALTIES ──────────────── */
 
-  // Mild overbought adjustment
   if (stock.rsi14 > 70 && stock.rsi14 <= 75) {
-      buyScore -= 0.5;
-      reasons.push("(RSI elevated)");
+    buyScore -= 0.5;
+    reasons.push("(RSI elevated)");
   }
-
-  // Extreme overbought warning
   if (stock.rsi14 > 75) {
-      buyScore -= 2.0; // Increased penalty
-      reasons.push("(RSI very high)");
+    buyScore -= 2.0;
+    reasons.push("(RSI very high)");
   }
 
-  // Near resistance caution
-  const nearResistance = stock.currentPrice > stock.fiftyTwoWeekHigh * 0.97; // Tighter 3% buffer
+  const nearResistance = stock.currentPrice > stock.fiftyTwoWeekHigh * 0.95;  // 5 % band
   if (nearResistance && !resistanceBreakSignal.didBreak) {
-      buyScore -= 1.0; // Increased penalty
-      reasons.push("(near resistance)");
+    buyScore -= 1.5;
+    reasons.push("(near resistance)");
   }
 
-  // Declining volume warning
   if (avgVolume20 > 0 && today.volume < avgVolume20 * 0.7 && today.close > yesterday.close) {
-      buyScore -= 0.5;
-      reasons.push("(weak volume)");
+    buyScore -= 0.5;
+    reasons.push("(weak volume)");
   }
 
-  // --- 6. FINAL DECISION ---
+  /* ───────────── 6. FINAL DECISION ─────────────── */
 
-  // Increased threshold for higher selectivity
   const buyThreshold = 5.0;
 
-  // Special case for a single, very high-conviction signal
-  const hasVeryStrongSignal = reasons.some(r =>
-      r.includes("Early Stage Breakout") ||
-      r.includes("Trend Reversal")
-  );
+  // Bypass now needs BOTH early breakout + reversal AND ≥ 4.5 pts
+  const hasVeryStrongSignal = earlyBreakout && isReversal;
+  let   isBuyNow = buyScore >= buyThreshold ||
+                   (hasVeryStrongSignal && buyScore >= 4.5);
 
-  let isBuyNow = buyScore >= buyThreshold || (hasVeryStrongSignal && buyScore >= 3.0);
-  let finalReason = "No immediate buy signal detected.";
+  // Parabolic / extreme check
+  if (isBuyNow &&
+      (stock.rsi14 > 78 ||
+       (stock.currentPrice > stock.bollingerUpper &&
+        stock.atr14 && stock.atr14 > stock.currentPrice * 0.04))) {
+    isBuyNow = false;
+    reasons.push("Extreme overbought / parabolic – waiting for pullback");
+  }
 
+  let finalReason;
   if (isBuyNow) {
-      // Final safety check for extreme conditions
-      if (stock.rsi14 > 78 ||
-          (stock.currentPrice > stock.bollingerUpper && stock.atr14 > stock.currentPrice * 0.04)) {
-          isBuyNow = false;
-          finalReason = `Pattern found (${reasons.join(" | ")}), but extreme overbought conditions detected.`;
-      } else {
-          finalReason = "Buy Now: " + reasons.join(" | ");
-      }
-  } else if (buyScore >= 2.0) { // Threshold for watchlist
-      // Near-miss signals for watchlist
-      finalReason = `Watch closely (score: ${buyScore.toFixed(1)}): ${reasons.join(" | ")}`;
+    finalReason = "Buy Now: " + reasons.join(" | ");
+  } else if (buyScore >= 2.0) {
+    finalReason = `Watch closely (score: ${buyScore.toFixed(1)}): ${reasons.join(" | ")}`;
+  } else {
+    finalReason = "No immediate buy signal detected.";
   }
 
   return {
-      isBuyNow: isBuyNow,
-      reason: finalReason,
-      score: buyScore,
-      signals: reasons // Include this for debugging
+    isBuyNow,
+    reason : finalReason,
+    score  : buyScore,
+    signals: reasons     // for debugging / logs
   };
 }
 
