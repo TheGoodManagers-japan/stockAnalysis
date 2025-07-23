@@ -3203,11 +3203,11 @@ function checkForTrendReversal_V2(stock, historicalData) {
 }
 /**
  * =================================================================================
- * V3 - Balanced & Responsive Buy Signal Detection
+ * V3 - Balanced & Responsive Buy Signal Detection (Re-tuned)
  * =================================================================================
- * This function replaces the previous signal logic with a multi-tiered scoring
- * system. It identifies high-impact patterns, continuation signals, and momentum
- * to catch opportunities earlier while still being aware of risk.
+ * This function has been re-tuned to be more selective. The buy threshold and
+ * risk penalties have been increased to filter for higher-quality setups and
+ * avoid generating an excessive number of signals on strong market days.
  * =================================================================================
  */
 function getUnifiedBuySignal_V2(stock, historicalData) {
@@ -3324,9 +3324,9 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
       }
   }
 
-  // --- 5. CONTEXTUAL ADJUSTMENTS (not vetoes, just score modifiers) ---
+  // --- 5. CONTEXTUAL ADJUSTMENTS (Penalties for risk factors) ---
 
-  // Mild overbought adjustment (not a hard veto)
+  // Mild overbought adjustment
   if (stock.rsi14 > 70 && stock.rsi14 <= 75) {
       buyScore -= 0.5;
       reasons.push("(RSI elevated)");
@@ -3334,48 +3334,47 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
 
   // Extreme overbought warning
   if (stock.rsi14 > 75) {
-      buyScore -= 1.5;
+      buyScore -= 2.0; // Increased penalty
       reasons.push("(RSI very high)");
   }
 
-  // Near resistance caution (not a veto)
-  const nearResistance = stock.currentPrice > stock.fiftyTwoWeekHigh * 0.95;
+  // Near resistance caution
+  const nearResistance = stock.currentPrice > stock.fiftyTwoWeekHigh * 0.97; // Tighter 3% buffer
   if (nearResistance && !resistanceBreakSignal.didBreak) {
-      buyScore -= 0.5;
+      buyScore -= 1.0; // Increased penalty
       reasons.push("(near resistance)");
   }
 
   // Declining volume warning
-  if (today.volume < avgVolume20 * 0.7 && today.close > yesterday.close) {
+  if (avgVolume20 > 0 && today.volume < avgVolume20 * 0.7 && today.close > yesterday.close) {
       buyScore -= 0.5;
       reasons.push("(weak volume)");
   }
 
   // --- 6. FINAL DECISION ---
 
-  // Lower threshold for more opportunities
-  const buyThreshold = 2; // Down from 3
+  // Increased threshold for higher selectivity
+  const buyThreshold = 3.5;
 
-  // Special case: Strong single signal can trigger buy
+  // Special case for a single, very high-conviction signal
   const hasVeryStrongSignal = reasons.some(r =>
       r.includes("Early Stage Breakout") ||
-      r.includes("Trend Reversal") ||
-      (r.includes("Broke Resistance") && r.includes("high volume"))
+      r.includes("Trend Reversal")
   );
 
-  let isBuyNow = buyScore >= buyThreshold || (hasVeryStrongSignal && buyScore >= 1.5);
+  let isBuyNow = buyScore >= buyThreshold || (hasVeryStrongSignal && buyScore >= 3.0);
   let finalReason = "No immediate buy signal detected.";
 
   if (isBuyNow) {
-      // Final safety check (not a hard veto, just a downgrade)
-      if (stock.rsi14 > 80 ||
-          (stock.currentPrice > stock.bollingerUpper && stock.atr14 > stock.currentPrice * 0.03)) {
+      // Final safety check for extreme conditions
+      if (stock.rsi14 > 78 ||
+          (stock.currentPrice > stock.bollingerUpper && stock.atr14 > stock.currentPrice * 0.04)) {
           isBuyNow = false;
-          finalReason = `Pattern found (${reasons.join(" | ")}), but extreme overbought conditions`;
+          finalReason = `Pattern found (${reasons.join(" | ")}), but extreme overbought conditions detected.`;
       } else {
           finalReason = "Buy Now: " + reasons.join(" | ");
       }
-  } else if (buyScore >= 1.5) {
+  } else if (buyScore >= 2.0) { // Threshold for watchlist
       // Near-miss signals for watchlist
       finalReason = `Watch closely (score: ${buyScore.toFixed(1)}): ${reasons.join(" | ")}`;
   }
@@ -3387,7 +3386,6 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
       signals: reasons // Include this for debugging
   };
 }
-
 
 
 /**
