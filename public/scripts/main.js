@@ -4161,29 +4161,29 @@ window.scan = {
           stock.historicalData = historicalData || []; // 4) Analyze with ML for next 30 days, using the already-fetched historicalData
 
           console.log(`Analyzing stock: ${stock.ticker}`);
-          const prediction = await analyzeStock(stock.ticker, historicalData);
-          if (prediction == null) {
-            console.error(
-              `Failed to generate prediction for ${stock.ticker}. Aborting.`
-            );
-            throw new Error("Failed to generate prediction.");
-          }
+          // const prediction = await analyzeStock(stock.ticker, historicalData);
+          // if (prediction == null) {
+          //   console.error(
+          //     `Failed to generate prediction for ${stock.ticker}. Aborting.`
+          //   );
+          //   throw new Error("Failed to generate prediction.");
+          // }
 
-          console.log("prediction: ", prediction);
-          stock.prediction = prediction; // 5) Calculate Stop Loss & Target
+          // console.log("prediction: ", prediction);
+          // stock.prediction = prediction; // 5) Calculate Stop Loss & Target
 
-          const { stopLoss, targetPrice } = calculateStopLossAndTarget(
-            stock,
-            prediction
-          );
-          if (stopLoss === null || targetPrice === null) {
-            console.error(
-              `Failed to calculate stop loss or target price for ${stock.ticker}.`
-            );
-            throw new Error("Stop loss or target price calculation failed.");
-          }
-          stock.stopLoss = stopLoss;
-          stock.targetPrice = targetPrice; // --- 1. Calculate All Component Scores --- // These are needed for the Tier calculation and overall analysis.
+          // const { stopLoss, targetPrice } = calculateStopLossAndTarget(
+          //   stock,
+          //   prediction
+          // );
+          // if (stopLoss === null || targetPrice === null) {
+          //   console.error(
+          //     `Failed to calculate stop loss or target price for ${stock.ticker}.`
+          //   );
+          //   throw new Error("Stop loss or target price calculation failed.");
+          // }
+          // stock.stopLoss = stopLoss;
+          // stock.targetPrice = targetPrice; // --- 1. Calculate All Component Scores --- // These are needed for the Tier calculation and overall analysis.
 
           stock.technicalScore = getTechnicalScore(stock);
           stock.fundamentalScore = getAdvancedFundamentalScore(stock);
