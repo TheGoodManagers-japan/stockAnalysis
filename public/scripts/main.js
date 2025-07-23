@@ -7,7 +7,7 @@ import {
   getNumericTier
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
-import { all } from "@tensorflow/tfjs";
+
 
 
 
