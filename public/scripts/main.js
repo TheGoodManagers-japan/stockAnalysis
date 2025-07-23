@@ -3354,7 +3354,7 @@ function getUnifiedBuySignal_V2(stock, historicalData) {
   // --- 6. FINAL DECISION ---
 
   // Increased threshold for higher selectivity
-  const buyThreshold = 3.5;
+  const buyThreshold = 5.0;
 
   // Special case for a single, very high-conviction signal
   const hasVeryStrongSignal = reasons.some(r =>
