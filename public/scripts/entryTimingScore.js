@@ -80,6 +80,8 @@ export function getComprehensiveEntryTiming(
     features
   );
 
+  console.log("here");
+
   // ---- Generate comprehensive insights
   const keyInsights = generateSwingInsights(
     features,
