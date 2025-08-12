@@ -325,7 +325,11 @@ window.scan = {
           stock.smartStopLoss = entryAnalysis.stopLoss;
           stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
 
-          const finalSignal = getBuyTrigger(stock, historicalData);
+          const finalSignal = getBuyTrigger(
+            stock,
+            historicalData,
+            entryAnalysis
+          );
           stock.isBuyNow = finalSignal.isBuyNow;
           stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
 

@@ -1,21 +1,18 @@
 /**
- * @file This script provides a comprehensive stock analysis engine to generate buy signals.
- * It combines multiple technical analysis techniques, including pattern recognition,
- * trend analysis, and a detailed scoring model, into a single, unified function.
+ * @file Enhanced stock analysis engine that leverages pre-calculated indicators
+ * from the stock object to avoid redundant calculations.
  *
- * Key Features:
- * - Score-based system: Aggregates scores from various detected bullish signals.
- * - Veto system: Allows specific bearish conditions to override buy signals.
- * - Modular Checkers: Easy to add, remove, or modify individual signal and veto checks.
- * - Configurable: All scoring weights and thresholds are managed in a central config object.
- * - Comprehensive Analysis: Integrates trend reversals, breakouts, candlestick patterns,
- * and a detailed entry timing score.
+ * Changes:
+ * - Put historicalData on context (bug fix)
+ * - Robust rolling volume averages (no off-by-one)
+ * - Support percentile fix (use 6th lowest, not 6th highest)
+ * - ATR-aware proximity for support/resistance logic (optional)
+ * - Safer guards for NaN/undefined values
  */
 
 // --- CONFIGURATION ---
-// Central configuration for all thresholds, scores, and weights.
 const defaultConfig = {
-  buyThreshold: 5, // Minimum total score to trigger a "buy" signal.
+  buyThreshold: 5, // Minimum total score to trigger a "buy" signal
   scores: {
     trendReversal: 5,
     resistanceBreak: 4,
@@ -23,46 +20,99 @@ const defaultConfig = {
     pullbackEntry: 3,
     bullishEngulfing: 3,
     hammerCandle: 3,
-    consolidationBreakout: 4, // New signal from checkForBuyNowSignal
-    entryTimingScore: 6, // High score for a positive timing model result.
+    consolidationBreakout: 4,
+    entryTimingScore: 6,
+    confirmedBounce: 4,
   },
   volume: {
-    confirmationMultiplier: 1.5, // e.g., volume must be 1.5x the average.
+    confirmationMultiplier: 1.5,
+    exhaustionMultiplier: 2.5,
   },
   rsi: {
     overbought: 70,
+    moderatelyOverbought: 65,
+    oversold: 30,
+    hardOverbought: 80,
   },
   squeeze: {
-    bandWidthThreshold: 0.05, // Example: Bollinger Bandwidth percent
+    bandWidthThreshold: 0.05,
   },
   pullback: {
-    proximityPercent: 0.02, // e.g., within 2% of the moving average.
+    proximityPercent: 0.02,
+    minRetracePercent: 0.03,
+    maxRetracePercent: 0.15,
   },
   hammer: {
-    bodyToRangeRatio: 0.1, // Ensures body is not insignificantly small (prevents Dojis).
-    wickToBodyRatio: 2, // Lower wick must be at least 2x the body.
+    bodyToRangeRatio: 0.1,
+    wickToBodyRatio: 2,
   },
   consolidation: {
-    period: 5, // Days to look back for consolidation.
+    period: 5,
     volumeMultiplier: 1.5,
   },
+  parabolic: {
+    consecutiveGreenDays: 5,
+    distanceFromMA50: 0.1,
+    distanceFromMA200: 0.2,
+    shortTermGainThreshold: 0.15,
+  },
+  momentum: {
+    minDaysForReversal: 2,
+    volumeIncreaseForReversal: 1.3,
+  },
   veto: {
-    catastrophicDropPercent: -8.0, // A drop of 8% or more is a veto.
-    resistanceZoneBuffer: 0.03, // 3% buffer below a major resistance high.
-    resistanceBypassVolumeMultiplier: 3.0, // Bypass veto with 3x volume.
-    resistanceBypassRsi: 75, // Bypass veto with RSI > 75.
+    catastrophicDropPercent: -8.0,
+    resistanceZoneBuffer: 0.03,
+    resistanceBypassVolumeMultiplier: 3.0,
+    resistanceBypassRsi: 75,
+    choppyRegimeConfidenceThreshold: 0.3,
+    momentumBypass: {
+      // Allow RSI>70 if trend is strong
+      minDistanceFromMA50: 0.02, // >2% above MA50
+      minDistanceFromMA200: 0.0, // above MA200
+      minGreenDays: 3, // at least 3 consecutive green days
+    },
   },
 };
 
+/* -------------------- Small utilities -------------------- */
+
+function meanSafe(nums) {
+  const arr = nums.filter((x) => Number.isFinite(x));
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+// Excludes the most recent bar (your “today” = last close pre-open)
+function rollingAvgVolume(hd, n) {
+  if (!Array.isArray(hd) || hd.length < 2) return 0;
+  const end = hd.length - 1; // exclude last bar
+  const start = Math.max(0, end - n); // up to n bars before last
+  const slice = hd.slice(start, end);
+  return meanSafe(slice.map((d) => d?.volume ?? 0));
+}
+
+// Fallback small ATR proxy (avg true range over last 14 bars)
+function calcATR14(hd) {
+  if (!Array.isArray(hd) || hd.length < 15) return 0;
+  let trs = [];
+  for (let i = hd.length - 14; i < hd.length; i++) {
+    const cur = hd[i];
+    const prev = hd[i - 1];
+    if (!cur || !prev) continue;
+    const tr = Math.max(
+      cur.high - cur.low,
+      Math.abs(cur.high - prev.close),
+      Math.abs(cur.low - prev.close)
+    );
+    trs.push(tr);
+  }
+  return meanSafe(trs);
+}
+
 /**
- * Analyzes the stock to generate a buy signal.
- * This is the single entry point for the entire trigger analysis.
- *
- * @param {object} stock - The stock object with current data (e.g., MAs, RSI).
- * @param {array} historicalData - The array of historical daily data for the stock.
- * @returns {{isBuyNow: boolean, reason: string}} An object with the buy decision and a descriptive reason.
+ * Analyzes the stock to generate a buy signal using pre-calculated indicators.
  */
-export function getBuyTrigger(stock, historicalData) {
+export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
   const config = defaultConfig;
 
   if (!historicalData || historicalData.length < 50) {
@@ -75,37 +125,42 @@ export function getBuyTrigger(stock, historicalData) {
   const today = historicalData[historicalData.length - 1];
   const yesterday = historicalData[historicalData.length - 2];
 
-  // Create a shared context to avoid recalculating data across checks.
-  // This is the single source of truth for daily data.
+  // Robust volume averages (exclude "today")
+  const avgVolume10 = rollingAvgVolume(historicalData, 10);
+  const avgVolume20 = rollingAvgVolume(historicalData, 20);
+  const avgVolume50 = rollingAvgVolume(historicalData, 50);
+
+  // Enhanced context using stock object's pre-calculated values
   const context = {
-    today: today,
-    yesterday: yesterday,
-    avgVolume10:
-      historicalData.slice(-11, -1).reduce((sum, day) => sum + day.volume, 0) /
-      10,
-    avgVolume20:
-      historicalData.slice(-21, -1).reduce((sum, day) => sum + day.volume, 0) /
-      20,
-    // The enriched stock object is now part of the context for helpers that need it.
-    enrichedStock: {
-      ...stock,
-      currentPrice: today.close,
-      historicalData: historicalData,
-    },
+    today,
+    yesterday,
+    avgVolume10,
+    avgVolume20,
+    avgVolume50,
+    historicalData, // <-- bug fix: make it available
+    stock, // full stock object
+    entryAnalysis,
+    atr14: Number(stock?.atr14) || calcATR14(historicalData), // optional ATR
+    recentPerformance: calculateRecentPerformance(historicalData),
+    marketStructure: analyzeMarketStructure(stock, historicalData),
   };
-  context.keyLevels = calculateKeyLevels(context.enrichedStock);
+
+  // Use simplified key levels that leverage stock's MAs
+  context.keyLevels = calculateKeyLevels(stock, historicalData);
 
   // --- Run all signal checks ---
   const signalChecks = [
     checkTrendReversal,
     checkResistanceBreak,
     checkVolatilitySqueeze,
-    checkPullbackEntry,
+    checkEnhancedPullbackEntry,
     checkBullishEngulfing,
     checkHammerCandle,
     checkConsolidationBreakout,
-    checkEntryTimingScore, // Now properly uses context
+    checkConfirmedBounce,
+    checkEntryTimingScore,
   ];
+
   const detectedSignals = signalChecks
     .map((checkFn) => checkFn(stock, context, config))
     .filter((signal) => signal.detected);
@@ -115,13 +170,19 @@ export function getBuyTrigger(stock, historicalData) {
     0
   );
 
-  // --- Run all veto checks ---
+  // --- Enhanced veto checks ---
   const vetoChecks = [
     checkRsiOverbought,
     checkCatastrophicDrop,
     checkSupportBreak,
     checkMajorResistance,
+    checkChoppyRegime,
+    checkParabolicMove,
+    checkExhaustedTrend,
+    checkFalseBreakout,
+    checkWeakBounce,
   ];
+
   const vetoResults = vetoChecks
     .map((vetoFn) => vetoFn(stock, context, config))
     .filter((veto) => veto.isVetoed);
@@ -143,11 +204,16 @@ export function getBuyTrigger(stock, historicalData) {
   }
 
   if (totalScore >= config.buyThreshold) {
+    const insights =
+      entryAnalysis?.keyInsights?.length > 0
+        ? ` | ${entryAnalysis.keyInsights[0]}`
+        : "";
+
     return {
       isBuyNow: true,
       reason: `Buy Trigger (${totalScore} pts): ${detectedSignals
         .map((s) => s.name)
-        .join(" | ")}`,
+        .join(" | ")}${insights}`,
     };
   }
 
@@ -159,28 +225,173 @@ export function getBuyTrigger(stock, historicalData) {
 
 /**
  * -----------------------------------------------------------------
- * SIGNAL CHECKER FUNCTIONS
+ * OPTIMIZED HELPER FUNCTIONS (using stock object data)
+ * -----------------------------------------------------------------
+ */
+
+function calculateRecentPerformance(historicalData) {
+  if (historicalData.length < 20)
+    return {
+      gain5d: 0,
+      gain10d: 0,
+      gain20d: 0,
+      consecutiveGreenDays: 0,
+      daysFromHigh: 20,
+      currentDrawdown: 0,
+    };
+
+  const recent5 = historicalData.slice(-5);
+  const recent10 = historicalData.slice(-10);
+  const recent20 = historicalData.slice(-20);
+
+  return {
+    gain5d: (recent5.at(-1).close - recent5[0].close) / recent5[0].close,
+    gain10d: (recent10.at(-1).close - recent10[0].close) / recent10[0].close,
+    gain20d: (recent20.at(-1).close - recent20[0].close) / recent20[0].close,
+    consecutiveGreenDays: countConsecutiveGreenDays(historicalData),
+    daysFromHigh: daysSinceHigh(historicalData),
+    currentDrawdown: calculateDrawdown(historicalData),
+  };
+}
+
+// Optimized to use stock object's pre-calculated values
+function analyzeMarketStructure(stock, historicalData) {
+  const currentPrice =
+    Number(stock.currentPrice) || historicalData.at(-1)?.close || 0;
+
+  return {
+    distanceFromMA50: stock.movingAverage50d
+      ? (currentPrice - stock.movingAverage50d) / stock.movingAverage50d
+      : 0,
+    distanceFromMA200: stock.movingAverage200d
+      ? (currentPrice - stock.movingAverage200d) / stock.movingAverage200d
+      : 0,
+    distanceFrom52wHigh: stock.fiftyTwoWeekHigh
+      ? (stock.fiftyTwoWeekHigh - currentPrice) / stock.fiftyTwoWeekHigh
+      : 0,
+    isNearResistance: isNearKeyResistance(historicalData, currentPrice),
+    hasConfirmedSupport: hasConfirmedSupportBelow(historicalData, currentPrice),
+  };
+}
+
+// Simplified to use stock's MA values directly
+function calculateKeyLevels(stock, historicalData) {
+  const levels = { supports: [], resistances: [] };
+
+  const addIf = (arr, v) => {
+    const x = Number(v);
+    if (Number.isFinite(x) && x > 0) arr.push(x);
+  };
+
+  if (stock.movingAverage50d) addIf(levels.supports, stock.movingAverage50d);
+  if (stock.movingAverage200d) addIf(levels.supports, stock.movingAverage200d);
+  if (stock.fiftyTwoWeekHigh) addIf(levels.resistances, stock.fiftyTwoWeekHigh);
+
+  // Swing highs/lows from last 20 bars
+  if (historicalData && historicalData.length >= 20) {
+    const recentData = historicalData.slice(-20);
+    for (let i = 2; i < recentData.length - 2; i++) {
+      const c = recentData[i];
+      if (
+        c.high > recentData[i - 1].high &&
+        c.high > recentData[i - 2].high &&
+        c.high > recentData[i + 1].high &&
+        c.high > recentData[i + 2].high
+      )
+        levels.resistances.push(c.high);
+
+      if (
+        c.low < recentData[i - 1].low &&
+        c.low < recentData[i - 2].low &&
+        c.low < recentData[i + 1].low &&
+        c.low < recentData[i + 2].low
+      )
+        levels.supports.push(c.low);
+    }
+  }
+
+  levels.supports = [...new Set(levels.supports)].sort((a, b) => b - a);
+  levels.resistances = [...new Set(levels.resistances)].sort((a, b) => a - b);
+  return levels;
+}
+
+function countConsecutiveGreenDays(historicalData) {
+  let count = 0;
+  for (let i = historicalData.length - 1; i > 0; i--) {
+    if (historicalData[i].close > historicalData[i - 1].close) count++;
+    else break;
+  }
+  return count;
+}
+
+function daysSinceHigh(historicalData) {
+  const window = historicalData.slice(-20);
+  const recentHigh = Math.max(...window.map((d) => d.high));
+  for (
+    let i = historicalData.length - 1;
+    i >= historicalData.length - window.length;
+    i--
+  ) {
+    if (historicalData[i].high === recentHigh) {
+      return historicalData.length - 1 - i;
+    }
+  }
+  return 20;
+}
+
+function calculateDrawdown(historicalData) {
+  const recent20High = Math.max(
+    ...historicalData.slice(-20).map((d) => d.high)
+  );
+  const currentPrice = historicalData.at(-1).close;
+  return recent20High > 0 ? (recent20High - currentPrice) / recent20High : 0;
+}
+
+function isNearKeyResistance(historicalData, currentPrice) {
+  const highs = historicalData.slice(-50).map((d) => d.high);
+  if (!highs.length) return false;
+  const recentHigh = Math.max(...highs);
+  return currentPrice > recentHigh * 0.97;
+}
+
+function hasConfirmedSupportBelow(historicalData, currentPrice) {
+  const lows = historicalData
+    .slice(-20)
+    .map((d) => d.low)
+    .filter(Number.isFinite);
+  if (lows.length < 6) return false;
+  // FIX: pick 6th LOWEST (support-y), not 6th highest
+  const sortedAsc = [...lows].sort((a, b) => a - b);
+  const supportLevel = sortedAsc[Math.min(5, sortedAsc.length - 1)];
+  return currentPrice > supportLevel * 1.02;
+}
+
+/**
+ * -----------------------------------------------------------------
+ * SIGNAL CHECKERS (optimized to use stock object)
  * -----------------------------------------------------------------
  */
 
 function checkTrendReversal(stock, context, config) {
   const { today, yesterday, avgVolume20 } = context;
   const { macd, macdSignal, movingAverage25d, movingAverage75d } = stock;
-  const { historicalData } = context.enrichedStock;
+
   const hasData =
-    movingAverage75d && movingAverage25d && macd && macdSignal !== undefined;
-  if (!hasData || historicalData.length < 80) return { detected: false };
+    Number.isFinite(movingAverage75d) &&
+    Number.isFinite(movingAverage25d) &&
+    Number.isFinite(macd) &&
+    Number.isFinite(macdSignal);
+  if (!hasData) return { detected: false };
 
   const priceTrigger =
     today.close > movingAverage75d && yesterday.close <= movingAverage75d;
   if (!priceTrigger) return { detected: false };
 
-  const ma25History =
-    historicalData.slice(-30, -5).reduce((sum, day) => sum + day.close, 0) / 25;
-  const trendTrigger = movingAverage25d > ma25History;
+  const trendTrigger = movingAverage25d > movingAverage75d;
   const momentumTrigger = macd > macdSignal;
   const volumeTrigger =
     today.volume > avgVolume20 * config.volume.confirmationMultiplier;
+
   const confirmations = [trendTrigger, momentumTrigger, volumeTrigger].filter(
     Boolean
   ).length;
@@ -196,11 +407,17 @@ function checkTrendReversal(stock, context, config) {
 }
 
 function checkResistanceBreak(stock, context, config) {
-  const { today, yesterday, keyLevels, avgVolume20 } = context;
+  const { today, yesterday, keyLevels, avgVolume20, atr14 } = context;
   const immediateResistance = keyLevels.resistances.find(
     (r) => r > yesterday.close
   );
-  if (!immediateResistance) return { detected: false };
+  if (!Number.isFinite(immediateResistance)) return { detected: false };
+
+  // ATR-aware proximity (avoid “leap” to far resistance)
+  const within = atr14
+    ? immediateResistance - yesterday.close <= 3 * atr14
+    : true;
+  if (!within) return { detected: false };
 
   const priceBroke =
     yesterday.close < immediateResistance && today.close > immediateResistance;
@@ -209,12 +426,11 @@ function checkResistanceBreak(stock, context, config) {
   const volumeConfirms =
     today.volume > avgVolume20 * config.volume.confirmationMultiplier;
   const name = `Broke Resistance${volumeConfirms ? " on high volume" : ""}`;
-  return { detected: true, name: name, score: config.scores.resistanceBreak };
+  return { detected: true, name, score: config.scores.resistanceBreak };
 }
 
 function checkVolatilitySqueeze(stock, context, config) {
-  const { bollingerUpper, bollingerLower, bollingerMid } = stock;
-  const { currentPrice } = context.enrichedStock;
+  const { bollingerUpper, bollingerLower, bollingerMid, currentPrice } = stock;
   if (!bollingerUpper || !bollingerLower || !bollingerMid)
     return { detected: false };
 
@@ -232,26 +448,44 @@ function checkVolatilitySqueeze(stock, context, config) {
   return { detected: false };
 }
 
-function checkPullbackEntry(stock, context, config) {
-  const { movingAverage25d, movingAverage75d } = stock;
-  const { currentPrice } = context.enrichedStock;
+function checkEnhancedPullbackEntry(stock, context, config) {
+  const { movingAverage25d, movingAverage50d, movingAverage75d, currentPrice } =
+    stock;
+  const { recentPerformance } = context;
+
   if (!movingAverage25d || !movingAverage75d) return { detected: false };
 
   const isInUptrend =
     currentPrice > movingAverage75d && movingAverage25d > movingAverage75d;
   if (!isInUptrend) return { detected: false };
 
-  const priceNearMA25 =
+  const pullbackFromHigh = recentPerformance.currentDrawdown;
+  if (
+    pullbackFromHigh < config.pullback.minRetracePercent ||
+    pullbackFromHigh > config.pullback.maxRetracePercent
+  ) {
+    return { detected: false };
+  }
+
+  const nearMA25 =
     Math.abs(currentPrice - movingAverage25d) / movingAverage25d <
     config.pullback.proximityPercent;
-  if (priceNearMA25) {
-    return {
-      detected: true,
-      name: "Pullback to 25-day MA",
-      score: config.scores.pullbackEntry,
-    };
-  }
-  return { detected: false };
+  const nearMA50 =
+    movingAverage50d &&
+    Math.abs(currentPrice - movingAverage50d) / movingAverage50d <
+      config.pullback.proximityPercent;
+
+  if (!nearMA25 && !nearMA50) return { detected: false };
+
+  const { today, yesterday } = context;
+  const showingBounce = today.close > today.open && today.low > yesterday.low;
+  if (!showingBounce) return { detected: false };
+
+  return {
+    detected: true,
+    name: `Confirmed Pullback to ${nearMA25 ? "25" : "50"}-day MA`,
+    score: config.scores.pullbackEntry,
+  };
 }
 
 function checkBullishEngulfing(stock, context, config) {
@@ -296,12 +530,14 @@ function checkHammerCandle(stock, context, config) {
 }
 
 function checkConsolidationBreakout(stock, context, config) {
-  const { today, avgVolume10 } = context;
-  const { historicalData } = context.enrichedStock;
+  const { today, avgVolume10, historicalData } = context;
   const period = config.consolidation.period;
 
-  if (historicalData.length < period + 1) return { detected: false };
+  if (!Array.isArray(historicalData) || historicalData.length < period + 1) {
+    return { detected: false };
+  }
 
+  // prior N bars (exclude today)
   const consolidationPeriod = historicalData.slice(-(period + 1), -1);
   const consolidationHigh = Math.max(...consolidationPeriod.map((d) => d.high));
   const isBreakout = today.close > consolidationHigh;
@@ -318,32 +554,108 @@ function checkConsolidationBreakout(stock, context, config) {
   return { detected: false };
 }
 
-function checkEntryTimingScore(stock, context, config) {
-  const scoreTier = getEntryTimingScore_Helper(stock, context);
+function checkConfirmedBounce(stock, context, config) {
+  const { today, yesterday, keyLevels, avgVolume20, historicalData, atr14 } =
+    context;
 
-  if (scoreTier <= 2) {
-    // Tier 1 is "Strong Buy", Tier 2 is "Buy"
-    const name = scoreTier === 1 ? "Strong Entry Score" : "Good Entry Score";
+  if (!Array.isArray(historicalData) || historicalData.length < 3)
+    return { detected: false };
+
+  const twoDaysAgo = historicalData[historicalData.length - 3];
+
+  // ATR-aware relevance window for supports
+  const windowBelow = atr14 ? 2.5 * atr14 : Infinity;
+  const nearestSupport = keyLevels.supports.find(
+    (s) =>
+      s < today.close &&
+      today.close - s <= windowBelow &&
+      (yesterday.low <= s * 1.01 || twoDaysAgo.low <= s * 1.01)
+  );
+
+  if (!Number.isFinite(nearestSupport)) return { detected: false };
+
+  const bounceConfirmed =
+    today.close > yesterday.close &&
+    today.close > today.open &&
+    today.volume > avgVolume20 * config.momentum.volumeIncreaseForReversal;
+
+  if (bounceConfirmed) {
     return {
       detected: true,
-      name: name,
-      score: config.scores.entryTimingScore,
+      name: "Confirmed Bounce off Support",
+      score: config.scores.confirmedBounce,
     };
+  }
+  return { detected: false };
+}
+
+function checkEntryTimingScore(stock, context, config) {
+  const { entryAnalysis } = context;
+
+  if (entryAnalysis && entryAnalysis.score !== undefined) {
+    const scoreTier = entryAnalysis.score;
+
+    if (scoreTier <= 2) {
+      const confidence = entryAnalysis.confidence
+        ? ` (${Math.round(entryAnalysis.confidence * 100)}% conf)`
+        : "";
+      const name =
+        scoreTier === 1
+          ? `Strong Entry Score${confidence}`
+          : `Good Entry Score${confidence}`;
+
+      let adjustedScore = config.scores.entryTimingScore;
+      if (Number.isFinite(entryAnalysis.confidence)) {
+        if (entryAnalysis.confidence > 0.7) adjustedScore *= 1.2;
+        else if (entryAnalysis.confidence < 0.3) adjustedScore *= 0.7;
+      }
+
+      return {
+        detected: true,
+        name,
+        score: Math.round(adjustedScore * 10) / 10,
+      };
+    }
   }
   return { detected: false };
 }
 
 /**
  * -----------------------------------------------------------------
- * VETO CHECKER FUNCTIONS
+ * VETO CHECKERS (optimized to use stock object)
  * -----------------------------------------------------------------
  */
 
 function checkRsiOverbought(stock, context, config) {
-  if (stock.rsi14 && stock.rsi14 > config.rsi.overbought) {
+  const rsi = stock.rsi14;
+  if (!Number.isFinite(rsi)) return { isVetoed: false };
+
+  // 1) Extreme condition → hard veto
+  if (rsi >= (config.rsi.hardOverbought || 80)) {
     return {
       isVetoed: true,
-      reason: `RSI is overbought (${stock.rsi14.toFixed(0)})`,
+      reason: `RSI extremely overbought (${rsi.toFixed(0)})`,
+    };
+  }
+
+  // 2) Momentum bypass: allow RSI>70 if trend context is strong
+  if (rsi > config.rsi.overbought) {
+    const ms = context.marketStructure;
+    const rp = context.recentPerformance;
+    const b = config.veto.momentumBypass || {};
+    const momentumBypass =
+      ms.distanceFromMA50 > (b.minDistanceFromMA50 ?? 0.02) &&
+      ms.distanceFromMA200 > (b.minDistanceFromMA200 ?? 0.0) &&
+      rp.consecutiveGreenDays >= (b.minGreenDays ?? 3) &&
+      context.today.close >= context.yesterday.close;
+
+    if (momentumBypass) return { isVetoed: false };
+
+    return {
+      isVetoed: true,
+      reason: `RSI overbought without momentum confirmation (${rsi.toFixed(
+        0
+      )})`,
     };
   }
   return { isVetoed: false };
@@ -366,7 +678,7 @@ function checkCatastrophicDrop(stock, context, config) {
 function checkSupportBreak(stock, context, config) {
   const { today, yesterday } = context;
   const ma50 = stock.movingAverage50d;
-  if (ma50 && today.close < ma50 && yesterday.close > ma50) {
+  if (Number.isFinite(ma50) && today.close < ma50 && yesterday.close > ma50) {
     return { isVetoed: true, reason: "Broke below 50-day MA support" };
   }
   return { isVetoed: false };
@@ -379,197 +691,188 @@ function checkMajorResistance(stock, context, config) {
   return { isVetoed: false };
 }
 
+function checkChoppyRegime(stock, context, config) {
+  const { entryAnalysis } = context;
+  if (!entryAnalysis) return { isVetoed: false };
+
+  if (
+    entryAnalysis.shortTermRegime === "CHOPPY" &&
+    entryAnalysis.confidence < config.veto.choppyRegimeConfidenceThreshold
+  ) {
+    return {
+      isVetoed: true,
+      reason: `Choppy market regime with low confidence (${Math.round(
+        (entryAnalysis.confidence || 0) * 100
+      )}%)`,
+    };
+  }
+
+  if (
+    entryAnalysis.longTermRegime === "BEARISH" &&
+    entryAnalysis.shortTermRegime === "BEARISH" &&
+    entryAnalysis.score >= 5
+  ) {
+    return {
+      isVetoed: true,
+      reason: "Both short and long-term regimes are bearish",
+    };
+  }
+  return { isVetoed: false };
+}
+
+function checkParabolicMove(stock, context, config) {
+  const { recentPerformance, marketStructure } = context;
+  const { rsi14 } = stock;
+
+  const conditions = [];
+
+  if (
+    recentPerformance.consecutiveGreenDays >=
+    config.parabolic.consecutiveGreenDays
+  ) {
+    conditions.push(
+      `${recentPerformance.consecutiveGreenDays} consecutive green days`
+    );
+  }
+  if (marketStructure.distanceFromMA50 > config.parabolic.distanceFromMA50) {
+    conditions.push(
+      `${(marketStructure.distanceFromMA50 * 100).toFixed(1)}% above MA50`
+    );
+  }
+  if (marketStructure.distanceFromMA200 > config.parabolic.distanceFromMA200) {
+    conditions.push(
+      `${(marketStructure.distanceFromMA200 * 100).toFixed(1)}% above MA200`
+    );
+  }
+  if (recentPerformance.gain5d > config.parabolic.shortTermGainThreshold) {
+    conditions.push(
+      `${(recentPerformance.gain5d * 100).toFixed(1)}% gain in 5 days`
+    );
+  }
+  if (
+    Number.isFinite(rsi14) &&
+    rsi14 > config.rsi.moderatelyOverbought &&
+    marketStructure.distanceFrom52wHigh < 0.02
+  ) {
+    conditions.push("RSI overbought near 52w high");
+  }
+
+  if (conditions.length >= 2) {
+    return {
+      isVetoed: true,
+      reason: `Parabolic/overextended: ${conditions.join(", ")}`,
+    };
+  }
+  return { isVetoed: false };
+}
+
+function checkExhaustedTrend(stock, context, config) {
+  const { today, avgVolume20, recentPerformance, marketStructure } = context;
+  const { rsi14 } = stock;
+
+  const highVolumeNoProgress =
+    today.volume > avgVolume20 * config.volume.exhaustionMultiplier &&
+    today.close <= today.open &&
+    recentPerformance.daysFromHigh <= 2;
+
+  const repeatedRejection =
+    recentPerformance.daysFromHigh > 0 &&
+    recentPerformance.daysFromHigh < 5 &&
+    today.high < context.yesterday.high;
+
+  const decliningMomentum =
+    Number.isFinite(rsi14) &&
+    rsi14 < 50 &&
+    marketStructure.distanceFromMA50 > 0.05;
+
+  if (highVolumeNoProgress || (repeatedRejection && decliningMomentum)) {
+    return { isVetoed: true, reason: "Trend showing exhaustion signs" };
+  }
+  return { isVetoed: false };
+}
+
+function checkFalseBreakout(stock, context, config) {
+  const { today, yesterday, keyLevels, historicalData } = context;
+
+  if (!Array.isArray(historicalData) || historicalData.length < 3) {
+    return { isVetoed: false };
+  }
+
+  const twoDaysAgo = historicalData[historicalData.length - 3];
+
+  const brokeResistanceYesterday = keyLevels.resistances.some(
+    (r) => yesterday.close > r && twoDaysAgo.close < r
+  );
+
+  if (brokeResistanceYesterday) {
+    const failingToday =
+      today.close < yesterday.close &&
+      today.close < today.open &&
+      today.high < yesterday.high;
+
+    if (failingToday) {
+      return {
+        isVetoed: true,
+        reason: "Potential false breakout - failing to hold above resistance",
+      };
+    }
+  }
+  return { isVetoed: false };
+}
+
+function checkWeakBounce(stock, context, config) {
+  const { today, yesterday, avgVolume20, recentPerformance, marketStructure } =
+    context;
+
+  const inDowntrend =
+    marketStructure.distanceFromMA50 < -0.05 ||
+    recentPerformance.gain10d < -0.1;
+
+  if (!inDowntrend) return { isVetoed: false };
+
+  const weakVolume = today.volume < avgVolume20 * 0.8;
+  const smallBodyCandle =
+    Math.abs(today.close - today.open) < (today.high - today.low) * 0.3;
+  const failingAtResistance =
+    today.high > yesterday.high && today.close < yesterday.high;
+
+  if (weakVolume && (smallBodyCandle || failingAtResistance)) {
+    return {
+      isVetoed: true,
+      reason: "Weak bounce in downtrend - low conviction",
+    };
+  }
+  return { isVetoed: false };
+}
+
 /**
  * -----------------------------------------------------------------
- * UTILITY & HELPER FUNCTIONS
+ * UTILITY FUNCTIONS
  * -----------------------------------------------------------------
  */
 
 function isNearMajorResistance_Helper(stock, context, config) {
-  const { rsi14 } = stock;
-  const { historicalData, currentPrice } = context.enrichedStock;
-  if (!historicalData || historicalData.length < 100) return false;
+  const { rsi14, currentPrice } = stock;
+  const { today, avgVolume50, avgVolume20 } = context;
 
-  const lookbackData = historicalData.slice(0, -22);
-  if (lookbackData.length === 0) return false;
+  if (Number.isFinite(stock.fiftyTwoWeekHigh)) {
+    const percentFrom52High =
+      (stock.fiftyTwoWeekHigh - currentPrice) / stock.fiftyTwoWeekHigh;
+    if (percentFrom52High < config.veto.resistanceZoneBuffer) {
+      // Bypass requires BOTH exceptional volume and very strong RSI
+      const volBase =
+        Number.isFinite(avgVolume50) && avgVolume50 > 0
+          ? avgVolume50
+          : avgVolume20;
+      const hasExceptionalVolume =
+        volBase > 0 &&
+        today.volume > volBase * config.veto.resistanceBypassVolumeMultiplier;
+      const hasVeryStrongRSI =
+        Number.isFinite(rsi14) && rsi14 > config.veto.resistanceBypassRsi;
 
-  const highestHighInPast = Math.max(...lookbackData.map((d) => d.high));
-  const resistanceZoneStart =
-    highestHighInPast * (1 - config.veto.resistanceZoneBuffer);
-
-  if (currentPrice < resistanceZoneStart) return false;
-
-  const avgVolume50 =
-    historicalData.slice(-72, -22).reduce((sum, day) => sum + day.volume, 0) /
-    50;
-  const lastDayVolume = historicalData[historicalData.length - 1].volume;
-  const hasExceptionalVolume =
-    lastDayVolume > avgVolume50 * config.veto.resistanceBypassVolumeMultiplier;
-  const hasVeryStrongRSI = rsi14 > config.veto.resistanceBypassRsi;
-
-  if (hasExceptionalVolume && hasVeryStrongRSI) return false;
-  return true;
-}
-
-function calculateKeyLevels(enrichedStock) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const { historicalData } = enrichedStock;
-  const levels = { supports: [], resistances: [] };
-
-  if (historicalData.length >= 20) {
-    const recentData = historicalData.slice(-20);
-    for (let i = 2; i < recentData.length - 2; i++) {
-      const current = recentData[i];
-      const isSwingHigh =
-        current.high > recentData[i - 1].high &&
-        current.high > recentData[i - 2].high &&
-        current.high > recentData[i + 1].high &&
-        current.high > recentData[i + 2].high;
-      if (isSwingHigh) levels.resistances.push(current.high);
-      const isSwingLow =
-        current.low < recentData[i - 1].low &&
-        current.low < recentData[i - 2].low &&
-        current.low < recentData[i + 1].low &&
-        current.low < recentData[i + 2].low;
-      if (isSwingLow) levels.supports.push(current.low);
+      if (hasExceptionalVolume && hasVeryStrongRSI) return false;
+      return true;
     }
   }
-  if (enrichedStock.movingAverage50d)
-    levels.supports.push(n(enrichedStock.movingAverage50d));
-  if (enrichedStock.movingAverage200d)
-    levels.supports.push(n(enrichedStock.movingAverage200d));
-  if (enrichedStock.fiftyTwoWeekHigh)
-    levels.resistances.push(n(enrichedStock.fiftyTwoWeekHigh));
-  levels.supports = [...new Set(levels.supports)].sort((a, b) => b - a);
-  levels.resistances = [...new Set(levels.resistances)].sort((a, b) => a - b);
-  return levels;
-}
-
-// FIXED: This helper has been refactored to remove the 'opts' parameter.
-function getEntryTimingScore_Helper(stock, context) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const { today, yesterday } = context;
-
-  // Data is now sourced from context (primary) and the original stock object (secondary).
-  const prices = {
-    current: n(today.close),
-    open: n(today.open),
-    high: n(today.high),
-    low: n(today.low),
-    prev: n(yesterday.close),
-    hi52: n(stock.fiftyTwoWeekHigh),
-    lo52: n(stock.fiftyTwoWeekLow),
-    ma50: n(stock.movingAverage50d),
-    ma200: n(stock.movingAverage200d),
-    atr: n(stock.atr14),
-  };
-
-  const metrics = {
-    pctFromHi52: prices.hi52
-      ? ((prices.hi52 - prices.current) / prices.hi52) * 100
-      : 0,
-    pctFromLo52: prices.lo52
-      ? ((prices.current - prices.lo52) / prices.lo52) * 100
-      : 0,
-    pctFromMA50: prices.ma50
-      ? ((prices.current - prices.ma50) / prices.ma50) * 100
-      : 0,
-    gapPct: prices.prev ? ((prices.open - prices.prev) / prices.prev) * 100 : 0,
-  };
-
-  const patterns = {
-    strongClose:
-      prices.current > prices.open &&
-      prices.current > prices.prev &&
-      prices.current - Math.min(prices.open, prices.prev) >
-        (prices.high - prices.current) * 2,
-    weakClose:
-      prices.current < prices.open &&
-      prices.current < prices.prev &&
-      Math.max(prices.open, prices.prev) - prices.current >
-        (prices.current - prices.low) * 2,
-    bullishRev:
-      prices.current > prices.open &&
-      prices.open < prices.prev &&
-      prices.current > prices.prev,
-    bearishRev:
-      prices.current < prices.open &&
-      prices.open > prices.prev &&
-      prices.current < prices.prev,
-    doji:
-      Math.abs(prices.current - prices.open) < (prices.high - prices.low) * 0.1,
-    gapUp: metrics.gapPct >= 2,
-    gapDown: metrics.gapPct <= -2,
-    insideDay: prices.high <= prices.prev && prices.low >= prices.prev,
-    bullTrap:
-      prices.current <= prices.open &&
-      prices.high - prices.open >= Math.abs(prices.open * 0.01) &&
-      (prices.high - prices.current) / (prices.high - prices.low || 1e-6) >=
-        0.7,
-  };
-
-  const weights = {
-    close: 2.0,
-    hiLo: 1.2,
-    ma: 1.0,
-    gap: 1.0,
-    pattern: 1.0,
-    vol: 0.7,
-    penalty: 2.0,
-  };
-  let score = 0;
-
-  if (patterns.strongClose) score += weights.close;
-  else if (patterns.weakClose) score -= weights.close;
-  if (patterns.bullishRev) score += 0.7 * weights.pattern;
-  if (patterns.bearishRev) score -= 0.7 * weights.pattern;
-  if (prices.current >= prices.hi52) score += weights.hiLo;
-  else if (metrics.pctFromHi52 <= 1) score += 0.8 * weights.hiLo;
-  else if (prices.current <= prices.lo52) score -= weights.hiLo;
-  else if (metrics.pctFromLo52 <= 1) score -= 0.8 * weights.hiLo;
-  if (prices.ma50 && prices.ma200) {
-    const above50 = prices.current > prices.ma50;
-    const above200 = prices.current > prices.ma200;
-    if (above50 && above200) score += weights.ma;
-    else if (!above50 && !above200) score -= weights.ma;
-    else if (Math.abs(metrics.pctFromMA50) <= 1) score += 0.3 * weights.ma;
-  }
-  if (patterns.gapUp && prices.current > prices.open)
-    score += 0.7 * weights.gap;
-  if (patterns.gapDown && prices.current < prices.open)
-    score -= 0.7 * weights.gap;
-  if (patterns.insideDay && prices.current > prices.prev)
-    score += 0.5 * weights.pattern;
-  if (patterns.insideDay && prices.current < prices.prev)
-    score -= 0.5 * weights.pattern;
-  if (patterns.doji) {
-    if (prices.current > prices.ma50 && prices.current > prices.ma200)
-      score += 0.3 * weights.pattern;
-    else if (prices.current < prices.ma50 && prices.current < prices.ma200)
-      score -= 0.3 * weights.pattern;
-  }
-  const hiVol = prices.atr > 0 && prices.atr > prices.current * 0.04;
-  const loVol = prices.atr > 0 && prices.atr < prices.current * 0.015;
-  if (hiVol && patterns.strongClose) score += 0.3 * weights.vol;
-  if (hiVol && patterns.weakClose) score -= 0.3 * weights.vol;
-  if (loVol && patterns.insideDay) score += 0.3 * weights.vol;
-  if (patterns.bullTrap) score -= weights.penalty;
-  if (patterns.weakClose && patterns.gapUp) score -= 0.7 * weights.penalty;
-
-  const cutoffs = {
-    t1: 4,
-    t2: 2,
-    t3: 0.5,
-    t4: -0.5,
-    t5: -2,
-    t6: -4,
-  };
-
-  if (score >= cutoffs.t1) return 1; // Strong Buy
-  if (score >= cutoffs.t2) return 2; // Buy
-  if (score >= cutoffs.t3) return 3; // Watch
-  if (score >= cutoffs.t4) return 4; // Neutral
-  if (score >= cutoffs.t5) return 5; // Caution
-  if (score >= cutoffs.t6) return 6; // Avoid
-  return 7; // Strong Avoid
+  return false;
 }

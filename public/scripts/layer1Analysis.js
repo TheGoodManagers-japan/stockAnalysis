@@ -1,7 +1,6 @@
 /**
  * Analyzes short-term (15-day) price action, patterns, and momentum.
- * This version has been refactored to remove the optional 'opts' parameter,
- * relying on internal default configurations for weights and cutoffs.
+ * Refactored to remove the optional 'opts' parameter, using internal defaults.
  *
  * @param {object} stock - The stock object.
  * @param {array} historicalData - The last 15+ days of historical data.
@@ -9,22 +8,23 @@
  */
 export function getLayer1PatternScore(stock, historicalData) {
   if (!historicalData || historicalData.length < 15) {
-    return 7; // Not enough data, return Strong Avoid
+    return 7; // Not enough data, return Strong Avoid (keep semantics)
   }
 
-  // Ensure data is sorted chronologically and get the last 15 days.
-  const recentData = historicalData
-    .slice(-15)
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  // Ensure data is sorted chronologically, then take the last 15 days.
+  const sorted = [...historicalData].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+  const recentData = sorted.slice(-15);
 
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const currentPrice = n(stock.currentPrice);
 
   const historical = {
-    closes: recentData.map((day) => day.close),
-    volumes: recentData.map((day) => day.volume),
-    highs: recentData.map((day) => day.high),
-    lows: recentData.map((day) => day.low),
+    closes: recentData.map((day) => n(day.close)),
+    volumes: recentData.map((day) => n(day.volume)),
+    highs: recentData.map((day) => n(day.high)),
+    lows: recentData.map((day) => n(day.low)),
   };
 
   // --- Pattern & Momentum Detection ---
@@ -44,7 +44,7 @@ export function getLayer1PatternScore(stock, historicalData) {
   );
 
   // --- Scoring ---
-  const weights = getPatternWeights(); // No longer needs opts
+  const weights = getPatternWeights();
   let histScore = 0;
   histScore += scoreMomentum(momentum, weights);
   histScore += scoreBullishPatterns(bullishPatterns, weights);
@@ -56,7 +56,6 @@ export function getLayer1PatternScore(stock, historicalData) {
   );
 
   // --- Tier Mapping ---
-  // Cutoffs are now hardcoded within the function.
   const cutoffs = {
     t1: 2.5,
     t2: 1.5,
@@ -82,24 +81,33 @@ export function getLayer1PatternScore(stock, historicalData) {
  */
 
 function calculateMomentumMetrics(historical, recentData) {
-  let recentMomentum = 0,
-    volumeTrend = 0;
+  let recentMomentum = 0;
+  let volumeTrend = 0;
 
   if (recentData.length >= 15) {
-    const last5Avg =
-      historical.closes.slice(-5).reduce((sum, price) => sum + price, 0) / 5;
-    const prev10Avg =
-      historical.closes.slice(-15, -5).reduce((sum, price) => sum + price, 0) /
-      10;
-    recentMomentum = ((last5Avg - prev10Avg) / prev10Avg) * 100;
+    const last5 = historical.closes.slice(-5);
+    const prev10 = historical.closes.slice(-15, -5);
+    const last5Avg = last5.length
+      ? last5.reduce((s, p) => s + p, 0) / last5.length
+      : 0;
+    const prev10Avg = prev10.length
+      ? prev10.reduce((s, p) => s + p, 0) / prev10.length
+      : 0;
+    recentMomentum = prev10Avg ? ((last5Avg - prev10Avg) / prev10Avg) * 100 : 0;
   }
 
   if (recentData.length >= 10) {
-    const last5VolAvg =
-      historical.volumes.slice(-5).reduce((sum, vol) => sum + vol, 0) / 5;
-    const prev5VolAvg =
-      historical.volumes.slice(-10, -5).reduce((sum, vol) => sum + vol, 0) / 5;
-    volumeTrend = ((last5VolAvg - prev5VolAvg) / prev5VolAvg) * 100;
+    const last5v = historical.volumes.slice(-5);
+    const prev5v = historical.volumes.slice(-10, -5);
+    const last5VolAvg = last5v.length
+      ? last5v.reduce((s, v) => s + v, 0) / last5v.length
+      : 0;
+    const prev5VolAvg = prev5v.length
+      ? prev5v.reduce((s, v) => s + v, 0) / prev5v.length
+      : 0;
+    volumeTrend = prev5VolAvg
+      ? ((last5VolAvg - prev5VolAvg) / prev5VolAvg) * 100
+      : 0;
   }
 
   return { recent: recentMomentum, volume: volumeTrend };
@@ -109,58 +117,67 @@ function detectBullishPatterns(recentData, historical, stock, currentPrice) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const patterns = {};
 
-  // Higher lows pattern
+  // Higher lows pattern (≥5 of last 6 pairs are higher)
   if (recentData.length >= 7) {
-    const last7Lows = recentData.slice(-7).map((day) => day.low);
+    const last7Lows = recentData.slice(-7).map((d) => n(d.low));
     const higherLowsCount = last7Lows
       .slice(1)
       .reduce((count, low, i) => (low > last7Lows[i] ? count + 1 : count), 0);
     patterns.higherLows = higherLowsCount >= 5;
   }
 
-  // Price compression
+  // Price compression (last 3 average range < 70% of last 7 average)
   if (recentData.length >= 7) {
-    const ranges = recentData.slice(-7).map((day) => day.high - day.low);
-    const rangeAvg = ranges.reduce((sum, range) => sum + range, 0) / 7;
+    const ranges = recentData
+      .slice(-7)
+      .map((d) => Math.max(0, n(d.high) - n(d.low)));
+    const rangeAvg = ranges.length
+      ? ranges.reduce((s, r) => s + r, 0) / ranges.length
+      : 0;
     const last3RangeAvg =
-      ranges.slice(-3).reduce((sum, range) => sum + range, 0) / 3;
-    patterns.priceCompression = last3RangeAvg < rangeAvg * 0.7;
+      ranges.slice(-3).reduce((s, r) => s + r, 0) /
+      Math.max(1, Math.min(3, ranges.length));
+    patterns.priceCompression =
+      last3RangeAvg > 0 && last3RangeAvg < rangeAvg * 0.7;
   }
 
-  // Engulfing pattern
+  // Bullish engulfing (allow equality)
   if (recentData.length >= 2) {
-    const yesterday = recentData[recentData.length - 2];
-    const today = recentData[recentData.length - 1];
+    const y = recentData[recentData.length - 2];
+    const t = recentData[recentData.length - 1];
     patterns.bullishEngulfing =
-      yesterday.close < yesterday.open &&
-      today.close > today.open &&
-      today.open < yesterday.close &&
-      today.close > yesterday.open;
+      n(y.close) <= n(y.open) &&
+      n(t.close) >= n(t.open) &&
+      n(t.open) <= n(y.close) &&
+      n(t.close) >= n(y.open) &&
+      n(t.close) > n(t.open);
   }
 
-  // Support test
+  // Support test (touch lowest of last 10 + rebound)
   if (recentData.length >= 10) {
-    const lowestDay = recentData
-      .slice(-10)
-      .reduce(
-        (lowest, day) => (day.low < lowest.low ? day : lowest),
-        recentData[recentData.length - 10]
-      );
+    const window10 = recentData.slice(-10);
+    const lowestDay = window10.reduce((lowest, d) =>
+      n(d.low) < n(lowest.low) ? d : lowest
+    );
     const today = recentData[recentData.length - 1];
     patterns.supportTest =
-      today.low <= lowestDay.low * 1.01 &&
-      today.close > today.open &&
-      today.close > lowestDay.low * 1.02;
+      n(today.low) <= n(lowestDay.low) * 1.01 &&
+      n(today.close) > n(today.open) &&
+      n(today.close) > n(lowestDay.low) * 1.02;
   }
 
-  // MA pullback
-  if (n(stock.movingAverage20d) > 0) {
-    const ma20 = n(stock.movingAverage20d);
-    const ma50 = n(stock.movingAverage50d);
-    const low = Math.min(...recentData.slice(-3).map((day) => day.low));
+  // MA pullback (to 20d or 50d then back above)
+  const ma20 = n(stock.movingAverage20d);
+  const ma50 = n(stock.movingAverage50d);
+  if (ma20 > 0 || ma50 > 0) {
+    const recentLows = recentData.slice(-3).map((d) => n(d.low));
+    const low = Math.min(...recentLows);
     patterns.pullbackToMA =
-      (low <= ma20 * 1.01 && currentPrice > ma20) ||
-      (low <= ma50 * 1.01 && currentPrice > ma50);
+      (ma20 > 0 && low <= ma20 * 1.01 && currentPrice > ma20) ||
+      (ma50 > 0 && low <= ma50 * 1.01 && currentPrice > ma50) ||
+      false;
+  } else {
+    patterns.pullbackToMA = false;
   }
 
   // Breakout from consolidation
@@ -176,11 +193,12 @@ function detectBullishPatterns(recentData, historical, stock, currentPrice) {
 }
 
 function detectBearishPatterns(recentData, historical) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
   const patterns = {};
 
-  // Lower highs pattern
+  // Lower highs pattern (≥5 of last 6 pairs are lower)
   if (recentData.length >= 7) {
-    const last7Highs = recentData.slice(-7).map((day) => day.high);
+    const last7Highs = recentData.slice(-7).map((d) => n(d.high));
     const lowerHighsCount = last7Highs
       .slice(1)
       .reduce(
@@ -190,24 +208,25 @@ function detectBearishPatterns(recentData, historical) {
     patterns.lowerHighs = lowerHighsCount >= 5;
   }
 
-  // Bearish engulfing
+  // Bearish engulfing (allow equality)
   if (recentData.length >= 2) {
-    const yesterday = recentData[recentData.length - 2];
-    const today = recentData[recentData.length - 1];
+    const y = recentData[recentData.length - 2];
+    const t = recentData[recentData.length - 1];
     patterns.bearishEngulfing =
-      yesterday.close > yesterday.open &&
-      today.close < today.open &&
-      today.open > yesterday.close &&
-      today.close < yesterday.open;
+      n(y.close) >= n(y.open) &&
+      n(t.close) <= n(t.open) &&
+      n(t.open) >= n(y.close) &&
+      n(t.close) <= n(y.open) &&
+      n(t.close) < n(t.open);
   }
 
   // Doji after trend
   if (recentData.length >= 5) {
     const lastDay = recentData[recentData.length - 1];
     const dojiRange =
-      Math.abs(lastDay.close - lastDay.open) <
-      (lastDay.high - lastDay.low) * 0.1;
-    const last4Closes = historical.closes.slice(-5, -1);
+      Math.abs(n(lastDay.close) - n(lastDay.open)) <
+      Math.max(0.000001, (n(lastDay.high) - n(lastDay.low)) * 0.1);
+    const last4Closes = recentData.slice(-5, -1).map((d) => n(d.close));
     const hadTrend =
       (last4Closes[3] > last4Closes[0] && last4Closes[3] > last4Closes[1]) ||
       (last4Closes[3] < last4Closes[0] && last4Closes[3] < last4Closes[1]);
@@ -226,69 +245,81 @@ function detectExhaustionPatterns(
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const patterns = {};
 
-  // Trend maturity
-  if (recentData.length >= 14) {
-    const upDaysCount = recentData.slice(-14).reduce((count, day, i) => {
-      // Compare with the previous day in the full recentData array
-      const prevDay = recentData[i]; // i is index in slice, so need to adjust
-      return day.close > prevDay.close ? count + 1 : count;
-    }, 0);
+  // Trend maturity: count up days in the last 14 comparisons
+  if (recentData.length >= 15) {
+    const window = recentData.slice(-15);
+    let upDaysCount = 0;
+    for (let i = 1; i < window.length; i++) {
+      if (n(window[i].close) > n(window[i - 1].close)) upDaysCount++;
+    }
     patterns.trendTooMature = upDaysCount >= 10;
+  } else {
+    patterns.trendTooMature = false;
   }
 
-  // Climax pattern
+  // Climax pattern (high volume, small real body, close near high)
   if (recentData.length >= 10) {
-    const avgVolume =
-      historical.volumes.slice(-10, -5).reduce((sum, vol) => sum + vol, 0) / 5;
-    patterns.climaxPattern = recentData.slice(-5).some((day) => {
-      const highVolume = day.volume > avgVolume * 1.8;
-      const smallGain =
-        day.close > day.open &&
-        day.close - day.open < (day.high - day.low) * 0.3;
-      const nearHigh = day.close > day.high - (day.high - day.low) * 0.2;
+    const prev5VolAvg =
+      historical.volumes.slice(-10, -5).reduce((s, v) => s + v, 0) / 5 || 0;
+    patterns.climaxPattern = recentData.slice(-5).some((d) => {
+      const highVolume = n(d.volume) > prev5VolAvg * 1.8;
+      const range = Math.max(0, n(d.high) - n(d.low));
+      const realBody = Math.abs(n(d.close) - n(d.open));
+      const smallGain = n(d.close) > n(d.open) && realBody < range * 0.3;
+      const nearHigh = n(d.close) > n(d.high) - range * 0.2;
       return highVolume && smallGain && nearHigh;
     });
+  } else {
+    patterns.climaxPattern = false;
   }
 
-  // Bearish divergence
-  if (stock.rsi14 && recentData.length >= 10) {
-    const currentRSI = n(stock.rsi14);
-    const recentHigh = Math.max(...recentData.slice(-5).map((day) => day.high));
+  // Bearish divergence (price higher high, RSI not confirming + weak momentum)
+  const currentRSI = n(stock.rsi14);
+  if (currentRSI && recentData.length >= 10) {
+    const recentHigh = Math.max(...recentData.slice(-5).map((d) => n(d.high)));
     const priorHigh = Math.max(
-      ...recentData.slice(-10, -5).map((day) => day.high)
+      ...recentData.slice(-10, -5).map((d) => n(d.high))
     );
     patterns.bearishDivergence =
       recentHigh > priorHigh && currentRSI < 65 && recentMomentum < 3;
+  } else {
+    patterns.bearishDivergence = false;
   }
 
-  // Exhaustion gap
-  patterns.exhaustionGap = recentData.slice(-3).some((day, i, arr) => {
+  // Exhaustion gap (gap up then close weak)
+  patterns.exhaustionGap = recentData.slice(-3).some((d, i, arr) => {
     if (i === 0) return false;
-    const gapUp = day.open > arr[i - 1].close * 1.02;
-    const weakness = day.close < day.open;
+    const prev = arr[i - 1];
+    const gapUp = n(d.open) > n(prev.close) * 1.02;
+    const weakness = n(d.close) < n(d.open);
     return gapUp && weakness;
   });
 
-  // Volume climax
+  // Volume climax (3-day avg >> 15-day avg)
   if (recentData.length >= 15) {
     const avgVolume =
-      historical.volumes.reduce((sum, vol) => sum + vol, 0) /
-      historical.volumes.length;
+      historical.volumes.reduce((s, v) => s + v, 0) /
+        historical.volumes.length || 0;
     const last3Volume =
-      historical.volumes.slice(-3).reduce((sum, vol) => sum + vol, 0) / 3;
-    patterns.volumeClimax = last3Volume > avgVolume * 2.2;
+      historical.volumes.slice(-3).reduce((s, v) => s + v, 0) / 3 || 0;
+    patterns.volumeClimax = avgVolume > 0 && last3Volume > avgVolume * 2.2;
+  } else {
+    patterns.volumeClimax = false;
   }
 
   // Overbought momentum divergence
-  if (stock.rsi14) {
-    const currentRSI = n(stock.rsi14);
-    patterns.overboughtMomentumDiv = currentRSI > 70 && recentMomentum < 2.5;
-  }
+  patterns.overboughtMomentumDiv = currentRSI > 70 && recentMomentum < 2.5;
 
-  // At resistance
-  if (stock.fiftyTwoWeekHigh && stock.currentPrice) {
-    patterns.atResistance =
-      n(stock.currentPrice) >= n(stock.fiftyTwoWeekHigh) * 0.98;
+  // At resistance (near 52W high)
+  const fiftyTwoWeekHigh = n(stock.fiftyTwoWeekHigh);
+  if (
+    Number.isFinite(fiftyTwoWeekHigh) &&
+    fiftyTwoWeekHigh > 0 &&
+    Number.isFinite(currentPrice)
+  ) {
+    patterns.atResistance = currentPrice >= fiftyTwoWeekHigh * 0.98;
+  } else {
+    patterns.atResistance = false;
   }
 
   return patterns;
@@ -297,26 +328,34 @@ function detectExhaustionPatterns(
 function detectBreakoutPattern(recentData, priceCompression) {
   if (recentData.length < 15) return false;
 
-  const last10Ranges = recentData
-    .slice(-12, -2)
-    .map((day, i, arr) =>
-      i === 0
-        ? day.high - day.low
-        : Math.max(
-            day.high - day.low,
-            Math.abs(day.high - arr[i - 1].close),
-            Math.abs(day.low - arr[i - 1].close)
-          )
+  // Use the 10 trading days prior to today for ATR-like range
+  const prev10 = recentData.slice(-11, -1); // exclude latest day
+  if (prev10.length < 10) return false;
+
+  const last10Ranges = prev10.map((day, i) => {
+    if (i === 0) {
+      return Math.max(0, day.high - day.low);
+    }
+    const prevClose = prev10[i - 1].close;
+    return Math.max(
+      0,
+      day.high - day.low,
+      Math.abs(day.high - prevClose),
+      Math.abs(day.low - prevClose)
     );
-  const atrLast10 = last10Ranges.reduce((sum, range) => sum + range, 0) / 10;
+  });
+
+  const atrLast10 =
+    last10Ranges.reduce((s, r) => s + r, 0) / last10Ranges.length;
 
   const latestDay = recentData[recentData.length - 1];
-  const rangeExpansion = latestDay.high - latestDay.low > atrLast10 * 1.5;
-  const directionalStrength =
-    Math.abs(latestDay.close - latestDay.open) >
-    (latestDay.high - latestDay.low) * 0.6;
+  const dayRange = Math.max(0, latestDay.high - latestDay.low);
+  const realBody = Math.abs(latestDay.close - latestDay.open);
 
-  return priceCompression && rangeExpansion && directionalStrength;
+  const rangeExpansion = dayRange > atrLast10 * 1.5;
+  const directionalStrength = realBody > dayRange * 0.6;
+
+  return Boolean(priceCompression) && rangeExpansion && directionalStrength;
 }
 
 function detectCupAndHandle(recentData) {
@@ -326,16 +365,16 @@ function detectCupAndHandle(recentData) {
   const cupBottom = recentData.slice(5, 10);
   const cupRight = recentData.slice(10);
 
-  const maxLeftHigh = Math.max(...cupLeft.map((day) => day.high));
-  const minBottomLow = Math.min(...cupBottom.map((day) => day.low));
-  const maxRightHigh = Math.max(...cupRight.map((day) => day.high));
+  const maxLeftHigh = Math.max(...cupLeft.map((d) => d.high));
+  const minBottomLow = Math.min(...cupBottom.map((d) => d.low));
+  const maxRightHigh = Math.max(...cupRight.map((d) => d.high));
 
   const similarHighs =
     Math.abs(maxLeftHigh - maxRightHigh) < maxLeftHigh * 0.03;
   const properBottom =
     minBottomLow < Math.min(maxLeftHigh, maxRightHigh) * 0.95;
 
-  if (cupRight.length < 5) return false; // Ensure there are enough days for a handle
+  if (cupRight.length < 5) return false; // Ensure enough days for a handle
 
   const recentPullback =
     cupRight[cupRight.length - 2].close < cupRight[cupRight.length - 3].close &&
@@ -344,7 +383,7 @@ function detectCupAndHandle(recentData) {
   return similarHighs && properBottom && recentPullback;
 }
 
-// This function now returns a static object of weights.
+// Static weights (removed unused gapFill)
 function getPatternWeights() {
   return {
     momentum: 1.5,
@@ -355,7 +394,6 @@ function getPatternWeights() {
     engulfing: 1.5,
     doji: 0.7,
     support: 1.3,
-    gapFill: 0.9,
     pullbackMA: 1.4,
     breakout: 1.6,
     cupHandle: 1.7,
@@ -387,8 +425,10 @@ function scoreMomentum(momentum, weights) {
 function scoreBullishPatterns(patterns, weights) {
   let score = 0;
   if (patterns.higherLows) score += weights.higherLows;
-  if (patterns.priceCompression)
-    score += (patterns.priceCompression ? 0.6 : 0.2) * weights.compression;
+
+  // Compression: award only if present (fix unreachable-else bug)
+  if (patterns.priceCompression) score += 0.6 * weights.compression;
+
   if (patterns.bullishEngulfing) score += weights.engulfing;
   if (patterns.supportTest) score += weights.support;
   if (patterns.pullbackToMA) score += weights.pullbackMA;
