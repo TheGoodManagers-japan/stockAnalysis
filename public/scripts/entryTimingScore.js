@@ -71,6 +71,8 @@ export function getComprehensiveEntryTiming(
     shortTermRegime
   );
 
+  console.log("here 1");
+
   // ---- Risk Management (Stop Loss & Price Target)
   const riskManagement = calculateSwingRiskManagement(
     stock,
@@ -80,7 +82,7 @@ export function getComprehensiveEntryTiming(
     features
   );
 
-  console.log("here");
+  console.log("here 2");
 
   // ---- Generate comprehensive insights
   const keyInsights = generateSwingInsights(
