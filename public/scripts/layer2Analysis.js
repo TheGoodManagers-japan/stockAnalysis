@@ -1,11 +1,8 @@
-/**
- * Performs advanced (90-day) analysis including market structure, regime,
- * order flow, and institutional patterns to generate an ML-inspired score.
- *
- * @param {object} stock - The stock object.
- * @param {array} historicalData - OHLCV array.
- * @returns {{ mlScore:number, features:Object, longTermRegime:Object, shortTermRegime:Object }}
- */
+// layer2Analysis.js
+// Standalone Layer 2 analysis (no benchmark/sector required)
+// Exports: getLayer2MLAnalysis(stock, historicalData)
+// Output fields align with your orchestrator expectations.
+
 export function getLayer2MLAnalysis(stock, historicalData) {
   if (!historicalData || historicalData.length < 90) {
     return {
@@ -22,27 +19,31 @@ export function getLayer2MLAnalysis(stock, historicalData) {
     };
   }
 
-  // Sort entire history first, then take last 90 in chronological order
+  // Chronological
   const sortedAll = [...historicalData].sort(
     (a, b) => new Date(a.date) - new Date(b.date)
   );
-  const recentData = sortedAll.slice(-90);
 
-  // 1) GATHER ALL DATA & ANALYSIS
-  const microstructure = analyzeMicrostructure(recentData);
-  const volumeProfile = analyzeVolumeProfile(recentData);
-  const priceActionQuality = analyzePriceActionQuality(recentData);
-  const hiddenDivergences = detectHiddenDivergences(stock, recentData);
-  const volatilityRegime = analyzeVolatilityRegime(stock, recentData);
-  const advancedPatterns = detectAdvancedPatterns(recentData, volatilityRegime);
-  const orderFlow = inferOrderFlow(recentData);
-  const extensionAnalysis = analyzeExtension(stock, recentData);
-  const trendQuality = analyzeTrendQuality(stock, recentData);
-  const momentumAnalysis = analyzeMomentumPersistence(stock, recentData);
-  const longTermRegime = detectMarketRegime(sortedAll);
-  const shortTermRegime = detectMarketRegime(recentData);
+  // Windows
+  const ctxWin = sortedAll.slice(-Math.min(180, sortedAll.length)); // context
+  const stWin = sortedAll.slice(-Math.min(30, sortedAll.length)); // timing
+  const midWin = sortedAll.slice(-Math.min(90, sortedAll.length)); // short-term regime base
 
-  // 2) FEATURE VECTOR & BASE SCORE
+  // ---- 1) Analyses (ordered to preserve fX_* keys your orchestrator uses)
+  const microstructure = analyzeMicrostructure(stWin); // f0
+  const volumeProfile = analyzeVolumeProfile(sortedAll.slice(-30)); // f1
+  const priceActionQuality = analyzePriceActionQuality(ctxWin); // f2
+  const hiddenDivergences = detectHiddenDivergences(stock, stWin); // f3
+  const longTermRegime = detectMarketRegime(sortedAll); // f4
+  const volatilityRegime = analyzeVolatilityRegime(stock, ctxWin); // f6 (order kept later)
+  const advancedPatterns = detectAdvancedPatterns(stWin, volatilityRegime); // f5
+  const orderFlow = inferOrderFlow(stWin); // f7
+  const extensionAnalysis = analyzeExtension(stock, ctxWin); // f8
+  const trendQuality = analyzeTrendQuality(stock, ctxWin); // f9
+  const momentumAnalysis = analyzeMomentumPersistence(stock, stWin); // f10
+  const institutionalAct = detectInstitutionalActivity(sortedAll); // f11
+
+  // ---- 2) Features vector (f0..f11 key space preserved)
   const features = extractFeatureVector(
     microstructure, // f0
     volumeProfile, // f1
@@ -55,12 +56,13 @@ export function getLayer2MLAnalysis(stock, historicalData) {
     extensionAnalysis, // f8
     trendQuality, // f9
     momentumAnalysis, // f10
-    detectInstitutionalActivity(recentData) // f11
+    institutionalAct // f11
   );
 
+  // ---- 3) Base ML-like score from features
   let mlScore = calculateMLScore(features);
 
-  // 3) REGIME-BASED & CONTEXTUAL ADJUSTMENTS
+  // ---- 4) Regime/contextual adjustments (kept simple & bounded)
   let regimeAdjustment = 0;
   const has = (arr, s) => Array.isArray(arr) && arr.includes(s);
 
@@ -70,6 +72,8 @@ export function getLayer2MLAnalysis(stock, historicalData) {
   const isLongUp =
     longTermRegime.type === "TRENDING" &&
     has(longTermRegime.characteristics, "UPTREND");
+  const shortTermRegime = detectMarketRegime(midWin);
+
   const isShortDown =
     shortTermRegime.type === "TRENDING" &&
     has(shortTermRegime.characteristics, "DOWNTREND");
@@ -96,17 +100,23 @@ export function getLayer2MLAnalysis(stock, historicalData) {
   }
   mlScore += regimeAdjustment;
 
-  // Contextual adjustments
-  if (microstructure.bullishAuction && volumeProfile.pocRising) mlScore += 2.5;
+  // Contextual combos
+  if (microstructure.bullishAuction && volumeProfile.pocRising) mlScore += 2.0;
   if (microstructure.sellerExhaustion && orderFlow.buyingPressure)
     mlScore += 3.0;
   if (hiddenDivergences.bullishHidden && trendQuality.isHealthyTrend)
     mlScore += 2.0;
   if (advancedPatterns.wyckoffSpring) mlScore += 3.5;
+  if (advancedPatterns.wyckoffUpthrust) mlScore -= 3.0;
   if (advancedPatterns.threePushes && extensionAnalysis.isExtended)
     mlScore -= 3.0;
   if (volatilityRegime.compression && advancedPatterns.coiledSpring)
     mlScore += 2.5;
+  if (advancedPatterns.failedBreakout) mlScore -= 2.0;
+  if (advancedPatterns.successfulRetest) mlScore += 1.5;
+
+  // Soft clamp
+  mlScore = clamp(mlScore, -3, 3);
 
   return { mlScore, features, longTermRegime, shortTermRegime };
 }
@@ -121,7 +131,6 @@ function analyzeMicrostructure(data) {
     buyerExhaustion: false,
     deltaProfile: "NEUTRAL",
   };
-
   if (!data || data.length < 20) return analysis;
 
   const recent = data.slice(-10);
@@ -166,7 +175,7 @@ function analyzeMicrostructure(data) {
   return analysis;
 }
 
-/* ──────────── Volume Profile ──────────── */
+/* ──────────── Volume Profile (POC trend over time) ──────────── */
 function analyzeVolumeProfile(data) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const profile = {
@@ -179,45 +188,38 @@ function analyzeVolumeProfile(data) {
   if (!data || data.length < 30) return profile;
 
   const last30 = data.slice(-30);
-  const avgPrice =
-    last30.reduce((s, d) => s + (n(d.high) + n(d.low)) / 2, 0) / 30;
-  const priceStepPercent = 0.005;
-  const priceStep = Math.max(1e-8, Math.abs(avgPrice) * priceStepPercent);
+  const split = 15;
 
-  const priceVolumes = {};
-  last30.forEach((bar) => {
-    const mid = (n(bar.high) + n(bar.low)) / 2;
-    const bucket = Math.round(mid / priceStep) * priceStep;
-    priceVolumes[bucket] = (priceVolumes[bucket] || 0) + n(bar.volume);
-  });
+  const bucketedPOC = (arr) => {
+    const avgPrice =
+      arr.reduce((s, d) => s + (n(d.high) + n(d.low)) / 2, 0) / arr.length;
+    const step = Math.max(1e-8, Math.abs(avgPrice) * 0.005);
+    const buckets = {};
+    arr.forEach((d) => {
+      const mid = (n(d.high) + n(d.low)) / 2;
+      const b = Math.round(mid / step) * step;
+      buckets[b] = (buckets[b] || 0) + n(d.volume);
+    });
+    let best = { p: null, v: -1 },
+      worst = { p: null, v: Number.POSITIVE_INFINITY };
+    Object.entries(buckets).forEach(([p, v]) => {
+      const price = +p;
+      if (v > best.v) best = { p: price, v };
+      if (v > 0 && v < worst.v) worst = { p: price, v };
+    });
+    return { poc: best.p, lvn: worst.p };
+  };
 
-  let maxVolume = -1,
-    minVolume = Number.POSITIVE_INFINITY;
-  let poc = null,
-    lvn = null;
+  const early = bucketedPOC(last30.slice(0, split));
+  const late = bucketedPOC(last30.slice(split));
 
-  Object.entries(priceVolumes).forEach(([price, vol]) => {
-    const p = parseFloat(price);
-    if (vol > maxVolume) {
-      maxVolume = vol;
-      poc = p;
-    }
-    if (vol > 0 && vol < minVolume) {
-      minVolume = vol;
-      lvn = p;
-    }
-  });
-
-  const recentPrices = last30.slice(-10).map((d) => n(d.close));
-  const avgRecentPrice =
-    recentPrices.reduce((a, b) => a + b, 0) / Math.max(1, recentPrices.length);
-
-  if (poc != null) {
-    profile.pocRising = poc < avgRecentPrice;
-    profile.pocFalling = poc > avgRecentPrice;
+  if (Number.isFinite(early.poc) && Number.isFinite(late.poc)) {
+    profile.pocRising = late.poc > early.poc * 1.002; // +0.2%
+    profile.pocFalling = late.poc < early.poc * 0.998; // -0.2%
   }
-  profile.highVolumeNode = poc;
-  profile.lowVolumeNode = lvn;
+
+  profile.highVolumeNode = late.poc ?? early.poc ?? null;
+  profile.lowVolumeNode = late.lvn ?? early.lvn ?? null;
 
   const vol10 = last30.slice(-10).reduce((s, d) => s + n(d.volume), 0) / 10;
   const vol30 = last30.reduce((s, d) => s + n(d.volume), 0) / 30;
@@ -255,7 +257,6 @@ function analyzePriceActionQuality(data) {
   }
 
   quality.trendEfficiency = totalMove > 0 ? directionalMove / totalMove : 0;
-
   quality.clean = quality.trendEfficiency > 0.7;
   quality.choppy = quality.trendEfficiency < 0.3;
   quality.impulsive =
@@ -276,7 +277,7 @@ function analyzePriceActionQuality(data) {
   return quality;
 }
 
-/* ──────────── Hidden Divergences ──────────── */
+/* ──────────── Hidden Divergences (via RSI series) ──────────── */
 function detectHiddenDivergences(stock, data) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const divergences = {
@@ -284,65 +285,62 @@ function detectHiddenDivergences(stock, data) {
     bearishHidden: false,
     strength: 0,
   };
-  if (!data || data.length < 30 || !Number.isFinite(stock?.rsi14))
-    return divergences;
+  if (!data || data.length < 30) return divergences;
 
-  const prices = data.map((d) => n(d.close));
-  const swingLows = [],
-    swingHighs = [];
-
-  for (let i = 5; i < data.length - 5; i++) {
-    if (
-      prices[i] < prices[i - 2] &&
-      prices[i] < prices[i + 2] &&
-      prices[i] < prices[i - 4] &&
-      prices[i] < prices[i + 4]
-    ) {
-      swingLows.push({ index: i, price: prices[i] });
-    }
-    if (
-      prices[i] > prices[i - 2] &&
-      prices[i] > prices[i + 2] &&
-      prices[i] > prices[i - 4] &&
-      prices[i] > prices[i + 4]
-    ) {
-      swingHighs.push({ index: i, price: prices[i] });
-    }
+  const closes = data.map((d) => n(d.close));
+  const rsi = stock?._rsiSeries14 || _calculateRSI(closes, 14);
+  if (!rsi || rsi.length < closes.length - 1) {
+    const r = _calculateRSI(closes, 14);
+    if (!r || r.length === 0) return divergences;
   }
 
+  const swingLows = [],
+    swingHighs = [];
+  for (let i = 5; i < data.length - 5; i++) {
+    if (
+      closes[i] < closes[i - 2] &&
+      closes[i] < closes[i + 2] &&
+      closes[i] < closes[i - 4] &&
+      closes[i] < closes[i + 4]
+    )
+      swingLows.push(i);
+
+    if (
+      closes[i] > closes[i - 2] &&
+      closes[i] > closes[i + 2] &&
+      closes[i] > closes[i - 4] &&
+      closes[i] > closes[i + 4]
+    )
+      swingHighs.push(i);
+  }
+
+  // Hidden bullish: price HL while RSI makes LL
   if (swingLows.length >= 2) {
     const a = swingLows[swingLows.length - 2];
     const b = swingLows[swingLows.length - 1];
-    if (b.price > a.price) {
-      const mA = calculateMomentumAtPoint(data, a.index);
-      const mB = calculateMomentumAtPoint(data, b.index);
-      if (mB < mA) {
-        divergences.bullishHidden = true;
-        divergences.strength = Math.abs(mB - mA);
-      }
+    if (closes[b] > closes[a] && (rsi[b] ?? 50) < (rsi[a] ?? 50)) {
+      divergences.bullishHidden = true;
+      divergences.strength = Math.abs((rsi[a] ?? 50) - (rsi[b] ?? 50));
     }
   }
 
+  // Hidden bearish: price LH while RSI makes HH
   if (swingHighs.length >= 2) {
     const a = swingHighs[swingHighs.length - 2];
     const b = swingHighs[swingHighs.length - 1];
-    if (b.price < a.price) {
-      const mA = calculateMomentumAtPoint(data, a.index);
-      const mB = calculateMomentumAtPoint(data, b.index);
-      if (mB > mA) {
-        divergences.bearishHidden = true;
-        divergences.strength = Math.max(
-          divergences.strength,
-          Math.abs(mB - mA)
-        );
-      }
+    if (closes[b] < closes[a] && (rsi[b] ?? 50) > (rsi[a] ?? 50)) {
+      divergences.bearishHidden = true;
+      divergences.strength = Math.max(
+        divergences.strength,
+        Math.abs((rsi[a] ?? 50) - (rsi[b] ?? 50))
+      );
     }
   }
 
   return divergences;
 }
 
-/* ──────────── Market Regime ──────────── */
+/* ──────────── Market Regime (log-price regression) ──────────── */
 function detectMarketRegime(historicalData) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const regime = {
@@ -357,10 +355,12 @@ function detectMarketRegime(historicalData) {
   }
 
   const data = historicalData.slice(-252);
-  const prices = data.map((d) => n(d.close));
+  const prices = data.map((d) => n(d.close)).map((p) => Math.max(1e-8, p));
+  const logs = prices.map((p) => Math.log(p));
+
   const returns = [];
   for (let i = 1; i < prices.length; i++)
-    returns.push((prices[i] - prices[i - 1]) / Math.max(1e-8, prices[i - 1]));
+    returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
 
   const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
   const varSum = returns.reduce(
@@ -370,8 +370,8 @@ function detectMarketRegime(historicalData) {
   const dailyVolatility = Math.sqrt(varSum / Math.max(1, returns.length - 1));
   const annualVolatility = dailyVolatility * Math.sqrt(252);
 
-  const xValues = Array.from({ length: prices.length }, (_, i) => i);
-  const { slope, r2 } = linearRegression(xValues, prices);
+  const x = Array.from({ length: logs.length }, (_, i) => i);
+  const { slope, r2 } = linearRegression(x, logs);
 
   if (r2 > 0.4 && slope > 0) {
     regime.type = "TRENDING";
@@ -407,6 +407,7 @@ function detectAdvancedPatterns(data, volatilityRegime) {
     coiledSpring: false,
     failedBreakout: false,
     successfulRetest: false,
+    failedBreakdown: false, // internal helper flag (not used by orchestrator)
   };
   if (!data || data.length < 30) return patterns;
 
@@ -415,12 +416,16 @@ function detectAdvancedPatterns(data, volatilityRegime) {
   const closes = data.map((d) => n(d.close));
   const volumes = data.map((d) => n(d.volume));
 
+  // Support/Resistance from prior 15 bars (lookback within last 20)
   const recentLows = lows.slice(-20);
   const supportLevel = Math.min(...recentLows.slice(0, 15));
-  const last5 = data.slice(-5);
+  const recentHighs = highs.slice(-20);
+  const resistanceLevel = Math.max(...recentHighs.slice(0, 15));
 
+  const last5 = data.slice(-5);
   const avgVol15 = volumes.slice(-20, -5).reduce((a, b) => a + b, 0) / 15 || 0;
 
+  // Wyckoff Spring
   const springCandidate = last5.find(
     (d) =>
       n(d.low) < supportLevel * 0.99 &&
@@ -431,10 +436,75 @@ function detectAdvancedPatterns(data, volatilityRegime) {
     patterns.wyckoffSpring = true;
   }
 
+  // Failed Breakdown (helper / for microstructure pairing)
+  const fbd = last5.find(
+    (d) =>
+      n(d.low) < supportLevel * 0.995 &&
+      n(d.close) < supportLevel &&
+      n(d.volume) > avgVol15 * 1.3
+  );
+  if (fbd) patterns.failedBreakdown = true;
+
+  // Wyckoff Upthrust
+  for (let i = Math.max(0, data.length - 5); i < data.length; i++) {
+    const d = data[i];
+    const high = n(d.high),
+      close = n(d.close),
+      vol = n(d.volume);
+    if (
+      high > resistanceLevel * 1.005 &&
+      close < resistanceLevel &&
+      vol > avgVol15 * 1.3
+    ) {
+      patterns.wyckoffUpthrust = true;
+      break;
+    }
+  }
+
+  // Breakout detection and quick failure or successful retest
+  let confirmedBreakoutIdx = null;
+  for (let i = data.length - 8; i < data.length; i++) {
+    if (i < 0) continue;
+    if (n(data[i]?.close) > resistanceLevel * 1.005) {
+      confirmedBreakoutIdx = i;
+      break;
+    }
+  }
+  if (confirmedBreakoutIdx != null) {
+    const failWindowEnd = Math.min(data.length - 1, confirmedBreakoutIdx + 3);
+    for (let j = confirmedBreakoutIdx + 1; j <= failWindowEnd; j++) {
+      if (n(data[j].close) < resistanceLevel) {
+        patterns.failedBreakout = true;
+        break;
+      }
+    }
+    if (!patterns.failedBreakout) {
+      for (
+        let j = confirmedBreakoutIdx + 1;
+        j <= Math.min(data.length - 1, confirmedBreakoutIdx + 5);
+        j++
+      ) {
+        const low = n(data[j].low),
+          close = n(data[j].close),
+          open = n(data[j].open);
+        const near =
+          Math.abs(low - resistanceLevel) / Math.max(1e-8, resistanceLevel) <
+          0.01;
+        const reclaim = close > resistanceLevel && close > open;
+        if (near && reclaim) {
+          patterns.successfulRetest = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Three pushes (simple impulse segmentation)
   const pushes = findPushes(highs.slice(-30));
   if (pushes.length >= 3 && pushes[pushes.length - 1].declining)
     patterns.threePushes = true;
 
+  // Coiled spring via volatility regime
   patterns.coiledSpring =
     Boolean(volatilityRegime?.compression) &&
     (volatilityRegime?.cyclePhase === "COMPRESSION_ONGOING" ||
@@ -459,7 +529,7 @@ function analyzeVolatilityRegime(stock, data) {
   const atr =
     Number.isFinite(stock?.atr14) && stock.atr14 > 0
       ? stock.atr14
-      : calculateATR(data.slice(-(period + 1)), period); // need 15 bars for ATR(14)
+      : calculateATR(data.slice(-(period + 1)), period); // 15 bars needed for ATR(14)
 
   const historicalATRs = [];
   for (let i = period + 1; i <= data.length; i++) {
@@ -500,7 +570,7 @@ function analyzeVolatilityRegime(stock, data) {
   return analysis;
 }
 
-/* ──────────── Order Flow ──────────── */
+/* ──────────── Order Flow (absorption via median range) ──────────── */
 function inferOrderFlow(data) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const flow = {
@@ -509,14 +579,19 @@ function inferOrderFlow(data) {
     absorption: false,
     imbalance: 0,
   };
-  if (!data || data.length < 10) return flow;
+  if (!data || data.length < 20) return flow;
 
-  const recent = data.slice(-10);
-  const avgVol = recent.reduce((s, d) => s + n(d.volume), 0) / 10;
+  const recent = data.slice(-20);
+  const avgVol = recent.reduce((s, d) => s + n(d.volume), 0) / recent.length;
 
-  let buyVolume = 0,
-    sellVolume = 0,
-    absorption = 0;
+  const ranges = recent.map((d) => n(d.high) - n(d.low)).filter((x) => x > 0);
+  ranges.sort((a, b) => a - b);
+  const medRange = ranges[Math.floor(ranges.length / 2)] || 0;
+  const tightThresh = medRange * 0.6;
+
+  let buyV = 0,
+    sellV = 0,
+    absorb = 0;
 
   recent.forEach((bar) => {
     const high = n(bar.high),
@@ -525,18 +600,16 @@ function inferOrderFlow(data) {
       vol = n(bar.volume);
     const range = Math.max(0, high - low);
     const closePos = range > 0 ? (close - low) / range : 0.5;
-
-    buyVolume += vol * closePos;
-    sellVolume += vol * (1 - closePos);
-
-    if (vol > avgVol * 1.5 && range < close * 0.01) absorption++;
+    buyV += vol * closePos;
+    sellV += vol * (1 - closePos);
+    if (vol > avgVol * 1.5 && range < tightThresh) absorb++;
   });
 
-  const denom = buyVolume + sellVolume;
-  flow.imbalance = denom > 0 ? (buyVolume - sellVolume) / denom : 0;
+  const denom = buyV + sellV;
+  flow.imbalance = denom > 0 ? (buyV - sellV) / denom : 0;
   flow.buyingPressure = flow.imbalance > 0.2;
   flow.sellingPressure = flow.imbalance < -0.2;
-  flow.absorption = absorption >= 2;
+  flow.absorption = absorb >= 2;
 
   return flow;
 }
@@ -706,11 +779,9 @@ function extractFeatureVector(...analyses) {
       } else if (typeof value === "number") {
         features[`f${idx}_${key}`] = value;
       } else if (typeof value === "string") {
-        features[`f${idx}_${key}_${value}`] = 1; // one-hot string
+        features[`f${idx}_${key}_${value}`] = 1; // one-hot
       } else if (Array.isArray(value)) {
-        value.forEach((v) => {
-          features[`f${idx}_${key}_${v}`] = 1;
-        });
+        value.forEach((v) => (features[`f${idx}_${key}_${v}`] = 1));
       }
     });
   });
@@ -720,24 +791,25 @@ function extractFeatureVector(...analyses) {
 function calculateMLScore(features) {
   let score = 0;
 
-  // f2 = priceActionQuality, f9 = trendQuality, f4 = longTermRegime
+  // Quality hurdle
   let qualityHurdle = 0;
   if (features.f2_clean) qualityHurdle++;
   if (features.f9_isHealthyTrend) qualityHurdle++;
   if (features.f4_type_TRENDING) qualityHurdle++;
   if (qualityHurdle < 2) score -= 2.0;
 
-  // Learned combos
+  // Learned combos (kept from your prior mapping)
   if (features.f0_bullishAuction && features.f1_pocRising && features.f2_clean)
-    score += 3.5;
-  if (features.f3_bullishHidden && features.f9_isHealthyTrend) score += 2.8;
-  if (features.f3_bearishHidden && features.f8_isExtended) score -= 2.8;
+    score += 3.0;
+  if (features.f3_bullishHidden && features.f9_isHealthyTrend) score += 2.5;
+  if (features.f3_bearishHidden && features.f8_isExtended) score -= 2.5;
   if (features.f5_wyckoffSpring && features.f7_buyingPressure) score += 4.0;
-  if (features.f0_sellerExhaustion && features.f6_compression) score += 2.5;
+  if (features.f0_sellerExhaustion && features.f6_compression) score += 2.3;
 
   // Negatives
   if (features.f5_threePushes && features.f8_parabolicMove) score -= 4.0;
-  if (features.f0_bearishAuction && features.f1_pocFalling) score -= 3.0;
+  if (features.f5_wyckoffUpthrust && features.f1_pocFalling) score -= 3.0;
+  if (features.f5_failedBreakout) score -= 2.0;
 
   // Non-linear momentum x trend
   const momentumScore =
@@ -745,22 +817,15 @@ function calculateMLScore(features) {
     (1 + (features.f9_trendStrength || 0) / 10);
   score += momentumScore;
 
-  // Volatility adjustment — fix key name to match one-hot encoding
+  // Volatility expansion + impulsive action
   if (features.f6_cyclePhase_EXPANSION_STARTING && features.f2_impulsive) {
-    score *= 1.3;
+    score *= 1.25;
   }
 
   return score;
 }
 
 /* ──────────── Misc Helpers ──────────── */
-function calculateMomentumAtPoint(data, index) {
-  if (!data || index < 5 || index >= data.length) return 0;
-  const price = data[index].close;
-  const priceAgo = data[index - 5].close;
-  return priceAgo ? (price - priceAgo) / priceAgo : 0;
-}
-
 function linearRegression(x, y) {
   const n = x.length;
   const sumX = x.reduce((a, b) => a + b, 0);
@@ -811,6 +876,8 @@ function findPushes(prices) {
 
 /**
  * ATR over a window with (period+1) bars for TR calculation.
+ * @param {Array} historicalData
+ * @param {number} period
  */
 function calculateATR(historicalData, period = 14) {
   if (!historicalData || historicalData.length < period + 1) return 0;
@@ -824,4 +891,8 @@ function calculateATR(historicalData, period = 14) {
   }
   const last = trs.slice(-period);
   return last.reduce((s, v) => s + v, 0) / period;
+}
+
+function clamp(x, a, b) {
+  return Math.max(a, Math.min(b, x));
 }
