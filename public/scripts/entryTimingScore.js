@@ -166,90 +166,65 @@ function combineScoresForSwing(
   longTermRegime,
   shortTermRegime
 ) {
-  // Normalize Layer 1 score (1-7 scale to -3 to +3)
-  // 1 (best) → +3, 4 (neutral) → 0, 7 (worst) → -3
-  const normalizedLayer1 = (4 - layer1Score) * (3 / 3);
+  // MORE CONSERVATIVE normalization
+  // 1 (best) → +2, 4 (neutral) → 0, 7 (worst) → -4
+  const normalizedLayer1 = (4 - layer1Score) * 0.667; // Reduced from 1.0
 
-  // ML score already in appropriate range (typically -5 to +5)
-  // Clamp to prevent extremes
-  const clampedML = Math.max(-5, Math.min(5, mlScore));
+  // Clamp ML score more aggressively
+  const clampedML = Math.max(-4, Math.min(3, mlScore)); // Was -5 to +5
 
   // Weighted combination
   let combinedScore =
     normalizedLayer1 * weights.layer1 + clampedML * weights.layer2;
 
-  // ===== SWING-SPECIFIC ADJUSTMENTS =====
-
-  // Relative strength bonus/penalty
+  // REDUCED adjustments
   const rsRating = features.relativeStrength_rsRating || 50;
-  if (rsRating >= 80) {
-    combinedScore += 1.0; // Strong RS bonus
+  if (rsRating >= 85) {
+    // Raised from 80
+    combinedScore += 0.5; // Was 1.0
   } else if (rsRating <= 30) {
-    combinedScore -= 1.0; // Weak RS penalty
+    combinedScore -= 1.5; // Was -1.0
   }
 
-  // Stage adjustments
+  // Stage adjustments (more conservative)
   const stage = features.stageAnalysis_current;
-  if (stage === "ADVANCING" && features.priceStructure_pullback) {
-    combinedScore += 1.5; // Prime swing setup
-  } else if (stage === "DISTRIBUTION" || stage === "DECLINING") {
-    combinedScore -= 1.5; // Avoid declining stocks
-  }
-
-  // Institutional activity
-  if (features.institutional_accumulation) {
-    combinedScore += 0.8;
-  } else if (features.institutional_distribution) {
-    combinedScore -= 0.8;
-  }
-
-  // ===== CONFIDENCE CALCULATION =====
-
-  let confidence = layer2Confidence; // Start with Layer 2 confidence
-
-  // Adjust based on regime alignment
   if (
-    longTermRegime?.type === shortTermRegime?.type &&
-    longTermRegime?.type === "TRENDING"
+    stage === "ADVANCING" &&
+    features.priceStructure_pullback &&
+    features.priceStructure_higherHighsLows
   ) {
-    confidence += 0.1;
-  } else if (longTermRegime?.type !== shortTermRegime?.type) {
-    confidence -= 0.1;
+    // Added condition
+    combinedScore += 0.8; // Was 1.5
+  } else if (stage === "DISTRIBUTION" || stage === "DECLINING") {
+    combinedScore -= 2.0; // Was -1.5
   }
 
-  // Pattern quality affects confidence
-  if (layer1Score <= 2) confidence += 0.1; // Strong patterns
-  if (layer1Score >= 6) confidence -= 0.1; // Weak patterns
-
-  // Risk metrics affect confidence
-  const riskScore = features.riskMetrics_riskScore || 0.5;
-  if (riskScore > 0.7) confidence -= 0.15;
-  if (riskScore < 0.3) confidence += 0.05;
-
-  // Bound confidence
-  confidence = Math.max(0.1, Math.min(0.9, confidence));
-
-  // ===== MAP TO FINAL SCORE =====
-
+  // STRICTER final score mapping
   let finalScore;
   let recommendation;
 
-  if (combinedScore >= 3.0) {
+  if (combinedScore >= 4.0) {
+    // Was 3.0
     finalScore = 1;
     recommendation = "STRONG BUY";
-  } else if (combinedScore >= 2.0) {
+  } else if (combinedScore >= 2.5) {
+    // Was 2.0
     finalScore = 2;
     recommendation = "BUY";
   } else if (combinedScore >= 1.0) {
+    // Same
     finalScore = 3;
     recommendation = "WATCH - Positive";
   } else if (combinedScore >= -0.5) {
+    // Same
     finalScore = 4;
     recommendation = "NEUTRAL";
-  } else if (combinedScore >= -1.5) {
+  } else if (combinedScore >= -2.0) {
+    // Was -1.5
     finalScore = 5;
     recommendation = "WATCH - Negative";
-  } else if (combinedScore >= -2.5) {
+  } else if (combinedScore >= -3.5) {
+    // Was -2.5
     finalScore = 6;
     recommendation = "AVOID";
   } else {
@@ -257,10 +232,21 @@ function combineScoresForSwing(
     recommendation = "STRONG AVOID";
   }
 
-  // Confidence veto for extreme recommendations
-  if (confidence < 0.3 && finalScore <= 2) {
+  // MORE AGGRESSIVE confidence veto
+  if (confidence < 0.5 && finalScore <= 2) {
+    // Was 0.3
+    finalScore = Math.min(4, finalScore + 2); // Push to neutral
+    recommendation = "NEUTRAL - Low confidence";
+  }
+
+  // Add market condition veto
+  if (
+    (longTermRegime?.type === "VOLATILE" ||
+      shortTermRegime?.type === "VOLATILE") &&
+    finalScore <= 2
+  ) {
     finalScore = Math.min(3, finalScore + 1);
-    recommendation = "WATCH - Low confidence";
+    recommendation = "WATCH - High volatility";
   }
 
   return { finalScore, confidence, recommendation };

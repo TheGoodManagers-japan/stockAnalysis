@@ -728,138 +728,92 @@ function calculateSwingScore(features, context) {
   const { longTermRegime, shortTermRegime, stageAnalysis, relativeStrength } =
     context;
 
-  // ===== BASE SCORING =====
-
-  // Stage-based scoring
+  // REDUCED positive scoring
   if (stageAnalysis.current === "ADVANCING") {
-    score += 2;
-    confidence += 0.1;
+    score += 1; // Was 2
+    confidence += 0.05; // Was 0.1
   } else if (
     stageAnalysis.current === "ACCUMULATION" &&
-    stageAnalysis.readiness > 0.6
+    stageAnalysis.readiness > 0.7
   ) {
-    score += 1.5;
-    confidence += 0.05;
-  } else if (stageAnalysis.current === "DECLINING") {
-    score -= 2;
-    confidence -= 0.1;
+    // Raised from 0.6
+    score += 0.8; // Was 1.5
+    confidence += 0.03; // Was 0.05
   }
 
-  // Relative strength scoring
-  if (relativeStrength.isLeader) {
-    score += 3;
-    confidence += 0.15;
+  // INCREASED negative scoring
+  if (stageAnalysis.current === "DECLINING") {
+    score -= 3; // Was -2
+    confidence -= 0.15; // Was -0.1
+  }
+  if (stageAnalysis.current === "DISTRIBUTION") {
+    score -= 2; // New penalty
+  }
+
+  // Relative strength (reduced positive, increased negative)
+  if (relativeStrength.isLeader && relativeStrength.rsRating >= 85) {
+    // Raised threshold
+    score += 1.5; // Was 3
+    confidence += 0.1; // Was 0.15
   } else if (relativeStrength.rsRating > 70) {
-    score += 1.5;
-    confidence += 0.05;
+    score += 0.5; // Was 1.5
+  } else if (relativeStrength.rsRating < 50) {
+    // New mid-range penalty
+    score -= 1;
   } else if (relativeStrength.isLaggard) {
-    score -= 2;
-    confidence -= 0.1;
+    score -= 3; // Was -2
+    confidence -= 0.15; // Was -0.1
   }
 
-  // Institutional footprint
-  if (features.institutional_accumulation) {
-    score += 2.5;
-    confidence += 0.1;
+  // Institutional (more balanced)
+  if (
+    features.institutional_accumulation &&
+    features.institutional_netScore > 5
+  ) {
+    // Added threshold
+    score += 1.2; // Was 2.5
+    confidence += 0.05; // Was 0.1
   } else if (features.institutional_distribution) {
-    score -= 2.5;
+    score -= 2.5; // Same
     confidence -= 0.1;
-  }
-
-  // ===== PATTERN-BASED ADJUSTMENTS =====
-
-  // Volume dynamics
-  if (features.volumeDynamics_dryingUp && features.priceStructure_tightRange) {
-    score += 1.5; // Coiling for breakout
-  }
-
-  if (
-    features.volumeDynamics_climax &&
-    features.institutional_smartMoney_DISTRIBUTING
+  } else if (
+    !features.institutional_accumulation &&
+    !features.institutional_distribution
   ) {
-    score -= 2; // Distribution climax
+    score -= 0.5; // Penalty for no clear institutional interest
   }
 
-  // Price structure
-  if (features.priceStructure_breakout) {
-    score += 2;
-    if (features.volumeDynamics_expanding) {
-      score += 1; // Volume-confirmed breakout
-      confidence += 0.1;
-    }
-  }
-
+  // Volume dynamics (more selective)
   if (
-    features.priceStructure_pullback &&
-    stageAnalysis.current === "ADVANCING"
+    features.volumeDynamics_dryingUp &&
+    features.priceStructure_tightRange &&
+    features.priceStructure_higherHighsLows
   ) {
-    score += 2.5; // Pullback in uptrend
-    confidence += 0.15;
+    // Added condition
+    score += 0.8; // Was 1.5
   }
 
-  // Momentum combinations
-  if (
-    features.momentumQuality_acceleration &&
-    !features.riskMetrics_volatility > 0.4
-  ) {
-    score += 1.5;
-  }
-
-  if (features.momentumQuality_divergence) {
-    score -= 1.5;
-    confidence -= 0.05;
-  }
-
-  // ===== REGIME ADJUSTMENTS =====
-
-  // Long-term vs short-term alignment
-  if (
-    longTermRegime.type === "TRENDING" &&
-    shortTermRegime.type === "TRENDING"
-  ) {
-    if (
-      longTermRegime.characteristics.includes("UPTREND") &&
-      shortTermRegime.characteristics.includes("UPTREND")
-    ) {
-      score += 1; // Aligned uptrends
-      confidence += 0.1;
-    } else if (
-      longTermRegime.characteristics.includes("DOWNTREND") &&
-      shortTermRegime.characteristics.includes("DOWNTREND")
-    ) {
-      score -= 2; // Aligned downtrends
-      confidence += 0.05; // High confidence to avoid
-    }
-  }
-
-  // Transitional opportunities
-  if (
-    longTermRegime.type === "RANGE_BOUND" &&
-    shortTermRegime.characteristics.includes("UPTREND")
-  ) {
-    score += 1.5; // Potential breakout from range
-  }
-
-  // ===== RISK ADJUSTMENTS =====
-
+  // Risk penalties (increased)
   const risk = features.riskMetrics_riskScore || 0.5;
   if (risk > 0.7) {
-    score *= 0.7; // Reduce score for high risk
-    confidence *= 0.8;
-  } else if (risk < 0.3) {
-    score *= 1.1; // Boost for low risk
-    confidence *= 1.1;
+    score *= 0.5; // Was 0.7
+    confidence *= 0.7; // Was 0.8
+  } else if (risk > 0.5) {
+    score *= 0.8; // New mid-risk penalty
   }
 
-  // ===== FINAL CONFIDENCE ADJUSTMENTS =====
+  // Volatility penalty
+  if (features.riskMetrics_volatility > 0.5) {
+    score -= 1; // New penalty for high volatility
+  }
 
-  // Quality checks
-  if (features.priceStructure_qualityScore > 0.7) confidence += 0.1;
-  if (features.institutional_netScore > 5) confidence += 0.1;
-  if (features.momentumQuality_composite > 0.7) confidence += 0.05;
-
-  // Bound confidence
-  confidence = Math.max(0.1, Math.min(0.9, confidence));
+  // Regime penalties
+  if (
+    longTermRegime.type === "VOLATILE" ||
+    shortTermRegime.type === "VOLATILE"
+  ) {
+    score -= 1.5; // New penalty
+  }
 
   return { mlScore: score, confidence };
 }
