@@ -18,8 +18,6 @@ import { getLayer2MLAnalysis } from "./layer2Analysis.js";
  * - No pre-open / PTS gap adjustments anywhere.
  */
 
-
-
 export function getComprehensiveEntryTiming(stock, historicalData) {
   // ---- Validate inputs
   if (!stock || !historicalData || historicalData.length < 50) {
@@ -54,7 +52,7 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
   console.log("getLayer2PatternScore");
   // ---- 3) Market-adaptive weighting (ensure 1 is reachable in trending regime)
   const weights = getAdaptiveWeights(longTermRegime, shortTermRegime);
-  console.log("getLayer2PatternScore here");
+
   // ---- 4) Normalization & clamping
   // Map Layer1 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
   const normalizedLayer1 = 6.3333333333 - 1.3333333333 * layer1Score;
@@ -97,11 +95,6 @@ function getAdaptiveWeights(longTermRegime, shortTermRegime) {
   const lt = longTermRegime?.type || "UNKNOWN";
   const st = shortTermRegime?.type || "UNKNOWN";
 
-  // Favor Layer 1 if Layer 2 can't confidently label the regime
-  if (lt === "UNKNOWN" || st === "UNKNOWN") {
-    return { layer1: 0.7, mlAnalysis: 0.3 };
-  }
-
   if (lt === "TRENDING" && st === "TRENDING") {
     // Make Strong Buy reachable: max = 5*0.3 + 3*0.7 = 3.6
     return { layer1: 0.3, mlAnalysis: 0.7 };
@@ -138,7 +131,6 @@ function mapToFinalScoreWithConfidence(
     "wyckoffspring",
     "sellerexhaustion",
     "pocrising",
-    "successfulretest", // NEW
     "compression",
     "cyclephase_expansion", // f6_cyclePhase_EXPANSION_STARTING
   ];
@@ -148,7 +140,6 @@ function mapToFinalScoreWithConfidence(
     "distribut",
     "buyerexhaustion",
     "wyckoffupthrust",
-    "failedbreakout", // NEW
     "pocfalling",
   ];
 
@@ -211,23 +202,11 @@ function generateKeyInsights(features = {}) {
   if (features.f5_wyckoffSpring) {
     insights.push("Wyckoff spring pattern – long setup");
   }
-  if (features.f5_wyckoffUpthrust) {
-    insights.push("Upthrust above resistance – risk of bull trap");
-  }
-  if (features.f5_failedBreakout) {
-    insights.push("Failed breakout – supply overhead");
-  }
-  if (features.f5_successfulRetest) {
-    insights.push("Breakout held on retest – support confirmed");
-  }
   if (features.f6_compression && features.f6_cyclePhase_EXPANSION_STARTING) {
     insights.push("Volatility expansion starting from compression");
   }
   if (features.f1_pocRising) {
     insights.push("Rising volume POC – accumulation bias");
-  }
-  if (features.f1_pocFalling) {
-    insights.push("Falling volume POC – distribution bias");
   }
   return insights;
 }
