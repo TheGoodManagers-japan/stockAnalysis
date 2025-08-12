@@ -44,12 +44,7 @@ export function getLayer1PatternScore(stock, historicalData) {
     stock,
     currentPrice
   );
-  const trendStructure = analyzeTrendStructure(
-    recentData,
-    historical,
-    stock,
-    currentPrice
-  );
+  const trendStructure = analyzeTrendStructure(recentData, historical, stock);
   const riskReward = assessRiskReward(recentData, stock, currentPrice);
   const relativeStrength = calculateRelativeStrength(stock, recentData);
 
@@ -67,15 +62,14 @@ export function getLayer1PatternScore(stock, historicalData) {
 
   // --- Map to 1-7 scale (swing-optimized thresholds) ---
   const thresholds = {
-    strongBuy: 8.0, // Was 4.0 - now needs multiple strong signals
-    buy: 6.0, // Was 2.5
-    watch: 3.0, // Was 1.0
-    neutral: 0, // Was -0.5
-    caution: -3.0, // Was -2.0
-    avoid: -6.0, // Was -3.5
+    strongBuy: 4.0, // Relaxed from 2.5
+    buy: 2.5, // Relaxed from 1.5
+    watch: 1.0, // Relaxed from 0.5
+    neutral: -0.5,
+    caution: -2.0,
+    avoid: -3.5,
   };
 
-  // Map to 1-7 scale
   if (score >= thresholds.strongBuy) return 1;
   if (score >= thresholds.buy) return 2;
   if (score >= thresholds.watch) return 3;
@@ -230,7 +224,7 @@ function detectSwingPatterns(recentData, historical, stock, currentPrice) {
 }
 
 /* ──────────── TREND STRUCTURE ANALYSIS ──────────── */
-function analyzeTrendStructure(recentData, historical, stock, currentPrice) {
+function analyzeTrendStructure(recentData, historical, stock) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // Stage Analysis (Accumulation, Markup, Distribution, Markdown)
@@ -654,29 +648,28 @@ function getSwingWeights(stock, trendStructure) {
 function scoreSwingMomentum(momentum, weights) {
   let score = 0;
 
-  // Positive signals (reduced)
+  // MACD momentum
   if (momentum.macdPositive && momentum.macdMomentum > 0) {
-    score += weights.momentum * 0.4; // Was 0.8
+    score += weights.momentum * 0.8;
   } else if (momentum.macdMomentum > 0) {
-    score += weights.momentum * 0.2; // Was 0.4
+    score += weights.momentum * 0.4;
   }
 
-  // NEGATIVE signals (added/increased)
-  if (momentum.macdMomentum < 0) {
-    score -= weights.momentum * 0.5;
-  }
-  if (momentum.decelerating) {
-    score -= weights.momentum * 0.6; // Was 0.3
-  }
-  if (momentum.ma50Distance < 0) {
-    score -= weights.momentum * 0.4; // New penalty
-  }
-
-  // Stochastic
+  // Stochastic oversold bounce
   if (momentum.stochTurning) {
-    score += weights.momentum * 0.3; // Was 0.6
-  } else if (momentum.stochOversold && !momentum.stochTurning) {
-    score -= weights.momentum * 0.2; // Oversold but not turning
+    score += weights.momentum * 0.6;
+  }
+
+  // Acceleration pattern
+  if (momentum.accelerating) {
+    score += weights.momentum * 0.5;
+  } else if (momentum.decelerating) {
+    score -= weights.momentum * 0.3;
+  }
+
+  // Position relative to MAs
+  if (momentum.ma20Distance > 0 && momentum.ma50Distance > 0) {
+    score += weights.momentum * 0.4;
   }
 
   return score;
@@ -711,23 +704,37 @@ function scoreVolumeAccumulation(volumeAnalysis, weights) {
 function scoreSwingPatterns(patterns, weights) {
   let score = 0;
 
-  // Reduce positive scores
+  // High-value swing patterns
   if (patterns.flag) {
-    score += weights.patterns * 0.8; // Was 1.5
-  }
-  if (patterns.pennant) {
-    score += weights.patterns * 0.7; // Was 1.3
-  }
-  if (patterns.channelBreakout) {
-    score += weights.patterns * 0.6; // Was 1.2
-  }
-  if (patterns.firstPullback) {
-    score += weights.patterns * 0.7; // Was 1.4
+    score += weights.patterns * 1.5; // Flag patterns are gold for swings
   }
 
-  // Add negative pattern detection
-  if (!patterns.higherLowsHighs && !patterns.flag && !patterns.pennant) {
-    score -= weights.patterns * 0.5; // No bullish structure
+  if (patterns.pennant) {
+    score += weights.patterns * 1.3;
+  }
+
+  if (patterns.channelBreakout) {
+    score += weights.patterns * 1.2;
+  }
+
+  if (patterns.firstPullback) {
+    score += weights.patterns * 1.4; // High probability setup
+  }
+
+  if (patterns.higherLowsHighs) {
+    score += weights.patterns * 0.8;
+  }
+
+  if (patterns.baseBuilding) {
+    score += weights.patterns * 1.0;
+  }
+
+  if (patterns.maReclaim) {
+    score += weights.patterns * 0.7;
+  }
+
+  if (patterns.oversoldReversal) {
+    score += weights.patterns * 0.6;
   }
 
   return score;
