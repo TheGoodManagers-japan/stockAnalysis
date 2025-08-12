@@ -59,6 +59,7 @@ export function getComprehensiveEntryTiming(
     shortTermRegime,
     features
   );
+  console.log("here 0");
 
   // ---- Score Combination
   const { finalScore, confidence, recommendation } = combineScoresForSwing(
