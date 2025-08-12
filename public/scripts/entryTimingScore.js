@@ -29,6 +29,8 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
       error: "Insufficient data for analysis",
     };
   }
+  console.log("stock:");
+  console.log(stock)
 
   // ---- Ensure chronology once and reuse everywhere
   const sorted = [...historicalData].sort(
@@ -36,6 +38,7 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
   );
 
   // ---- 1) LAYER 1
+  console.log("getLayer1PatternScore");
   const layer1Score = getLayer1PatternScore(stock, sorted);
 
   // ---- 2) LAYER 2 (robust defaults)
@@ -46,6 +49,7 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
     shortTermRegime = { type: "UNKNOWN", strength: 0 },
   } = getLayer2MLAnalysis(stock, sorted) || {};
 
+  console.log("getLayer2PatternScore");
   // ---- 3) Market-adaptive weighting (ensure 1 is reachable in trending regime)
   const weights = getAdaptiveWeights(longTermRegime, shortTermRegime);
 
