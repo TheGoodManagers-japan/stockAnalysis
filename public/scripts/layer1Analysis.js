@@ -244,6 +244,7 @@ function detectExhaustionPatterns(
 ) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const patterns = {};
+  const currentPrice = n(stock?.currentPrice);
 
   // Trend maturity: count up days in the last 14 comparisons
   if (recentData.length >= 15) {
