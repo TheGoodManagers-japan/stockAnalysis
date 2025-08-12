@@ -1,12 +1,11 @@
 /**
- * Enhanced Entry Timing Orchestrator for Swing Trading - BALANCED VERSION
- *
- * Changes made to reduce over-conservatism:
- * 1. Raised extension thresholds (15% and 25% instead of 8% and 12%)
- * 2. Removed duplicate penalties
- * 3. Lowered final score thresholds
- * 4. Balanced positive and negative scoring
- * 5. Only penalize EXTREME conditions
+ * Enhanced Entry Timing Orchestrator for Swing Trading - PROPERLY BALANCED VERSION
+ * 
+ * Balanced approach:
+ * - Moderate extension thresholds (between original and previous fix)
+ * - Single penalty system (no duplicates)
+ * - Realistic score thresholds
+ * - Proper risk/reward balance
  */
 
 import { getLayer1PatternScore } from "./layer1Analysis.js";
@@ -125,7 +124,7 @@ export function getComprehensiveEntryTiming(
   };
 }
 
-/* ════════════════════ IMPROVED EXTENSION ANALYSIS ════════════════════ */
+/* ════════════════════ BALANCED EXTENSION ANALYSIS ════════════════════ */
 
 function analyzeExtension(stock, historicalData) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
@@ -197,37 +196,36 @@ function analyzeExtension(stock, historicalData) {
     }
   }
 
-  // Calculate extension score with RAISED THRESHOLDS
+  // Calculate extension score with BALANCED THRESHOLDS
   let extensionScore = 0;
 
-  // MA extension checks (RAISED THRESHOLDS)
-  if (analysis.distanceFromMA20 > 0.15) extensionScore += 0.2; // Was 0.08
-  if (analysis.distanceFromMA20 > 0.25) extensionScore += 0.2; // Was 0.12
-  if (analysis.distanceFromMA50 > 0.25) extensionScore += 0.2; // Was 0.15
-  if (analysis.distanceFromMA50 > 0.35) extensionScore += 0.1; // Was 0.20
-  if (analysis.distanceFromMA200 > 0.4) extensionScore += 0.1; // Was 0.30
+  // MA extension checks (BALANCED - between original and previous fix)
+  if (analysis.distanceFromMA20 > 0.10) extensionScore += 0.15;  // 10%
+  if (analysis.distanceFromMA20 > 0.15) extensionScore += 0.15;  // 15%
+  if (analysis.distanceFromMA20 > 0.20) extensionScore += 0.10;  // 20%
+  if (analysis.distanceFromMA50 > 0.18) extensionScore += 0.15;  // 18%
+  if (analysis.distanceFromMA50 > 0.25) extensionScore += 0.10;  // 25%
+  if (analysis.distanceFromMA200 > 0.35) extensionScore += 0.10;  // 35%
 
-  // Momentum extension (RAISED THRESHOLDS)
-  if (analysis.consecutiveUpDays >= 7) extensionScore += 0.1; // Was 5
-  if (analysis.consecutiveUpDays >= 10) extensionScore += 0.1; // Was 7
-  if (analysis.shortTermGain > 0.2) extensionScore += 0.1; // Was 0.15
-  if (analysis.shortTermGain > 0.3) extensionScore += 0.1; // Was 0.20
+  // Momentum extension (BALANCED)
+  if (analysis.consecutiveUpDays >= 6) extensionScore += 0.10;   // 6 days
+  if (analysis.consecutiveUpDays >= 8) extensionScore += 0.10;   // 8 days
+  if (analysis.shortTermGain > 0.12) extensionScore += 0.10;     // 12%
+  if (analysis.shortTermGain > 0.18) extensionScore += 0.10;     // 18%
+  if (analysis.shortTermGain > 0.25) extensionScore += 0.10;     // 25%
 
-  // Parabolic penalty (keep this strict)
-  if (analysis.isParabolic) extensionScore += 0.3;
+  // Parabolic penalty (keep strict)
+  if (analysis.isParabolic) extensionScore += 0.35;
 
   analysis.extensionScore = Math.min(1, extensionScore);
-  analysis.isExtended = extensionScore >= 0.6; // RAISED from 0.5
+  analysis.isExtended = extensionScore >= 0.55;  // BALANCED threshold
 
-  // Determine extension level with ADJUSTED THRESHOLDS
-  if (extensionScore >= 0.8) {
-    // Was 0.7
+  // Determine extension level with BALANCED THRESHOLDS
+  if (extensionScore >= 0.75) {
     analysis.extensionLevel = "EXTREME";
-  } else if (extensionScore >= 0.6) {
-    // Was 0.5
+  } else if (extensionScore >= 0.55) {
     analysis.extensionLevel = "HIGH";
-  } else if (extensionScore >= 0.4) {
-    // Was 0.3
+  } else if (extensionScore >= 0.35) {
     analysis.extensionLevel = "MODERATE";
   } else {
     analysis.extensionLevel = "LOW";
@@ -330,7 +328,7 @@ function detectExhaustion(stock, historicalData) {
   return exhaustion;
 }
 
-/* ════════════════════ ADAPTIVE WEIGHTING (Adjusted) ════════════════════ */
+/* ════════════════════ ADAPTIVE WEIGHTING ════════════════════ */
 
 function getSwingAdaptiveWeights(
   longTermRegime,
@@ -347,13 +345,16 @@ function getSwingAdaptiveWeights(
     layer2: 0.6,
   };
 
-  // Only reduce pattern importance when EXTREMELY extended
+  // Adjust weights based on extension
   if (extensionAnalysis.extensionLevel === "EXTREME") {
-    weights.layer1 *= 0.7; // Less severe reduction (was 0.5)
+    weights.layer1 *= 0.6;  // Significant reduction
+    weights.layer2 = 1 - weights.layer1;
+  } else if (extensionAnalysis.extensionLevel === "HIGH") {
+    weights.layer1 *= 0.8;  // Moderate reduction
     weights.layer2 = 1 - weights.layer1;
   }
 
-  // Existing regime adjustments
+  // Regime adjustments
   if (
     lt === "TRENDING" &&
     st === "TRENDING" &&
@@ -369,7 +370,7 @@ function getSwingAdaptiveWeights(
   return weights;
 }
 
-/* ════════════════════ IMPROVED SCORE COMBINATION ════════════════════ */
+/* ════════════════════ BALANCED SCORE COMBINATION ════════════════════ */
 
 function combineScoresForSwing(
   layer1Score,
@@ -392,101 +393,131 @@ function combineScoresForSwing(
   let combinedScore =
     normalizedLayer1 * weights.layer1 + clampedML * weights.layer2;
 
-  // RS Rating adjustments (MORE BALANCED)
+  // RS Rating adjustments (BALANCED)
   const rsRating = features.relativeStrength_rsRating || 50;
-  if (rsRating >= 80) {
-    // Lowered from 85
-    if (
-      extensionAnalysis.extensionLevel === "LOW" ||
-      extensionAnalysis.extensionLevel === "MODERATE"
-    ) {
-      combinedScore += 0.5; // Increased from 0.3
+  if (rsRating >= 85) {
+    if (extensionAnalysis.extensionLevel === "LOW") {
+      combinedScore += 0.4;  // Good RS, not extended
+    } else if (extensionAnalysis.extensionLevel === "MODERATE") {
+      combinedScore += 0.2;  // Good RS, moderately extended
+    } else if (extensionAnalysis.extensionLevel === "HIGH") {
+      combinedScore -= 0.2;  // Good RS but too extended
+    } else if (extensionAnalysis.extensionLevel === "EXTREME") {
+      combinedScore -= 0.5;  // Dangerous combination
     }
-    // Only penalize if EXTREMELY extended
-    else if (extensionAnalysis.extensionLevel === "EXTREME") {
-      combinedScore -= 0.3; // Reduced penalty
+  } else if (rsRating >= 70) {
+    if (!extensionAnalysis.isExtended) {
+      combinedScore += 0.2;  // Decent RS, not extended
     }
-  } else if (rsRating <= 30) {
-    combinedScore -= 1.0; // Reduced from -1.5
+  } else if (rsRating >= 50) {
+    // Neutral zone - no adjustment
+  } else if (rsRating < 30) {
+    combinedScore -= 1.2;  // Weak RS
   }
 
-  // Stage adjustments (MORE BALANCED)
+  // Stage adjustments (BALANCED)
   const stage = features.stageAnalysis_current;
 
   if (stage === "ADVANCING") {
-    // Reward advancing stocks more generously
-    if (
-      features.priceStructure_pullback &&
-      isPullbackConfirmed(features, extensionAnalysis)
-    ) {
-      combinedScore += 1.2; // Increased from 0.8
+    if (features.priceStructure_pullback && 
+        isPullbackConfirmed(features, extensionAnalysis)) {
+      combinedScore += 1.0;  // Prime setup
     } else if (extensionAnalysis.extensionLevel === "LOW") {
-      combinedScore += 0.5; // Reward non-extended advancing stocks
+      combinedScore += 0.3;  // Early in advance
+    } else if (extensionAnalysis.extensionLevel === "MODERATE") {
+      // No adjustment - normal for advancing stocks
+    } else if (extensionAnalysis.extensionLevel === "HIGH") {
+      combinedScore -= 0.5;  // Getting stretched
+    } else if (extensionAnalysis.extensionLevel === "EXTREME") {
+      combinedScore -= 1.2;  // Too extended
     }
-    // Only penalize EXTREME extensions
-    else if (extensionAnalysis.extensionLevel === "EXTREME") {
-      combinedScore -= 1.0; // Reduced from -1.5
+  } else if (stage === "ACCUMULATION") {
+    const readiness = features.stageAnalysis_readiness || 0;
+    if (readiness > 0.7) {
+      combinedScore += 0.5;  // Ready to break out
+    } else if (readiness > 0.5) {
+      combinedScore += 0.2;  // Building
     }
-    // MODERATE extensions in advancing stage are NORMAL - no penalty
-  } else if (
-    stage === "ACCUMULATION" &&
-    features.stageAnalysis_readiness > 0.5
-  ) {
-    combinedScore += 0.3; // New bonus for accumulation stocks
   } else if (stage === "DISTRIBUTION") {
-    combinedScore -= 1.5; // Reduced from -2.0
+    combinedScore -= 1.5;  // Topping
   } else if (stage === "DECLINING") {
-    combinedScore -= 2.0; // Keep this strict
+    combinedScore -= 2.0;  // Downtrend
   }
 
-  // Extension penalties (ONLY ONE PENALTY, NOT MULTIPLE)
+  // Institutional activity (BALANCED)
+  if (features.institutional_accumulation) {
+    const netScore = features.institutional_netScore || 0;
+    if (netScore > 5) {
+      combinedScore += 0.5;  // Strong accumulation
+    } else if (netScore > 2) {
+      combinedScore += 0.2;  // Moderate accumulation
+    }
+  } else if (features.institutional_distribution) {
+    combinedScore -= 0.5;  // Distribution
+  }
+
+  // Extension penalties (SINGLE APPLICATION)
   if (extensionAnalysis.extensionLevel === "EXTREME") {
-    combinedScore -= 1.5; // Single penalty for extreme extension
+    combinedScore -= 1.2;
     confidence *= 0.7;
   } else if (extensionAnalysis.extensionLevel === "HIGH") {
-    combinedScore -= 0.5; // Minor penalty for high extension
+    combinedScore -= 0.4;
     confidence *= 0.85;
   }
-  // NO PENALTY for MODERATE or LOW extension
+  // NO penalty for MODERATE extension
 
-  // Parabolic penalty (keep this)
+  // Parabolic penalty
   if (extensionAnalysis.isParabolic) {
-    combinedScore -= 1.5; // Reduced from -2.0
-    confidence *= 0.6;
+    combinedScore -= 1.8;
+    confidence *= 0.5;
   }
 
-  // Exhaustion penalties (adjusted)
+  // Exhaustion penalties
   if (exhaustionSignals.isExhausted) {
-    combinedScore -= exhaustionSignals.exhaustionScore * 1.5; // Reduced from *2
-    confidence *= 1 - exhaustionSignals.exhaustionScore * 0.2; // Reduced from *0.3
+    combinedScore -= exhaustionSignals.exhaustionScore * 1.5;
+    confidence *= 1 - exhaustionSignals.exhaustionScore * 0.25;
   }
 
-  // BALANCED final score mapping (LOWERED THRESHOLDS)
+  // Price structure bonuses
+  if (features.priceStructure_breakout && !extensionAnalysis.isExtended) {
+    combinedScore += 0.3;
+  }
+  if (features.priceStructure_higherHighsLows && !exhaustionSignals.isExhausted) {
+    combinedScore += 0.2;
+  }
+
+  // Volume dynamics
+  if (features.volumeDynamics_dryingUp && features.priceStructure_tightRange) {
+    combinedScore += 0.3;  // Coiling for breakout
+  }
+
+  // Risk adjustments
+  const riskScore = features.riskMetrics_riskScore || 0.5;
+  if (riskScore > 0.7) {
+    combinedScore *= 0.8;
+    confidence *= 0.85;
+  }
+
+  // BALANCED final score mapping
   let finalScore;
   let recommendation;
 
-  if (combinedScore >= 2.5) {
-    // Lowered from 4.5
+  if (combinedScore >= 3.5) {      // Harder to achieve than 2.5
     finalScore = 1;
     recommendation = "STRONG BUY";
-  } else if (combinedScore >= 1.5) {
-    // Lowered from 3.0
+  } else if (combinedScore >= 2.2) {  // Harder than 1.5
     finalScore = 2;
     recommendation = "BUY";
-  } else if (combinedScore >= 0.5) {
-    // Lowered from 1.5
+  } else if (combinedScore >= 1.0) {  // Reasonable threshold
     finalScore = 3;
     recommendation = "WATCH - Positive";
-  } else if (combinedScore >= -0.5) {
-    // Lowered from 0
+  } else if (combinedScore >= -0.2) {  // Slightly positive bias
     finalScore = 4;
     recommendation = "NEUTRAL";
-  } else if (combinedScore >= -1.5) {
-    // Same
+  } else if (combinedScore >= -1.2) {
     finalScore = 5;
     recommendation = "WATCH - Negative";
   } else if (combinedScore >= -2.5) {
-    // Raised from -3.0
     finalScore = 6;
     recommendation = "AVOID";
   } else {
@@ -494,32 +525,36 @@ function combineScoresForSwing(
     recommendation = "STRONG AVOID";
   }
 
-  // Override only for EXTREME cases
+  // Quality gates
   if (extensionAnalysis.extensionLevel === "EXTREME" && finalScore <= 2) {
-    finalScore = 3;
-    recommendation = "WAIT FOR PULLBACK - Extremely extended";
+    finalScore = Math.min(3, finalScore + 1);
+    recommendation = "WAIT FOR PULLBACK - Too extended";
   }
-  // Don't override for moderate extensions
+  
+  if (exhaustionSignals.isExhausted && finalScore <= 2) {
+    finalScore = Math.min(3, finalScore + 1);
+    recommendation = "CAUTION - Exhaustion signals";
+  }
 
-  // Confidence veto (less strict)
-  if (confidence < 0.4 && finalScore <= 2) {
-    // Lowered from 0.5
-    finalScore = Math.min(4, finalScore + 1); // Less penalty
-    recommendation = "NEUTRAL - Low confidence";
+  // Confidence veto
+  if (confidence < 0.45 && finalScore <= 2) {
+    finalScore = Math.min(4, finalScore + 1);
+    recommendation = "NEUTRAL - Insufficient confidence";
   }
 
   return { finalScore, confidence, recommendation };
 }
 
-/* ════════════════════ PULLBACK CONFIRMATION (Adjusted) ════════════════════ */
+/* ════════════════════ PULLBACK CONFIRMATION ════════════════════ */
 
 function isPullbackConfirmed(features, extensionAnalysis) {
   // A confirmed pullback must:
-  // 1. Not be EXTREMELY extended (moderate is OK)
+  // 1. Not be extremely extended
   // 2. Have found support (bounced)
   // 3. Show accumulation or positive volume
 
   if (extensionAnalysis.extensionLevel === "EXTREME") return false;
+  if (extensionAnalysis.extensionLevel === "HIGH") return false;  // Stricter
 
   const hasSupport = features.trendStructure_nearSupport === 1;
   const hasBounce = features.priceStructure_pullback === 1;
@@ -529,7 +564,7 @@ function isPullbackConfirmed(features, extensionAnalysis) {
   return hasSupport && hasBounce && hasVolume;
 }
 
-/* ════════════════════ RISK MANAGEMENT (Keep mostly as is) ════════════════════ */
+/* ════════════════════ RISK MANAGEMENT ════════════════════ */
 
 function calculateSwingRiskManagement(
   stock,
@@ -604,19 +639,13 @@ function calculateSwingStopLoss(
   features,
   extensionAnalysis
 ) {
-  // Only use wider stops for EXTREME extensions
-  const atrMultiplier =
-    extensionAnalysis.extensionLevel === "EXTREME"
-      ? score <= 2
-        ? 2.0
-        : score <= 4
-        ? 2.5
-        : 3.0
-      : score <= 2
-      ? 1.5
-      : score <= 4
-      ? 2.0
-      : 2.5;
+  // Adjust ATR multiplier based on extension
+  const atrMultiplier = 
+    extensionAnalysis.extensionLevel === "EXTREME" ? 
+      (score <= 2 ? 2.5 : 3.0) :
+    extensionAnalysis.extensionLevel === "HIGH" ?
+      (score <= 2 ? 2.0 : 2.5) :
+    (score <= 2 ? 1.5 : score <= 4 ? 2.0 : 2.5);
 
   const atrStop = currentPrice - atr * atrMultiplier;
   const swingLow = findValidatedSwingLow(historicalData.slice(-30));
@@ -634,7 +663,9 @@ function calculateSwingStopLoss(
     candidates.push(atrStop);
   }
 
-  if (extensionAnalysis.extensionLevel !== "EXTREME") {
+  // MA-based stop for non-extended stocks
+  if (extensionAnalysis.extensionLevel === "LOW" || 
+      extensionAnalysis.extensionLevel === "MODERATE") {
     const ma50 = Number(stock?.movingAverage50d) || 0;
     const maStop = ma50 > 0 ? ma50 - atr * 0.3 : 0;
     if (maStop && maStop > currentPrice * 0.9) {
@@ -646,10 +677,10 @@ function calculateSwingStopLoss(
   if (candidates.length === 0) {
     stopLoss =
       currentPrice * (1 - Math.min(0.08, 0.03 + (atr / currentPrice) * 2));
-  } else if (score <= 2 && extensionAnalysis.extensionLevel !== "EXTREME") {
-    stopLoss = Math.max(...candidates);
+  } else if (score <= 2 && extensionAnalysis.extensionLevel === "LOW") {
+    stopLoss = Math.max(...candidates);  // Tighter stop for best setups
   } else {
-    stopLoss = Math.min(...candidates);
+    stopLoss = Math.min(...candidates);  // Wider stop for safety
   }
 
   return stopLoss;
@@ -668,33 +699,27 @@ function calculateSwingPriceTarget(
 ) {
   const risk = currentPrice - stopLoss;
 
-  // Adjust targets based on extension level
-  const minRR =
-    extensionAnalysis.extensionLevel === "EXTREME"
-      ? score <= 2
-        ? 2.0
-        : score <= 4
-        ? 1.8
-        : 1.5
-      : extensionAnalysis.extensionLevel === "HIGH"
-      ? score <= 2
-        ? 2.5
-        : score <= 4
-        ? 2.0
-        : 1.8
-      : score <= 2
-      ? 3.0
-      : score <= 4
-      ? 2.5
-      : 2.0;
+  // Risk/Reward requirements based on extension
+  const minRR = 
+    extensionAnalysis.extensionLevel === "EXTREME" ?
+      (score <= 2 ? 1.8 : 1.5) :
+    extensionAnalysis.extensionLevel === "HIGH" ?
+      (score <= 2 ? 2.2 : 2.0) :
+    extensionAnalysis.extensionLevel === "MODERATE" ?
+      (score <= 2 ? 2.8 : 2.3) :
+    (score <= 2 ? 3.0 : 2.5);
 
   const minTarget = currentPrice + risk * minRR;
 
+  // Cap targets for extended stocks
   if (extensionAnalysis.extensionLevel === "EXTREME") {
-    return Math.min(minTarget, currentPrice * 1.08);
+    return Math.min(minTarget, currentPrice * 1.06);  // 6% max
+  } else if (extensionAnalysis.extensionLevel === "HIGH") {
+    return Math.min(minTarget, currentPrice * 1.10);  // 10% max
   }
 
-  const atrMultiplier = score <= 2 ? 3.5 : score <= 4 ? 2.5 : 2.0;
+  // Normal targets for non-extended stocks
+  const atrMultiplier = score <= 2 ? 3.0 : score <= 4 ? 2.5 : 2.0;
   const atrTarget = currentPrice + atr * atrMultiplier;
   const candidates = [minTarget, atrTarget];
 
@@ -704,10 +729,10 @@ function calculateSwingPriceTarget(
   }
 
   const priceTarget = Math.min(...candidates.filter((t) => t > currentPrice));
-  return Math.min(priceTarget, currentPrice * 1.2);
+  return Math.min(priceTarget, currentPrice * 1.15);  // 15% max
 }
 
-/* ════════════════════ POSITION SIZING (Adjusted) ════════════════════ */
+/* ════════════════════ POSITION SIZING ════════════════════ */
 
 function getPositionSizeHint(
   confidence,
@@ -719,11 +744,11 @@ function getPositionSizeHint(
   const safeConfidence = Number.isFinite(confidence) ? confidence : 0.5;
   const safeRR = Number.isFinite(riskRewardRatio) ? riskRewardRatio : 0;
 
-  // Only reduce position for EXTREME extensions
+  // Extension-based position sizing
   if (extensionAnalysis.extensionLevel === "EXTREME") {
-    return "HALF";
+    return "QUARTER";
   } else if (extensionAnalysis.extensionLevel === "HIGH") {
-    return score <= 2 ? "NORMAL" : "NORMAL-"; // Still allow normal positions
+    return score <= 2 ? "HALF" : "QUARTER";
   }
 
   // Normal position sizing
@@ -733,6 +758,8 @@ function getPositionSizeHint(
     sizeHint = "FULL";
   } else if (safeConfidence >= 0.6 && safeRR >= 2.5) {
     sizeHint = "NORMAL+";
+  } else if (safeConfidence >= 0.5 && safeRR >= 2.0) {
+    sizeHint = "NORMAL";
   } else if (safeConfidence < 0.4 || safeRR < 2.0) {
     sizeHint = "HALF";
   } else if (safeConfidence < 0.3 || safeRR < 1.5) {
@@ -742,7 +769,7 @@ function getPositionSizeHint(
   return sizeHint;
 }
 
-/* ════════════════════ INSIGHT GENERATION (Keep as is) ════════════════════ */
+/* ════════════════════ INSIGHT GENERATION ════════════════════ */
 
 function generateSwingInsights(
   features,
@@ -755,45 +782,48 @@ function generateSwingInsights(
 ) {
   const insights = [...layer2Insights];
 
+  // Extension insights
   if (extensionAnalysis.extensionLevel === "EXTREME") {
     insights.unshift(
-      `⚠️ Extremely extended ${(
-        extensionAnalysis.distanceFromMA20 * 100
-      ).toFixed(0)}% above MA20`
+      `⚠️ EXTREME: ${(extensionAnalysis.distanceFromMA20 * 100).toFixed(0)}% above MA20`
     );
   } else if (extensionAnalysis.extensionLevel === "HIGH") {
+    insights.unshift(
+      `⚠️ Extended ${(extensionAnalysis.distanceFromMA20 * 100).toFixed(0)}% above MA20`
+    );
+  } else if (extensionAnalysis.extensionLevel === "MODERATE" && 
+             extensionAnalysis.distanceFromMA20 > 0.12) {
     insights.push(
-      `Extended ${(extensionAnalysis.distanceFromMA20 * 100).toFixed(
-        0
-      )}% above MA20 - consider smaller position`
+      `Moderately extended ${(extensionAnalysis.distanceFromMA20 * 100).toFixed(0)}% above MA20`
     );
   }
 
   if (extensionAnalysis.isParabolic) {
-    insights.unshift("⚠️ PARABOLIC move detected - extreme caution");
+    insights.unshift("⚠️ PARABOLIC move detected - extreme risk");
   }
 
   if (exhaustionSignals.isExhausted) {
     insights.unshift(
-      `⚠️ Exhaustion signals: ${exhaustionSignals.signals.join(", ")}`
+      `⚠️ Exhaustion: ${exhaustionSignals.signals.join(", ")}`
     );
   }
 
-  if (
-    riskManagement.riskRewardRatio >= 3 &&
-    extensionAnalysis.extensionLevel !== "EXTREME"
-  ) {
-    insights.push(`Good R:R ratio of ${riskManagement.riskRewardRatio}:1`);
+  // Risk/Reward insights
+  if (riskManagement.riskRewardRatio >= 3 && 
+      extensionAnalysis.extensionLevel === "LOW") {
+    insights.push(`Excellent R:R of ${riskManagement.riskRewardRatio}:1`);
+  } else if (riskManagement.riskRewardRatio >= 2.5) {
+    insights.push(`Good R:R of ${riskManagement.riskRewardRatio}:1`);
   } else if (riskManagement.riskRewardRatio < 2) {
     insights.push(
-      `Weak R:R ratio of ${riskManagement.riskRewardRatio}:1 - consider passing`
+      `Poor R:R of ${riskManagement.riskRewardRatio}:1 - consider passing`
     );
   }
 
   return insights.slice(0, 5);
 }
 
-/* ════════════════════ UTILITY FUNCTIONS (Keep as is) ════════════════════ */
+/* ════════════════════ UTILITY FUNCTIONS ════════════════════ */
 
 function findValidatedSwingLow(data) {
   const result = { price: null, isValid: false, touches: 0 };
@@ -898,5 +928,5 @@ function roundToJPXTick(price, roundUp = false) {
     return Math.ceil(price / tick) * tick;
   } else {
     return Math.floor(price / tick) * tick;
-  }
+}
 }
