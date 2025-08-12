@@ -235,13 +235,14 @@ function analyzeTrendStructure(
   stock,
   currentPriceParam
 ) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+
   // define currentPrice here (param > stock > last close)
   const currentPrice = n(
     currentPriceParam ??
       stock?.currentPrice ??
       recentData[recentData.length - 1]?.close
   );
-  const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // Stage Analysis (Accumulation, Markup, Distribution, Markdown)
   const stage = determineStage(recentData, stock);
