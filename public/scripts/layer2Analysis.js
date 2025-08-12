@@ -81,7 +81,7 @@ export function getLayer2MLAnalysis(stock, historicalData, marketData = null) {
   });
 
   // ===== SCORING =====
-  const { mlScore, confidence } = calculateSwingScore(features, {
+  const scoreResult = calculateSwingScore(features, {
     longTermRegime,
     shortTermRegime,
     stageAnalysis,
@@ -89,11 +89,11 @@ export function getLayer2MLAnalysis(stock, historicalData, marketData = null) {
   });
 
   return {
-    mlScore,
+    mlScore: scoreResult.mlScore,
     features,
     longTermRegime,
     shortTermRegime,
-    confidence,
+    confidence: scoreResult.confidence,
     insights: generateSwingInsights(features, stageAnalysis, relativeStrength),
   };
 }
@@ -815,7 +815,10 @@ function calculateSwingScore(features, context) {
     score -= 1.5; // New penalty
   }
 
-  return { mlScore: score, confidence };
+  // Ensure confidence stays within bounds
+  confidence = Math.max(0, Math.min(1, confidence));
+
+  return { mlScore: score, confidence: confidence };
 }
 
 /* ════════════════════ INSIGHT GENERATION ════════════════════ */
