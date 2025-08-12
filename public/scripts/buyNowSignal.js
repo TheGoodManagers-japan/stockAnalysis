@@ -1,3 +1,8 @@
+export const defaultConfig = Object.freeze({
+  buyThreshold: 5.0, // tune this
+  minRR: 2.0, // optional: use below instead of hardcoded 2.0
+});
+
 export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
   const config = defaultConfig;
 

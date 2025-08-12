@@ -52,7 +52,7 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
   console.log("getLayer2PatternScore");
   // ---- 3) Market-adaptive weighting (ensure 1 is reachable in trending regime)
   const weights = getAdaptiveWeights(longTermRegime, shortTermRegime);
-
+  console.log("getLayer2PatternScore here");
   // ---- 4) Normalization & clamping
   // Map Layer1 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
   const normalizedLayer1 = 6.3333333333 - 1.3333333333 * layer1Score;
