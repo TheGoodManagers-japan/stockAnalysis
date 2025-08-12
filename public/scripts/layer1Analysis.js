@@ -44,7 +44,7 @@ export function getLayer1PatternScore(stock, historicalData) {
     stock,
     currentPrice
   );
-  const trendStructure = analyzeTrendStructure(recentData, historical, stock);
+  const trendStructure = analyzeTrendStructure(recentData, historical, stock, currentPrice);
   const riskReward = assessRiskReward(recentData, stock, currentPrice);
   const relativeStrength = calculateRelativeStrength(stock, recentData);
 
@@ -224,7 +224,7 @@ function detectSwingPatterns(recentData, historical, stock, currentPrice) {
 }
 
 /* ──────────── TREND STRUCTURE ANALYSIS ──────────── */
-function analyzeTrendStructure(recentData, historical, stock) {
+function analyzeTrendStructure(recentData, historical, stock, currentPrice) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // Stage Analysis (Accumulation, Markup, Distribution, Markdown)
