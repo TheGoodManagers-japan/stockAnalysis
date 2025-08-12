@@ -51,6 +51,7 @@ export function getComprehensiveEntryTiming(
     confidence: layer2Confidence = 0.5,
     insights = [],
   } = layer2Result;
+  console.log("Running Layer 2 ML Analysis - finished");
 
   // ---- Adaptive Weighting based on market conditions
   const weights = getSwingAdaptiveWeights(
