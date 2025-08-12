@@ -1,14 +1,12 @@
 /**
- * Balanced Buy Trigger Wrapper for Swing Trading
+ * Enhanced Buy Trigger for Swing Trading - FIXED VERSION
  *
- * This version maintains risk management while being practical enough
- * to actually identify good swing trading opportunities.
- *
- * Key changes from overly strict version:
- * - Tiered approach: different confidence levels trigger different position sizes
- * - Allows for "good enough" setups, not just perfect ones
- * - More nuanced scoring that doesn't require ALL conditions
- * - Separate criteria for different market conditions
+ * Major fixes:
+ * - Strict extension/exhaustion checks
+ * - No buying into parabolic moves
+ * - Requires confirmed support for pullbacks
+ * - "Wait for pullback" signals instead of chasing
+ * - Removed opportunistic tier for weak setups
  */
 
 export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
@@ -42,60 +40,104 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
     keyInsights = [],
     longTermRegime = "UNKNOWN",
     shortTermRegime = "UNKNOWN",
+    extension = {}, // NEW
+    exhaustion = {}, // NEW
     debug = {},
   } = entryAnalysis;
 
-  // Extract additional features if available
+  // Extract additional features
   const features = debug.features || {};
   const volatility = features.riskMetrics_volatility || 0;
   const hasHigherHighsLows = features.priceStructure_higherHighsLows === 1;
   const isAccumulating = features.institutional_accumulation === 1;
   const netInstitutional = features.institutional_netScore || 0;
   const volumeConfirmation = features.volume_confirmation === 1;
-  const nearSupport = features.support_proximity <= 0.02; // Within 2% of support
+  const nearSupport = features.trendStructure_nearSupport === 1;
+  const hasPullback = features.priceStructure_pullback === 1;
 
-  // ===== TIERED CRITERIA SYSTEM =====
-  // Instead of one strict set, we have tiers
+  // ===== NEW: EXTENSION/EXHAUSTION CHECK =====
+  // This comes FIRST - no point checking other criteria if extended
+  if (extension.isExtended || exhaustion.isExhausted) {
+    const extensionReasons = [];
+
+    if (extension.isParabolic) {
+      extensionReasons.push("parabolic move");
+    } else if (extension.extensionLevel === "EXTREME") {
+      extensionReasons.push(
+        `extremely extended (${(extension.distanceFromMA20 * 100).toFixed(
+          0
+        )}% above MA20)`
+      );
+    } else if (extension.isExtended) {
+      extensionReasons.push(
+        `extended ${(extension.distanceFromMA20 * 100).toFixed(0)}% above MA20`
+      );
+    }
+
+    if (exhaustion.isExhausted) {
+      extensionReasons.push(
+        `showing exhaustion (${exhaustion.signals.join(", ")})`
+      );
+    }
+
+    return {
+      isBuyNow: false,
+      reason: `WAIT FOR PULLBACK - ${extensionReasons.join(" and ")}`,
+      waitForPullback: true, // NEW flag
+      details: {
+        score,
+        confidence,
+        riskRewardRatio,
+        extensionLevel: extension.extensionLevel,
+        extensionScore: extension.extensionScore,
+        exhaustionScore: exhaustion.exhaustionScore,
+        distanceFromMA20: (extension.distanceFromMA20 * 100).toFixed(1) + "%",
+        distanceFromMA50: (extension.distanceFromMA50 * 100).toFixed(1) + "%",
+        consecutiveUpDays: extension.consecutiveUpDays,
+        suggestion: "Monitor for pullback to MA20/MA50 or support level",
+      },
+    };
+  }
+
+  // ===== TIERED CRITERIA (STRICTER) =====
   const buyTiers = {
-    // Tier 1: Strong Buy - Full position
+    // Tier 1: Strong Buy - Full position (VERY STRICT)
     strong: {
       minScore: 1,
       maxScore: 1,
-      minConfidence: 0.65,
-      minRiskReward: 2.5,
-      minRelativeStrength: 70,
-      requiredConditions: 3, // Need 3 out of the bonus conditions
+      minConfidence: 0.7, // Raised from 0.65
+      minRiskReward: 3.0, // Raised from 2.5
+      minRelativeStrength: 65, // Lowered from 70 (don't need super high RS)
+      maxRelativeStrength: 85, // NEW: Cap to avoid chasing
+      requiredConditions: 4, // Raised from 3
+      requiresPullback: true, // NEW: Must have pullback
     },
     // Tier 2: Standard Buy - Normal position
     standard: {
       minScore: 1,
       maxScore: 2,
-      minConfidence: 0.5,
-      minRiskReward: 2.0,
-      minRelativeStrength: 55,
-      requiredConditions: 2, // Need 2 bonus conditions
-    },
-    // Tier 3: Opportunistic Buy - Half position
-    opportunistic: {
-      minScore: 1,
-      maxScore: 2,
-      minConfidence: 0.4,
-      minRiskReward: 1.8,
+      minConfidence: 0.55, // Raised from 0.5
+      minRiskReward: 2.5, // Raised from 2.0
       minRelativeStrength: 50,
-      requiredConditions: 2, // Need 2 bonus conditions
+      maxRelativeStrength: 90,
+      requiredConditions: 3, // Raised from 2
+      requiresPullback: false, // Can buy breakouts
     },
+    // REMOVED opportunistic tier - too risky
   };
 
-  // ===== ABSOLUTE DISQUALIFIERS =====
-  // These prevent any buy regardless of other factors
+  // ===== ABSOLUTE DISQUALIFIERS (EXPANDED) =====
   const disqualifiers = [
     stage === "DECLINING",
     stage === "DISTRIBUTION",
     longTermRegime === "BEARISH" && shortTermRegime === "BEARISH",
-    volatility > 0.6, // Extreme volatility
+    volatility > 0.6,
     !Number.isFinite(stopLoss) || !Number.isFinite(priceTarget),
     stopLoss <= 0 || priceTarget <= 0,
-    relativeStrength < 40, // Too weak relative to market
+    relativeStrength < 40,
+    // NEW disqualifiers
+    extension.shortTermGain > 0.15, // Up >15% in recent days
+    extension.consecutiveUpDays >= 7, // 7+ up days in a row
   ];
 
   if (disqualifiers.some(Boolean)) {
@@ -106,7 +148,8 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
       volatility,
       stopLoss,
       priceTarget,
-      relativeStrength
+      relativeStrength,
+      extension
     );
     return {
       isBuyNow: false,
@@ -121,18 +164,21 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
     };
   }
 
-  // ===== BONUS CONDITIONS =====
-  // Count positive factors that enhance the setup
+  // ===== BONUS CONDITIONS (MORE STRICT) =====
   const bonusConditions = {
-    strongTrend: stage === "ADVANCING" && hasHigherHighsLows,
-    accumulation: stage === "ACCUMULATION" && confidence > 0.5,
-    institutional: isAccumulating && netInstitutional > 3,
-    momentum: relativeStrength >= 65,
+    confirmedPullback: hasPullback && nearSupport && !extension.isExtended,
+    strongTrend:
+      stage === "ADVANCING" && hasHigherHighsLows && !extension.isExtended,
+    accumulation: stage === "ACCUMULATION" && confidence > 0.55,
+    institutional: isAccumulating && netInstitutional > 5, // Raised from 3
+    momentum: relativeStrength >= 60 && relativeStrength <= 85, // Capped
     excellentRR: riskRewardRatio >= 3.0,
     volume: volumeConfirmation,
     support: nearSupport,
-    regime: longTermRegime === "BULLISH" || shortTermRegime === "BULLISH",
-    lowVolatility: volatility < 0.3,
+    regime:
+      (longTermRegime === "TRENDING" || shortTermRegime === "TRENDING") &&
+      !longTermRegime.includes("BEARISH"),
+    lowVolatility: volatility < 0.25, // Stricter
   };
 
   const bonusCount = Object.values(bonusConditions).filter(Boolean).length;
@@ -141,44 +187,81 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
   let qualifyingTier = null;
   let tierName = "";
 
-  // Check each tier from strongest to weakest
   for (const [name, tier] of Object.entries(buyTiers)) {
     const meetsScore = score >= tier.minScore && score <= tier.maxScore;
     const meetsConfidence = confidence >= tier.minConfidence;
     const meetsRR = riskRewardRatio >= tier.minRiskReward;
-    const meetsRS = relativeStrength >= tier.minRelativeStrength;
+    const meetsRS =
+      relativeStrength >= tier.minRelativeStrength &&
+      relativeStrength <= tier.maxRelativeStrength;
     const meetsBonus = bonusCount >= tier.requiredConditions;
+    const meetsPullback =
+      !tier.requiresPullback || bonusConditions.confirmedPullback;
 
-    if (meetsScore && meetsConfidence && meetsRR && meetsRS && meetsBonus) {
+    if (
+      meetsScore &&
+      meetsConfidence &&
+      meetsRR &&
+      meetsRS &&
+      meetsBonus &&
+      meetsPullback
+    ) {
       qualifyingTier = tier;
       tierName = name;
       break;
     }
   }
 
-  // ===== SPECIAL CASES =====
-  // High-confidence breakouts or pullbacks can override normal criteria
+  // ===== SPECIAL SETUPS (MORE STRICT) =====
   const specialSetup = checkSpecialSetups(
     keyInsights,
     confidence,
     riskRewardRatio,
     stage,
-    bonusConditions
+    bonusConditions,
+    extension
   );
 
-  if (specialSetup.qualified && !qualifyingTier) {
-    qualifyingTier = buyTiers.opportunistic;
+  // Only allow special setups if they're really good
+  if (
+    specialSetup.qualified &&
+    !qualifyingTier &&
+    specialSetup.confidence >= 0.6
+  ) {
+    qualifyingTier = buyTiers.standard;
     tierName = "special";
   }
 
   // ===== GENERATE BUY DECISION =====
-  if (qualifyingTier || specialSetup.qualified) {
+  if (
+    qualifyingTier ||
+    (specialSetup.qualified && specialSetup.confidence >= 0.6)
+  ) {
+    // Final safety check - no buying if showing any exhaustion
+    if (exhaustion.signals && exhaustion.signals.length > 0) {
+      return {
+        isBuyNow: false,
+        reason: `WAIT - Exhaustion signals present: ${exhaustion.signals.join(
+          ", "
+        )}`,
+        waitForConfirmation: true,
+        details: {
+          score,
+          confidence,
+          riskRewardRatio,
+          exhaustionSignals: exhaustion.signals,
+          suggestion: "Wait for exhaustion to clear",
+        },
+      };
+    }
+
     const positionSize = getPositionSize(
       tierName,
       confidence,
       riskRewardRatio,
       volatility,
-      bonusCount
+      bonusCount,
+      extension
     );
 
     const reasons = buildBuyReasons(
@@ -213,19 +296,21 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
           .map(([k]) => k),
         regime: `${longTermRegime}/${shortTermRegime}`,
         specialSetup: specialSetup.type,
+        extensionLevel: extension.extensionLevel,
       },
     };
   }
 
   // ===== NEAR MISS ANALYSIS =====
-  // Identify what's preventing a buy signal
   const nearMissAnalysis = analyzeNearMiss(
     score,
     confidence,
     riskRewardRatio,
     relativeStrength,
     bonusCount,
-    buyTiers.opportunistic
+    buyTiers.standard,
+    bonusConditions,
+    extension
   );
 
   if (nearMissAnalysis.isNearMiss) {
@@ -267,7 +352,7 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
   };
 }
 
-// ===== HELPER FUNCTIONS =====
+// ===== UPDATED HELPER FUNCTIONS =====
 
 function getDisqualifyReason(
   stage,
@@ -276,7 +361,8 @@ function getDisqualifyReason(
   volatility,
   stopLoss,
   priceTarget,
-  relativeStrength
+  relativeStrength,
+  extension
 ) {
   if (stage === "DECLINING") return "Declining stage";
   if (stage === "DISTRIBUTION") return "Distribution stage";
@@ -287,6 +373,12 @@ function getDisqualifyReason(
   if (!Number.isFinite(stopLoss) || !Number.isFinite(priceTarget))
     return "Invalid levels";
   if (relativeStrength < 40) return `Very weak RS (${relativeStrength})`;
+  if (extension.shortTermGain > 0.15)
+    return `Recent gain too high (${(extension.shortTermGain * 100).toFixed(
+      0
+    )}%)`;
+  if (extension.consecutiveUpDays >= 7)
+    return `Too many consecutive up days (${extension.consecutiveUpDays})`;
   return "Failed criteria";
 }
 
@@ -295,42 +387,51 @@ function checkSpecialSetups(
   confidence,
   riskRewardRatio,
   stage,
-  bonusConditions
+  bonusConditions,
+  extension
 ) {
   const insightsText = keyInsights.join(" ").toLowerCase();
 
-  // Breakout setup
+  // NEW: No special setups if extended
+  if (extension.isExtended) {
+    return { qualified: false, type: null, confidence: 0 };
+  }
+
+  // Breakout setup (STRICTER)
   if (
     (insightsText.includes("breakout") ||
       insightsText.includes("breaking out")) &&
-    confidence >= 0.45 &&
-    riskRewardRatio >= 1.8 &&
-    (bonusConditions.volume || bonusConditions.institutional)
+    confidence >= 0.6 && // Raised from 0.45
+    riskRewardRatio >= 2.5 && // Raised from 1.8
+    bonusConditions.volume &&
+    bonusConditions.institutional
   ) {
-    return { qualified: true, type: "breakout" };
+    return { qualified: true, type: "breakout", confidence };
   }
 
-  // Pullback to support
+  // Pullback to support (STRICTER)
   if (
     insightsText.includes("pullback") &&
     bonusConditions.support &&
+    bonusConditions.confirmedPullback && // NEW requirement
     stage === "ADVANCING" &&
-    confidence >= 0.4
+    confidence >= 0.55 // Raised from 0.4
   ) {
-    return { qualified: true, type: "pullback" };
+    return { qualified: true, type: "pullback", confidence };
   }
 
-  // Accumulation completion
+  // Accumulation completion (STRICTER)
   if (
     stage === "ACCUMULATION" &&
     bonusConditions.institutional &&
-    confidence >= 0.45 &&
-    riskRewardRatio >= 2.0
+    confidence >= 0.6 && // Raised from 0.45
+    riskRewardRatio >= 2.5 && // Raised from 2.0
+    !extension.isExtended
   ) {
-    return { qualified: true, type: "accumulation" };
+    return { qualified: true, type: "accumulation", confidence };
   }
 
-  return { qualified: false, type: null };
+  return { qualified: false, type: null, confidence: 0 };
 }
 
 function getPositionSize(
@@ -338,19 +439,24 @@ function getPositionSize(
   confidence,
   riskRewardRatio,
   volatility,
-  bonusCount
+  bonusCount,
+  extension
 ) {
+  // NEW: Never full size if any extension present
+  if (extension.distanceFromMA20 > 0.08) {
+    return "HALF";
+  }
+
   let baseSize;
 
   // Base size by tier
   switch (tierName) {
     case "strong":
-      baseSize = "FULL";
+      baseSize = bonusCount >= 6 ? "FULL" : "NORMAL+"; // Harder to get full
       break;
     case "standard":
       baseSize = "NORMAL";
       break;
-    case "opportunistic":
     case "special":
       baseSize = "HALF";
       break;
@@ -359,25 +465,99 @@ function getPositionSize(
   }
 
   // Adjust for volatility
-  if (volatility > 0.45) {
-    // Reduce by one level for high volatility
+  if (volatility > 0.35) {
+    // Stricter than 0.45
     if (baseSize === "FULL") baseSize = "NORMAL";
+    else if (baseSize === "NORMAL+") baseSize = "NORMAL";
     else if (baseSize === "NORMAL") baseSize = "HALF";
     else if (baseSize === "HALF") baseSize = "QUARTER";
   }
 
-  // Boost for exceptional setups
+  // Only boost for truly exceptional setups
   if (
-    bonusCount >= 6 &&
-    confidence >= 0.7 &&
-    riskRewardRatio >= 3.0 &&
-    volatility < 0.3
+    bonusCount >= 7 && // Raised from 6
+    confidence >= 0.75 && // Raised from 0.7
+    riskRewardRatio >= 3.5 && // Raised from 3.0
+    volatility < 0.25 && // Stricter
+    !extension.isExtended
   ) {
-    if (baseSize === "NORMAL") baseSize = "FULL";
+    if (baseSize === "NORMAL") baseSize = "NORMAL+";
     else if (baseSize === "HALF") baseSize = "NORMAL";
   }
 
   return baseSize;
+}
+
+function analyzeNearMiss(
+  score,
+  confidence,
+  riskRewardRatio,
+  relativeStrength,
+  bonusCount,
+  minTier,
+  bonusConditions,
+  extension
+) {
+  const missing = [];
+
+  // Check against minimum tier
+  if (score > minTier.maxScore) {
+    missing.push(`score ${score} > ${minTier.maxScore}`);
+  }
+  if (confidence < minTier.minConfidence) {
+    missing.push(
+      `conf ${Math.round(confidence * 100)}% < ${Math.round(
+        minTier.minConfidence * 100
+      )}%`
+    );
+  }
+  if (riskRewardRatio < minTier.minRiskReward) {
+    missing.push(
+      `R:R ${riskRewardRatio.toFixed(1)} < ${minTier.minRiskReward}`
+    );
+  }
+  if (relativeStrength < minTier.minRelativeStrength) {
+    missing.push(`RS ${relativeStrength} < ${minTier.minRelativeStrength}`);
+  }
+  if (relativeStrength > minTier.maxRelativeStrength) {
+    missing.push(
+      `RS ${relativeStrength} > ${minTier.maxRelativeStrength} (too hot)`
+    );
+  }
+  if (bonusCount < minTier.requiredConditions) {
+    missing.push(
+      `${bonusCount}/${minTier.requiredConditions} bonus conditions`
+    );
+  }
+
+  // NEW: Check if just needs pullback
+  if (extension.isExtended && missing.length === 0) {
+    return {
+      isNearMiss: true,
+      missing: ["waiting for pullback"],
+      reason: "Good setup but extended - wait for pullback",
+      suggestion: "Monitor for pullback to support",
+    };
+  }
+
+  // It's a near miss if only 1-2 things are missing
+  const isNearMiss = missing.length <= 2 && missing.length > 0;
+
+  if (isNearMiss) {
+    const suggestion =
+      missing.length === 1
+        ? "Almost ready"
+        : "Needs improvement in multiple areas";
+
+    return {
+      isNearMiss: true,
+      missing,
+      reason: missing.slice(0, 2).join(", "),
+      suggestion,
+    };
+  }
+
+  return { isNearMiss: false };
 }
 
 function buildBuyReasons(
@@ -413,7 +593,9 @@ function buildBuyReasons(
   }
 
   // Add most relevant bonus conditions
-  if (bonusConditions.strongTrend) {
+  if (bonusConditions.confirmedPullback) {
+    reasons.push("confirmed pullback");
+  } else if (bonusConditions.strongTrend) {
     reasons.push("strong trend");
   } else if (bonusConditions.institutional) {
     reasons.push("institutional buying");
@@ -421,72 +603,7 @@ function buildBuyReasons(
     reasons.push(`RS ${relativeStrength}`);
   }
 
-  // Add relevant insight if not redundant
-  const relevantInsight = keyInsights.find(
-    (insight) =>
-      !reasons.some((r) => r.toLowerCase().includes(insight.toLowerCase())) &&
-      insight.length < 30
-  );
-  if (relevantInsight) {
-    reasons.push(relevantInsight);
-  }
-
-  return reasons.slice(0, 5); // Limit to 5 reasons
-}
-
-function analyzeNearMiss(
-  score,
-  confidence,
-  riskRewardRatio,
-  relativeStrength,
-  bonusCount,
-  minTier
-) {
-  const missing = [];
-
-  // Check against minimum tier
-  if (score > minTier.maxScore) {
-    missing.push(`score ${score} > ${minTier.maxScore}`);
-  }
-  if (confidence < minTier.minConfidence) {
-    missing.push(
-      `conf ${Math.round(confidence * 100)}% < ${Math.round(
-        minTier.minConfidence * 100
-      )}%`
-    );
-  }
-  if (riskRewardRatio < minTier.minRiskReward) {
-    missing.push(
-      `R:R ${riskRewardRatio.toFixed(1)} < ${minTier.minRiskReward}`
-    );
-  }
-  if (relativeStrength < minTier.minRelativeStrength) {
-    missing.push(`RS ${relativeStrength} < ${minTier.minRelativeStrength}`);
-  }
-  if (bonusCount < minTier.requiredConditions) {
-    missing.push(
-      `${bonusCount}/${minTier.requiredConditions} bonus conditions`
-    );
-  }
-
-  // It's a near miss if only 1-2 things are missing
-  const isNearMiss = missing.length <= 2 && missing.length > 0;
-
-  if (isNearMiss) {
-    const suggestion =
-      missing.length === 1
-        ? "Almost ready"
-        : "Needs improvement in multiple areas";
-
-    return {
-      isNearMiss: true,
-      missing,
-      reason: missing.slice(0, 2).join(", "),
-      suggestion,
-    };
-  }
-
-  return { isNearMiss: false };
+  return reasons.slice(0, 5);
 }
 
 function buildRejectionReason(
@@ -502,16 +619,21 @@ function buildRejectionReason(
   if (score > 2) {
     issues.push(`Weak signal (${score})`);
   }
-  if (confidence < 0.4) {
+  if (confidence < 0.55) {
+    // Raised threshold
     issues.push(`Low conf (${Math.round(confidence * 100)}%)`);
   }
-  if (riskRewardRatio < 1.8) {
+  if (riskRewardRatio < 2.5) {
+    // Raised threshold
     issues.push(`Poor R:R (${riskRewardRatio.toFixed(1)}:1)`);
   }
   if (relativeStrength < 50) {
     issues.push(`Weak RS (${relativeStrength})`);
+  } else if (relativeStrength > 90) {
+    issues.push(`RS too high (${relativeStrength}) - likely extended`);
   }
-  if (bonusCount < 2) {
+  if (bonusCount < 3) {
+    // Raised threshold
     issues.push(`Few positives (${bonusCount})`);
   }
 

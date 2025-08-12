@@ -1,15 +1,12 @@
 /**
- * Enhanced Entry Timing Orchestrator for Swing Trading
- * Coordinates Layer 1 (30-day patterns) and Layer 2 (90-day context)
+ * Enhanced Entry Timing Orchestrator for Swing Trading - FIXED VERSION
  *
- * Key improvements:
- * - Swing-optimized stop/target placement
- * - Uses swing points for natural stops
- * - Minimum 2:1 R:R enforcement
- * - Confidence-based position sizing hints
- * - Stage-aware adjustments
- * - Better feature interpretation from new layers
- * - Fixed confidence variable handling
+ * Major fixes to prevent chasing price:
+ * - Added parabolic/exhaustion detection
+ * - Strict pullback validation
+ * - Multiple extension checks
+ * - Exhaustion indicators
+ * - "Wait for pullback" signals
  */
 
 import { getLayer1PatternScore } from "./layer1Analysis.js";
@@ -37,6 +34,10 @@ export function getComprehensiveEntryTiming(
     (a, b) => new Date(a.date) - new Date(b.date)
   );
 
+  // ---- NEW: Extension and Exhaustion Analysis
+  const extensionAnalysis = analyzeExtension(stock, sorted);
+  const exhaustionSignals = detectExhaustion(stock, sorted);
+
   // ---- Layer 1: Pattern Analysis (30-day focus)
   console.log("Running Layer 1 Pattern Analysis...");
   const layer1Score = getLayer1PatternScore(stock, sorted);
@@ -52,17 +53,16 @@ export function getComprehensiveEntryTiming(
     confidence: layer2Confidence = 0.5,
     insights = [],
   } = layer2Result;
-  console.log("Running Layer 2 ML Analysis - finished");
 
   // ---- Adaptive Weighting based on market conditions
   const weights = getSwingAdaptiveWeights(
     longTermRegime,
     shortTermRegime,
-    features
+    features,
+    extensionAnalysis // NEW: Pass extension analysis
   );
-  console.log("Adaptive weights calculated");
 
-  // ---- Score Combination
+  // ---- Score Combination with Extension Penalties
   const { finalScore, confidence, recommendation } = combineScoresForSwing(
     layer1Score,
     mlScore,
@@ -70,10 +70,10 @@ export function getComprehensiveEntryTiming(
     layer2Confidence,
     features,
     longTermRegime,
-    shortTermRegime
+    shortTermRegime,
+    extensionAnalysis, // NEW
+    exhaustionSignals // NEW
   );
-
-  console.log("Score combination completed");
 
   // ---- Risk Management (Stop Loss & Price Target)
   const riskManagement = calculateSwingRiskManagement(
@@ -81,10 +81,9 @@ export function getComprehensiveEntryTiming(
     sorted,
     finalScore,
     confidence,
-    features
+    features,
+    extensionAnalysis // NEW: Consider extension in risk management
   );
-
-  console.log("Risk management calculated");
 
   // ---- Generate comprehensive insights
   const keyInsights = generateSwingInsights(
@@ -92,7 +91,9 @@ export function getComprehensiveEntryTiming(
     insights,
     layer1Score,
     mlScore,
-    riskManagement
+    riskManagement,
+    extensionAnalysis,
+    exhaustionSignals
   );
 
   // ---- Compile final result
@@ -109,6 +110,9 @@ export function getComprehensiveEntryTiming(
     stage: features.stageAnalysis_current || "UNKNOWN",
     relativeStrength: features.relativeStrength_rsRating || 50,
     keyInsights: keyInsights,
+    // NEW: Extension and exhaustion info
+    extension: extensionAnalysis,
+    exhaustion: exhaustionSignals,
     // Debug info
     debug: {
       layer1Score,
@@ -116,53 +120,257 @@ export function getComprehensiveEntryTiming(
       weights,
       rawConfidence: layer2Confidence,
       features: Object.keys(features).length,
+      isExtended: extensionAnalysis.isExtended,
+      isExhausted: exhaustionSignals.isExhausted,
     },
   };
 }
 
-/* ════════════════════ ADAPTIVE WEIGHTING ════════════════════ */
+/* ════════════════════ NEW: EXTENSION ANALYSIS ════════════════════ */
 
-function getSwingAdaptiveWeights(longTermRegime, shortTermRegime, features) {
+function analyzeExtension(stock, historicalData) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+
+  const analysis = {
+    isExtended: false,
+    isParabolic: false,
+    extensionLevel: 0,
+    distanceFromMA20: 0,
+    distanceFromMA50: 0,
+    distanceFromMA200: 0,
+    consecutiveUpDays: 0,
+    shortTermGain: 0,
+    accelerationRate: 0,
+    extensionScore: 0, // 0-1, higher = more extended
+  };
+
+  if (!stock || historicalData.length < 30) return analysis;
+
+  const currentPrice = n(stock.currentPrice);
+  const ma20 = n(stock.movingAverage20d);
+  const ma50 = n(stock.movingAverage50d);
+  const ma200 = n(stock.movingAverage200d);
+
+  // Distance from MAs
+  if (ma20 > 0) {
+    analysis.distanceFromMA20 = (currentPrice - ma20) / ma20;
+  }
+  if (ma50 > 0) {
+    analysis.distanceFromMA50 = (currentPrice - ma50) / ma50;
+  }
+  if (ma200 > 0) {
+    analysis.distanceFromMA200 = (currentPrice - ma200) / ma200;
+  }
+
+  // Count consecutive up days
+  const recentData = historicalData.slice(-10);
+  let upDays = 0;
+  for (let i = 1; i < recentData.length; i++) {
+    if (n(recentData[i].close) > n(recentData[i - 1].close)) {
+      upDays++;
+    } else {
+      break; // Stop at first down day
+    }
+  }
+  analysis.consecutiveUpDays = upDays;
+
+  // Short-term gain (5-day and 10-day)
+  if (historicalData.length >= 10) {
+    const price5DaysAgo = n(historicalData[historicalData.length - 6].close);
+    const price10DaysAgo = n(historicalData[historicalData.length - 11].close);
+    const gain5Day =
+      price5DaysAgo > 0 ? (currentPrice - price5DaysAgo) / price5DaysAgo : 0;
+    const gain10Day =
+      price10DaysAgo > 0 ? (currentPrice - price10DaysAgo) / price10DaysAgo : 0;
+    analysis.shortTermGain = Math.max(gain5Day, gain10Day);
+  }
+
+  // Check for parabolic acceleration
+  if (historicalData.length >= 20) {
+    const roc5 = calculateROC(historicalData.slice(-5));
+    const roc10 = calculateROC(historicalData.slice(-10));
+    const roc20 = calculateROC(historicalData.slice(-20));
+
+    // Parabolic = each period's ROC is significantly higher
+    if (roc5 > roc10 * 1.5 && roc10 > roc20 * 1.5 && roc5 > 0.15) {
+      analysis.isParabolic = true;
+      analysis.accelerationRate = roc5 / roc20;
+    }
+  }
+
+  // Calculate extension score (0-1)
+  let extensionScore = 0;
+
+  // MA extension checks (weighted)
+  if (analysis.distanceFromMA20 > 0.08) extensionScore += 0.2;
+  if (analysis.distanceFromMA20 > 0.12) extensionScore += 0.1;
+  if (analysis.distanceFromMA50 > 0.15) extensionScore += 0.2;
+  if (analysis.distanceFromMA50 > 0.2) extensionScore += 0.1;
+  if (analysis.distanceFromMA200 > 0.3) extensionScore += 0.1;
+
+  // Momentum extension
+  if (analysis.consecutiveUpDays >= 5) extensionScore += 0.1;
+  if (analysis.consecutiveUpDays >= 7) extensionScore += 0.1;
+  if (analysis.shortTermGain > 0.15) extensionScore += 0.1;
+  if (analysis.shortTermGain > 0.2) extensionScore += 0.1;
+
+  // Parabolic penalty
+  if (analysis.isParabolic) extensionScore += 0.3;
+
+  analysis.extensionScore = Math.min(1, extensionScore);
+  analysis.isExtended = extensionScore >= 0.5;
+
+  // Determine extension level
+  if (extensionScore >= 0.7) {
+    analysis.extensionLevel = "EXTREME";
+  } else if (extensionScore >= 0.5) {
+    analysis.extensionLevel = "HIGH";
+  } else if (extensionScore >= 0.3) {
+    analysis.extensionLevel = "MODERATE";
+  } else {
+    analysis.extensionLevel = "LOW";
+  }
+
+  return analysis;
+}
+
+/* ════════════════════ NEW: EXHAUSTION DETECTION ════════════════════ */
+
+function detectExhaustion(stock, historicalData) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+
+  const exhaustion = {
+    isExhausted: false,
+    signals: [],
+    climacticVolume: false,
+    rsiDivergence: false,
+    momentumLoss: false,
+    resistanceRejection: false,
+    exhaustionScore: 0,
+  };
+
+  if (!stock || historicalData.length < 30) return exhaustion;
+
+  const recentData = historicalData.slice(-20);
+
+  // 1. Climactic Volume Check
+  const volumes = recentData.map((d) => n(d.volume));
+  const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+  const maxRecentVol = Math.max(...volumes.slice(-5));
+
+  if (maxRecentVol > avgVolume * 2.5) {
+    // Check if this was on an up day that failed to hold
+    const highVolDay = recentData.find((d) => n(d.volume) === maxRecentVol);
+    if (highVolDay) {
+      const dayIndex = recentData.indexOf(highVolDay);
+      if (dayIndex < recentData.length - 1) {
+        const nextDay = recentData[dayIndex + 1];
+        if (n(nextDay.close) < n(highVolDay.close)) {
+          exhaustion.climacticVolume = true;
+          exhaustion.signals.push("Climactic volume reversal");
+        }
+      }
+    }
+  }
+
+  // 2. RSI Divergence Check
+  const rsi = n(stock.rsi14);
+  if (rsi > 70 && historicalData.length >= 10) {
+    // Check if price made new high but RSI didn't
+    const recentHigh = Math.max(...recentData.slice(-5).map((d) => n(d.high)));
+    const earlierHigh = Math.max(
+      ...recentData.slice(-15, -10).map((d) => n(d.high))
+    );
+
+    if (recentHigh > earlierHigh && rsi < 75) {
+      exhaustion.rsiDivergence = true;
+      exhaustion.signals.push("RSI bearish divergence");
+    }
+  }
+
+  // 3. Momentum Loss Check
+  const macd = n(stock.macd);
+  const signal = n(stock.macdSignal);
+  const histogram = macd - signal;
+
+  if (histogram < 0 && n(stock.currentPrice) > n(stock.movingAverage20d)) {
+    exhaustion.momentumLoss = true;
+    exhaustion.signals.push("MACD momentum loss");
+  }
+
+  // 4. Resistance Rejection Check
+  const high52w = n(stock.fiftyTwoWeekHigh);
+  const currentPrice = n(stock.currentPrice);
+
+  if (high52w > 0) {
+    const nearResistance = Math.abs(currentPrice - high52w) / high52w < 0.02;
+    const failedBreakout = currentPrice < high52w * 0.98 && nearResistance;
+
+    if (failedBreakout) {
+      // Check if we touched resistance and reversed
+      const touchedResistance = recentData
+        .slice(-5)
+        .some((d) => n(d.high) >= high52w * 0.99);
+      if (touchedResistance) {
+        exhaustion.resistanceRejection = true;
+        exhaustion.signals.push("Rejected at 52-week high");
+      }
+    }
+  }
+
+  // Calculate exhaustion score
+  let score = 0;
+  if (exhaustion.climacticVolume) score += 0.3;
+  if (exhaustion.rsiDivergence) score += 0.25;
+  if (exhaustion.momentumLoss) score += 0.2;
+  if (exhaustion.resistanceRejection) score += 0.25;
+
+  exhaustion.exhaustionScore = score;
+  exhaustion.isExhausted = score >= 0.5;
+
+  return exhaustion;
+}
+
+/* ════════════════════ UPDATED: ADAPTIVE WEIGHTING ════════════════════ */
+
+function getSwingAdaptiveWeights(
+  longTermRegime,
+  shortTermRegime,
+  features,
+  extensionAnalysis
+) {
   const lt = longTermRegime?.type || "UNKNOWN";
   const st = shortTermRegime?.type || "UNKNOWN";
 
   // Base weights for swing trading
   let weights = {
-    layer1: 0.4, // Pattern recognition
-    layer2: 0.6, // Context and regime
+    layer1: 0.4,
+    layer2: 0.6,
   };
 
-  // Adjust based on market conditions
-  if (lt === "TRENDING" && st === "TRENDING") {
-    // Strong trending market - ML context more important
-    weights = { layer1: 0.35, layer2: 0.65 };
-  } else if (lt === "RANGE_BOUND" || st === "RANGE_BOUND") {
-    // Range-bound - patterns more important
-    weights = { layer1: 0.5, layer2: 0.5 };
-  } else if (lt === "VOLATILE" || st === "VOLATILE") {
-    // High volatility - be more conservative, rely on ML
-    weights = { layer1: 0.3, layer2: 0.7 };
-  } else if (lt === "TRANSITIONAL" || st === "TRANSITIONAL") {
-    // Market in transition - balance both
-    weights = { layer1: 0.45, layer2: 0.55 };
+  // NEW: Heavily reduce pattern importance when extended
+  if (extensionAnalysis.isExtended) {
+    weights.layer1 *= 0.5; // Patterns less reliable when extended
+    weights.layer2 = 1 - weights.layer1;
   }
 
-  // Stage-based adjustments
-  const stage = features.stageAnalysis_current;
-  if (stage === "ACCUMULATION") {
-    // In accumulation, patterns matter more
-    weights.layer1 = Math.min(0.6, weights.layer1 * 1.2);
-    weights.layer2 = 1 - weights.layer1;
-  } else if (stage === "DECLINING") {
-    // In decline, context matters more
-    weights.layer1 = Math.max(0.25, weights.layer1 * 0.8);
-    weights.layer2 = 1 - weights.layer1;
+  // Existing regime adjustments...
+  if (
+    lt === "TRENDING" &&
+    st === "TRENDING" &&
+    !extensionAnalysis.isParabolic
+  ) {
+    weights = { layer1: 0.35, layer2: 0.65 };
+  } else if (lt === "RANGE_BOUND" || st === "RANGE_BOUND") {
+    weights = { layer1: 0.5, layer2: 0.5 };
+  } else if (lt === "VOLATILE" || st === "VOLATILE") {
+    weights = { layer1: 0.3, layer2: 0.7 };
   }
 
   return weights;
 }
 
-/* ════════════════════ SCORE COMBINATION ════════════════════ */
+/* ════════════════════ UPDATED: SCORE COMBINATION ════════════════════ */
 
 function combineScoresForSwing(
   layer1Score,
@@ -171,70 +379,89 @@ function combineScoresForSwing(
   layer2Confidence,
   features,
   longTermRegime,
-  shortTermRegime
+  shortTermRegime,
+  extensionAnalysis,
+  exhaustionSignals
 ) {
-  // Use layer2Confidence throughout this function
   const confidence = Number.isFinite(layer2Confidence) ? layer2Confidence : 0.5;
 
-  // MORE CONSERVATIVE normalization
-  // 1 (best) → +2, 4 (neutral) → 0, 7 (worst) → -4
-  const normalizedLayer1 = (4 - layer1Score) * 0.667; // Reduced from 1.0
-
-  // Clamp ML score more aggressively
-  const clampedML = Math.max(-4, Math.min(3, mlScore)); // Was -5 to +5
+  // Normalize scores
+  const normalizedLayer1 = (4 - layer1Score) * 0.667;
+  const clampedML = Math.max(-4, Math.min(3, mlScore));
 
   // Weighted combination
   let combinedScore =
     normalizedLayer1 * weights.layer1 + clampedML * weights.layer2;
 
-  // REDUCED adjustments
+  // RS Rating adjustments (REDUCED for high RS - might be extended)
   const rsRating = features.relativeStrength_rsRating || 50;
-  if (rsRating >= 85) {
-    // Raised from 80
-    combinedScore += 0.5; // Was 1.0
+  if (rsRating >= 85 && !extensionAnalysis.isExtended) {
+    combinedScore += 0.3; // Reduced from 0.5, only if not extended
+  } else if (rsRating >= 85 && extensionAnalysis.isExtended) {
+    combinedScore -= 0.5; // PENALTY for high RS + extended
   } else if (rsRating <= 30) {
-    combinedScore -= 1.5; // Was -1.0
+    combinedScore -= 1.5;
   }
 
-  // Stage adjustments (more conservative)
+  // Stage adjustments (MORE STRICT)
   const stage = features.stageAnalysis_current;
-  if (
-    stage === "ADVANCING" &&
-    features.priceStructure_pullback &&
-    features.priceStructure_higherHighsLows
-  ) {
-    // Added condition
-    combinedScore += 0.8; // Was 1.5
+
+  // REMOVED the problematic advancing bonus
+  // Now only reward advancing if we have a CONFIRMED pullback
+  if (stage === "ADVANCING") {
+    if (
+      features.priceStructure_pullback &&
+      isPullbackConfirmed(features, extensionAnalysis)
+    ) {
+      combinedScore += 0.8;
+    } else if (extensionAnalysis.isExtended) {
+      combinedScore -= 1.5; // Penalty for chasing in advancing stage
+    }
   } else if (stage === "DISTRIBUTION" || stage === "DECLINING") {
-    combinedScore -= 2.0; // Was -1.5
+    combinedScore -= 2.0;
+  }
+
+  // NEW: Extension penalties
+  if (extensionAnalysis.isExtended) {
+    combinedScore -= extensionAnalysis.extensionScore * 3; // Up to -3 penalty
+    confidence *= 1 - extensionAnalysis.extensionScore * 0.5; // Reduce confidence
+  }
+
+  // NEW: Parabolic penalty
+  if (extensionAnalysis.isParabolic) {
+    combinedScore -= 2.0;
+    confidence *= 0.5;
+  }
+
+  // NEW: Exhaustion penalties
+  if (exhaustionSignals.isExhausted) {
+    combinedScore -= exhaustionSignals.exhaustionScore * 2;
+    confidence *= 1 - exhaustionSignals.exhaustionScore * 0.3;
   }
 
   // STRICTER final score mapping
   let finalScore;
   let recommendation;
 
-  if (combinedScore >= 4.0) {
-    // Was 3.0
+  if (combinedScore >= 4.5) {
+    // Raised from 4.0
     finalScore = 1;
     recommendation = "STRONG BUY";
-  } else if (combinedScore >= 2.5) {
-    // Was 2.0
+  } else if (combinedScore >= 3.0) {
+    // Raised from 2.5
     finalScore = 2;
     recommendation = "BUY";
-  } else if (combinedScore >= 1.0) {
-    // Same
+  } else if (combinedScore >= 1.5) {
+    // Raised from 1.0
     finalScore = 3;
     recommendation = "WATCH - Positive";
-  } else if (combinedScore >= -0.5) {
-    // Same
+  } else if (combinedScore >= 0) {
     finalScore = 4;
     recommendation = "NEUTRAL";
-  } else if (combinedScore >= -2.0) {
-    // Was -1.5
+  } else if (combinedScore >= -1.5) {
     finalScore = 5;
     recommendation = "WATCH - Negative";
-  } else if (combinedScore >= -3.5) {
-    // Was -2.5
+  } else if (combinedScore >= -3.0) {
     finalScore = 6;
     recommendation = "AVOID";
   } else {
@@ -242,34 +469,53 @@ function combineScoresForSwing(
     recommendation = "STRONG AVOID";
   }
 
-  // MORE AGGRESSIVE confidence veto - now using the properly defined confidence
-  if (confidence < 0.5 && finalScore <= 2) {
-    // Was 0.3
-    finalScore = Math.min(4, finalScore + 2); // Push to neutral
-    recommendation = "NEUTRAL - Low confidence";
+  // NEW: Override for extended/exhausted stocks
+  if (
+    extensionAnalysis.extensionLevel === "EXTREME" ||
+    exhaustionSignals.isExhausted
+  ) {
+    if (finalScore <= 3) {
+      finalScore = Math.max(4, finalScore + 1);
+      recommendation = "WAIT FOR PULLBACK - Too extended";
+    }
   }
 
-  // Add market condition veto
-  if (
-    (longTermRegime?.type === "VOLATILE" ||
-      shortTermRegime?.type === "VOLATILE") &&
-    finalScore <= 2
-  ) {
-    finalScore = Math.min(3, finalScore + 1);
-    recommendation = "WATCH - High volatility";
+  // Confidence veto remains strict
+  if (confidence < 0.5 && finalScore <= 2) {
+    finalScore = Math.min(4, finalScore + 2);
+    recommendation = "NEUTRAL - Low confidence";
   }
 
   return { finalScore, confidence, recommendation };
 }
 
-/* ════════════════════ RISK MANAGEMENT ════════════════════ */
+/* ════════════════════ NEW: PULLBACK CONFIRMATION ════════════════════ */
+
+function isPullbackConfirmed(features, extensionAnalysis) {
+  // A confirmed pullback must:
+  // 1. Not be extended
+  // 2. Have found support (bounced)
+  // 3. Show accumulation or positive volume
+
+  if (extensionAnalysis.isExtended) return false;
+
+  const hasSupport = features.trendStructure_nearSupport === 1;
+  const hasBounce = features.priceStructure_pullback === 1;
+  const hasVolume =
+    features.volumeDynamics_accumVolume > features.volumeDynamics_distVolume;
+
+  return hasSupport && hasBounce && hasVolume;
+}
+
+/* ════════════════════ UPDATED: RISK MANAGEMENT ════════════════════ */
 
 function calculateSwingRiskManagement(
   stock,
   historicalData,
   score,
   confidence,
-  features
+  features,
+  extensionAnalysis
 ) {
   const currentPrice = Number(stock?.currentPrice) || 0;
   const atr = Number(stock?.atr14) || calculateATR(historicalData.slice(-15));
@@ -284,7 +530,6 @@ function calculateSwingRiskManagement(
   }
 
   // ===== STOP LOSS CALCULATION =====
-
   const stopLoss = calculateSwingStopLoss(
     stock,
     historicalData,
@@ -292,11 +537,11 @@ function calculateSwingRiskManagement(
     atr,
     score,
     confidence,
-    features
+    features,
+    extensionAnalysis
   );
 
   // ===== PRICE TARGET CALCULATION =====
-
   const priceTarget = calculateSwingPriceTarget(
     stock,
     historicalData,
@@ -305,31 +550,27 @@ function calculateSwingRiskManagement(
     stopLoss,
     score,
     confidence,
-    features
+    features,
+    extensionAnalysis
   );
 
-  // ===== RISK/REWARD RATIO =====
-
+  // Risk/Reward calculation
   const risk = currentPrice - stopLoss;
   const reward = priceTarget - currentPrice;
   const riskRewardRatio = risk > 0 ? reward / risk : 0;
 
-  // ===== POSITION SIZE HINT =====
-
+  // Position size hint (more conservative when extended)
   const positionSizeHint = getPositionSizeHint(
     confidence,
     riskRewardRatio,
     features.riskMetrics_volatility || 0,
-    score
+    score,
+    extensionAnalysis
   );
 
-  // Round to JPX ticks if applicable
-  const finalStopLoss = roundToJPXTick(stopLoss, false); // Round down
-  const finalPriceTarget = roundToJPXTick(priceTarget, false); // Round down
-
   return {
-    stopLoss: finalStopLoss,
-    priceTarget: finalPriceTarget,
+    stopLoss: roundToJPXTick(stopLoss, false),
+    priceTarget: roundToJPXTick(priceTarget, false),
     riskRewardRatio: Math.round(riskRewardRatio * 10) / 10,
     positionSizeHint,
   };
@@ -342,63 +583,61 @@ function calculateSwingStopLoss(
   atr,
   score,
   confidence,
-  features
+  features,
+  extensionAnalysis
 ) {
-  // Find recent swing low
-  const swingLow = findRecentSwingLow(historicalData.slice(-30));
+  // NEW: For extended stocks, use wider stops
+  const atrMultiplier = extensionAnalysis.isExtended
+    ? score <= 2
+      ? 2.0
+      : score <= 4
+      ? 2.5
+      : 3.0 // Wider for extended
+    : score <= 2
+    ? 1.5
+    : score <= 4
+    ? 2.0
+    : 2.5; // Normal
 
-  // ATR-based stop
-  const atrMultiplier = score <= 2 ? 1.5 : score <= 4 ? 2.0 : 2.5;
   const atrStop = currentPrice - atr * atrMultiplier;
 
-  // MA-based stop
-  const ma50 = Number(stock?.movingAverage50d) || 0;
-  const maStop = ma50 > 0 ? ma50 - atr * 0.3 : 0;
+  // Find and validate swing low
+  const swingLow = findValidatedSwingLow(historicalData.slice(-30));
 
-  // Determine stop candidates
   const candidates = [];
 
-  // Swing low is preferred for swing trading
-  if (swingLow && swingLow < currentPrice && swingLow > currentPrice * 0.9) {
-    candidates.push(swingLow - atr * 0.2); // Small buffer below swing
+  // Only use swing low if it's been tested
+  if (
+    swingLow.isValid &&
+    swingLow.price < currentPrice &&
+    swingLow.price > currentPrice * 0.9
+  ) {
+    candidates.push(swingLow.price - atr * 0.2);
   }
 
   // ATR stop
   if (atrStop > currentPrice * 0.85) {
-    // Max 15% stop
     candidates.push(atrStop);
   }
 
-  // MA stop if in uptrend
-  if (
-    maStop &&
-    maStop > currentPrice * 0.9 &&
-    features.stageAnalysis_current === "ADVANCING"
-  ) {
-    candidates.push(maStop);
+  // MA stop only if not extended
+  if (!extensionAnalysis.isExtended) {
+    const ma50 = Number(stock?.movingAverage50d) || 0;
+    const maStop = ma50 > 0 ? ma50 - atr * 0.3 : 0;
+    if (maStop && maStop > currentPrice * 0.9) {
+      candidates.push(maStop);
+    }
   }
 
-  // Choose stop based on score
+  // Choose stop
   let stopLoss;
   if (candidates.length === 0) {
-    // Fallback: percentage-based
     stopLoss =
       currentPrice * (1 - Math.min(0.08, 0.03 + (atr / currentPrice) * 2));
-  } else if (score <= 2) {
-    // Best setups: tightest stop
-    stopLoss = Math.max(...candidates);
-  } else if (score <= 4) {
-    // Good setups: average stop
-    stopLoss = candidates.reduce((a, b) => a + b, 0) / candidates.length;
+  } else if (score <= 2 && !extensionAnalysis.isExtended) {
+    stopLoss = Math.max(...candidates); // Tightest
   } else {
-    // Weak setups: widest stop
-    stopLoss = Math.min(...candidates);
-  }
-
-  // Ensure minimum distance (at least 1% for swings)
-  const minDistance = currentPrice * 0.01;
-  if (currentPrice - stopLoss < minDistance) {
-    stopLoss = currentPrice - minDistance;
+    stopLoss = Math.min(...candidates); // Widest for safety
   }
 
   return stopLoss;
@@ -412,83 +651,70 @@ function calculateSwingPriceTarget(
   stopLoss,
   score,
   confidence,
-  features
+  features,
+  extensionAnalysis
 ) {
-  // Risk amount
   const risk = currentPrice - stopLoss;
 
-  // Minimum R:R for swing trades
-  const minRR = score <= 2 ? 3.0 : score <= 4 ? 2.5 : 2.0;
+  // NEW: Reduce targets for extended stocks
+  const minRR = extensionAnalysis.isExtended
+    ? score <= 2
+      ? 2.0
+      : score <= 4
+      ? 1.8
+      : 1.5 // Lower for extended
+    : score <= 2
+    ? 3.0
+    : score <= 4
+    ? 2.5
+    : 2.0; // Normal
+
   const minTarget = currentPrice + risk * minRR;
 
-  // Find recent swing high
-  const swingHigh = findRecentSwingHigh(historicalData.slice(-30));
+  // For extended stocks, be more conservative
+  if (extensionAnalysis.isExtended) {
+    return Math.min(minTarget, currentPrice * 1.08); // Cap at 8% for extended
+  }
 
-  // ATR-based target
+  // Normal target calculation for non-extended
   const atrMultiplier = score <= 2 ? 3.5 : score <= 4 ? 2.5 : 2.0;
   const atrTarget = currentPrice + atr * atrMultiplier;
 
-  // Resistance levels
-  const resistance52w = Number(stock?.fiftyTwoWeekHigh) || 0;
-
-  // Determine target candidates
   const candidates = [minTarget, atrTarget];
 
-  // Swing high as target
+  // Find resistance levels
+  const swingHigh = findRecentSwingHigh(historicalData.slice(-30));
   if (swingHigh && swingHigh > currentPrice * 1.05) {
-    candidates.push(swingHigh * 0.98); // Just below resistance
+    candidates.push(swingHigh * 0.98);
   }
 
-  // 52-week high if not too far
-  if (
-    resistance52w &&
-    resistance52w > currentPrice &&
-    resistance52w < currentPrice * 1.2
-  ) {
-    candidates.push(resistance52w * 0.98);
-  }
+  // Choose conservative target
+  const priceTarget = Math.min(...candidates.filter((t) => t > currentPrice));
 
-  // Measured move for patterns
-  if (features.priceStructure_breakout) {
-    const measuredMove = currentPrice * 1.15; // 15% measured move
-    candidates.push(measuredMove);
-  }
-
-  // Choose target based on score and stage
-  let priceTarget;
-  const stage = features.stageAnalysis_current;
-
-  if (stage === "ADVANCING" && score <= 2) {
-    // Strong uptrend, best setup: aggressive target
-    priceTarget = Math.max(...candidates);
-  } else if (score <= 3) {
-    // Good setup: balanced target
-    const filtered = candidates.filter((t) => t <= currentPrice * 1.15);
-    priceTarget = filtered.length ? Math.max(...filtered) : minTarget;
-  } else {
-    // Conservative target
-    priceTarget = minTarget;
-  }
-
-  // Cap at reasonable levels (20% max for swings)
-  priceTarget = Math.min(priceTarget, currentPrice * 1.2);
-
-  return priceTarget;
+  return Math.min(priceTarget, currentPrice * 1.2); // Cap at 20%
 }
 
-/* ════════════════════ POSITION SIZING ════════════════════ */
+/* ════════════════════ UPDATED: POSITION SIZING ════════════════════ */
 
-function getPositionSizeHint(confidence, riskRewardRatio, volatility, score) {
-  // Validate inputs
+function getPositionSizeHint(
+  confidence,
+  riskRewardRatio,
+  volatility,
+  score,
+  extensionAnalysis
+) {
   const safeConfidence = Number.isFinite(confidence) ? confidence : 0.5;
   const safeRR = Number.isFinite(riskRewardRatio) ? riskRewardRatio : 0;
-  const safeVolatility = Number.isFinite(volatility) ? volatility : 0.3;
-  const safeScore = Number.isFinite(score) ? score : 7;
 
-  // Base position size on confidence and R:R
+  // NEW: Never full position for extended stocks
+  if (extensionAnalysis.isExtended) {
+    return extensionAnalysis.extensionLevel === "EXTREME" ? "QUARTER" : "HALF";
+  }
+
+  // Normal position sizing
   let sizeHint = "NORMAL";
 
-  if (safeConfidence >= 0.7 && safeRR >= 3.0 && safeScore <= 2) {
+  if (safeConfidence >= 0.7 && safeRR >= 3.0 && score <= 2) {
     sizeHint = "FULL";
   } else if (safeConfidence >= 0.6 && safeRR >= 2.5) {
     sizeHint = "NORMAL+";
@@ -498,64 +724,62 @@ function getPositionSizeHint(confidence, riskRewardRatio, volatility, score) {
     sizeHint = "QUARTER";
   }
 
-  // Volatility adjustment
-  if (safeVolatility > 0.5) {
-    // High volatility: reduce size
-    if (sizeHint === "FULL") sizeHint = "NORMAL+";
-    else if (sizeHint === "NORMAL+") sizeHint = "NORMAL";
-    else if (sizeHint === "NORMAL") sizeHint = "HALF";
-  }
-
   return sizeHint;
 }
 
-/* ════════════════════ INSIGHT GENERATION ════════════════════ */
+/* ════════════════════ UPDATED: INSIGHT GENERATION ════════════════════ */
 
 function generateSwingInsights(
   features,
   layer2Insights,
   layer1Score,
   mlScore,
-  riskManagement
+  riskManagement,
+  extensionAnalysis,
+  exhaustionSignals
 ) {
-  const insights = [...layer2Insights]; // Start with Layer 2 insights
+  const insights = [...layer2Insights];
 
-  // Add entry quality insight
-  if (layer1Score <= 2 && mlScore > 2) {
-    insights.push("Strong pattern setup with positive market context");
-  } else if (layer1Score <= 3 && features.institutional_accumulation) {
-    insights.push("Good pattern with institutional accumulation");
+  // NEW: Extension warnings come first
+  if (extensionAnalysis.isExtended) {
+    insights.unshift(
+      `⚠️ Extended ${(extensionAnalysis.distanceFromMA20 * 100).toFixed(
+        0
+      )}% above MA20`
+    );
+  }
+  if (extensionAnalysis.isParabolic) {
+    insights.unshift("⚠️ PARABOLIC move detected - extreme caution");
+  }
+
+  // NEW: Exhaustion warnings
+  if (exhaustionSignals.isExhausted) {
+    insights.unshift(
+      `⚠️ Exhaustion signals: ${exhaustionSignals.signals.join(", ")}`
+    );
   }
 
   // Risk/Reward insight
-  if (riskManagement.riskRewardRatio >= 3) {
-    insights.push(`Excellent R:R ratio of ${riskManagement.riskRewardRatio}:1`);
+  if (riskManagement.riskRewardRatio >= 3 && !extensionAnalysis.isExtended) {
+    insights.push(`Good R:R ratio of ${riskManagement.riskRewardRatio}:1`);
   } else if (riskManagement.riskRewardRatio < 2) {
     insights.push(
       `Weak R:R ratio of ${riskManagement.riskRewardRatio}:1 - consider passing`
     );
   }
 
-  // Stage-specific insights
-  const stage = features.stageAnalysis_current;
-  if (stage === "ACCUMULATION" && features.priceStructure_tightRange) {
-    insights.push("Accumulation with tight range - potential breakout setup");
-  }
-
-  // Volume insights
-  if (features.volumeDynamics_dryingUp) {
-    insights.push("Volume drying up - watch for expansion");
-  }
-
-  return insights.slice(0, 5); // Limit to top 5 insights
+  return insights.slice(0, 5);
 }
 
-/* ════════════════════ UTILITY FUNCTIONS ════════════════════ */
+/* ════════════════════ NEW: VALIDATED SWING LOW ════════════════════ */
 
-function findRecentSwingLow(data) {
-  if (!data || data.length < 5) return null;
+function findValidatedSwingLow(data) {
+  const result = { price: null, isValid: false, touches: 0 };
 
-  let swingLow = null;
+  if (!data || data.length < 10) return result;
+
+  // Find potential swing lows
+  const swingLows = [];
   for (let i = 2; i < data.length - 2; i++) {
     if (
       data[i].low < data[i - 1].low &&
@@ -563,18 +787,42 @@ function findRecentSwingLow(data) {
       data[i].low < data[i + 1].low &&
       data[i].low < data[i + 2].low
     ) {
-      if (!swingLow || data[i].low < swingLow) {
-        swingLow = data[i].low;
-      }
+      swingLows.push({ index: i, price: data[i].low });
     }
   }
 
-  // If no swing found, use recent minimum
-  if (!swingLow) {
-    swingLow = Math.min(...data.slice(-10).map((d) => d.low));
+  if (swingLows.length === 0) {
+    result.price = Math.min(...data.slice(-10).map((d) => d.low));
+    return result;
   }
 
-  return swingLow;
+  // Find the most recent swing low
+  const recentSwing = swingLows[swingLows.length - 1];
+  result.price = recentSwing.price;
+
+  // Count how many times this level was tested
+  const tolerance = recentSwing.price * 0.01; // 1% tolerance
+  let touches = 0;
+
+  for (let i = recentSwing.index; i < data.length; i++) {
+    if (Math.abs(data[i].low - recentSwing.price) <= tolerance) {
+      touches++;
+    }
+  }
+
+  result.touches = touches;
+  result.isValid = touches >= 2; // Need at least 2 touches to be valid
+
+  return result;
+}
+
+/* ════════════════════ UTILITY FUNCTIONS ════════════════════ */
+
+function calculateROC(data) {
+  if (!data || data.length < 2) return 0;
+  const firstPrice = data[0].close;
+  const lastPrice = data[data.length - 1].close;
+  return firstPrice > 0 ? (lastPrice - firstPrice) / firstPrice : 0;
 }
 
 function findRecentSwingHigh(data) {
@@ -594,7 +842,6 @@ function findRecentSwingHigh(data) {
     }
   }
 
-  // If no swing found, use recent maximum
   if (!swingHigh) {
     swingHigh = Math.max(...data.slice(-10).map((d) => d.high));
   }
@@ -621,7 +868,6 @@ function calculateATR(data) {
 }
 
 function roundToJPXTick(price, roundUp = false) {
-  // JPX tick sizes
   let tick;
   if (price < 3000) tick = 1;
   else if (price < 5000) tick = 5;
