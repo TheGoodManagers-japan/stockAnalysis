@@ -10,6 +10,7 @@
  * - Additional volatility checks
  * - Market regime filters
  * - Requires multiple confirming signals
+ * - Fixed confidence variable handling
  */
 
 export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
@@ -31,29 +32,42 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
     };
   }
 
-  // ===== EXTRACT KEY METRICS =====
+  // ===== EXTRACT KEY METRICS WITH SAFE DEFAULTS =====
 
-  const {
-    score,
-    confidence = 0,
-    recommendation = "UNKNOWN",
-    riskRewardRatio = 0,
-    stopLoss,
-    priceTarget,
-    stage = "UNKNOWN",
-    relativeStrength = 50,
-    keyInsights = [],
-    longTermRegime = "UNKNOWN",
-    shortTermRegime = "UNKNOWN",
-    debug = {},
-  } = entryAnalysis;
+  // Ensure confidence is always a valid number
+  const confidence = Number.isFinite(entryAnalysis.confidence)
+    ? entryAnalysis.confidence
+    : 0;
+
+  // Extract other metrics with safe defaults
+  const score = entryAnalysis.score ?? 7;
+  const recommendation = entryAnalysis.recommendation || "UNKNOWN";
+  const riskRewardRatio = Number.isFinite(entryAnalysis.riskRewardRatio)
+    ? entryAnalysis.riskRewardRatio
+    : 0;
+  const stopLoss = entryAnalysis.stopLoss;
+  const priceTarget = entryAnalysis.priceTarget;
+  const stage = entryAnalysis.stage || "UNKNOWN";
+  const relativeStrength = Number.isFinite(entryAnalysis.relativeStrength)
+    ? entryAnalysis.relativeStrength
+    : 50;
+  const keyInsights = Array.isArray(entryAnalysis.keyInsights)
+    ? entryAnalysis.keyInsights
+    : [];
+  const longTermRegime = entryAnalysis.longTermRegime || "UNKNOWN";
+  const shortTermRegime = entryAnalysis.shortTermRegime || "UNKNOWN";
+  const debug = entryAnalysis.debug || {};
 
   // Extract additional features if available
   const features = debug.features || {};
-  const volatility = features.riskMetrics_volatility || 0;
+  const volatility = Number.isFinite(features.riskMetrics_volatility)
+    ? features.riskMetrics_volatility
+    : 0;
   const hasHigherHighsLows = features.priceStructure_higherHighsLows === 1;
   const isAccumulating = features.institutional_accumulation === 1;
-  const netInstitutional = features.institutional_netScore || 0;
+  const netInstitutional = Number.isFinite(features.institutional_netScore)
+    ? features.institutional_netScore
+    : 0;
 
   // ===== STRICTER SWING TRADING CRITERIA =====
 
@@ -144,9 +158,9 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
 
     // Relative Strength
     if (relativeStrength >= 85) {
-      reasons.push(`RS leader (${relativeStrength})`);
+      reasons.push(`RS leader (${Math.round(relativeStrength)})`);
     } else if (relativeStrength >= 70) {
-      reasons.push(`RS ${relativeStrength}`);
+      reasons.push(`RS ${Math.round(relativeStrength)}`);
     }
 
     // Stage/Trend
@@ -219,7 +233,8 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
     watchReasons.push(`Missing: ${missingItems.slice(0, 2).join(", ")}`);
 
     // Add any positive aspects
-    if (relativeStrength >= 70) watchReasons.push(`RS ${relativeStrength}`);
+    if (relativeStrength >= 70)
+      watchReasons.push(`RS ${Math.round(relativeStrength)}`);
     if (keyInsights.length > 0) watchReasons.push(keyInsights[0]);
 
     return {
@@ -258,7 +273,9 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
     const regimeText = [longTermRegime, shortTermRegime]
       .filter((r) => criteria.avoidRegimes.includes(r))
       .join("/");
-    rejectionReasons.push(`${regimeText} regime`);
+    if (regimeText) {
+      rejectionReasons.push(`${regimeText} regime`);
+    }
   }
 
   // Priority 2: Signal quality
@@ -281,7 +298,7 @@ export function getBuyTrigger(stock, historicalData, entryAnalysis = null) {
 
   // Priority 4: Structural issues
   if (!hasStrength) {
-    rejectionReasons.push(`Weak RS (${relativeStrength})`);
+    rejectionReasons.push(`Weak RS (${Math.round(relativeStrength)})`);
   }
   if (!hasTrendStructure) {
     rejectionReasons.push("No trend structure");
@@ -328,28 +345,34 @@ function getPositionSizeRecommendation(
   score,
   volatility
 ) {
+  // Validate inputs
+  const safeConfidence = Number.isFinite(confidence) ? confidence : 0;
+  const safeRR = Number.isFinite(riskRewardRatio) ? riskRewardRatio : 0;
+  const safeScore = Number.isFinite(score) ? score : 7;
+  const safeVolatility = Number.isFinite(volatility) ? volatility : 0.5;
+
   // Start with base sizing
   let size = "QUARTER"; // Default to smallest
 
   // High quality setup
-  if (confidence >= 0.7 && riskRewardRatio >= 3.0 && score === 1) {
+  if (safeConfidence >= 0.7 && safeRR >= 3.0 && safeScore === 1) {
     size = "FULL";
   }
   // Good quality setup
-  else if (confidence >= 0.6 && riskRewardRatio >= 2.5 && score <= 2) {
+  else if (safeConfidence >= 0.6 && safeRR >= 2.5 && safeScore <= 2) {
     size = "NORMAL";
   }
   // Acceptable setup
-  else if (confidence >= 0.5 && riskRewardRatio >= 2.0) {
+  else if (safeConfidence >= 0.5 && safeRR >= 2.0) {
     size = "HALF";
   }
 
   // Reduce for high volatility
-  if (volatility > 0.4) {
+  if (safeVolatility > 0.4) {
     if (size === "FULL") size = "NORMAL";
     else if (size === "NORMAL") size = "HALF";
     else if (size === "HALF") size = "QUARTER";
-  } else if (volatility > 0.3) {
+  } else if (safeVolatility > 0.3) {
     if (size === "FULL") size = "NORMAL";
   }
 
@@ -382,15 +405,20 @@ function getMissingCriteria(criteria, checks) {
 export function quickBuyCheck(entryAnalysis) {
   if (!entryAnalysis) return { buy: false, score: 7 };
 
-  const {
-    score = 7,
-    confidence = 0,
-    riskRewardRatio = 0,
-    stage = "UNKNOWN",
-    relativeStrength = 50,
-    longTermRegime = "UNKNOWN",
-    shortTermRegime = "UNKNOWN",
-  } = entryAnalysis;
+  // Safe extraction with validation
+  const score = Number.isFinite(entryAnalysis.score) ? entryAnalysis.score : 7;
+  const confidence = Number.isFinite(entryAnalysis.confidence)
+    ? entryAnalysis.confidence
+    : 0;
+  const riskRewardRatio = Number.isFinite(entryAnalysis.riskRewardRatio)
+    ? entryAnalysis.riskRewardRatio
+    : 0;
+  const stage = entryAnalysis.stage || "UNKNOWN";
+  const relativeStrength = Number.isFinite(entryAnalysis.relativeStrength)
+    ? entryAnalysis.relativeStrength
+    : 50;
+  const longTermRegime = entryAnalysis.longTermRegime || "UNKNOWN";
+  const shortTermRegime = entryAnalysis.shortTermRegime || "UNKNOWN";
 
   // Stricter quick check
   const buy =
@@ -413,15 +441,27 @@ export function getCompleteBuyDecision(
   historicalData,
   marketData = null
 ) {
-  const { getComprehensiveEntryTiming } = require("./entryTimingOrchestrator");
+  // Dynamic import to avoid circular dependencies
+  try {
+    const {
+      getComprehensiveEntryTiming,
+    } = require("./entryTimingOrchestrator");
 
-  // Run the comprehensive analysis
-  const entryAnalysis = getComprehensiveEntryTiming(
-    stock,
-    historicalData,
-    marketData
-  );
+    // Run the comprehensive analysis
+    const entryAnalysis = getComprehensiveEntryTiming(
+      stock,
+      historicalData,
+      marketData
+    );
 
-  // Convert to buy decision
-  return getBuyTrigger(stock, historicalData, entryAnalysis);
+    // Convert to buy decision
+    return getBuyTrigger(stock, historicalData, entryAnalysis);
+  } catch (error) {
+    console.error("Error in getCompleteBuyDecision:", error);
+    return {
+      isBuyNow: false,
+      reason: "Analysis error",
+      details: { error: error.message },
+    };
+  }
 }
