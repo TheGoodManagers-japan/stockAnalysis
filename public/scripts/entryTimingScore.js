@@ -9,6 +9,7 @@
  * - Confidence-based position sizing hints
  * - Stage-aware adjustments
  * - Better feature interpretation from new layers
+ * - Fixed confidence variable handling
  */
 
 import { getLayer1PatternScore } from "./layer1Analysis.js";
@@ -59,7 +60,7 @@ export function getComprehensiveEntryTiming(
     shortTermRegime,
     features
   );
-  console.log("here 0");
+  console.log("Adaptive weights calculated");
 
   // ---- Score Combination
   const { finalScore, confidence, recommendation } = combineScoresForSwing(
@@ -72,7 +73,7 @@ export function getComprehensiveEntryTiming(
     shortTermRegime
   );
 
-  console.log("here 1");
+  console.log("Score combination completed");
 
   // ---- Risk Management (Stop Loss & Price Target)
   const riskManagement = calculateSwingRiskManagement(
@@ -83,7 +84,7 @@ export function getComprehensiveEntryTiming(
     features
   );
 
-  console.log("here 2");
+  console.log("Risk management calculated");
 
   // ---- Generate comprehensive insights
   const keyInsights = generateSwingInsights(
@@ -172,6 +173,9 @@ function combineScoresForSwing(
   longTermRegime,
   shortTermRegime
 ) {
+  // Use layer2Confidence throughout this function
+  const confidence = Number.isFinite(layer2Confidence) ? layer2Confidence : 0.5;
+
   // MORE CONSERVATIVE normalization
   // 1 (best) → +2, 4 (neutral) → 0, 7 (worst) → -4
   const normalizedLayer1 = (4 - layer1Score) * 0.667; // Reduced from 1.0
@@ -238,7 +242,7 @@ function combineScoresForSwing(
     recommendation = "STRONG AVOID";
   }
 
-  // MORE AGGRESSIVE confidence veto
+  // MORE AGGRESSIVE confidence veto - now using the properly defined confidence
   if (confidence < 0.5 && finalScore <= 2) {
     // Was 0.3
     finalScore = Math.min(4, finalScore + 2); // Push to neutral
@@ -475,21 +479,27 @@ function calculateSwingPriceTarget(
 /* ════════════════════ POSITION SIZING ════════════════════ */
 
 function getPositionSizeHint(confidence, riskRewardRatio, volatility, score) {
+  // Validate inputs
+  const safeConfidence = Number.isFinite(confidence) ? confidence : 0.5;
+  const safeRR = Number.isFinite(riskRewardRatio) ? riskRewardRatio : 0;
+  const safeVolatility = Number.isFinite(volatility) ? volatility : 0.3;
+  const safeScore = Number.isFinite(score) ? score : 7;
+
   // Base position size on confidence and R:R
   let sizeHint = "NORMAL";
 
-  if (confidence >= 0.7 && riskRewardRatio >= 3.0 && score <= 2) {
+  if (safeConfidence >= 0.7 && safeRR >= 3.0 && safeScore <= 2) {
     sizeHint = "FULL";
-  } else if (confidence >= 0.6 && riskRewardRatio >= 2.5) {
+  } else if (safeConfidence >= 0.6 && safeRR >= 2.5) {
     sizeHint = "NORMAL+";
-  } else if (confidence < 0.4 || riskRewardRatio < 2.0) {
+  } else if (safeConfidence < 0.4 || safeRR < 2.0) {
     sizeHint = "HALF";
-  } else if (confidence < 0.3 || riskRewardRatio < 1.5) {
+  } else if (safeConfidence < 0.3 || safeRR < 1.5) {
     sizeHint = "QUARTER";
   }
 
   // Volatility adjustment
-  if (volatility > 0.5) {
+  if (safeVolatility > 0.5) {
     // High volatility: reduce size
     if (sizeHint === "FULL") sizeHint = "NORMAL+";
     else if (sizeHint === "NORMAL+") sizeHint = "NORMAL";
