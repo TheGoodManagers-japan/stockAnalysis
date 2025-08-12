@@ -721,104 +721,100 @@ function extractSwingFeatures(analyses) {
 
 /* ════════════════════ SCORING ENGINE ════════════════════ */
 
+// PROBLEM IN calculateSwingScore():
+// Too many penalties, not enough rewards
+
+// IMPROVED VERSION:
 function calculateSwingScore(features, context) {
   let score = 0;
   let confidence = 0.5;
-
-  const { longTermRegime, shortTermRegime, stageAnalysis, relativeStrength } =
-    context;
-
-  // REDUCED positive scoring
+  
+  const { longTermRegime, shortTermRegime, stageAnalysis, relativeStrength } = context;
+  
+  // Stage-based scoring (more balanced)
   if (stageAnalysis.current === "ADVANCING") {
-    score += 1; // Was 2
-    confidence += 0.05; // Was 0.1
-  } else if (
-    stageAnalysis.current === "ACCUMULATION" &&
-    stageAnalysis.readiness > 0.7
-  ) {
-    // Raised from 0.6
-    score += 0.8; // Was 1.5
-    confidence += 0.03; // Was 0.05
+      score += 1.5;  // Increased from 1
+      confidence += 0.1;
+      
+      // Bonus for pullback to support
+      if (stageAnalysis.characteristics.includes("PULLBACK_TO_SUPPORT")) {
+          score += 1.0;  // Additional bonus
+          confidence += 0.1;
+      }
+  } else if (stageAnalysis.current === "ACCUMULATION") {
+      if (stageAnalysis.readiness > 0.6) {  // Lowered from 0.7
+          score += 1.2;
+          confidence += 0.05;
+      } else if (stageAnalysis.readiness > 0.4) {
+          score += 0.5;  // Partial credit
+      }
+  } else if (stageAnalysis.current === "DECLINING") {
+      score -= 2;  // Reduced from -3
+      confidence -= 0.1;
+  } else if (stageAnalysis.current === "DISTRIBUTION") {
+      score -= 1.5;  // Reduced from -2
   }
-
-  // INCREASED negative scoring
-  if (stageAnalysis.current === "DECLINING") {
-    score -= 3; // Was -2
-    confidence -= 0.15; // Was -0.1
+  
+  // Relative strength (more balanced)
+  if (relativeStrength.rsRating >= 80) {  // Lowered from 85
+      score += 2.0;  // Increased from 1.5
+      confidence += 0.15;
+  } else if (relativeStrength.rsRating >= 60) {  // More granular
+      score += 1.0;
+  } else if (relativeStrength.rsRating >= 40) {
+      score += 0;  // Neutral, not negative
+  } else if (relativeStrength.rsRating < 30) {
+      score -= 2;  // Only penalize really weak stocks
+      confidence -= 0.1;
   }
-  if (stageAnalysis.current === "DISTRIBUTION") {
-    score -= 2; // New penalty
-  }
-
-  // Relative strength (reduced positive, increased negative)
-  if (relativeStrength.isLeader && relativeStrength.rsRating >= 85) {
-    // Raised threshold
-    score += 1.5; // Was 3
-    confidence += 0.1; // Was 0.15
-  } else if (relativeStrength.rsRating > 70) {
-    score += 0.5; // Was 1.5
-  } else if (relativeStrength.rsRating < 50) {
-    // New mid-range penalty
-    score -= 1;
-  } else if (relativeStrength.isLaggard) {
-    score -= 3; // Was -2
-    confidence -= 0.15; // Was -0.1
-  }
-
-  // Institutional (more balanced)
-  if (
-    features.institutional_accumulation &&
-    features.institutional_netScore > 5
-  ) {
-    // Added threshold
-    score += 1.2; // Was 2.5
-    confidence += 0.05; // Was 0.1
+  
+  // Institutional activity (more nuanced)
+  if (features.institutional_accumulation) {
+      if (features.institutional_netScore > 5) {
+          score += 2.0;  // Strong accumulation
+          confidence += 0.1;
+      } else if (features.institutional_netScore > 2) {
+          score += 1.0;  // Moderate accumulation
+          confidence += 0.05;
+      }
   } else if (features.institutional_distribution) {
-    score -= 2.5; // Same
-    confidence -= 0.1;
-  } else if (
-    !features.institutional_accumulation &&
-    !features.institutional_distribution
-  ) {
-    score -= 0.5; // Penalty for no clear institutional interest
+      score -= 2.0;
+      confidence -= 0.1;
   }
-
-  // Volume dynamics (more selective)
-  if (
-    features.volumeDynamics_dryingUp &&
-    features.priceStructure_tightRange &&
-    features.priceStructure_higherHighsLows
-  ) {
-    // Added condition
-    score += 0.8; // Was 1.5
+  // Remove penalty for neutral - it's okay to have no clear signal
+  
+  // Volume dynamics (keep but adjust)
+  if (features.volumeDynamics_dryingUp && 
+      features.priceStructure_tightRange) {
+      score += 1.0;  // Coiling pattern
   }
-
-  // Risk penalties (increased)
+  
+  // Price structure bonus
+  if (features.priceStructure_higherHighsLows) {
+      score += 0.5;  // Uptrend structure
+  }
+  if (features.priceStructure_breakout) {
+      score += 1.0;  // Breakout bonus
+  }
+  
+  // Risk adjustments (less harsh)
   const risk = features.riskMetrics_riskScore || 0.5;
   if (risk > 0.7) {
-    score *= 0.5; // Was 0.7
-    confidence *= 0.7; // Was 0.8
+      score *= 0.7;  // Less severe penalty
+      confidence *= 0.8;
   } else if (risk > 0.5) {
-    score *= 0.8; // New mid-risk penalty
+      score *= 0.9;  // Minor adjustment
   }
-
-  // Volatility penalty
-  if (features.riskMetrics_volatility > 0.5) {
-    score -= 1; // New penalty for high volatility
+  
+  // Regime adjustments (only for extreme volatility)
+  if (longTermRegime.type === "VOLATILE" && 
+      longTermRegime.volatility > 0.6) {
+      score -= 0.5;  // Reduced from -1.5
   }
-
-  // Regime penalties
-  if (
-    longTermRegime.type === "VOLATILE" ||
-    shortTermRegime.type === "VOLATILE"
-  ) {
-    score -= 1.5; // New penalty
-  }
-
-  // Ensure confidence stays within bounds
-  confidence = Math.max(0, Math.min(1, confidence));
-
-  return { mlScore: score, confidence: confidence };
+  
+  confidence = Math.max(0.1, Math.min(0.9, confidence));
+  
+  return { mlScore: score, confidence };
 }
 
 /* ════════════════════ INSIGHT GENERATION ════════════════════ */
