@@ -414,7 +414,9 @@ window.scan = {
             `❌ Error processing ticker ${tickerObj.code}:`,
             error.message
           );
-        }
+        } finally {
+            await new Promise((r) => setTimeout(r, 2000));
+          }
       } // ✅ Finished processing all tickers (success or some errors)
 
       bubble_fn_finish();
