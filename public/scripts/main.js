@@ -459,7 +459,7 @@ window.scan = {
             historicalData
           );
           console.log("Running getBuyTrigger - finished");
-          stock.isBuyNow = finalSignal.isBuyNow;
+          stock.isBuyNow = finalSignal.buyNow;
           stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
 
           // Check if current stock exists in myPortfolio
