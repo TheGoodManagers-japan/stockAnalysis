@@ -318,7 +318,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
         `Missing/zero critical fields for ${ticker}: ${missingFields.join(
           ", "
         )}`,
-        { ticker, missingFields, snapshot: yahooData }
+        // Added raw quote object to error details for easier debugging
+        { ticker, missingFields, snapshot: yahooData, rawQuote: quote }
       );
     }
 
