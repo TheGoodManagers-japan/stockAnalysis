@@ -60,6 +60,7 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
 
   const combinedScore =
     normalizedShortTerm * weights.shortTerm + safeMl * weights.deepAnalysis;
+    
 
   // ---- 5) Score → bucket + confidence
   const { finalScore, confidence } = mapToSentimentScoreWithConfidence(
@@ -178,13 +179,13 @@ function mapToSentimentScoreWithConfidence(
 
   let finalScore;
   const s = combinedScore + trendingNudge;
-  if (s >= 3.5) finalScore = 1; // Strong Buy (now reachable)
-  else if (s >= 2.5) finalScore = 2; // Buy
-  else if (s >= 1.5) finalScore = 3; // Weak Buy
-  else if (s >= 0.5) finalScore = 4; // Neutral
-  else if (s >= -0.5) finalScore = 5; // Weak Avoid
-  else if (s >= -1.5) finalScore = 6; // Avoid
-  else finalScore = 7; // Strong Avoid
+  if (s >= 4.2) finalScore = 1; // Was 3.5 - much harder to reach
+  else if (s >= 3.3) finalScore = 2; // Was 2.5
+  else if (s >= 2.2) finalScore = 3; // Was 1.5
+  else if (s >= 0.8) finalScore = 4; // Was 0.5
+  else if (s >= -0.5) finalScore = 5;
+  else if (s >= -1.5) finalScore = 6;
+  else finalScore = 7;
 
   return { finalScore, confidence };
 }
