@@ -12,7 +12,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const analysis = {
     entryQuality: 0,
     technicalChecks: {},
-    // allow manual overrides via opts (optional)
+    // optional manual overrides
     stopLoss: Number.isFinite(opts.stopLoss) ? opts.stopLoss : null,
     priceTarget: Number.isFinite(opts.priceTarget) ? opts.priceTarget : null,
   };
@@ -238,6 +238,288 @@ function checkEntryConditions(stock, historicalData) {
   return conditions;
 }
 
+/* ───────────────── Enhanced Condition Helpers ───────────────── */
+function checkEnhancedPullbackToSupport(stock, recent, currentPrice) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const ma5 = n(stock.movingAverage5d);
+  const ma25 = n(stock.movingAverage25d);
+  const ma50 = n(stock.movingAverage50d);
+  const ma200 = n(stock.movingAverage200d);
+  const last5Lows = recent.slice(-5).map((d) => n(d.low));
+  const lowestRecent = Math.min(...last5Lows);
+
+  const mas = [
+    { value: ma5, name: "MA5", tolerance: 0.02 },
+    { value: ma25, name: "MA25", tolerance: 0.025 },
+    { value: ma50, name: "MA50", tolerance: 0.03 },
+    { value: ma200, name: "MA200", tolerance: 0.035 },
+  ];
+  for (const ma of mas) {
+    if (ma.value > 0) {
+      const touchedMA =
+        Math.abs(lowestRecent - ma.value) / ma.value < ma.tolerance;
+      const bounced = currentPrice > ma.value * 1.005;
+      const todayUp = currentPrice > n(stock.openPrice);
+      if (touchedMA && bounced && todayUp) return true;
+    }
+  }
+
+  const prevHighArr = recent.slice(-20, -10).map((d) => n(d.high));
+  const previousHigh = Math.max(...prevHighArr, 0);
+  if (
+    previousHigh > 0 &&
+    Math.abs(lowestRecent - previousHigh) / previousHigh < 0.03
+  ) {
+    if (currentPrice > previousHigh * 0.99) return true;
+  }
+
+  const recentSwingHigh = Math.max(...recent.slice(-10).map((d) => n(d.high)));
+  const recentSwingLow = Math.min(
+    ...recent.slice(-20, -10).map((d) => n(d.low))
+  );
+  const swingRange = recentSwingHigh - recentSwingLow;
+  if (swingRange > 0) {
+    const fibs = [
+      recentSwingHigh - swingRange * 0.382,
+      recentSwingHigh - swingRange * 0.5,
+      recentSwingHigh - swingRange * 0.618,
+    ];
+    for (const level of fibs) {
+      if (
+        level > 0 &&
+        Math.abs(lowestRecent - level) / level < 0.03 &&
+        currentPrice > level * 0.99
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function checkEnhancedBounceConfirmation(stock, recent, currentPrice) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  if (recent.length < 3) return false;
+  const last3Days = recent.slice(-3);
+  const lastDay = recent[recent.length - 1];
+  const prevDay = recent[recent.length - 2];
+
+  const hammerPattern = (() => {
+    const range = n(lastDay.high) - n(lastDay.low);
+    const body = Math.abs(n(lastDay.close) - n(lastDay.open));
+    const lowerWick =
+      Math.min(n(lastDay.close), n(lastDay.open)) - n(lastDay.low);
+    return (
+      range > 0 &&
+      body < range * 0.4 &&
+      lowerWick > body * 1.5 &&
+      n(lastDay.close) >= n(lastDay.open)
+    );
+  })();
+
+  const bullishEngulfing =
+    n(prevDay.close) < n(prevDay.open) &&
+    n(lastDay.close) > n(lastDay.open) &&
+    n(lastDay.open) <= n(prevDay.close) &&
+    n(lastDay.close) > n(prevDay.open);
+
+  const morningStar = (() => {
+    if (last3Days.length < 3) return false;
+    const [d1, d2, d3] = last3Days;
+    return (
+      n(d1.close) < n(d1.open) &&
+      Math.abs(n(d2.close) - n(d2.open)) < (n(d2.high) - n(d2.low)) * 0.3 &&
+      n(d3.close) > n(d3.open) &&
+      n(d3.close) > (n(d1.open) + n(d1.close)) / 2
+    );
+  })();
+
+  const higherLowWithVolume =
+    n(lastDay.low) > n(prevDay.low) &&
+    n(lastDay.close) > n(lastDay.open) &&
+    n(lastDay.volume) > n(prevDay.volume) * 1.2;
+
+  const intradayReversal = (() => {
+    const ma50 = n(stock.movingAverage50d);
+    if (ma50 <= 0) return false;
+    return (
+      n(lastDay.open) < ma50 &&
+      n(lastDay.close) > ma50 &&
+      n(lastDay.close) > n(lastDay.open)
+    );
+  })();
+
+  const todayBullish =
+    n(stock.currentPrice) > n(stock.openPrice) &&
+    n(stock.currentPrice) > n(stock.prevClosePrice);
+
+  return (
+    hammerPattern ||
+    bullishEngulfing ||
+    morningStar ||
+    higherLowWithVolume ||
+    intradayReversal ||
+    todayBullish
+  );
+}
+
+function checkEnhancedVolumePattern(recent, stock) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  if (recent.length < 20) return false;
+
+  const obv = n(stock.obv);
+  const obvRising = obv > 0;
+
+  const avgVolume20 = recent.reduce((s, d) => s + n(d.volume), 0) / 20;
+  const avgVolume5 = recent.slice(-5).reduce((s, d) => s + n(d.volume), 0) / 5;
+  const volumeExpanding = avgVolume5 > avgVolume20;
+
+  const accumulationDays = recent.slice(-10).filter((d) => {
+    const bullish = n(d.close) > n(d.open);
+    const highVolume = n(d.volume) > avgVolume20;
+    return bullish && highVolume;
+  }).length;
+
+  const distributionDays = recent.slice(-10).filter((d) => {
+    const bearish = n(d.close) < n(d.open);
+    const highVolume = n(d.volume) > avgVolume20 * 1.2;
+    return bearish && highVolume;
+  }).length;
+
+  return (
+    (volumeExpanding && accumulationDays > distributionDays) ||
+    (accumulationDays >= 2 && distributionDays <= 1) ||
+    obvRising
+  );
+}
+
+function checkEnhancedMomentumAlignment(stock) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const rsi = n(stock.rsi14);
+  const macd = n(stock.macd);
+  const macdSignal = n(stock.macdSignal);
+  const stochK = n(stock.stochasticK);
+  const stochD = n(stock.stochasticD);
+
+  const currentPrice = n(stock.currentPrice);
+  const openPrice = n(stock.openPrice);
+  const prevClose = n(stock.prevClosePrice);
+
+  const priceActionBullish =
+    currentPrice > openPrice && currentPrice > prevClose;
+
+  const rsiBullish = rsi > 45 && rsi < 75;
+  const macdBullish = macd > macdSignal;
+  const macdCrossover =
+    macd > macdSignal && Math.abs(macd - macdSignal) < Math.abs(macd) * 0.2;
+  const stochasticBullish = stochK > stochD && stochK > 20 && stochK < 85;
+
+  if (!priceActionBullish) return false;
+
+  let alignedSignals = 1;
+  if (rsiBullish) alignedSignals++;
+  if (macdBullish || macdCrossover) alignedSignals++;
+  if (stochasticBullish) alignedSignals++;
+  return alignedSignals >= 2;
+}
+
+function checkNotOverextended(stock, recent, currentPrice) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const ma5 = n(stock.movingAverage5d);
+  const ma25 = n(stock.movingAverage25d);
+  const ma50 = n(stock.movingAverage50d);
+
+  // ATR as % floor to avoid crazy ratios on tiny ATRs
+  const rawATR = n(stock.atr14);
+  const atr = Math.max(rawATR, currentPrice * 0.005);
+  const priceVolatility = atr / Math.max(1, currentPrice);
+
+  const maxExtension5 = 5 + priceVolatility * 150;
+  const maxExtension25 = 8 + priceVolatility * 200;
+  const maxExtension50 = 12 + priceVolatility * 250;
+
+  if (ma5 > 0) {
+    const distanceFromMA5 = ((currentPrice - ma5) / ma5) * 100;
+    if (distanceFromMA5 > maxExtension5) return false;
+  }
+  if (ma25 > 0) {
+    const distanceFromMA25 = ((currentPrice - ma25) / ma25) * 100;
+    if (distanceFromMA25 > maxExtension25) return false;
+  }
+  if (ma50 > 0) {
+    const distanceFromMA50 = ((currentPrice - ma50) / ma50) * 100;
+    if (distanceFromMA50 > maxExtension50) return false;
+  }
+
+  const rsi = n(stock.rsi14);
+  if (rsi > 78) return false;
+
+  // Allow mild BB upper pierces on fresh strength; block only if overshoot + hot RSI
+  const bbUpper = n(stock.bollingerUpper);
+  if (bbUpper > 0) {
+    const bbOvershoot = (currentPrice - bbUpper) / bbUpper;
+    if (bbOvershoot > 0.012 && rsi >= 74) return false;
+  }
+
+  const fiveDaysAgo = recent[recent.length - 6]?.close;
+  if (fiveDaysAgo && fiveDaysAgo > 0) {
+    const fiveDayGain = ((currentPrice - fiveDaysAgo) / fiveDaysAgo) * 100;
+    const maxGain = 12 + priceVolatility * 350;
+    if (fiveDayGain > maxGain) return false;
+  }
+
+  return true;
+}
+
+function checkNotExhausted(stock, recent) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  let exhaustionSignals = 0;
+
+  const last5 = recent.slice(-5);
+  const upDaysWithDecreasingVolume = last5.filter(
+    (d, i) =>
+      i > 0 && n(d.close) > n(d.open) && n(d.volume) < n(last5[i - 1].volume)
+  ).length;
+  if (upDaysWithDecreasingVolume >= 4) exhaustionSignals++;
+
+  const smallBodies = last5.filter((d) => {
+    const range = n(d.high) - n(d.low);
+    const body = Math.abs(n(d.close) - n(d.open));
+    return range > 0 && body / range < 0.25;
+  }).length;
+  if (smallBodies >= 4) exhaustionSignals++;
+
+  const rsi = n(stock.rsi14);
+  if (rsi > 60 && rsi < 70) {
+    const priceHigher =
+      n(recent[recent.length - 1].high) >
+      n(recent[recent.length - 6]?.high || 0);
+    if (priceHigher && rsi < 65) exhaustionSignals++;
+  }
+
+  const stochK = n(stock.stochasticK);
+  if (stochK > 85) exhaustionSignals++;
+
+  const failedBreakouts = checkFailedBreakouts(recent);
+  if (failedBreakouts) exhaustionSignals++;
+
+  return exhaustionSignals <= 2;
+}
+
+function checkFailedBreakouts(recent) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  if (recent.length < 10) return false;
+  let failures = 0;
+  const recentHigh = Math.max(...recent.slice(-10).map((d) => n(d.high)));
+  for (let i = recent.length - 10; i < recent.length - 1; i++) {
+    const dayHigh = n(recent[i].high);
+    const nextDayClose = n(recent[i + 1].close);
+    if (dayHigh >= recentHigh * 0.99 && nextDayClose < dayHigh * 0.98)
+      failures++;
+  }
+  return failures >= 2;
+}
+
 /* ───────────────── Risk/Reward ───────────────── */
 function analyzeRiskReward(stock, marketStructure, overrides = {}) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
@@ -396,7 +678,6 @@ function calculateVWAP(dayData) {
 }
 
 /* ───────────────── Volume/Momentum ───────────────── */
-// (unchanged functions below, but now fully technical-only)
 function validateVolumeMomentum(stock, historicalData) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const validation = {
@@ -632,7 +913,7 @@ function makeFinalDecision(
   return { buyNow: false, reason: waitReason };
 }
 
-/* ───────────────── Helpers (mostly unchanged) ───────────────── */
+/* ───────────────── Helpers (weights, levels, quality, etc.) ───────────────── */
 function getAdaptiveWeights(marketStructure, volumeMomentum) {
   const w = {
     entryConditions: 0.35,
@@ -898,15 +1179,15 @@ function detectDoubleBottom(recent) {
 const LATE_GUARD = {
   breakoutLookback: 15,
   breakoutConfirmVolMult: 1.3,
-  maxDaysAfterBreakout: 4, // was 3
-  maxPctAbovePivot: 0.05, // was 0.03
+  maxDaysAfterBreakout: 4,
+  maxPctAbovePivot: 0.05,
 
-  maxConsecutiveUpDays: 5, // was 4
-  maxATRAboveMA25: 2.6, // was 2.2
-  maxATRAboveMA50: 3.6, // was 3.2
-  max5dGainPct: 16, // was 14
+  maxConsecutiveUpDays: 5,
+  maxATRAboveMA25: 2.6,
+  maxATRAboveMA50: 3.6,
+  max5dGainPct: 16,
 
-  hardRSI: 77, // was 76
+  hardRSI: 77,
   softRSI: 70,
   bbUpperCountForVeto: 2,
 
