@@ -1,8 +1,9 @@
-// swingTradeEntryTiming.js (auto DIP in morning, BREAKOUT in afternoon - JST)
+// swingTradeEntryTiming.js (flexible: works anytime; dip-first + strict breakouts)
 
 /**
  * Usage:
  * const res = analyzeSwingTradeEntry(stock, candles, { debug: true });
+ * Optional: { allowedKinds: ["DIP","BREAKOUT"] } to restrict if desired.
  * Returns: { buyNow, reason, stopLoss, priceTarget, debug? }
  */
 
@@ -36,11 +37,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  // Which session? (JST) → decides DIP vs BREAKOUT
-  const session = getJSTSession();
-  const allowDip = session.allow.includes("DIP");
-  const allowBreakout = session.allow.includes("BREAKOUT");
-
   const ms = getMarketStructure(stock, data); // { trend, recentHigh, recentLow, ma25, ma50 }
   if (ms.trend === "DOWN") {
     return {
@@ -50,15 +46,20 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // Price action gate (allow small red day to catch first bounce)
-  const priceActionGate = cfg.requireGreen
-    ? px > Math.max(openPx, prevClose)
-    : px > Math.max(openPx, prevClose) ||
-      (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
+  const priceActionGate =
+    px > Math.max(openPx, prevClose) ||
+    (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
 
-  // ---- Build candidates (gated by session) ----
+  // Allowed paths (default both)
+  const allow =
+    Array.isArray(opts.allowedKinds) && opts.allowedKinds.length
+      ? new Set(opts.allowedKinds.map((s) => s.toUpperCase()))
+      : new Set(["DIP", "BREAKOUT"]);
+
+  // ---- Build candidates ----
   const candidates = [];
 
-  if (allowDip) {
+  if (allow.has("DIP")) {
     const dip = detectDipBounce(stock, data, cfg);
     if (dip.trigger && priceActionGate) {
       const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg);
@@ -77,7 +78,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  if (allowBreakout) {
+  if (allow.has("BREAKOUT")) {
     const bo = detectRockSolidBreakout(stock, data, cfg);
     if (bo.trigger && priceActionGate) {
       const rr = analyzeRR(px, bo.stop, bo.target, stock, ms, cfg);
@@ -114,14 +115,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   if (candidates.length === 0) {
-    const why =
-      (!priceActionGate &&
-        `Price action weak today (${dayPct.toFixed(2)}%).`) ||
-      "No qualifying setup for this session.";
+    const why = !priceActionGate
+      ? `Price action weak today (${dayPct.toFixed(2)}%).`
+      : "No qualifying dip or breakout setup right now.";
     return { buyNow: false, reason: why };
   }
 
-  // Prefer dip first; otherwise choose highest RR
+  // Prefer DIP first; otherwise choose highest RR
   candidates.sort((a, b) =>
     a.kind === "DIP ENTRY"
       ? -1
@@ -137,7 +137,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     stopLoss: best.stop,
     priceTarget: best.target,
     debug: cfg.debug
-      ? { ms, dayPct, chosen: best.kind, rr: best.rr, session }
+      ? { ms, dayPct, chosen: best.kind, rr: best.rr, all: candidates }
       : undefined,
   };
 }
@@ -147,8 +147,7 @@ function getConfig(opts) {
   return {
     // Dip-first behavior
     allowSmallRed: true,
-    redDayMaxDownPct: -0.8, // allow small red day
-    requireGreen: false,
+    redDayMaxDownPct: -0.8, // allow small red day to catch first bounce
 
     // Guards & thresholds
     maxATRfromMA25: 1.5, // late if >1.5 ATR above MA25 at entry
@@ -390,25 +389,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes) {
   if (countConsecutiveUpDays(data) > cfg.maxConsecUp) return true;
 
   return false;
-}
-
-/* ======================= JST Session Helper ======================= */
-function getJSTSession(now = new Date()) {
-  // Convert to JST regardless of server timezone
-  const jstMillis = now.getTime() + (9 * 60 + now.getTimezoneOffset()) * 60000;
-  const jst = new Date(jstMillis);
-  const h = jst.getHours(),
-    m = jst.getMinutes();
-
-  const inMorning =
-    (h > 9 || (h === 9 && m >= 0)) && (h < 11 || (h === 11 && m <= 30));
-  const inAfternoon =
-    (h > 12 || (h === 12 && m >= 30)) && (h < 15 || (h === 15 && m <= 30));
-
-  if (inMorning) return { session: "MORNING", allow: ["DIP"] };
-  if (inAfternoon) return { session: "AFTERNOON", allow: ["BREAKOUT"] };
-  // Outside cash session → allow both (useful for backtests / after-close scans)
-  return { session: "OFF", allow: ["DIP", "BREAKOUT"] };
 }
 
 /* =========================== Utilities =========================== */
