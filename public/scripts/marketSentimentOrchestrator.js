@@ -1,8 +1,5 @@
-// entryTimingOrchestrator.js
-// Exports getComprehensiveEntryTiming; uses your layer1/layer2 modules
-
-import { getLayer1PatternScore } from "./layer1Analysis.js";
-import { getLayer2MLAnalysis } from "./layer2Analysis.js";
+import { getShortTermSentimentScore } from "./shortTermSentimentAnalysis.js";
+import { getDeepMarketAnalysis } from "./deepMarketAnalysis.js";
 
 /**
  * Enhanced orchestrator with market-adaptive weighting and better score normalization.
@@ -18,7 +15,7 @@ import { getLayer2MLAnalysis } from "./layer2Analysis.js";
  * - No pre-open / PTS gap adjustments anywhere.
  */
 
-export function getComprehensiveEntryTiming(stock, historicalData) {
+export function getComprehensiveMarketSentiment(stock, historicalData) {
   // ---- Validate inputs
   if (!stock || !historicalData || historicalData.length < 50) {
     return {
@@ -37,43 +34,43 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
     (a, b) => new Date(a.date) - new Date(b.date)
   );
 
-  // ---- 1) LAYER 1
-  console.log("getLayer1PatternScore");
-  const layer1Score = getLayer1PatternScore(stock, sorted);
+  // ---- 1) SHORT-TERM SENTIMENT (Layer 1)
+  console.log("getShortTermSentimentScore");
+  const shortTermScore = getShortTermSentimentScore(stock, sorted);
 
-  // ---- 2) LAYER 2 (robust defaults)
+  // ---- 2) DEEP MARKET ANALYSIS (Layer 2) (robust defaults)
   const {
     mlScore,
     features = {},
     longTermRegime = { type: "UNKNOWN", strength: 0 },
     shortTermRegime = { type: "UNKNOWN", strength: 0 },
-  } = getLayer2MLAnalysis(stock, sorted) || {};
+  } = getDeepMarketAnalysis(stock, sorted) || {};
 
-  console.log("getLayer2PatternScore");
+  console.log("getDeepMarketAnalysis complete");
   // ---- 3) Market-adaptive weighting (ensure 1 is reachable in trending regime)
-  const weights = getAdaptiveWeights(longTermRegime, shortTermRegime);
+  const weights = getAdaptiveSentimentWeights(longTermRegime, shortTermRegime);
 
   // ---- 4) Normalization & clamping
-  // Map Layer1 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
-  const normalizedLayer1 = 6.3333333333 - 1.3333333333 * layer1Score;
+  // Map ShortTerm 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
+  const normalizedShortTerm = 6.3333333333 - 1.3333333333 * shortTermScore;
 
   let safeMl = Number.isFinite(mlScore) ? mlScore : 0;
   // Assume ML behaves like a z-score; cap extremes so thresholds remain meaningful
   safeMl = Math.max(-3, Math.min(3, safeMl));
 
   const combinedScore =
-    normalizedLayer1 * weights.layer1 + safeMl * weights.mlAnalysis;
+    normalizedShortTerm * weights.shortTerm + safeMl * weights.deepAnalysis;
 
   // ---- 5) Score → bucket + confidence
-  const { finalScore, confidence } = mapToFinalScoreWithConfidence(
+  const { finalScore, confidence } = mapToSentimentScoreWithConfidence(
     combinedScore,
     features,
     longTermRegime,
     shortTermRegime
   );
 
-  // ---- 6) Targets & stops (confidence-aware, no gap logic)
-  const result = getTargetsFromScore(
+  // ---- 6) Risk levels based on sentiment (confidence-aware, no gap logic)
+  const result = calculateRiskLevelsFromSentiment(
     stock,
     sorted, // use sorted everywhere
     finalScore,
@@ -83,7 +80,7 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
   result.confidence = confidence;
   result.longTermRegime = longTermRegime.type;
   result.shortTermRegime = shortTermRegime.type;
-  result.keyInsights = generateKeyInsights(features);
+  result.keyInsights = generateSentimentInsights(features);
   result.rawCombinedScore = combinedScore; // for debugging
 
   return result;
@@ -91,27 +88,27 @@ export function getComprehensiveEntryTiming(stock, historicalData) {
 
 /* ───────────────── Market-Adaptive Weighting ───────────────── */
 
-function getAdaptiveWeights(longTermRegime, shortTermRegime) {
+function getAdaptiveSentimentWeights(longTermRegime, shortTermRegime) {
   const lt = longTermRegime?.type || "UNKNOWN";
   const st = shortTermRegime?.type || "UNKNOWN";
 
   if (lt === "TRENDING" && st === "TRENDING") {
     // Make Strong Buy reachable: max = 5*0.3 + 3*0.7 = 3.6
-    return { layer1: 0.3, mlAnalysis: 0.7 };
+    return { shortTerm: 0.3, deepAnalysis: 0.7 };
   } else if (lt === "CHOPPY" || st === "CHOPPY") {
-    // Slight bias to ML, but keep Layer1 meaningful for mean reversion
-    return { layer1: 0.4, mlAnalysis: 0.6 };
+    // Slight bias to deep analysis, but keep short-term meaningful for mean reversion
+    return { shortTerm: 0.4, deepAnalysis: 0.6 };
   } else if (lt !== st && lt !== "UNKNOWN" && st !== "UNKNOWN") {
     // Transition → balance
-    return { layer1: 0.5, mlAnalysis: 0.5 };
+    return { shortTerm: 0.5, deepAnalysis: 0.5 };
   } else {
-    return { layer1: 0.3, mlAnalysis: 0.7 };
+    return { shortTerm: 0.3, deepAnalysis: 0.7 };
   }
 }
 
 /* ───────────────── Confidence Mapping ───────────────── */
 
-function mapToFinalScoreWithConfidence(
+function mapToSentimentScoreWithConfidence(
   combinedScore,
   features,
   longTermRegime,
@@ -173,7 +170,7 @@ function mapToFinalScoreWithConfidence(
   confidence = Math.max(0.2, Math.min(0.9, confidence));
 
   // Map combinedScore to 1..7 buckets (1 best)
-  // With normalizedLayer1 in [-3..5] and ml in [-3..3], combined ~[-4..+5].
+  // With normalizedShortTerm in [-3..5] and ml in [-3..3], combined ~[-4..+5].
   const trendingNudge =
     longTermRegime?.type === "TRENDING" && shortTermRegime?.type === "TRENDING"
       ? -0.05
@@ -194,7 +191,7 @@ function mapToFinalScoreWithConfidence(
 
 /* ───────────────── Key Insights ───────────────── */
 
-function generateKeyInsights(features = {}) {
+function generateSentimentInsights(features = {}) {
   const insights = [];
   if (features.f0_sellerExhaustion) {
     insights.push("Seller exhaustion detected – potential reversal");
@@ -211,9 +208,9 @@ function generateKeyInsights(features = {}) {
   return insights;
 }
 
-/* ───────────────── Targets & Stops (no gap logic) ───────────────── */
+/* ───────────────── Risk Levels Based on Sentiment (no gap logic) ───────────────── */
 
-function getTargetsFromScore(
+function calculateRiskLevelsFromSentiment(
   stock,
   historicalDataSorted,
   score,
@@ -245,9 +242,9 @@ function getTargetsFromScore(
     };
   }
 
-  const levels = calculateKeyLevels(stock, historicalDataSorted);
+  const levels = identifyKeyPriceLevels(stock, historicalDataSorted);
 
-  const stopLossRaw = calculateSmartStopLoss(
+  const stopLossRaw = calculateSentimentBasedStopLoss(
     stock,
     historicalDataSorted,
     levels,
@@ -256,7 +253,7 @@ function getTargetsFromScore(
     confidence,
     combinedScore
   );
-  let priceTargetRaw = calculateSmartPriceTarget(
+  let priceTargetRaw = calculateSentimentBasedTarget(
     stock,
     historicalDataSorted,
     levels,
@@ -268,7 +265,7 @@ function getTargetsFromScore(
   );
 
   // Re-enforce min R:R (no gap adjustment step)
-  const minRR = minRiskRewardForScore(score, confidence);
+  const minRR = getMinRiskRewardForSentiment(score, confidence);
   const risk = price - stopLossRaw;
   const rrFloor = price + Math.max(0, risk) * minRR;
   if (Number.isFinite(priceTargetRaw) && priceTargetRaw < rrFloor) {
@@ -334,7 +331,7 @@ function estimateATR(stock, historicalData) {
 
 /* ───────────────── Key Levels & Pivots ───────────────── */
 
-function calculateKeyLevels(stock, historicalData) {
+function identifyKeyPriceLevels(stock, historicalData) {
   const currentPrice = Number(stock?.currentPrice);
   const levels = {
     supports: [],
@@ -427,12 +424,12 @@ function calculateKeyLevels(stock, historicalData) {
 
 /* ───────────────── Stop / Target ───────────────── */
 
-function calculateSmartStopLoss(
+function calculateSentimentBasedStopLoss(
   stock,
   historicalData,
   levels,
   atr,
-  entryScore,
+  sentimentScore,
   confidence,
   combinedScore
 ) {
@@ -447,7 +444,7 @@ function calculateSmartStopLoss(
       5: 2.3,
       6: 2.6,
       7: 3.0,
-    }[entryScore] ?? 2.0;
+    }[sentimentScore] ?? 2.0;
 
   const volatilityAdjustment = getVolatilityAdjustment(stock, historicalData);
 
@@ -497,9 +494,9 @@ function calculateSmartStopLoss(
   if (!candidates.length) {
     const fallbackPercent = Math.min(0.02 + (atr / currentPrice) * 2, 0.1);
     chosen = currentPrice * (1 - fallbackPercent);
-  } else if (entryScore <= 2) {
+  } else if (sentimentScore <= 2) {
     chosen = Math.max(...candidates); // tightest stop for best setups
-  } else if (entryScore <= 4) {
+  } else if (sentimentScore <= 4) {
     chosen = candidates.reduce((a, b) => a + b, 0) / candidates.length;
   } else {
     chosen = Math.min(...candidates); // widest stop for weak setups
@@ -516,12 +513,12 @@ function calculateSmartStopLoss(
   return chosen;
 }
 
-function calculateSmartPriceTarget(
+function calculateSentimentBasedTarget(
   stock,
   historicalData,
   levels,
   atr,
-  entryScore,
+  sentimentScore,
   confidence,
   combinedScore,
   stopLoss
@@ -531,14 +528,15 @@ function calculateSmartPriceTarget(
     return floorToJpxTick(currentPrice * 1.05); // minimal default (rounded down)
   }
 
-  const minRR = minRiskRewardForScore(entryScore, confidence);
+  const minRR = getMinRiskRewardForSentiment(sentimentScore, confidence);
   const risk = currentPrice - stopLoss;
   const minTarget = currentPrice + risk * minRR;
 
   // ATR-based target (confidence & intensity enlarge when strong)
   const baseTargetMult =
-    { 1: 3.5, 2: 3.0, 3: 2.5, 4: 2.0, 5: 1.5, 6: 1.2, 7: 1.0 }[entryScore] ??
-    2.0;
+    { 1: 3.5, 2: 3.0, 3: 2.5, 4: 2.0, 5: 1.5, 6: 1.2, 7: 1.0 }[
+      sentimentScore
+    ] ?? 2.0;
 
   const volatilityAdjustment = getVolatilityAdjustment(stock, historicalData);
   const confNorm = Math.max(0, Math.min(1, (confidence - 0.2) / 0.7));
@@ -575,7 +573,7 @@ function calculateSmartPriceTarget(
     const fib618 = base + 0.618 * swing;
     const fib100 = base + 1.0 * swing;
     if (!resistanceTarget) {
-      resistanceTarget = entryScore <= 2 ? fib100 : fib618;
+      resistanceTarget = sentimentScore <= 2 ? fib100 : fib618;
     }
   }
 
@@ -586,10 +584,10 @@ function calculateSmartPriceTarget(
   if (!candidates.length) return floorToJpxTick(minTarget);
 
   let chosen;
-  if (entryScore <= 2) {
+  if (sentimentScore <= 2) {
     const cap = currentPrice * (1 + (atr / currentPrice) * 5); // cap at ~5 ATRs
     chosen = Math.max(Math.min(Math.max(...candidates), cap), minTarget);
-  } else if (entryScore <= 4) {
+  } else if (sentimentScore <= 4) {
     const avg = candidates.reduce((a, b) => a + b, 0) / candidates.length;
     chosen = Math.max(avg, minTarget);
   } else {
@@ -599,7 +597,7 @@ function calculateSmartPriceTarget(
   return chosen;
 }
 
-function minRiskRewardForScore(entryScore, confidence) {
+function getMinRiskRewardForSentiment(sentimentScore, confidence) {
   // Slightly lift min RR with confidence
   const base =
     {
@@ -610,7 +608,7 @@ function minRiskRewardForScore(entryScore, confidence) {
       5: 1.2,
       6: 1.0,
       7: 0.8,
-    }[entryScore] ?? 1.5;
+    }[sentimentScore] ?? 1.5;
 
   const confNorm = Math.max(0, Math.min(1, (confidence - 0.2) / 0.7));
   return base * (1 + 0.15 * confNorm); // up to +15%
