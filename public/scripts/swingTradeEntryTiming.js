@@ -82,13 +82,74 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 }
 
 /* ───────────────── Input Validation ───────────────── */
+// Replace your validateInputs with this (drop-in)
 function validateInputs(stock, historicalData) {
-  if (!stock || !historicalData) return false;
-  if (!Array.isArray(historicalData) || historicalData.length < 20)
+  const issues = [];
+  const isNum = (v) => Number.isFinite(v);
+  const isPos = (v) => isNum(v) && v > 0;
+
+  if (!stock) issues.push("stock object is missing");
+  if (!historicalData) issues.push("historicalData is missing");
+  if (!Array.isArray(historicalData)) issues.push("historicalData is not an array");
+
+  const len = Array.isArray(historicalData) ? historicalData.length : 0;
+  if (len < 20) issues.push(`historicalData too short (need ≥20 bars, got ${len})`);
+
+  const last = len ? historicalData[len - 1] : {};
+  if (!isPos(stock?.currentPrice)) issues.push("stock.currentPrice missing/≤0");
+  if (!isPos(last?.close)) issues.push("lastBar.close missing/≤0");
+  if (!isPos(last?.open)) issues.push("lastBar.open missing/≤0");
+  if (!isPos(last?.high)) issues.push("lastBar.high missing/≤0");
+  if (!isPos(last?.low)) issues.push("lastBar.low missing/≤0");
+  if (!isNum(last?.volume)) issues.push("lastBar.volume missing/NaN");
+
+  // Flag important technicals that are zero/NaN (not fatal, but useful to know)
+  const techFields = [
+    "movingAverage5d","movingAverage25d","movingAverage50d","movingAverage75d","movingAverage200d",
+    "rsi14","macd","macdSignal","stochasticK","stochasticD",
+    "bollingerUpper","bollingerLower","atr14","obv",
+    "fiftyTwoWeekHigh","fiftyTwoWeekLow",
+    "openPrice","prevClosePrice","highPrice","lowPrice"
+  ];
+  const weakTechs = techFields.filter((k) => !isNum(stock?.[k]) || stock[k] === 0);
+
+  if (issues.length) {
+    // High-signal summary first
+    console.warn("[swingEntry] ❌ Input validation failed:", issues);
+
+    // Contextual snapshots to help debug upstream data
+    try {
+      const snap = (b) => ({
+        date: b?.date,
+        open: b?.open,
+        high: b?.high,
+        low:  b?.low,
+        close:b?.close,
+        volume: b?.volume
+      });
+      const last3 = historicalData?.slice(Math.max(0, len - 3)).map(snap) || [];
+      console.warn("[swingEntry] Last 3 candles snapshot:", last3);
+    } catch {}
+
+    if (weakTechs.length) {
+      console.warn(
+        "[swingEntry] ⚠️ Non-finite/zero technical fields (not fatal but may reduce score):",
+        weakTechs
+      );
+    }
     return false;
-  if (!stock.currentPrice || stock.currentPrice <= 0) return false;
+  }
+
+  // Optional: still warn if a lot of tech fields are missing even when pass
+  if (weakTechs.length >= 5) {
+    console.warn(
+      "[swingEntry] ⚠️ Many technical fields are zero/NaN; results may be conservative:",
+      weakTechs
+    );
+  }
   return true;
 }
+
 
 /* ───────────────── Market Structure ───────────────── */
 function analyzeMarketStructure(stock, historicalData) {
