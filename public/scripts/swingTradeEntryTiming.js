@@ -637,14 +637,16 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
   const prevDay = recent[recent.length - 2];
   const todayUp = n(stock.currentPrice) > n(stock.openPrice);
 
+  // “Volume surge” uses yesterday’s (lastDay) volume vs prior 4-day average
+  const prior4AvgVol =
+    recent.slice(0, 4).reduce((s, d) => s + n(d.volume), 0) / 4;
+
   signals.intraday = {
     closeNearHigh:
       n(lastDay.close) >
       n(lastDay.high) - (n(lastDay.high) - n(lastDay.low)) * 0.3,
     bullishClose: n(lastDay.close) > n(lastDay.open),
-    volumeSurge:
-      n(lastDay.volume) >
-      (recent.slice(0, 4).reduce((s, d) => s + n(d.volume), 0) / 4) * 1.1,
+    volumeSurge: n(lastDay.volume) > prior4AvgVol * 1.1, // no intraday volume
     openAbovePrevClose: n(stock.openPrice) > n(stock.prevClosePrice),
     strongOpen: n(stock.openPrice) > n(stock.prevClosePrice) * 1.005,
     currentlyBullish: todayUp,
