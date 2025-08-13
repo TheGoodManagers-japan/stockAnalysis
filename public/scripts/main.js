@@ -454,8 +454,7 @@ window.scan = {
           stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
 
           console.log("Running getBuyTrigger...");
-          const finalSignal = analyzeSwingTradeEntry(
-            entryAnalysis, stock,
+          const finalSignal = analyzeSwingTradeEntry(stock,
             historicalData
           );
           console.log("Running getBuyTrigger - finished");
