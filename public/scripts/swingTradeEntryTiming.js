@@ -77,6 +77,15 @@ export function analyzeSwingTradeEntry(sentimentResult, stock, historicalData) {
   );
 }
 
+// STEP 6.5: Late-entry / Overextension Veto (hard gate)
+const guard = getEntryGuards(stock, sortedData, marketStructure);
+if (guard.vetoed) {
+  return {
+    buyNow: false,
+    reason: guard.reason,
+  };
+}
+
 /* ───────────────── Input Validation ───────────────── */
 
 function validateInputs(sentimentResult, stock, historicalData) {
@@ -1473,4 +1482,179 @@ function detectDoubleBottom(recent) {
   const breakout = currentClose > middlePeak;
 
   return lowsEqual && validPeak && breakout;
+}
+
+
+
+/* ───────────────── CONFIG (tunable) ───────────────── */
+const LATE_GUARD = {
+  // Pivot/breakout timing
+  breakoutLookback: 15,          // days to search for a pivot & breakout
+  breakoutConfirmVolMult: 1.3,   // lastDay.volume vs avg10 to confirm breakout
+  maxDaysAfterBreakout: 3,       // D0..D3 is still timely; later = require pullback
+  maxPctAbovePivot: 0.03,        // 3% above pivot is OK, >3% risks late entry
+
+  // Extension limits
+  maxConsecutiveUpDays: 3,       // 4+ up days = late without a reset
+  maxATRAboveMA25: 1.6,          // >1.6 ATR above MA25 is extended
+  maxATRAboveMA50: 2.2,          // >2.2 ATR above MA50 is extended
+  max5dGainPct: 12,              // >12% in 5 sessions = extended unless pullback
+
+  // RSI / Bollinger
+  hardRSI: 74,                   // absolute stop
+  softRSI: 70,                   // combine with BB/timing
+  bbUpperCountForVeto: 2,        // 2 consecutive closes above BB upper
+
+  // Climax day
+  climaxVolMult: 2.5,            // today volume vs avg20
+  climaxCloseFromHigh: 0.6,      // close must be in lower 60% of range (long upper wick)
+
+  // Pullback allowances to re-enable entries after late move
+  pullbackNearMA25Pct: 0.012,    // within 1.2% of MA25
+  pullbackATR: 1.0,              // or within 1 ATR of pivot
+};
+
+/* ─────────── Utility: rolling stats & helpers ─────────── */
+function avg(arr) { return arr.length ? arr.reduce((a,b)=>a+(+b||0),0)/arr.length : 0; }
+function n(v){ return Number.isFinite(v) ? v : 0; }
+
+function countConsecutiveUpDays(data, k=8){
+  let c = 0;
+  for (let i = data.length-1; i>0 && c<k; i--){
+    if (n(data[i].close) > n(data[i-1].close)) c++; else break;
+  }
+  return c;
+}
+
+/* Find a recent pivot (highest high in a pre-breakout window) and detect the breakout day */
+function findPivotAndBreakout(recent){
+  if (recent.length < 12) return null;
+  const window = recent.slice(-LATE_GUARD.breakoutLookback);
+  if (window.length < 12) return null;
+
+  // pivot = max high in the pre-breakout portion (exclude last 2 bars)
+  const pre = window.slice(0, -2);
+  const pivot = Math.max(...pre.map(d => n(d.high)));
+  const avgVol10 = avg(window.slice(-10).map(d => n(d.volume)));
+
+  // breakout day = first bar closing above pivot with volume expansion
+  let breakoutIdx = -1;
+  for (let i = pre.length; i < window.length; i++){
+    const d = window[i];
+    if (n(d.close) > pivot && n(d.volume) >= avgVol10 * LATE_GUARD.breakoutConfirmVolMult) {
+      breakoutIdx = i; break;
+    }
+  }
+  if (breakoutIdx === -1) return null;
+
+  // distance to "today" (end of recent)
+  const daysSinceBreakout = window.length - 1 - breakoutIdx;
+  return { pivot, daysSinceBreakout };
+}
+
+/* Lightweight anchored constraint & late-window logic */
+function lateWindowVeto(stock, recent, pivotInfo){
+  if (!pivotInfo) return { veto: false };
+
+  const curr = n(stock.currentPrice);
+  const atr = Math.max(0.01, n(stock.atr14));
+  const ma25 = n(stock.movingAverage25d);
+
+  const { pivot, daysSinceBreakout } = pivotInfo;
+  const pctAbovePivot = pivot > 0 ? (curr - pivot) / pivot : 0;
+
+  // Too many days after breakout AND too far from pivot without pullback near MA?
+  if (daysSinceBreakout > LATE_GUARD.maxDaysAfterBreakout) {
+    const nearMA25 = ma25 > 0 && Math.abs(curr - ma25) / ma25 <= LATE_GUARD.pullbackNearMA25Pct;
+    const withinATRofPivot = Math.abs(curr - pivot) <= LATE_GUARD.pullbackATR * atr;
+    if (!nearMA25 && !withinATRofPivot) {
+      return { veto: true, reason: `Late after breakout (D+${daysSinceBreakout}) and not near MA25/pivot.` };
+    }
+  }
+
+  // On any day, too far above pivot = late chase
+  if (pctAbovePivot > LATE_GUARD.maxPctAbovePivot) {
+    // Allow only if daysSinceBreakout <= 1 (very fresh)
+    if (daysSinceBreakout > 1) {
+      return { veto: true, reason: `Price ${ (pctAbovePivot*100).toFixed(1) }% above pivot – late breakout chase.` };
+    }
+  }
+
+  return { veto: false };
+}
+
+/* Extension / exhaustion checks */
+function overboughtOverextendedVeto(stock, recent){
+  const curr = n(stock.currentPrice);
+  const prev5 = recent[recent.length-6]?.close;
+  const gain5 = prev5 ? ((curr - n(prev5))/n(prev5))*100 : 0;
+
+  const rsi = n(stock.rsi14);
+  const bbU = n(stock.bollingerUpper);
+  const ma25 = n(stock.movingAverage25d);
+  const ma50 = n(stock.movingAverage50d);
+  const atr  = Math.max(0.01, n(stock.atr14));
+
+  // 1) RSI hard and combo checks
+  if (rsi >= LATE_GUARD.hardRSI) {
+    return { veto: true, reason: `RSI ${rsi.toFixed(0)} is too hot.` };
+  }
+  // 2 consecutive closes above upper band?
+  const last2AboveBBU = recent.slice(-2).every(d => bbU > 0 && n(d.close) > bbU);
+  if (rsi >= LATE_GUARD.softRSI && last2AboveBBU) {
+    return { veto: true, reason: `Overbought (RSI ${rsi.toFixed(0)}) with repeated closes above upper band.` };
+  }
+
+  // 2) Distance from MAs in ATRs
+  if (ma25 > 0 && (curr - ma25)/atr > LATE_GUARD.maxATRAboveMA25) {
+    return { veto: true, reason: `Too far above MA25 (${((curr-ma25)/atr).toFixed(1)} ATR).` };
+  }
+  if (ma50 > 0 && (curr - ma50)/atr > LATE_GUARD.maxATRAboveMA50) {
+    return { veto: true, reason: `Too far above MA50 (${((curr-ma50)/atr).toFixed(1)} ATR).` };
+  }
+
+  // 3) 5-day run
+  if (gain5 > LATE_GUARD.max5dGainPct) {
+    return { veto: true, reason: `+${gain5.toFixed(1)}% in 5 days – extended.` };
+  }
+
+  // 4) Consecutive up days
+  const ups = countConsecutiveUpDays(recent, 8);
+  if (ups > LATE_GUARD.maxConsecutiveUpDays) {
+    return { veto: true, reason: `${ups} straight up days – late without a reset.` };
+  }
+
+  return { veto: false };
+}
+
+/* Volume climax / blow-off day */
+function climaxVeto(recent){
+  if (recent.length < 20) return { veto: false };
+  const last = recent[recent.length-1];
+  const range = Math.max(0.01, n(last.high) - n(last.low));
+  const closeFromHighPct = (n(last.high) - n(last.close)) / range; // 0 = close at high, 1 = at low
+
+  const avgVol20 = avg(recent.slice(-20).map(d => n(d.volume)));
+  const isClimax = n(last.volume) >= avgVol20 * LATE_GUARD.climaxVolMult && closeFromHighPct >= LATE_GUARD.climaxCloseFromHigh;
+
+  if (isClimax) {
+    return { veto: true, reason: `Volume climax with weak close – likely blow-off.` };
+  }
+  return { veto: false };
+}
+
+/* Master guard */
+function getEntryGuards(stock, sortedData, marketStructure) {
+  const recent = sortedData.slice(-20);
+  const pivotInfo = findPivotAndBreakout(sortedData.slice(-LATE_GUARD.breakoutLookback));
+  const late = lateWindowVeto(stock, recent, pivotInfo);
+  if (late.veto) return { vetoed: true, reason: late.reason };
+
+  const ext = overboughtOverextendedVeto(stock, recent);
+  if (ext.veto) return { vetoed: true, reason: ext.reason };
+
+  const clim = climaxVeto(sortedData.slice(-20));
+  if (clim.veto) return { vetoed: true, reason: clim.reason };
+
+  return { vetoed: false };
 }
