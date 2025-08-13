@@ -179,13 +179,13 @@ function mapToSentimentScoreWithConfidence(
 
   let finalScore;
   const s = combinedScore + trendingNudge;
-  if (s >= 4.2) finalScore = 1; // Was 3.5 - much harder to reach
-  else if (s >= 3.3) finalScore = 2; // Was 2.5
-  else if (s >= 2.2) finalScore = 3; // Was 1.5
-  else if (s >= 0.8) finalScore = 4; // Was 0.5
-  else if (s >= -0.5) finalScore = 5;
-  else if (s >= -1.5) finalScore = 6;
-  else finalScore = 7;
+if (s >= 4.0) finalScore = 1;      // Was 3.5 - much harder to reach
+else if (s >= 3.0) finalScore = 2;  // Was 2.5
+else if (s >= 2.0) finalScore = 3;  // Was 1.5
+else if (s >= 0.8) finalScore = 4;  // Was 0.5
+else if (s >= -0.5) finalScore = 5;
+else if (s >= -1.5) finalScore = 6;
+else finalScore = 7;
 
   return { finalScore, confidence };
 }
