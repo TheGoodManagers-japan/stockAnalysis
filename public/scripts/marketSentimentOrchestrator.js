@@ -52,7 +52,7 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
 
   // ---- 4) Normalization & clamping
   // Map ShortTerm 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
-  const normalizedShortTerm = 4 - shortTermScore;
+  const normalizedShortTerm = 5 - shortTermScore;
 
   let safeMl = Number.isFinite(mlScore) ? mlScore : 0;
   // Assume ML behaves like a z-score; cap extremes so thresholds remain meaningful
