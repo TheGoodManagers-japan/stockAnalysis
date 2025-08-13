@@ -2,17 +2,19 @@
 // Determines optimal swing trade entry points based on technicals only (no sentiment)
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
+  const cfg = getConfig(opts.mode || "balanced", opts);
+
   if (!validateInputs(stock, historicalData)) {
     return {
       buyNow: false,
       reason: "Invalid or insufficient data for analysis",
+      debug: cfg.debug ? { failedAt: "validateInputs" } : undefined,
     };
   }
 
   const analysis = {
     entryQuality: 0,
     technicalChecks: {},
-    // optional manual overrides
     stopLoss: Number.isFinite(opts.stopLoss) ? opts.stopLoss : null,
     priceTarget: Number.isFinite(opts.priceTarget) ? opts.priceTarget : null,
   };
@@ -25,6 +27,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // Robust price-action (works pre-open/after-close)
   const nr = (v) => (Number.isFinite(v) ? v : 0);
   const lastBar = sortedData[sortedData.length - 1] || {};
+  if (!Number.isFinite(stock.currentPrice) || stock.currentPrice <= 0) {
+    stock.currentPrice = Number(lastBar.close) || 0;
+  }
+  if (!Number.isFinite(stock.openPrice) || stock.openPrice <= 0) {
+    stock.openPrice = Number(lastBar.open) || stock.currentPrice;
+  }
+  if (!Number.isFinite(stock.prevClosePrice) || stock.prevClosePrice <= 0) {
+    stock.prevClosePrice = Number(lastBar.close) || stock.openPrice;
+  }
+
   const pxNow = nr(stock.currentPrice) || nr(lastBar.close);
   const pxOpen = nr(stock.openPrice) || nr(lastBar.open);
   const prevClose = nr(stock.prevClosePrice) || nr(lastBar.close);
@@ -36,11 +48,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   analysis.technicalChecks.marketStructure = marketStructure;
 
   // 2) Entry Conditions
-  const entryConditions = checkEntryConditions(stock, sortedData);
+  const entryConditions = checkEntryConditions(stock, sortedData, cfg);
   analysis.technicalChecks.entryConditions = entryConditions;
 
   // 3) Risk/Reward (with fallback stops/targets; opts can override)
-  const riskReward = analyzeRiskReward(stock, marketStructure, {
+  const riskReward = analyzeRiskReward(stock, marketStructure, cfg, {
     stopLoss: analysis.stopLoss,
     target: analysis.priceTarget,
   });
@@ -64,12 +76,26 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     stock,
     sortedData,
     marketStructure,
-    entryConditions
+    entryConditions,
+    cfg
   );
-  if (guard.vetoed) return { buyNow: false, reason: guard.reason };
+  if (guard.vetoed) {
+    return {
+      buyNow: false,
+      reason: guard.reason,
+      debug: cfg.debug
+        ? {
+            gate: "late/overextended/climax",
+            guard,
+            marketStructure,
+            entryConditions,
+          }
+        : undefined,
+    };
+  }
 
   // 7) Final Decision
-  return makeFinalDecision(
+  const result = makeFinalDecision(
     stock,
     analysis,
     entryConditions,
@@ -77,12 +103,89 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     riskReward,
     marketStructure,
     volumeMomentum,
-    priceActionPositive
+    priceActionPositive,
+    cfg
   );
+
+  if (cfg.debug) {
+    result.debug = {
+      cfg,
+      marketStructure,
+      entryConditions,
+      timingSignals,
+      riskReward,
+      volumeMomentum,
+      priceActionPositive,
+      entryQuality: analysis.entryQuality,
+    };
+  }
+  return result;
 }
 
-/* ───────────────── Input Validation ───────────────── */
-// Replace your validateInputs with this (drop-in)
+/* ───────────────── Config / Modes ───────────────── */
+function getConfig(mode = "balanced", opts = {}) {
+  const base = {
+    // Risk/Reward thresholds
+    rrBase: 1.5,
+    rrStrongUp: 1.15,
+    rrDown: 2.1,
+
+    // Entry quality threshold
+    qualityBase: 66, // base for balanced
+    minEntryScore: 60,
+
+    // Price action gating
+    requirePriceActionPositive: false,
+    allowSmallRedDay: true,
+    redDayMaxDownPct: -0.8, // allow entries if day change >= -0.8%
+
+    // Breakout volume confirmation (vs avg)
+    breakoutVolMult: 1.15,
+
+    // Guards
+    enforceNotExhausted: false, // don't hard-reject on “exhausted” in balanced/loose
+    lateGuard: true,
+
+    debug: !!opts.debug,
+  };
+
+  const strict = {
+    rrBase: 1.6,
+    rrStrongUp: 1.2,
+    rrDown: 2.3,
+    qualityBase: 70,
+    minEntryScore: 65,
+    requirePriceActionPositive: true,
+    allowSmallRedDay: false,
+    breakoutVolMult: 1.3,
+    enforceNotExhausted: true,
+    lateGuard: true,
+    debug: !!opts.debug,
+  };
+
+  const loose = {
+    rrBase: 1.4,
+    rrStrongUp: 1.1,
+    rrDown: 1.9,
+    qualityBase: 62,
+    minEntryScore: 55,
+    requirePriceActionPositive: false,
+    allowSmallRedDay: true,
+    redDayMaxDownPct: -1.2,
+    breakoutVolMult: 1.05,
+    enforceNotExhausted: false,
+    lateGuard: false,
+    debug: !!opts.debug,
+  };
+
+  const table = { strict, balanced: base, loose };
+  const chosen = table[mode] || base;
+
+  // Optional per-run overrides via opts.tuning
+  return { ...chosen, ...(opts.tuning || {}) };
+}
+
+/* ───────────────── Input Validation (with logs) ───────────────── */
 function validateInputs(stock, historicalData) {
   const issues = [];
   const isNum = (v) => Number.isFinite(v);
@@ -90,10 +193,12 @@ function validateInputs(stock, historicalData) {
 
   if (!stock) issues.push("stock object is missing");
   if (!historicalData) issues.push("historicalData is missing");
-  if (!Array.isArray(historicalData)) issues.push("historicalData is not an array");
+  if (!Array.isArray(historicalData))
+    issues.push("historicalData is not an array");
 
   const len = Array.isArray(historicalData) ? historicalData.length : 0;
-  if (len < 20) issues.push(`historicalData too short (need ≥20 bars, got ${len})`);
+  if (len < 20)
+    issues.push(`historicalData too short (need ≥20 bars, got ${len})`);
 
   const last = len ? historicalData[len - 1] : {};
   if (!isPos(stock?.currentPrice)) issues.push("stock.currentPrice missing/≤0");
@@ -103,44 +208,54 @@ function validateInputs(stock, historicalData) {
   if (!isPos(last?.low)) issues.push("lastBar.low missing/≤0");
   if (!isNum(last?.volume)) issues.push("lastBar.volume missing/NaN");
 
-  // Flag important technicals that are zero/NaN (not fatal, but useful to know)
   const techFields = [
-    "movingAverage5d","movingAverage25d","movingAverage50d","movingAverage75d","movingAverage200d",
-    "rsi14","macd","macdSignal","stochasticK","stochasticD",
-    "bollingerUpper","bollingerLower","atr14","obv",
-    "fiftyTwoWeekHigh","fiftyTwoWeekLow",
-    "openPrice","prevClosePrice","highPrice","lowPrice"
+    "movingAverage5d",
+    "movingAverage25d",
+    "movingAverage50d",
+    "movingAverage75d",
+    "movingAverage200d",
+    "rsi14",
+    "macd",
+    "macdSignal",
+    "stochasticK",
+    "stochasticD",
+    "bollingerUpper",
+    "bollingerLower",
+    "atr14",
+    "obv",
+    "fiftyTwoWeekHigh",
+    "fiftyTwoWeekLow",
+    "openPrice",
+    "prevClosePrice",
+    "highPrice",
+    "lowPrice",
   ];
-  const weakTechs = techFields.filter((k) => !isNum(stock?.[k]) || stock[k] === 0);
+  const weakTechs = techFields.filter(
+    (k) => !isNum(stock?.[k]) || stock[k] === 0
+  );
 
   if (issues.length) {
-    // High-signal summary first
     console.warn("[swingEntry] ❌ Input validation failed:", issues);
-
-    // Contextual snapshots to help debug upstream data
     try {
       const snap = (b) => ({
         date: b?.date,
         open: b?.open,
         high: b?.high,
-        low:  b?.low,
-        close:b?.close,
-        volume: b?.volume
+        low: b?.low,
+        close: b?.close,
+        volume: b?.volume,
       });
       const last3 = historicalData?.slice(Math.max(0, len - 3)).map(snap) || [];
       console.warn("[swingEntry] Last 3 candles snapshot:", last3);
     } catch {}
-
     if (weakTechs.length) {
       console.warn(
-        "[swingEntry] ⚠️ Non-finite/zero technical fields (not fatal but may reduce score):",
+        "[swingEntry] ⚠️ Non-finite/zero technical fields:",
         weakTechs
       );
     }
     return false;
   }
-
-  // Optional: still warn if a lot of tech fields are missing even when pass
   if (weakTechs.length >= 5) {
     console.warn(
       "[swingEntry] ⚠️ Many technical fields are zero/NaN; results may be conservative:",
@@ -149,7 +264,6 @@ function validateInputs(stock, historicalData) {
   }
   return true;
 }
-
 
 /* ───────────────── Market Structure ───────────────── */
 function analyzeMarketStructure(stock, historicalData) {
@@ -238,7 +352,7 @@ function analyzeMarketStructure(stock, historicalData) {
 }
 
 /* ───────────────── Entry Conditions ───────────────── */
-function checkEntryConditions(stock, historicalData) {
+function checkEntryConditions(stock, historicalData, cfg) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const currentPrice = n(stock.currentPrice);
 
@@ -270,7 +384,8 @@ function checkEntryConditions(stock, historicalData) {
   conditions.breakingResistance = checkResistanceBreakout(
     stock,
     recent,
-    currentPrice
+    currentPrice,
+    cfg
   );
   conditions.notOverextended = checkNotOverextended(
     stock,
@@ -299,290 +414,8 @@ function checkEntryConditions(stock, historicalData) {
   return conditions;
 }
 
-/* ───────────────── Enhanced Condition Helpers ───────────────── */
-function checkEnhancedPullbackToSupport(stock, recent, currentPrice) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const ma5 = n(stock.movingAverage5d);
-  const ma25 = n(stock.movingAverage25d);
-  const ma50 = n(stock.movingAverage50d);
-  const ma200 = n(stock.movingAverage200d);
-  const last5Lows = recent.slice(-5).map((d) => n(d.low));
-  const lowestRecent = Math.min(...last5Lows);
-
-  const mas = [
-    { value: ma5, name: "MA5", tolerance: 0.02 },
-    { value: ma25, name: "MA25", tolerance: 0.025 },
-    { value: ma50, name: "MA50", tolerance: 0.03 },
-    { value: ma200, name: "MA200", tolerance: 0.035 },
-  ];
-  for (const ma of mas) {
-    if (ma.value > 0) {
-      const touchedMA =
-        Math.abs(lowestRecent - ma.value) / ma.value < ma.tolerance;
-      const bounced = currentPrice > ma.value * 1.005;
-      const todayUp = currentPrice > n(stock.openPrice);
-      if (touchedMA && bounced && todayUp) return true;
-    }
-  }
-
-  const prevHighArr = recent.slice(-20, -10).map((d) => n(d.high));
-  const previousHigh = Math.max(...prevHighArr, 0);
-  if (
-    previousHigh > 0 &&
-    Math.abs(lowestRecent - previousHigh) / previousHigh < 0.03
-  ) {
-    if (currentPrice > previousHigh * 0.99) return true;
-  }
-
-  const recentSwingHigh = Math.max(...recent.slice(-10).map((d) => n(d.high)));
-  const recentSwingLow = Math.min(
-    ...recent.slice(-20, -10).map((d) => n(d.low))
-  );
-  const swingRange = recentSwingHigh - recentSwingLow;
-  if (swingRange > 0) {
-    const fibs = [
-      recentSwingHigh - swingRange * 0.382,
-      recentSwingHigh - swingRange * 0.5,
-      recentSwingHigh - swingRange * 0.618,
-    ];
-    for (const level of fibs) {
-      if (
-        level > 0 &&
-        Math.abs(lowestRecent - level) / level < 0.03 &&
-        currentPrice > level * 0.99
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function checkEnhancedBounceConfirmation(stock, recent, currentPrice) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  if (recent.length < 3) return false;
-  const last3Days = recent.slice(-3);
-  const lastDay = recent[recent.length - 1];
-  const prevDay = recent[recent.length - 2];
-
-  const hammerPattern = (() => {
-    const range = n(lastDay.high) - n(lastDay.low);
-    const body = Math.abs(n(lastDay.close) - n(lastDay.open));
-    const lowerWick =
-      Math.min(n(lastDay.close), n(lastDay.open)) - n(lastDay.low);
-    return (
-      range > 0 &&
-      body < range * 0.4 &&
-      lowerWick > body * 1.5 &&
-      n(lastDay.close) >= n(lastDay.open)
-    );
-  })();
-
-  const bullishEngulfing =
-    n(prevDay.close) < n(prevDay.open) &&
-    n(lastDay.close) > n(lastDay.open) &&
-    n(lastDay.open) <= n(prevDay.close) &&
-    n(lastDay.close) > n(prevDay.open);
-
-  const morningStar = (() => {
-    if (last3Days.length < 3) return false;
-    const [d1, d2, d3] = last3Days;
-    return (
-      n(d1.close) < n(d1.open) &&
-      Math.abs(n(d2.close) - n(d2.open)) < (n(d2.high) - n(d2.low)) * 0.3 &&
-      n(d3.close) > n(d3.open) &&
-      n(d3.close) > (n(d1.open) + n(d1.close)) / 2
-    );
-  })();
-
-  const higherLowWithVolume =
-    n(lastDay.low) > n(prevDay.low) &&
-    n(lastDay.close) > n(lastDay.open) &&
-    n(lastDay.volume) > n(prevDay.volume) * 1.2;
-
-  const intradayReversal = (() => {
-    const ma50 = n(stock.movingAverage50d);
-    if (ma50 <= 0) return false;
-    return (
-      n(lastDay.open) < ma50 &&
-      n(lastDay.close) > ma50 &&
-      n(lastDay.close) > n(lastDay.open)
-    );
-  })();
-
-  const todayBullish =
-    n(stock.currentPrice) > n(stock.openPrice) &&
-    n(stock.currentPrice) > n(stock.prevClosePrice);
-
-  return (
-    hammerPattern ||
-    bullishEngulfing ||
-    morningStar ||
-    higherLowWithVolume ||
-    intradayReversal ||
-    todayBullish
-  );
-}
-
-function checkEnhancedVolumePattern(recent, stock) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  if (recent.length < 20) return false;
-
-  const obv = n(stock.obv);
-  const obvRising = obv > 0;
-
-  const avgVolume20 = recent.reduce((s, d) => s + n(d.volume), 0) / 20;
-  const avgVolume5 = recent.slice(-5).reduce((s, d) => s + n(d.volume), 0) / 5;
-  const volumeExpanding = avgVolume5 > avgVolume20;
-
-  const accumulationDays = recent.slice(-10).filter((d) => {
-    const bullish = n(d.close) > n(d.open);
-    const highVolume = n(d.volume) > avgVolume20;
-    return bullish && highVolume;
-  }).length;
-
-  const distributionDays = recent.slice(-10).filter((d) => {
-    const bearish = n(d.close) < n(d.open);
-    const highVolume = n(d.volume) > avgVolume20 * 1.2;
-    return bearish && highVolume;
-  }).length;
-
-  return (
-    (volumeExpanding && accumulationDays > distributionDays) ||
-    (accumulationDays >= 2 && distributionDays <= 1) ||
-    obvRising
-  );
-}
-
-function checkEnhancedMomentumAlignment(stock) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const rsi = n(stock.rsi14);
-  const macd = n(stock.macd);
-  const macdSignal = n(stock.macdSignal);
-  const stochK = n(stock.stochasticK);
-  const stochD = n(stock.stochasticD);
-
-  const currentPrice = n(stock.currentPrice);
-  const openPrice = n(stock.openPrice);
-  const prevClose = n(stock.prevClosePrice);
-
-  const priceActionBullish =
-    currentPrice > openPrice && currentPrice > prevClose;
-
-  const rsiBullish = rsi > 45 && rsi < 75;
-  const macdBullish = macd > macdSignal;
-  const macdCrossover =
-    macd > macdSignal && Math.abs(macd - macdSignal) < Math.abs(macd) * 0.2;
-  const stochasticBullish = stochK > stochD && stochK > 20 && stochK < 85;
-
-  if (!priceActionBullish) return false;
-
-  let alignedSignals = 1;
-  if (rsiBullish) alignedSignals++;
-  if (macdBullish || macdCrossover) alignedSignals++;
-  if (stochasticBullish) alignedSignals++;
-  return alignedSignals >= 2;
-}
-
-function checkNotOverextended(stock, recent, currentPrice) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const ma5 = n(stock.movingAverage5d);
-  const ma25 = n(stock.movingAverage25d);
-  const ma50 = n(stock.movingAverage50d);
-
-  // ATR as % floor to avoid crazy ratios on tiny ATRs
-  const rawATR = n(stock.atr14);
-  const atr = Math.max(rawATR, currentPrice * 0.005);
-  const priceVolatility = atr / Math.max(1, currentPrice);
-
-  const maxExtension5 = 5 + priceVolatility * 150;
-  const maxExtension25 = 8 + priceVolatility * 200;
-  const maxExtension50 = 12 + priceVolatility * 250;
-
-  if (ma5 > 0) {
-    const distanceFromMA5 = ((currentPrice - ma5) / ma5) * 100;
-    if (distanceFromMA5 > maxExtension5) return false;
-  }
-  if (ma25 > 0) {
-    const distanceFromMA25 = ((currentPrice - ma25) / ma25) * 100;
-    if (distanceFromMA25 > maxExtension25) return false;
-  }
-  if (ma50 > 0) {
-    const distanceFromMA50 = ((currentPrice - ma50) / ma50) * 100;
-    if (distanceFromMA50 > maxExtension50) return false;
-  }
-
-  const rsi = n(stock.rsi14);
-  if (rsi > 78) return false;
-
-  // Allow mild BB upper pierces on fresh strength; block only if overshoot + hot RSI
-  const bbUpper = n(stock.bollingerUpper);
-  if (bbUpper > 0) {
-    const bbOvershoot = (currentPrice - bbUpper) / bbUpper;
-    if (bbOvershoot > 0.012 && rsi >= 74) return false;
-  }
-
-  const fiveDaysAgo = recent[recent.length - 6]?.close;
-  if (fiveDaysAgo && fiveDaysAgo > 0) {
-    const fiveDayGain = ((currentPrice - fiveDaysAgo) / fiveDaysAgo) * 100;
-    const maxGain = 12 + priceVolatility * 350;
-    if (fiveDayGain > maxGain) return false;
-  }
-
-  return true;
-}
-
-function checkNotExhausted(stock, recent) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  let exhaustionSignals = 0;
-
-  const last5 = recent.slice(-5);
-  const upDaysWithDecreasingVolume = last5.filter(
-    (d, i) =>
-      i > 0 && n(d.close) > n(d.open) && n(d.volume) < n(last5[i - 1].volume)
-  ).length;
-  if (upDaysWithDecreasingVolume >= 4) exhaustionSignals++;
-
-  const smallBodies = last5.filter((d) => {
-    const range = n(d.high) - n(d.low);
-    const body = Math.abs(n(d.close) - n(d.open));
-    return range > 0 && body / range < 0.25;
-  }).length;
-  if (smallBodies >= 4) exhaustionSignals++;
-
-  const rsi = n(stock.rsi14);
-  if (rsi > 60 && rsi < 70) {
-    const priceHigher =
-      n(recent[recent.length - 1].high) >
-      n(recent[recent.length - 6]?.high || 0);
-    if (priceHigher && rsi < 65) exhaustionSignals++;
-  }
-
-  const stochK = n(stock.stochasticK);
-  if (stochK > 85) exhaustionSignals++;
-
-  const failedBreakouts = checkFailedBreakouts(recent);
-  if (failedBreakouts) exhaustionSignals++;
-
-  return exhaustionSignals <= 2;
-}
-
-function checkFailedBreakouts(recent) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  if (recent.length < 10) return false;
-  let failures = 0;
-  const recentHigh = Math.max(...recent.slice(-10).map((d) => n(d.high)));
-  for (let i = recent.length - 10; i < recent.length - 1; i++) {
-    const dayHigh = n(recent[i].high);
-    const nextDayClose = n(recent[i + 1].close);
-    if (dayHigh >= recentHigh * 0.99 && nextDayClose < dayHigh * 0.98)
-      failures++;
-  }
-  return failures >= 2;
-}
-
 /* ───────────────── Risk/Reward ───────────────── */
-function analyzeRiskReward(stock, marketStructure, overrides = {}) {
+function analyzeRiskReward(stock, marketStructure, cfg, overrides = {}) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const currentPrice = n(stock.currentPrice);
   const rawATR = n(stock.atr14);
@@ -640,10 +473,10 @@ function analyzeRiskReward(stock, marketStructure, overrides = {}) {
     { level: target, percentage: 34 },
   ];
 
-  // Requirements not influenced by sentiment
-  let requiredRatio = 1.6;
-  if (marketStructure.trend === "STRONG_UP") requiredRatio = 1.2;
-  else if (marketStructure.trend === "DOWN") requiredRatio = 2.3;
+  // Requirements (mode-aware)
+  let requiredRatio = cfg.rrBase;
+  if (marketStructure.trend === "STRONG_UP") requiredRatio = cfg.rrStrongUp;
+  else if (marketStructure.trend === "DOWN") requiredRatio = cfg.rrDown;
 
   const rsi = n(stock.rsi14);
   if (rsi > 65 && rsi < 75) requiredRatio += 0.2;
@@ -668,7 +501,7 @@ function analyzeRiskReward(stock, marketStructure, overrides = {}) {
 }
 
 /* ───────────────── Timing ───────────────── */
-function confirmEntryTiming(stock, historicalData, marketStructure) {
+function confirmEntryTiming(stock, historicalData) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const signals = { intraday: {}, daily: {}, marketPhase: {}, score: 0 };
   if (historicalData.length < 5) return signals;
@@ -676,7 +509,6 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
   const recent = historicalData.slice(-5);
   const lastDay = recent[recent.length - 1];
   const prevDay = recent[recent.length - 2];
-  const todayUp = n(stock.currentPrice) > n(stock.openPrice);
 
   signals.intraday = {
     closeNearHigh:
@@ -686,19 +518,19 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
     volumeSurge:
       n(lastDay.volume) >
       (recent.slice(0, 4).reduce((s, d) => s + n(d.volume), 0) / 4) * 1.1,
-    openAbovePrevClose: n(stock.openPrice) > n(stock.prevClosePrice),
-    strongOpen: n(stock.openPrice) > n(stock.prevClosePrice) * 1.005,
-    currentlyBullish: todayUp,
+    openAbovePrevClose: n(lastDay.open) > n(prevDay.close),
+    strongOpen: n(lastDay.open) > n(prevDay.close) * 1.005,
+    currentlyBullish: n(lastDay.close) > n(lastDay.open),
   };
 
   signals.daily = {
     higherLow: n(lastDay.low) > n(prevDay.low),
     higherClose: n(lastDay.close) > n(prevDay.close),
     trendContinuation: checkTrendContinuation(recent),
-    aboveVWAP: n(stock.currentPrice) > calculateVWAP(lastDay),
+    aboveVWAP: n(lastDay.close) > calculateVWAP(lastDay),
   };
 
-  signals.marketPhase = getMarketPhaseSignals(stock, lastDay);
+  signals.marketPhase = getMarketPhaseSignals(lastDay);
 
   let score = 0;
   if (signals.intraday.closeNearHigh) score += 15;
@@ -715,7 +547,7 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
   return signals;
 }
 
-function getMarketPhaseSignals(stock, lastDay) {
+function getMarketPhaseSignals(lastDay) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const openToHighRatio =
     n(lastDay.high) > n(lastDay.open)
@@ -821,7 +653,8 @@ function makeFinalDecision(
   riskReward,
   marketStructure,
   volumeMomentum,
-  priceActionPositive
+  priceActionPositive,
+  cfg
 ) {
   const weights = getAdaptiveWeights(marketStructure, volumeMomentum);
   const qualityScore =
@@ -832,13 +665,25 @@ function makeFinalDecision(
     volumeMomentum.score * weights.volumeMomentum;
   analysis.entryQuality = Math.round(qualityScore);
 
-  const qualityThreshold = getQualityThreshold(marketStructure);
+  const qualityThreshold = getQualityThreshold(marketStructure, cfg);
+
+  // Price action gate (mode-aware; allow small red day if other signals are strong)
+  const openPx = Number.isFinite(stock.openPrice)
+    ? stock.openPrice
+    : stock.currentPrice;
+  const dayPct = openPx
+    ? (((stock.currentPrice || openPx) - openPx) / openPx) * 100
+    : 0;
+  const priceActionGate = cfg.requirePriceActionPositive
+    ? priceActionPositive
+    : priceActionPositive ||
+      (cfg.allowSmallRedDay && dayPct >= cfg.redDayMaxDownPct);
 
   const mustHavesMet =
     riskReward.acceptable &&
     entryConditions.notOverextended &&
-    entryConditions.notExhausted &&
-    priceActionPositive;
+    (cfg.enforceNotExhausted ? entryConditions.notExhausted : true) &&
+    priceActionGate;
 
   const pullbackBounce =
     entryConditions.pullbackToSupport && entryConditions.bounceConfirmed;
@@ -851,7 +696,7 @@ function makeFinalDecision(
     entryConditions.momentumAligned &&
     entryConditions.notOverextended &&
     volumeMomentum.score >= 50 &&
-    priceActionPositive &&
+    priceActionGate &&
     (stock.currentPrice - (stock.openPrice || stock.currentPrice)) /
       (stock.openPrice || stock.currentPrice) >
       0.003;
@@ -872,9 +717,9 @@ function makeFinalDecision(
     idealSetup;
 
   const goodEnoughConditions =
-    entryConditions.score >= 65 &&
+    entryConditions.score >= cfg.minEntryScore &&
     riskReward.acceptable &&
-    priceActionPositive &&
+    priceActionGate &&
     (entryConditions.notOverextended || marketStructure.trend === "STRONG_UP");
 
   if (
@@ -883,9 +728,9 @@ function makeFinalDecision(
   ) {
     let buyReason = "";
     if (idealSetup) {
-      buyReason = `IDEAL ENTRY: Pullback to support with bounce confirmed, strong volume (${
+      buyReason = `IDEAL ENTRY: Pullback + bounce confirmed, strong volume (${
         volumeMomentum.volumeProfile
-      }), and momentum aligned. Entry quality: ${
+      }), momentum aligned. Entry quality: ${
         analysis.entryQuality
       }%. R:R ${riskReward.ratio.toFixed(1)}:1.`;
     } else if (pullbackBounce) {
@@ -910,71 +755,69 @@ function makeFinalDecision(
       }). Entry quality: ${
         analysis.entryQuality
       }%. R:R ${riskReward.ratio.toFixed(1)}:1.`;
-    } else if (goodEnoughConditions) {
+    } else {
       buyReason = `TECHNICAL ENTRY: Solid setup in ${
         marketStructure.trend
-      } trend. Today up ${(
-        ((stock.currentPrice - (stock.openPrice || stock.currentPrice)) /
-          (stock.openPrice || stock.currentPrice)) *
-        100
-      ).toFixed(2)}%. Entry quality: ${
+      } trend. Today ${dayPct.toFixed(2)}%. Entry quality: ${
         analysis.entryQuality
       }%. R:R ${riskReward.ratio.toFixed(1)}:1.`;
     }
     return { buyNow: true, reason: buyReason };
   }
 
-  // Explain misses
+  // Explain misses (mode-aware wording)
   let waitReason = "";
-  if (!priceActionPositive) {
-    const openPx = stock.openPrice || stock.currentPrice;
-    const pct = openPx
-      ? ((((stock.currentPrice || openPx) - openPx) / openPx) * 100).toFixed(2)
-      : "0.00";
-    waitReason = `Stock is down ${pct}% today. No entry on red days—wait for bullish price action.`;
-  } else if (!mustHavesMet) {
+  if (!priceActionGate) {
+    waitReason = `Price action weak today (${dayPct.toFixed(
+      2
+    )}%). Wait for bullish action or smaller red day.`;
+  } else if (!(riskReward.acceptable && entryConditions.notOverextended)) {
     if (!riskReward.acceptable) {
+      const need =
+        marketStructure.trend === "STRONG_UP"
+          ? cfg.rrStrongUp
+          : marketStructure.trend === "DOWN"
+          ? cfg.rrDown
+          : cfg.rrBase;
       waitReason = `Risk/Reward not favorable (${riskReward.ratio.toFixed(
         1
-      )}:1, need ${(marketStructure.trend === "STRONG_UP" ? 1.5 : 2.0).toFixed(
-        1
-      )}:1+).`;
+      )}:1, need ${need.toFixed(1)}:1+).`;
     } else if (!entryConditions.notOverextended) {
       const rsi = Number(stock?.rsi14) || 0;
       const bbUpper = Number(stock?.bollingerUpper) || 0;
       if (rsi > 70)
-        waitReason = `RSI overbought at ${rsi.toFixed(0)}—wait for a cool-off.`;
+        waitReason = `RSI ${rsi.toFixed(0)} (overbought) — wait for cool-off.`;
       else if (bbUpper > 0 && stock.currentPrice > bbUpper)
-        waitReason = `Above upper Bollinger Band—wait for pullback into bands.`;
-      else waitReason = `Extended from MAs—wait for pullback to MA25/MA50.`;
-    } else if (!entryConditions.notExhausted) {
-      waitReason = `Exhaustion signals present (${volumeMomentum.volumeProfile} volume, momentum ${volumeMomentum.momentumState}). Wait for consolidation.`;
+        waitReason = `Above upper Bollinger Band — wait for pullback into bands.`;
+      else
+        waitReason = `Extended from MAs — wait for pullback toward MA25/MA50.`;
     }
-  } else if (!hasStrongSignal) {
-    if (!entryConditions.pullbackToSupport)
-      waitReason =
-        "No pullback to support yet—wait for MA25/MA50 or key support test.";
-    else if (!entryConditions.bounceConfirmed)
-      waitReason =
-        "At support but bounce not confirmed—wait for a bullish reversal candle with volume.";
-    else if (!entryConditions.volumeConfirmation)
-      waitReason = `Volume pattern is ${volumeMomentum.volumeProfile}—wait for accumulation.`;
-    else
-      waitReason =
-        "No clear trigger—wait for pullback, breakout, or pattern completion.";
+  } else if (
+    !(
+      entryConditions.pullbackToSupport ||
+      entryConditions.breakingResistance ||
+      entryConditions.patternComplete ||
+      entryConditions.momentumAligned
+    )
+  ) {
+    waitReason =
+      "No clear trigger — wait for pullback, breakout, or pattern completion.";
+  } else if (analysis.entryQuality < qualityThreshold) {
+    waitReason = `Entry quality too low (${analysis.entryQuality}%, need ${qualityThreshold}%).`;
   } else {
-    waitReason = `Entry quality too low (${analysis.entryQuality}%, need ${qualityThreshold}%+).`;
+    waitReason =
+      "Conditions close but not all aligned — monitor for confirmation.";
   }
 
   if (marketStructure.trend === "DOWN")
     waitReason += " Note: Overall trend is bearish (counter-trend).";
   else if (marketStructure.trend === "WEAK_UP")
-    waitReason += " Note: Uptrend is weak—be selective.";
+    waitReason += " Note: Uptrend is weak — be selective.";
 
   return { buyNow: false, reason: waitReason };
 }
 
-/* ───────────────── Helpers (weights, levels, quality, etc.) ───────────────── */
+/* ───────────────── Helpers ───────────────── */
 function getAdaptiveWeights(marketStructure, volumeMomentum) {
   const w = {
     entryConditions: 0.35,
@@ -994,11 +837,11 @@ function getAdaptiveWeights(marketStructure, volumeMomentum) {
   return w;
 }
 
-function getQualityThreshold(marketStructure) {
-  let t = 70;
+function getQualityThreshold(marketStructure, cfg) {
+  let t = cfg.qualityBase;
   if (marketStructure.trend === "STRONG_UP") t -= 5;
-  else if (marketStructure.trend === "DOWN") t += 10;
-  return Math.max(60, t);
+  else if (marketStructure.trend === "DOWN") t += 8;
+  return Math.max(55, t);
 }
 
 function findEnhancedSupportLevels(historicalData, currentPrice, stock) {
@@ -1107,14 +950,14 @@ function checkDivergences(stock, recent) {
 
   if (priceWeekAgo && priceWeekAgo > 0) {
     const priceChange = ((currentPrice - priceWeekAgo) / priceWeekAgo) * 100;
-    if (priceChange > 5 && rsi < 60)
-      divergences.push({ type: "bearish", strength: "moderate" });
-    else if (priceChange > 10 && rsi < 65)
+    if (priceChange > 10 && rsi < 65)
       divergences.push({ type: "bearish", strength: "strong" });
-    if (priceChange < -5 && rsi > 40)
-      divergences.push({ type: "bullish", strength: "moderate" });
-    else if (priceChange < -10 && rsi > 35)
+    else if (priceChange > 5 && rsi < 60)
+      divergences.push({ type: "bearish", strength: "moderate" });
+    if (priceChange < -10 && rsi > 35)
       divergences.push({ type: "bullish", strength: "strong" });
+    else if (priceChange < -5 && rsi > 40)
+      divergences.push({ type: "bullish", strength: "moderate" });
   }
 
   const macd = n(stock.macd);
@@ -1129,7 +972,7 @@ function checkDivergences(stock, recent) {
   return divergences;
 }
 
-function checkResistanceBreakout(stock, recent, currentPrice) {
+function checkResistanceBreakout(stock, recent, currentPrice, cfg) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   const resistanceWindow = recent.slice(-12, -2);
   if (resistanceWindow.length < 8) return false;
@@ -1140,10 +983,14 @@ function checkResistanceBreakout(stock, recent, currentPrice) {
 
   const todayBreakout =
     currentPrice > resistance * 1.01 && n(stock.openPrice) < resistance * 1.02;
+
+  // Relaxed volume confirmation per mode (we don't have intraday volume here)
+  const volumeOK = n(lastDay.volume) > avgVolume * cfg.breakoutVolMult;
+
   const breakoutConfirmed =
     todayBreakout &&
     currentPrice > n(stock.openPrice) &&
-    n(lastDay.volume) > avgVolume * 1.3 &&
+    volumeOK &&
     n(lastDay.close) > resistance;
 
   return breakoutConfirmed;
@@ -1160,7 +1007,7 @@ function checkPatternCompletion(recent) {
   );
 }
 
-/* ───────────────── Pattern Detectors ───────────────── */
+/* ───────────────── Pattern Detectors (unchanged logic) ───────────────── */
 function detectBullFlag(recent) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
   if (recent.length < 10) return false;
@@ -1242,19 +1089,15 @@ const LATE_GUARD = {
   breakoutConfirmVolMult: 1.3,
   maxDaysAfterBreakout: 4,
   maxPctAbovePivot: 0.05,
-
   maxConsecutiveUpDays: 5,
   maxATRAboveMA25: 2.6,
   maxATRAboveMA50: 3.6,
   max5dGainPct: 16,
-
   hardRSI: 77,
   softRSI: 70,
   bbUpperCountForVeto: 2,
-
   climaxVolMult: 2.5,
   climaxCloseFromHigh: 0.6,
-
   pullbackNearMA25Pct: 0.012,
   pullbackATR: 1.0,
 };
@@ -1406,8 +1249,23 @@ function climaxVeto(recent) {
     : { veto: false };
 }
 
-function getEntryGuards(stock, sortedData, marketStructure, entryConditions) {
+function getEntryGuards(
+  stock,
+  sortedData,
+  marketStructure,
+  entryConditions,
+  cfg
+) {
   const recent = sortedData.slice(-20);
+
+  if (!cfg.lateGuard) {
+    // still enforce “too hot” and climax to avoid worst entries
+    const ext = overboughtOverextendedVeto(stock, recent);
+    if (ext.veto) return { vetoed: true, reason: ext.reason };
+    const clim = climaxVeto(sortedData.slice(-20));
+    if (clim.veto) return { vetoed: true, reason: clim.reason };
+    return { vetoed: false };
+  }
 
   // Bypass late-breakout veto for legit pullbacks and completed patterns
   if (
