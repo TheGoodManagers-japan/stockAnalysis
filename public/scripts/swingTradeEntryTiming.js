@@ -286,20 +286,21 @@ function checkEnhancedPullbackToSupport(stock, recent, currentPrice) {
   const last5Lows = recent.slice(-5).map((d) => n(d.low));
   const lowestRecent = Math.min(...last5Lows);
 
-  // Check if we've pulled back to any MA and bounced (relaxed tolerances)
+  // Check if we've pulled back to any MA and bounced (require price above MA)
   const mas = [
-    { value: ma5, name: "MA5", tolerance: 0.02 }, // Increased from 0.015
-    { value: ma25, name: "MA25", tolerance: 0.025 }, // Increased from 0.02
-    { value: ma50, name: "MA50", tolerance: 0.03 }, // Increased from 0.02
-    { value: ma200, name: "MA200", tolerance: 0.035 }, // Increased from 0.025
+    { value: ma5, name: "MA5", tolerance: 0.02 },
+    { value: ma25, name: "MA25", tolerance: 0.025 },
+    { value: ma50, name: "MA50", tolerance: 0.03 },
+    { value: ma200, name: "MA200", tolerance: 0.035 },
   ];
 
   for (const ma of mas) {
     if (ma.value > 0) {
       const touchedMA =
         Math.abs(lowestRecent - ma.value) / ma.value < ma.tolerance;
-      const bounced = currentPrice > ma.value;
-      if (touchedMA && bounced) return true;
+      const bounced = currentPrice > ma.value * 1.005; // Must be clearly above MA
+      const todayUp = currentPrice > n(stock.openPrice); // Must be up today
+      if (touchedMA && bounced && todayUp) return true;
     }
   }
 
@@ -363,12 +364,13 @@ function checkEnhancedBounceConfirmation(stock, recent, currentPrice) {
     ); // Allow doji (equal close/open)
   })();
 
-  // 2. Bullish engulfing
+  // 2. Bullish engulfing (must be GREEN today)
   const bullishEngulfing =
     n(prevDay.close) < n(prevDay.open) &&
     n(lastDay.close) > n(lastDay.open) &&
     n(lastDay.open) <= n(prevDay.close) &&
-    n(lastDay.close) > n(prevDay.open);
+    n(lastDay.close) > n(prevDay.open) &&
+    n(lastDay.close) > n(lastDay.open); // Already checked but keeping for clarity
 
   // 3. Morning star pattern (3-day)
   const morningStar = (() => {
@@ -384,13 +386,13 @@ function checkEnhancedBounceConfirmation(stock, recent, currentPrice) {
     ); // Closes above midpoint of day 1
   })();
 
-  // 4. Higher low with volume
+  // 4. Higher low with volume (must be GREEN)
   const higherLowWithVolume =
     n(lastDay.low) > n(prevDay.low) &&
-    n(lastDay.close) > n(lastDay.open) &&
+    n(lastDay.close) > n(lastDay.open) && // Must be green
     n(lastDay.volume) > n(prevDay.volume) * 1.2;
 
-  // 5. Intraday reversal (open below support, close above)
+  // 5. Intraday reversal (open below support, close above) - must close GREEN
   const intradayReversal = (() => {
     const ma50 = n(stock.movingAverage50d);
     if (ma50 <= 0) return false;
@@ -399,15 +401,21 @@ function checkEnhancedBounceConfirmation(stock, recent, currentPrice) {
       n(lastDay.open) < ma50 &&
       n(lastDay.close) > ma50 &&
       n(lastDay.close) > n(lastDay.open)
-    );
+    ); // Must be green candle
   })();
+
+  // 6. Add new check: Today must show buying pressure
+  const todayBullish =
+    n(stock.currentPrice) > n(stock.openPrice) &&
+    n(stock.currentPrice) > n(stock.prevClosePrice);
 
   return (
     hammerPattern ||
     bullishEngulfing ||
     morningStar ||
     higherLowWithVolume ||
-    intradayReversal
+    intradayReversal ||
+    todayBullish
   );
 }
 
@@ -458,15 +466,25 @@ function checkEnhancedMomentumAlignment(stock) {
   const stochK = n(stock.stochasticK);
   const stochD = n(stock.stochasticD);
 
-  // Multiple momentum confirmations (relaxed)
-  const rsiBullish = rsi > 45 && rsi < 75; // Expanded range from 50-70
-  const macdBullish = macd > macdSignal; // Removed && macd > 0 requirement
-  const macdCrossover =
-    macd > macdSignal && Math.abs(macd - macdSignal) < Math.abs(macd) * 0.2; // Increased from 0.1
-  const stochasticBullish = stochK > stochD && stochK > 20 && stochK < 85; // Increased from 80
+  // Multiple momentum confirmations (require actual bullish price action)
+  const currentPrice = n(stock.currentPrice);
+  const openPrice = n(stock.openPrice);
+  const prevClose = n(stock.prevClosePrice);
 
-  // Count aligned signals
-  let alignedSignals = 0;
+  // Price action must be bullish TODAY
+  const priceActionBullish =
+    currentPrice > openPrice && currentPrice > prevClose;
+
+  const rsiBullish = rsi > 45 && rsi < 75;
+  const macdBullish = macd > macdSignal;
+  const macdCrossover =
+    macd > macdSignal && Math.abs(macd - macdSignal) < Math.abs(macd) * 0.2;
+  const stochasticBullish = stochK > stochD && stochK > 20 && stochK < 85;
+
+  // Count aligned signals (but require price action)
+  if (!priceActionBullish) return false; // No momentum if price is down
+
+  let alignedSignals = 1; // Price action counts as one
   if (rsiBullish) alignedSignals++;
   if (macdBullish || macdCrossover) alignedSignals++;
   if (stochasticBullish) alignedSignals++;
@@ -688,17 +706,20 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
   const prevDay = recent[recent.length - 2];
   const currentPrice = n(stock.currentPrice);
 
-  // Intraday signals (more lenient on volume surge)
+  // Intraday signals (require actual bullish action)
+  const todayUp = n(stock.currentPrice) > n(stock.openPrice);
+
   signals.intraday = {
     closeNearHigh:
       n(lastDay.close) >
-      n(lastDay.high) - (n(lastDay.high) - n(lastDay.low)) * 0.3, // Increased from 0.25
+      n(lastDay.high) - (n(lastDay.high) - n(lastDay.low)) * 0.3,
     bullishClose: n(lastDay.close) > n(lastDay.open),
     volumeSurge:
       n(lastDay.volume) >
-      (recent.slice(0, 4).reduce((s, d) => s + n(d.volume), 0) / 4) * 1.1, // Reduced from 1.2
+      (recent.slice(0, 4).reduce((s, d) => s + n(d.volume), 0) / 4) * 1.1,
     openAbovePrevClose: n(stock.openPrice) > n(stock.prevClosePrice),
-    strongOpen: n(stock.openPrice) > n(stock.prevClosePrice) * 1.005, // Reduced from 1.01
+    strongOpen: n(stock.openPrice) > n(stock.prevClosePrice) * 1.005,
+    currentlyBullish: todayUp, // New check
   };
 
   // Daily signals
@@ -718,6 +739,7 @@ function confirmEntryTiming(stock, historicalData, marketStructure) {
   if (signals.intraday.bullishClose) score += 10;
   if (signals.intraday.volumeSurge) score += 20;
   if (signals.intraday.strongOpen) score += 10;
+  if (signals.intraday.currentlyBullish) score += 20; // Important weight
   if (signals.daily.higherLow) score += 15;
   if (signals.daily.higherClose) score += 10;
   if (signals.daily.trendContinuation) score += 15;
@@ -889,23 +911,30 @@ function makeFinalDecision(
     analysis.sentimentScore
   );
 
-  // Check must-have conditions
+  // Check must-have conditions (add price action check)
+  const priceActionPositive = stock.currentPrice > stock.openPrice;
+
   const mustHavesMet =
     riskReward.acceptable &&
     entryConditions.notOverextended &&
-    entryConditions.notExhausted;
+    entryConditions.notExhausted &&
+    priceActionPositive; // NEW: Must be green today
 
-  // Check for strong buy signals (added more flexibility)
+  // Check for strong buy signals (removed momentum entry if not actually up)
   const pullbackBounce =
     entryConditions.pullbackToSupport && entryConditions.bounceConfirmed;
   const breakoutWithVolume =
     entryConditions.breakingResistance && entryConditions.volumeConfirmation;
   const patternWithTiming =
-    entryConditions.patternComplete && timingSignals.score >= 50; // Reduced from 60
+    entryConditions.patternComplete && timingSignals.score >= 50;
+
+  // Momentum entry only valid if price is actually up today
   const momentumEntry =
     entryConditions.momentumAligned &&
     entryConditions.notOverextended &&
-    volumeMomentum.score >= 50; // New condition
+    volumeMomentum.score >= 50 &&
+    priceActionPositive &&
+    (stock.currentPrice - stock.openPrice) / stock.openPrice > 0.003; // At least 0.3% up
 
   // Check for ideal setup (relaxed)
   const idealSetup =
@@ -924,11 +953,12 @@ function makeFinalDecision(
     momentumEntry ||
     idealSetup;
 
-  // Also allow entry with good conditions even if not all perfect
+  // Also allow entry with good conditions even if not all perfect (but must be green)
   const goodEnoughConditions =
-    entryConditions.score >= 60 && // Reasonable entry conditions
+    entryConditions.score >= 65 && // Raised from 60
     riskReward.acceptable &&
-    (entryConditions.notOverextended || marketStructure.trend === "STRONG_UP"); // Allow some extension in strong trends
+    priceActionPositive && // Must be green
+    (entryConditions.notOverextended || marketStructure.trend === "STRONG_UP");
 
   if (
     (mustHavesMet && hasStrongSignal && highQuality) ||
@@ -969,7 +999,10 @@ function makeFinalDecision(
     } else if (goodEnoughConditions) {
       buyReason = `TECHNICAL ENTRY: Good technical setup with ${
         marketStructure.trend
-      } trend. Entry quality: ${
+      } trend. Currently up ${(
+        ((stock.currentPrice - stock.openPrice) / stock.openPrice) *
+        100
+      ).toFixed(2)}% today. Entry quality: ${
         analysis.entryQuality
       }%. Risk/Reward: ${riskReward.ratio.toFixed(1)}:1.`;
     }
@@ -982,7 +1015,14 @@ function makeFinalDecision(
     // NOT A BUY - Explain what's missing
     let waitReason = "";
 
-    if (!mustHavesMet) {
+    // First check if stock is red today
+    if (!priceActionPositive) {
+      const percentDown = (
+        ((stock.currentPrice - stock.openPrice) / stock.openPrice) *
+        100
+      ).toFixed(2);
+      waitReason = `Stock is down ${percentDown}% today. No entry on red days. Wait for bullish price action.`;
+    } else if (!mustHavesMet) {
       if (!riskReward.acceptable) {
         waitReason = `Risk/Reward not favorable (${riskReward.ratio.toFixed(
           1
@@ -1073,18 +1113,17 @@ function getAdaptiveWeights(marketStructure, volumeMomentum) {
 }
 
 function getQualityThreshold(marketStructure, sentimentScore) {
-  let threshold = 65; // Reduced base from 70
+  let threshold = 70; // Raised base back to 70 from 65
 
   // Adjust based on market trend
-  if (marketStructure.trend === "STRONG_UP")
-    threshold -= 10; // Increased reduction from 5
+  if (marketStructure.trend === "STRONG_UP") threshold -= 5; // Back to original
   else if (marketStructure.trend === "DOWN") threshold += 10;
 
   // Adjust based on sentiment strength
-  if (sentimentScore === 1) threshold -= 10; // Increased reduction from 5
+  if (sentimentScore === 1) threshold -= 5; // Back to original
   else if (sentimentScore === 3) threshold += 5;
 
-  return Math.max(50, threshold); // Set minimum at 50
+  return Math.max(60, threshold); // Minimum raised to 60 from 50
 }
 
 function findEnhancedSupportLevels(historicalData, currentPrice, stock) {
@@ -1267,21 +1306,26 @@ function checkDivergences(stock, recent) {
 function checkResistanceBreakout(stock, recent, currentPrice) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
-  // Find recent resistance (highest high of past 10 days, excluding last 2)
+  // Check for resistance breakout with CURRENT price action
   const resistanceWindow = recent.slice(-12, -2);
   if (resistanceWindow.length < 8) return false;
 
   const resistance = Math.max(...resistanceWindow.map((d) => n(d.high)));
   const lastDay = recent[recent.length - 1];
+  const prevDay = recent[recent.length - 2];
+
+  // Must be breaking out TODAY, not yesterday
+  const todayBreakout =
+    currentPrice > resistance * 1.01 && n(stock.openPrice) < resistance * 1.02; // Opened below/near resistance
 
   // Check for breakout with volume
   const avgVolume =
     recent.slice(-10).reduce((sum, d) => sum + n(d.volume), 0) / 10;
   const breakoutConfirmed =
-    currentPrice > resistance * 1.01 &&
+    todayBreakout &&
+    currentPrice > n(stock.openPrice) && // Must be up today
     n(lastDay.volume) > avgVolume * 1.3 &&
-    n(lastDay.close) > n(lastDay.open) &&
-    n(lastDay.close) > resistance; // Close above resistance
+    n(lastDay.close) > resistance; // Yesterday closed above resistance too
 
   return breakoutConfirmed;
 }
