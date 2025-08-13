@@ -1,21 +1,20 @@
-// swingTradeEntryTiming.js (flexible: works anytime; dip-first + strict breakouts)
+// swingTradeEntryTiming.js (flexible; now explains WHY it's "no")
 
 /**
  * Usage:
  * const res = analyzeSwingTradeEntry(stock, candles, { debug: true });
- * Optional: { allowedKinds: ["DIP","BREAKOUT"] } to restrict if desired.
+ * Optional: { allowedKinds: ["DIP","BREAKOUT"] }
  * Returns: { buyNow, reason, stopLoss, priceTarget, debug? }
  */
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
+  const reasons = []; // collect all "no" reasons
 
   // ---- Validate & prep data ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
-    return {
-      buyNow: false,
-      reason: "Insufficient historical data (need ≥25 bars).",
-    };
+    const r = "Insufficient historical data (need ≥25 bars).";
+    return withNo(r, { reasons: [r] });
   }
   const data = [...historicalData].sort(
     (a, b) => new Date(a.date) - new Date(b.date)
@@ -28,7 +27,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     !isFiniteN(last.close) ||
     !isFiniteN(last.volume)
   ) {
-    return { buyNow: false, reason: "Invalid last bar OHLCV." };
+    const r = "Invalid last bar OHLCV.";
+    return withNo(r, { reasons: [r] });
   }
 
   // Robust price context (works pre-open / intraday / after-close)
@@ -38,17 +38,19 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
   const ms = getMarketStructure(stock, data); // { trend, recentHigh, recentLow, ma25, ma50 }
-  if (ms.trend === "DOWN") {
-    return {
-      buyNow: false,
-      reason: "Skip: overall trend DOWN (counter-trend dip not allowed).",
-    };
-  }
 
   // Price action gate (allow small red day to catch first bounce)
   const priceActionGate =
     px > Math.max(openPx, prevClose) ||
     (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
+
+  const gateWhy = !priceActionGate
+    ? `Price action gate failed: px ${fmt(px)} <= max(open ${fmt(
+        openPx
+      )}, prevClose ${fmt(prevClose)}) and dayPct ${dayPct.toFixed(2)}% < ${
+        cfg.redDayMaxDownPct
+      }% threshold.`
+    : "";
 
   // Allowed paths (default both)
   const allow =
@@ -56,72 +58,144 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ? new Set(opts.allowedKinds.map((s) => s.toUpperCase()))
       : new Set(["DIP", "BREAKOUT"]);
 
-  // ---- Build candidates ----
+  // ---- Build candidates (and gather non-trigger reasons) ----
   const candidates = [];
+  const checks = {};
 
   if (allow.has("DIP")) {
     const dip = detectDipBounce(stock, data, cfg);
-    if (dip.trigger && priceActionGate) {
+    checks.dip = dip;
+    if (!dip.trigger) reasons.push(`DIP not ready: ${dip.waitReason}`);
+    else if (!priceActionGate) reasons.push(`DIP blocked by gate: ${gateWhy}`);
+    else {
       const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg);
-      if (
-        rr.acceptable &&
-        !guardVeto(stock, data, px, rr, ms, cfg, dip.nearestRes)
-      ) {
-        candidates.push({
-          kind: "DIP ENTRY",
-          why: dip.why,
-          stop: rr.stop,
-          target: rr.target,
-          rr,
-        });
+      if (!rr.acceptable) {
+        reasons.push(
+          `DIP RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)} (risk ${fmt(
+            px - rr.stop
+          )}, reward ${fmt(rr.target - px)}).`
+        );
+      } else {
+        const gv = guardVeto(stock, data, px, rr, ms, cfg, dip.nearestRes);
+        if (gv.veto) {
+          reasons.push(
+            `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+          );
+        } else {
+          candidates.push({
+            kind: "DIP ENTRY",
+            why: dip.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
       }
     }
   }
 
   if (allow.has("BREAKOUT")) {
     const bo = detectRockSolidBreakout(stock, data, cfg);
-    if (bo.trigger && priceActionGate) {
+    checks.breakoutStrict = bo;
+    if (!bo.trigger)
+      reasons.push(`BREAKOUT (strict) not ready: ${bo.waitReason}`);
+    else if (!priceActionGate)
+      reasons.push(`BREAKOUT (strict) blocked by gate: ${gateWhy}`);
+    else {
       const rr = analyzeRR(px, bo.stop, bo.target, stock, ms, cfg);
-      if (
-        rr.acceptable &&
-        !guardVeto(stock, data, px, rr, ms, cfg, bo.nearestRes)
-      ) {
-        candidates.push({
-          kind: "BREAKOUT (STRICT)",
-          why: bo.why,
-          stop: rr.stop,
-          target: rr.target,
-          rr,
-        });
+      if (!rr.acceptable) {
+        reasons.push(
+          `BREAKOUT (strict) RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}.`
+        );
+      } else {
+        const gv = guardVeto(stock, data, px, rr, ms, cfg, bo.nearestRes);
+        if (gv.veto) {
+          reasons.push(
+            `BREAKOUT (strict) guard veto: ${gv.reason} ${summarizeGuardDetails(
+              gv.details
+            )}.`
+          );
+        } else {
+          candidates.push({
+            kind: "BREAKOUT (STRICT)",
+            why: bo.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
       }
     }
 
     const legacy = detectLegacyBreakoutStrict(stock, data, cfg);
-    if (legacy.trigger && priceActionGate) {
+    checks.breakoutLegacy = legacy;
+    if (!legacy.trigger)
+      reasons.push(`BREAKOUT (legacy) not ready: ${legacy.waitReason}`);
+    else if (!priceActionGate)
+      reasons.push(`BREAKOUT (legacy) blocked by gate: ${gateWhy}`);
+    else {
       const rr = analyzeRR(px, legacy.stop, legacy.target, stock, ms, cfg);
-      if (
-        rr.acceptable &&
-        !guardVeto(stock, data, px, rr, ms, cfg, legacy.nearestRes)
-      ) {
-        candidates.push({
-          kind: "BREAKOUT (LEGACY+STRICTIFIED)",
-          why: legacy.why,
-          stop: rr.stop,
-          target: rr.target,
-          rr,
-        });
+      if (!rr.acceptable) {
+        reasons.push(
+          `BREAKOUT (legacy) RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}.`
+        );
+      } else {
+        const gv = guardVeto(stock, data, px, rr, ms, cfg, legacy.nearestRes);
+        if (gv.veto) {
+          reasons.push(
+            `BREAKOUT (legacy) guard veto: ${gv.reason} ${summarizeGuardDetails(
+              gv.details
+            )}.`
+          );
+        } else {
+          candidates.push({
+            kind: "BREAKOUT (LEGACY+STRICTIFIED)",
+            why: legacy.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
       }
     }
   }
 
+  // ---- Final decision ----
   if (candidates.length === 0) {
-    const why = !priceActionGate
-      ? `Price action weak today (${dayPct.toFixed(2)}%).`
-      : "No qualifying dip or breakout setup right now.";
-    return { buyNow: false, reason: why };
+    // Build a concise, actionable "no" reason
+    const top = [];
+    if (!priceActionGate) top.push(gateWhy);
+    if (ms.trend === "DOWN")
+      top.push(
+        "Trend is DOWN (signals still allowed, but RR/guards may reject)."
+      ); // informative, not hard ban
+    const reason = buildNoReason(top, reasons);
+    const debug = opts.debug
+      ? {
+          ms,
+          dayPct,
+          priceActionGate,
+          reasons,
+          checks,
+          px,
+          openPx,
+          prevClose,
+          cfg,
+        }
+      : undefined;
+    return { buyNow: false, reason, debug };
   }
 
-  // Prefer DIP first; otherwise choose highest RR
+  // Prefer dip first; otherwise choose highest RR
   candidates.sort((a, b) =>
     a.kind === "DIP ENTRY"
       ? -1
@@ -131,14 +205,28 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   );
   const best = candidates[0];
 
+  const debug = opts.debug
+    ? {
+        ms,
+        dayPct,
+        priceActionGate,
+        chosen: best.kind,
+        rr: best.rr,
+        guard: best.guard,
+        checks,
+        px,
+        openPx,
+        prevClose,
+        cfg,
+      }
+    : undefined;
+
   return {
     buyNow: true,
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
     stopLoss: best.stop,
     priceTarget: best.target,
-    debug: cfg.debug
-      ? { ms, dayPct, chosen: best.kind, rr: best.rr, all: candidates }
-      : undefined,
+    debug,
   };
 }
 
@@ -194,7 +282,7 @@ function getMarketStructure(stock, data) {
   const w = data.slice(-20);
   const recentHigh = Math.max(...w.map((d) => d.high));
   const recentLow = Math.min(...w.map((d) => d.low));
-  return { trend, recentHigh, recentLow, ma25, ma50 };
+  return { trend, recentHigh, recentLow, ma25, ma50, ma200 };
 }
 
 /* ===================== DIP + BOUNCE DETECTOR ===================== */
@@ -257,14 +345,30 @@ function detectDipBounce(stock, data, cfg) {
   const waitReason = trigger
     ? ""
     : !nearMA
-    ? "Price not near MA25/50."
+    ? "price not near MA25/50"
     : !higherLow
-    ? "No higher low yet."
+    ? "no higher low yet"
     : !volOK
-    ? "Bounce volume below average."
-    : "Bounce candle not confirmed.";
+    ? "bounce volume below average"
+    : "bounce candle not confirmed";
 
-  return { trigger, stop, target, nearestRes, why, waitReason };
+  return {
+    trigger,
+    stop,
+    target,
+    nearestRes,
+    why,
+    waitReason,
+    diagnostics: {
+      nearMA,
+      higherLow,
+      closeAboveYHigh,
+      hammer,
+      engulf,
+      volOK,
+      atr,
+    },
+  };
 }
 
 /* =================== ROCK-SOLID BREAKOUT DETECTOR =================== */
@@ -278,7 +382,7 @@ function detectRockSolidBreakout(stock, data, cfg) {
   if (window.length < 8)
     return {
       trigger: false,
-      waitReason: "Not enough base to define resistance.",
+      waitReason: "not enough base to define resistance",
     };
   const resistance = Math.max(...window.map((d) => num(d.high)));
 
@@ -302,14 +406,22 @@ function detectRockSolidBreakout(stock, data, cfg) {
   const waitReason = trigger
     ? ""
     : !closeBreak
-    ? "Close not far enough above resistance."
+    ? "close not ≥ threshold above resistance"
     : !openOK
-    ? "Gap too large at open."
+    ? "gap too large at open"
     : !volOK
-    ? "Volume not strong enough."
-    : "RSI too hot for a safe breakout.";
+    ? "volume not strong enough"
+    : "RSI too hot";
 
-  return { trigger, stop, target, nearestRes, why, waitReason };
+  return {
+    trigger,
+    stop,
+    target,
+    nearestRes,
+    why,
+    waitReason,
+    diagnostics: { resistance, closeBreak, openOK, volOK, notHot, atr },
+  };
 }
 
 /* ============= LEGACY-FLAVOR BREAKOUT (STRICTIFIED) ============= */
@@ -319,7 +431,7 @@ function detectLegacyBreakoutStrict(stock, data, cfg) {
   const rsi = num(stock.rsi14);
 
   const win = data.slice(-18, -2);
-  if (win.length < 10) return { trigger: false, waitReason: "Base too short." };
+  if (win.length < 10) return { trigger: false, waitReason: "base too short" };
 
   const highs = win.map((d) => num(d.high));
   const top = Math.max(...highs);
@@ -333,16 +445,18 @@ function detectLegacyBreakoutStrict(stock, data, cfg) {
 
   const trigger = touches >= 3 && through && gapOK && notHot;
   if (!trigger) {
+    const wr =
+      touches < 3
+        ? "not enough flat-top taps"
+        : !through
+        ? "not decisively through flat-top"
+        : !gapOK
+        ? "gap too large"
+        : "RSI too hot";
     return {
       trigger: false,
-      waitReason:
-        touches < 3
-          ? "Not enough flat-top taps."
-          : !through
-          ? "Not decisively through flat-top."
-          : !gapOK
-          ? "Gap too large."
-          : "RSI too hot.",
+      waitReason: wr,
+      diagnostics: { touches, top, through, gapOK, notHot, atr },
     };
   }
 
@@ -350,7 +464,15 @@ function detectLegacyBreakoutStrict(stock, data, cfg) {
   const target = px + Math.max(2.5 * atr, px * 0.02);
   const nearestRes = findNearestResistance(data, px);
   const why = `Flat-top with ≥3 taps; clean push-through with controlled gap.`;
-  return { trigger, stop, target, nearestRes, why, waitReason: "" };
+  return {
+    trigger,
+    stop,
+    target,
+    nearestRes,
+    why,
+    waitReason: "",
+    diagnostics: { touches, top, through, gapOK, notHot, atr },
+  };
 }
 
 /* ======================== Risk / Reward ======================== */
@@ -369,26 +491,73 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg) {
   if (ms.trend === "STRONG_UP") need = cfg.minRRstrongUp;
   if (ms.trend === "WEAK_UP") need = cfg.minRRweakUp;
 
-  return { acceptable: ratio >= need, ratio, stop, target };
+  return {
+    acceptable: ratio >= need,
+    ratio,
+    stop,
+    target,
+    need,
+    atr,
+    risk,
+    reward,
+  };
 }
 
 /* ============================ Guards ============================ */
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes) {
-  if (num(stock.rsi14) >= cfg.hardRSI) return true; // RSI heat
-
+  const details = {};
   const atr = Math.max(num(stock.atr14), px * 0.005);
-
-  // Headroom to nearest resistance
-  if (nearestRes && nearestRes - px < cfg.nearResVetoATR * atr) return true;
-
-  // Not too far above MA25 (avoid late entries after bounce)
+  const rsi = num(stock.rsi14);
   const ma25 = num(stock.movingAverage25d);
-  if (ma25 > 0 && (px - ma25) / atr > cfg.maxATRfromMA25) return true;
 
-  // Too many consecutive up days (chasing)
-  if (countConsecutiveUpDays(data) > cfg.maxConsecUp) return true;
+  details.rsi = rsi;
+  if (rsi >= cfg.hardRSI)
+    return {
+      veto: true,
+      reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.hardRSI}`,
+      details,
+    };
 
-  return false;
+  if (nearestRes) {
+    const headroom = (nearestRes - px) / atr;
+    details.nearestRes = nearestRes;
+    details.headroomATR = headroom;
+    if (headroom < cfg.nearResVetoATR)
+      return {
+        veto: true,
+        reason: `Headroom ${headroom.toFixed(2)} ATR < ${
+          cfg.nearResVetoATR
+        } ATR to resistance`,
+        details,
+      };
+  } else {
+    details.nearestRes = null;
+  }
+
+  if (ma25 > 0) {
+    const distMA25 = (px - ma25) / atr;
+    details.ma25 = ma25;
+    details.distFromMA25_ATR = distMA25;
+    if (distMA25 > cfg.maxATRfromMA25)
+      return {
+        veto: true,
+        reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${
+          cfg.maxATRfromMA25
+        })`,
+        details,
+      };
+  }
+
+  const ups = countConsecutiveUpDays(data);
+  details.consecUp = ups;
+  if (ups > cfg.maxConsecUp)
+    return {
+      veto: true,
+      reason: `Consecutive up days ${ups} > ${cfg.maxConsecUp}`,
+      details,
+    };
+
+  return { veto: false, reason: "", details };
 }
 
 /* =========================== Utilities =========================== */
@@ -402,6 +571,9 @@ function avg(arr) {
   return arr.length
     ? arr.reduce((a, b) => a + (Number(b) || 0), 0) / arr.length
     : 0;
+}
+function fmt(x) {
+  return Number.isFinite(x) ? x.toFixed(2) : String(x);
 }
 
 function countConsecutiveUpDays(data, k = 8) {
@@ -422,4 +594,31 @@ function findNearestResistance(data, px) {
   if (!ups.length) return null;
   ups.sort((a, b) => a - b);
   return ups[0];
+}
+
+/* =========================== Helpers =========================== */
+function buildNoReason(top, list) {
+  const head = top.filter(Boolean).join(" | ");
+  const uniq = Array.from(new Set(list.filter(Boolean)));
+  const bullet = uniq
+    .slice(0, 6)
+    .map((r) => `- ${r}`)
+    .join("\n");
+  return [head, bullet].filter(Boolean).join("\n");
+}
+
+function summarizeGuardDetails(d) {
+  if (!d) return "";
+  const bits = [];
+  if (typeof d.rsi === "number") bits.push(`RSI=${d.rsi.toFixed(1)}`);
+  if (typeof d.headroomATR === "number")
+    bits.push(`headroom=${d.headroomATR.toFixed(2)} ATR`);
+  if (typeof d.distFromMA25_ATR === "number")
+    bits.push(`distMA25=${d.distFromMA25_ATR.toFixed(2)} ATR`);
+  if (typeof d.consecUp === "number") bits.push(`consecUp=${d.consecUp}`);
+  return bits.length ? `(${bits.join(", ")})` : "";
+}
+
+function withNo(reason, debug) {
+  return { buyNow: false, reason, debug };
 }
