@@ -8,6 +8,19 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     return err;
   };
 
+  // Helper to convert values to numbers, returning 0 for invalid inputs
+  const toNumber = (val) => {
+    const num = parseFloat(val);
+    return isNaN(num) ? 0 : num;
+  };
+
+  // Helper to get dates in the past
+  const getDateYearsAgo = (years) => {
+    const date = new Date();
+    date.setFullYear(date.getFullYear() - years);
+    return date;
+  };
+
   try {
     console.log(`Fetching all data for ticker: ${ticker}`);
 
@@ -191,7 +204,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const todayHighPrimary = toNumber(quote.regularMarketDayHigh);
     const todayLowPrimary = toNumber(quote.regularMarketDayLow);
     const todayOpenPrimary = toNumber(quote.regularMarketOpen);
-    const todayVolume = toNumber(quote.regularMarketVolume); // optional
+    const todayVolume = toNumber(quote.regularMarketVolume); // Now required
 
     const highPrice = todayHighPrimary || toNumber(lastBar.high);
     const lowPrice = todayLowPrimary || toNumber(lastBar.low);
@@ -224,7 +237,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       lowPrice,
       openPrice,
       prevClosePrice,
-      todayVolume, // optional for timing logic
+      todayVolume,
 
       marketCap: toNumber(quote.marketCap),
       peRatio,
@@ -277,6 +290,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       "currentPrice",
       "highPrice",
       "lowPrice",
+      "todayVolume", // Added volume to required fields
       "fiftyTwoWeekHigh",
       "fiftyTwoWeekLow",
       "movingAverage5d",
