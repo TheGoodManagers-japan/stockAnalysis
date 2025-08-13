@@ -65,6 +65,15 @@ export function analyzeSwingTradeEntry(sentimentResult, stock, historicalData) {
   const volumeMomentum = validateVolumeMomentum(stock, sortedData);
   analysis.technicalChecks.volumeMomentum = volumeMomentum;
 
+  // STEP 6.5: Late-entry / Overextension Veto (hard gate)
+  const guard = getEntryGuards(stock, sortedData, marketStructure);
+  if (guard.vetoed) {
+    return {
+      buyNow: false,
+      reason: guard.reason,
+    };
+  }
+
   // STEP 7: Final Entry Decision
   return makeFinalDecision(
     stock,
@@ -76,15 +85,9 @@ export function analyzeSwingTradeEntry(sentimentResult, stock, historicalData) {
     volumeMomentum
   );
 }
+ 
 
-// STEP 6.5: Late-entry / Overextension Veto (hard gate)
-const guard = getEntryGuards(stock, sortedData, marketStructure);
-if (guard.vetoed) {
-  return {
-    buyNow: false,
-    reason: guard.reason,
-  };
-}
+
 
 /* ───────────────── Input Validation ───────────────── */
 
