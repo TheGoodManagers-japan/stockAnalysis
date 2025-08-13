@@ -1,131 +1,216 @@
-// riskReward.js
-import { n } from "./utils.js";
+// guards.js
+import { n, avg } from "./utils.js";
 
-export function analyzeRiskReward(stock, marketStructure, cfg, overrides = {}) {
-  const currentPrice = n(stock.currentPrice);
-  const rawATR = n(stock.atr14);
-  const atr = Math.max(rawATR, currentPrice * 0.005);
+const DEFAULTS = {
+  breakoutLookback: 15,
+  breakoutConfirmVolMult: 1.3,
+  maxDaysAfterBreakout: 4,
+  maxPctAbovePivot: 0.05,
+  maxConsecutiveUpDays: 5,
+  maxATRAboveMA25: 2.6,
+  maxATRAboveMA50: 3.6,
+  max5dGainPct: 16,
+  hardRSI: 77,
+  softRSI: 70,
+  climaxVolMult: 2.5,
+  climaxCloseFromHigh: 0.6,
+  pullbackNearMA25Pct: 0.012,
+  pullbackATR: 1.0,
+};
 
-  const analysis = {
-    ratio: 0,
-    risk: 0,
-    reward: 0,
-    acceptable: false,
-    quality: "POOR",
-    adjustedStopLoss: null,
-    multipleTargets: [],
+function LG(cfg) {
+  return {
+    ...DEFAULTS,
+    breakoutConfirmVolMult:
+      cfg?.breakoutVolMult ?? DEFAULTS.breakoutConfirmVolMult,
+    maxATRAboveMA25: cfg?.maxATRAboveMA25 ?? DEFAULTS.maxATRAboveMA25,
+    maxATRAboveMA50: cfg?.maxATRAboveMA50 ?? DEFAULTS.maxATRAboveMA50,
+    max5dGainPct: cfg?.max5dGainPct ?? DEFAULTS.max5dGainPct,
+    hardRSI: cfg?.rsiHard ?? DEFAULTS.hardRSI,
+    softRSI: cfg?.rsiSoft ?? DEFAULTS.softRSI,
   };
+}
 
-  let stopLoss = Number.isFinite(overrides.stopLoss)
-    ? overrides.stopLoss
-    : null;
-  let target = Number.isFinite(overrides.target) ? overrides.target : null;
+export function getEntryGuards(
+  stock,
+  sortedData,
+  marketStructure,
+  entryConditions,
+  cfg
+) {
+  const recent = sortedData.slice(-20);
+  const L = LG(cfg);
 
-  const supports = marketStructure?.keyLevels?.supports || [];
-  const resistances = marketStructure?.keyLevels?.resistances || [];
-
-  if (!stopLoss) {
-    stopLoss = supports.length
-      ? supports[0] - Math.max(0.3 * atr, currentPrice * 0.002)
-      : currentPrice - 1.8 * atr;
-  }
-  if (!target) {
-    target = resistances.length ? resistances[0] : currentPrice + 2.8 * atr;
+  if (!cfg.lateGuard) {
+    const ext = overboughtOverextendedVeto(stock, recent, L);
+    if (ext.veto) return { vetoed: true, reason: ext.reason };
+    const clim = climaxVeto(sortedData.slice(-20), L);
+    if (clim.veto) return { vetoed: true, reason: clim.reason };
+    return { vetoed: false };
   }
 
   if (
-    !stopLoss ||
-    !target ||
-    stopLoss >= currentPrice ||
-    target <= currentPrice
-  )
-    return analysis;
-
-  // ▶ configurable min stop distance
-  const minStopDistance = atr * (cfg?.stopMinATR ?? 1.5);
-  if (currentPrice - stopLoss < minStopDistance) {
-    stopLoss = currentPrice - minStopDistance;
-    analysis.adjustedStopLoss = stopLoss;
-  }
-
-  let risk = currentPrice - stopLoss;
-  let reward = target - currentPrice;
-
-  // ▶ target stepping: try deeper resistances for better R:R
-  const requiredRatioBase =
-    marketStructure.trend === "STRONG_UP"
-      ? cfg?.rrStrongUp ?? 1.15
-      : marketStructure.trend === "DOWN"
-      ? cfg?.rrDown ?? 2.1
-      : cfg?.rrBase ?? 1.5;
-
-  let requiredRatio = requiredRatioBase;
-  const rsi = n(stock.rsi14);
-  if (rsi > 65 && rsi < 75) requiredRatio += 0.2;
-
-  let bestTarget = target;
-  let bestReward = reward;
-  let bestRatio = reward / risk;
-
-  for (let i = 0; i < Math.min(3, resistances.length); i++) {
-    const candidate = resistances[i];
-    if (!Number.isFinite(candidate) || candidate <= currentPrice) continue;
-    const candReward = candidate - currentPrice;
-    const candRatio = candReward / risk;
-    if (candRatio > bestRatio) {
-      bestRatio = candRatio;
-      bestReward = candReward;
-      bestTarget = candidate;
-      if (bestRatio >= requiredRatio) break;
-    }
-  }
-
-  // ▶ extension fallback (clamped by 52W high and +20%)
-  if (bestRatio < requiredRatio) {
-    const fiftyTwo = n(stock.fiftyTwoWeekHigh);
-    const needed = requiredRatio * risk;
-    const extTarget = currentPrice + Math.max(needed, 1.6 * atr);
-    const cap = Math.min(
-      fiftyTwo > currentPrice ? fiftyTwo : Infinity,
-      currentPrice * 1.2
-    );
-    const candidate = Math.min(extTarget, cap);
-    if (candidate > currentPrice) {
-      const candReward = candidate - currentPrice;
-      const candRatio = candReward / risk;
-      if (candRatio > bestRatio) {
-        bestRatio = candRatio;
-        bestReward = candReward;
-        bestTarget = candidate;
-      }
-    }
-  }
-
-  analysis.risk = risk = currentPrice - stopLoss;
-  analysis.reward = reward = bestReward;
-  analysis.ratio = reward / risk;
-
-  analysis.multipleTargets = [
-    { level: currentPrice + reward * 0.5, percentage: 33 },
-    { level: currentPrice + reward * 0.75, percentage: 33 },
-    { level: bestTarget, percentage: 34 },
-  ];
-
-  if (analysis.ratio >= requiredRatio + 1) {
-    analysis.quality = "EXCELLENT";
-    analysis.acceptable = true;
-  } else if (analysis.ratio >= requiredRatio) {
-    analysis.quality = "GOOD";
-    analysis.acceptable = true;
-  } else if (
-    analysis.ratio >= requiredRatio - 0.4 &&
-    marketStructure.trend === "STRONG_UP"
+    (entryConditions?.pullbackToSupport && entryConditions?.bounceConfirmed) ||
+    entryConditions?.patternComplete
   ) {
-    analysis.quality = "FAIR";
-    analysis.acceptable = true;
-  } else {
-    analysis.quality = "POOR";
-    analysis.acceptable = false;
+    const ext = overboughtOverextendedVeto(stock, recent, L);
+    if (ext.veto) return { vetoed: true, reason: ext.reason };
+    const clim = climaxVeto(sortedData.slice(-20), L);
+    if (clim.veto) return { vetoed: true, reason: clim.reason };
+    return { vetoed: false };
   }
-  return analysis;
+
+  const pivotInfo = findPivotAndBreakout(
+    sortedData.slice(-L.breakoutLookback),
+    L
+  );
+  const late = lateWindowVeto(stock, recent, pivotInfo, L);
+  if (late.veto) return { vetoed: true, reason: late.reason };
+
+  const ext = overboughtOverextendedVeto(stock, recent, L);
+  if (ext.veto) return { vetoed: true, reason: ext.reason };
+
+  const clim = climaxVeto(sortedData.slice(-20), L);
+  if (clim.veto) return { vetoed: true, reason: clim.reason };
+
+  return { vetoed: false };
+}
+
+/* helpers (parametrized by L) */
+function countConsecutiveUpDays(data, k = 8) {
+  let c = 0;
+  for (let i = data.length - 1; i > 0 && c < k; i--) {
+    if (n(data[i].close) > n(data[i - 1].close)) c++;
+    else break;
+  }
+  return c;
+}
+
+function findPivotAndBreakout(recent, L) {
+  if (recent.length < 12) return null;
+  const window = recent.slice(-L.breakoutLookback);
+  if (window.length < 12) return null;
+
+  const pre = window.slice(0, -2);
+  const pivot = Math.max(...pre.map((d) => n(d.high)));
+  const avgVol10 = avg(window.slice(-10).map((d) => n(d.volume)));
+
+  let breakoutIdx = -1;
+  for (let i = pre.length; i < window.length; i++) {
+    const d = window[i];
+    if (
+      n(d.close) > pivot &&
+      n(d.volume) >= avgVol10 * L.breakoutConfirmVolMult
+    ) {
+      breakoutIdx = i;
+      break;
+    }
+  }
+  if (breakoutIdx === -1) return null;
+
+  const daysSinceBreakout = window.length - 1 - breakoutIdx;
+  return { pivot, daysSinceBreakout };
+}
+
+function lateWindowVeto(stock, recent, pivotInfo, L) {
+  if (!pivotInfo) return { veto: false };
+  const curr = n(stock.currentPrice);
+  const atr = Math.max(n(stock.atr14), curr * 0.005);
+  const ma25 = n(stock.movingAverage25d);
+
+  const { pivot, daysSinceBreakout } = pivotInfo;
+  const pctAbovePivot = pivot > 0 ? (curr - pivot) / pivot : 0;
+
+  if (daysSinceBreakout > L.maxDaysAfterBreakout) {
+    const nearMA25 =
+      ma25 > 0 && Math.abs(curr - ma25) / ma25 <= L.pullbackNearMA25Pct;
+    const withinATRofPivot = Math.abs(curr - pivot) <= L.pullbackATR * atr;
+    if (!nearMA25 && !withinATRofPivot) {
+      return {
+        veto: true,
+        reason: `Late after breakout (D+${daysSinceBreakout}) and not near MA25/pivot.`,
+      };
+    }
+  }
+
+  if (pctAbovePivot > L.maxPctAbovePivot && daysSinceBreakout > 1) {
+    return {
+      veto: true,
+      reason: `Price ${(pctAbovePivot * 100).toFixed(
+        1
+      )}% above pivot – late breakout chase.`,
+    };
+  }
+  return { veto: false };
+}
+
+function overboughtOverextendedVeto(stock, recent, L) {
+  const curr = n(stock.currentPrice);
+  const prev5 = recent[recent.length - 6]?.close;
+  const gain5 = prev5 ? ((curr - n(prev5)) / n(prev5)) * 100 : 0;
+
+  const rsi = n(stock.rsi14);
+  const bbU = n(stock.bollingerUpper);
+  const ma25 = n(stock.movingAverage25d);
+  const ma50 = n(stock.movingAverage50d);
+  const atr = Math.max(n(stock.atr14), curr * 0.005);
+
+  if (rsi >= L.hardRSI)
+    return { veto: true, reason: `RSI ${rsi.toFixed(0)} is too hot.` };
+
+  const last2AboveBBU = recent
+    .slice(-2)
+    .every((d) => bbU > 0 && n(d.close) > bbU);
+  if (rsi >= L.softRSI && last2AboveBBU) {
+    return {
+      veto: true,
+      reason: `Overbought (RSI ${rsi.toFixed(
+        0
+      )}) with repeated closes above upper band.`,
+    };
+  }
+
+  if (ma25 > 0 && (curr - ma25) / atr > L.maxATRAboveMA25) {
+    return {
+      veto: true,
+      reason: `Too far above MA25 (${((curr - ma25) / atr).toFixed(1)} ATR).`,
+    };
+  }
+  if (ma50 > 0 && (curr - ma50) / atr > L.maxATRAboveMA50) {
+    return {
+      veto: true,
+      reason: `Too far above MA50 (${((curr - ma50) / atr).toFixed(1)} ATR).`,
+    };
+  }
+
+  if (gain5 > L.max5dGainPct) {
+    return {
+      veto: true,
+      reason: `+${gain5.toFixed(1)}% in 5 days – extended.`,
+    };
+  }
+
+  const ups = countConsecutiveUpDays(recent, 8);
+  if (ups > L.maxConsecutiveUpDays) {
+    return {
+      veto: true,
+      reason: `${ups} straight up days – late without a reset.`,
+    };
+  }
+
+  return { veto: false };
+}
+
+function climaxVeto(recent, L) {
+  if (recent.length < 20) return { veto: false };
+  const last = recent[recent.length - 1];
+  const range = Math.max(0.01, n(last.high) - n(last.low));
+  const closeFromHighPct = (n(last.high) - n(last.close)) / range;
+  const avgVol20 = avg(recent.slice(-20).map((d) => n(d.volume)));
+  const isClimax =
+    n(last.volume) >= avgVol20 * L.climaxVolMult &&
+    closeFromHighPct >= L.climaxCloseFromHigh;
+  return isClimax
+    ? { veto: true, reason: `Volume climax with weak close – likely blow-off.` }
+    : { veto: false };
 }
