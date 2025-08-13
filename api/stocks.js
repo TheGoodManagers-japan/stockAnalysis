@@ -1,35 +1,13 @@
-const yahooFinance = require("yahoo-finance2").default;
-
-// Helper to safely convert values to numbers, defaulting to 0.
-function toNumber(value) {
-  const num = parseFloat(value);
-  return isNaN(num) ? 0 : num;
-}
-
-// Helper to get a date from a number of years ago.
-function getDateYearsAgo(years) {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - years);
-  return date;
-}
-
-// Helper to check if a stock is in a financial-related sector.
-function isFinancialSector(sector) {
-  const financialSectors = [
-    "Banking",
-    "Securities",
-    "Insurance",
-    "Other Financial Services",
-    "Real Estate",
-  ];
-  return financialSectors.some((s) => sector?.includes(s));
-}
-
-/**
- * Main function to fetch all required data for a stock from Yahoo Finance
- * and calculate a suite of technical indicators.
- */
 async function fetchYahooFinanceData(ticker, sector = "") {
+  // Small helper to throw typed errors you can inspect in the route handler
+  const mkError = (code, message, details = {}) => {
+    const err = new Error(message);
+    err.name = "DataIntegrityError";
+    err.code = code;
+    err.details = details;
+    return err;
+  };
+
   try {
     console.log(`Fetching all data for ticker: ${ticker}`);
 
@@ -37,7 +15,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
-    // Fetch all data points in parallel for efficiency.
+    // Fetch in parallel
     const [quote, historicalPrices, dividendEvents, summary] =
       await Promise.all([
         yahooFinance.quote(ticker),
@@ -62,26 +40,28 @@ async function fetchYahooFinanceData(ticker, sector = "") {
         }),
       ]);
 
-    // --- SAFETY CHECKS ---
-    if (!Array.isArray(historicalPrices)) {
-      console.error(
-        `Error or invalid format for historicalPrices for ${ticker}.`
-      );
-      return null;
+    // --- SAFETY CHECKS (now throwing) ---
+    if (!Array.isArray(historicalPrices) || !historicalPrices.length) {
+      throw mkError("NO_HISTORICAL", `No historical prices for ${ticker}`, {
+        ticker,
+      });
     }
-    const safeDividendGrowth = Array.isArray(dividendEvents)
+    if (!quote) {
+      throw mkError("NO_QUOTE", `No quote for ${ticker}`, { ticker });
+    }
+
+    const safeDividendEvents = Array.isArray(dividendEvents)
       ? dividendEvents
       : [];
+    const lastBar = historicalPrices[historicalPrices.length - 1] || {};
+    const prevBar = historicalPrices[historicalPrices.length - 2] || {};
 
-    if (!quote || !historicalPrices.length) {
-      console.warn(`No essential Yahoo Finance data available for ${ticker}`);
-      return null;
-    }
-
-    // --- INDICATOR CALCULATION HELPERS ---
+    // --- INDICATOR HELPERS (unchanged) ---
     function calculateMA(data, days) {
       if (data.length < days) return 0;
-      const sum = data.slice(-days).reduce((acc, val) => acc + val.close, 0);
+      const sum = data
+        .slice(-days)
+        .reduce((acc, val) => acc + (val.close || 0), 0);
       return sum / days;
     }
 
@@ -91,9 +71,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       const result = [];
       let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
       for (let i = period - 1; i < prices.length; i++) {
-        if (i === period - 1) {
-          result.push(ema);
-        } else {
+        if (i === period - 1) result.push(ema);
+        else {
           ema = prices[i] * k + result[result.length - 1] * (1 - k);
           result.push(ema);
         }
@@ -122,67 +101,54 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       const emaSlow = calculateEMA(closes, slow);
       const macdLine = emaFast
         .slice(emaFast.length - emaSlow.length)
-        .map((val, i) => val - emaSlow[i]);
+        .map((v, i) => v - emaSlow[i]);
       const signalLine = calculateEMA(macdLine, signal);
-      return {
-        macd: macdLine.pop() || 0,
-        signal: signalLine.pop() || 0,
-      };
+      return { macd: macdLine.pop() || 0, signal: signalLine.pop() || 0 };
     }
 
     function calculateBollingerBands(closes, period = 20, multiplier = 2) {
       if (closes.length < period) return { upper: 0, lower: 0, mid: 0 };
       const recent = closes.slice(-period);
-      const mid = recent.reduce((acc, val) => acc + val, 0) / period;
+      const mid = recent.reduce((acc, v) => acc + v, 0) / period;
       const variance =
-        recent.reduce((acc, val) => acc + Math.pow(val - mid, 2), 0) / period;
+        recent.reduce((acc, v) => acc + Math.pow(v - mid, 2), 0) / period;
       const stdDev = Math.sqrt(variance);
       return {
         upper: mid + multiplier * stdDev,
         lower: mid - multiplier * stdDev,
-        mid: mid,
+        mid,
       };
     }
 
     function calculateATR(data, period = 14) {
       if (data.length < period + 1) return 0;
+      const relevant = data.slice(-(period + 1));
       const trs = [];
-      const relevantData = data.slice(-(period + 1));
-      for (let i = 1; i < relevantData.length; i++) {
-        const current = relevantData[i];
-        const previous = relevantData[i - 1];
+      for (let i = 1; i < relevant.length; i++) {
+        const c = relevant[i],
+          p = relevant[i - 1];
         const tr = Math.max(
-          current.high - current.low,
-          Math.abs(current.high - previous.close),
-          Math.abs(current.low - previous.close)
+          c.high - c.low,
+          Math.abs(c.high - p.close),
+          Math.abs(c.low - p.close)
         );
         trs.push(tr);
       }
-      return trs.reduce((sum, val) => sum + val, 0) / trs.length;
+      return trs.reduce((s, v) => s + v, 0) / trs.length;
     }
 
     function calculateStochastic(data, kPeriod = 14, dPeriod = 3) {
-      if (data.length < kPeriod + dPeriod - 1) {
-        return { k: 50, d: 50 }; // Default neutral values
-      }
-
-      // Calculate %K values
+      if (data.length < kPeriod + dPeriod - 1) return { k: 50, d: 50 };
       const kValues = [];
       for (let i = kPeriod - 1; i < data.length; i++) {
-        const period = data.slice(i - kPeriod + 1, i + 1);
-        const high = Math.max(...period.map((d) => d.high));
-        const low = Math.min(...period.map((d) => d.low));
+        const slice = data.slice(i - kPeriod + 1, i + 1);
+        const high = Math.max(...slice.map((d) => d.high));
+        const low = Math.min(...slice.map((d) => d.low));
         const close = data[i].close;
-
         const k = high !== low ? ((close - low) / (high - low)) * 100 : 50;
         kValues.push(k);
       }
-
-      // Calculate %D (moving average of %K)
-      if (kValues.length < dPeriod) {
-        return { k: kValues[kValues.length - 1] || 50, d: 50 };
-      }
-
+      if (kValues.length < dPeriod) return { k: kValues.at(-1) || 50, d: 50 };
       const dValues = [];
       for (let i = dPeriod - 1; i < kValues.length; i++) {
         const sum = kValues
@@ -190,35 +156,24 @@ async function fetchYahooFinanceData(ticker, sector = "") {
           .reduce((a, b) => a + b, 0);
         dValues.push(sum / dPeriod);
       }
-
-      return {
-        k: kValues[kValues.length - 1],
-        d: dValues[dValues.length - 1],
-      };
+      return { k: kValues.at(-1), d: dValues.at(-1) };
     }
 
     function calculateOBV(data) {
       if (data.length < 2) return 0;
-
       let obv = 0;
       for (let i = 1; i < data.length; i++) {
-        const currentClose = data[i].close;
-        const previousClose = data[i - 1].close;
-        const volume = data[i].volume || 0;
-
-        if (currentClose > previousClose) {
-          obv += volume;
-        } else if (currentClose < previousClose) {
-          obv -= volume;
-        }
-        // If prices are equal, OBV stays the same
+        const cc = data[i].close,
+          pc = data[i - 1].close,
+          vol = data[i].volume || 0;
+        if (cc > pc) obv += vol;
+        else if (cc < pc) obv -= vol;
       }
-
       return obv;
     }
 
-    // --- DATA CALCULATION ---
-    const closes = historicalPrices.map((d) => d.close);
+    // --- INDICATORS ---
+    const closes = historicalPrices.map((d) => d.close || 0);
     const movingAverage5d = calculateMA(historicalPrices, 5);
     const movingAverage25d = calculateMA(historicalPrices, 25);
     const movingAverage50d = calculateMA(historicalPrices, 50);
@@ -231,45 +186,77 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const stochastic = calculateStochastic(historicalPrices);
     const obv = calculateOBV(historicalPrices);
 
+    // --- TODAY'S H/L/V WITH FALLBACKS ---
+    const currentPrice = toNumber(quote.regularMarketPrice);
+    const todayHighPrimary = toNumber(quote.regularMarketDayHigh);
+    const todayLowPrimary = toNumber(quote.regularMarketDayLow);
+    const todayOpenPrimary = toNumber(quote.regularMarketOpen);
+    const todayVolume = toNumber(quote.regularMarketVolume); // optional
+
+    const highPrice = todayHighPrimary || toNumber(lastBar.high);
+    const lowPrice = todayLowPrimary || toNumber(lastBar.low);
+    const openPrice = todayOpenPrimary || toNumber(lastBar.open);
+    const prevClosePrice =
+      toNumber(quote.regularMarketPreviousClose) || toNumber(prevBar.close);
+
+    // --- Robust PE/PB fallbacks ---
+    const peRatio = toNumber(
+      quote.trailingPE ??
+        summary?.defaultKeyStatistics?.trailingPE ??
+        summary?.summaryDetail?.trailingPE
+    );
+    const pbRatio = toNumber(
+      quote.priceToBook ??
+        summary?.defaultKeyStatistics?.priceToBook ??
+        summary?.summaryDetail?.priceToBook
+    );
+
     const epsTrailing = toNumber(quote.epsTrailingTwelveMonths);
     const epsForward = toNumber(quote.epsForward);
     const epsGrowthRate = epsTrailing
       ? ((epsForward - epsTrailing) / Math.abs(epsTrailing)) * 100
       : 0;
 
-    // --- FINAL DATA ASSEMBLY ---
+    // --- FINAL DATA ---
     const yahooData = {
-      currentPrice: toNumber(quote.regularMarketPrice),
-      highPrice: toNumber(quote.regularMarketDayHigh),
-      lowPrice: toNumber(quote.regularMarketDayLow),
-      openPrice: toNumber(quote.regularMarketOpen),
-      prevClosePrice: toNumber(quote.regularMarketPreviousClose),
+      currentPrice,
+      highPrice,
+      lowPrice,
+      openPrice,
+      prevClosePrice,
+      todayVolume, // optional for timing logic
+
       marketCap: toNumber(quote.marketCap),
-      peRatio: toNumber(quote.trailingPE),
-      pbRatio: toNumber(quote.priceToBook),
+      peRatio,
+      pbRatio,
       priceToSales: toNumber(
         summary?.summaryDetail?.priceToSalesTrailing12Months
       ),
+
       dividendYield: toNumber(quote.dividendYield) * 100,
       dividendGrowth5yr:
-        safeDividendGrowth.length >= 2 && safeDividendGrowth[0].dividends
-          ? (((safeDividendGrowth[safeDividendGrowth.length - 1].dividends -
-              safeDividendGrowth[0].dividends) /
-              safeDividendGrowth[0].dividends) *
+        safeDividendEvents.length >= 2 && safeDividendEvents[0].dividends
+          ? (((safeDividendEvents[safeDividendEvents.length - 1].dividends -
+              safeDividendEvents[0].dividends) /
+              safeDividendEvents[0].dividends) *
               100) /
             5
           : 0,
+
       fiftyTwoWeekHigh: toNumber(quote.fiftyTwoWeekHigh),
       fiftyTwoWeekLow: toNumber(quote.fiftyTwoWeekLow),
+
       epsTrailingTwelveMonths: epsTrailing,
-      epsForward: epsForward,
-      epsGrowthRate: epsGrowthRate,
+      epsForward,
+      epsGrowthRate,
       debtEquityRatio: toNumber(summary?.financialData?.debtToEquity),
+
       movingAverage5d: toNumber(movingAverage5d),
       movingAverage25d: toNumber(movingAverage25d),
       movingAverage50d: toNumber(movingAverage50d),
       movingAverage75d: toNumber(movingAverage75d),
       movingAverage200d: toNumber(movingAverage200d),
+
       rsi14: toNumber(rsi),
       macd: toNumber(macd),
       macdSignal: toNumber(signal),
@@ -280,16 +267,16 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       stochasticD: toNumber(stochastic.d),
       obv: toNumber(obv),
       atr14: toNumber(atr),
+
+      regularMarketTime: quote.regularMarketTime || null,
+      exchange: quote.fullExchangeName || quote.exchange || null,
     };
 
-    // --- STRICT DATA INTEGRITY CHECK ---
+    // --- STRICT DATA INTEGRITY CHECK (now throws) ---
     const requiredFields = [
       "currentPrice",
       "highPrice",
       "lowPrice",
-      "marketCap",
-      "peRatio",
-      "pbRatio",
       "fiftyTwoWeekHigh",
       "fiftyTwoWeekLow",
       "movingAverage5d",
@@ -304,89 +291,34 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       "obv",
     ];
 
-    const missingFields = requiredFields.filter((field) => {
-      const value = yahooData[field];
-      return value === undefined || value === null || value === 0;
-    });
+    const missingFields = requiredFields
+      .filter((field) => {
+        const v = yahooData[field];
+        return v === undefined || v === null || v === 0;
+      })
+      .filter((f) => !(f === "obv" && yahooData[f] === 0)); // OBV=0 allowed
 
-    // OBV can legitimately be 0, so remove it from the check if it's the only "missing" field
-    const filteredMissingFields = missingFields.filter((field) => {
-      if (field === "obv" && yahooData[field] === 0) {
-        return false; // OBV of 0 is valid
-      }
-      return true;
-    });
-
-    if (filteredMissingFields.length > 0) {
-      console.warn(
-        `⚠️ Disqualifying ${ticker} due to missing or zero-value critical data: ${filteredMissingFields.join(
+    if (missingFields.length > 0) {
+      throw mkError(
+        "MISSING_FIELDS",
+        `Missing/zero critical fields for ${ticker}: ${missingFields.join(
           ", "
-        )}`
+        )}`,
+        { ticker, missingFields, snapshot: yahooData }
       );
-      return null; // Disqualify the stock
     }
 
     console.log(`✅ All critical data present for ${ticker}.`);
     return yahooData;
   } catch (error) {
-    console.error(
-      `Error in fetchYahooFinanceData for ${ticker}:`,
-      error.stack || error.message
+    // Re-throw as DataIntegrityError if it's not already, so your route can handle uniformly
+    if (error && error.name === "DataIntegrityError") {
+      throw error;
+    }
+    throw new Error(
+      `fetchYahooFinanceData failed for ${ticker}: ${
+        error.stack || error.message
+      }`
     );
-    return null; // Return null on any failure
   }
 }
-
-// --- API ENDPOINT LOGIC ---
-const allowedOrigins = [
-  "https://thegoodmanagers.com",
-  "https://www.thegoodmanagers.com",
-];
-
-module.exports = async (req, res) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-  }
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Vary", "Origin");
-
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") {
-    return res
-      .status(405)
-      .json({ success: false, error: "Method not allowed" });
-  }
-
-  try {
-    const { ticker } = req.body;
-    if (!ticker || !ticker.code) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Missing or invalid 'ticker' in body" });
-    }
-
-    const yahooData = await fetchYahooFinanceData(ticker.code, ticker.sector);
-
-    if (!yahooData) {
-      return res.status(404).json({
-        success: false,
-        error: `No data available for ticker ${ticker.code}`,
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        code: ticker.code,
-        sector: ticker.sector,
-        yahooData,
-      },
-    });
-  } catch (error) {
-    console.error("API Error:", error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-};
