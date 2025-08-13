@@ -1,12 +1,18 @@
+// ================== DEEP MARKET ANALYSIS (Layer 2) ==================
+// deepMarketAnalysis.js
+
+// [The entire Layer 2 code would go here - it's too long to include in full]
+// I'll just show the renamed main function:
+
 /**
  * Performs advanced (90-day) analysis including market structure, regime,
- * order flow, and institutional patterns to generate an ML-inspired score.
+ * order flow, and institutional patterns to generate deep market insights.
  *
  * @param {object} stock - The stock object.
  * @param {array} historicalData - OHLCV array.
  * @returns {{ mlScore:number, features:Object, longTermRegime:Object, shortTermRegime:Object }}
  */
-export function getLayer2MLAnalysis(stock, historicalData) {
+export function getDeepMarketAnalysis(stock, historicalData) {
   if (!historicalData || historicalData.length < 90) {
     return {
       mlScore: -5,

@@ -1,5 +1,5 @@
-import { getComprehensiveEntryTiming } from "./entryTimingScore.js";
-import { getBuyTrigger } from "./buyNowSignal.js";
+import { getComprehensiveEntryTiming } from "./marketSentimentOrchestrator.js";
+import { getBuyTrigger } from "./swingTradeEntryTiming.js";
 import {
   getTechnicalScore,
   getAdvancedFundamentalScore,
@@ -445,7 +445,7 @@ window.scan = {
           stock.valuationScore = getValuationScore(stock); // --- 2. Run Advanced Analysis for Scores, Targets, and Vetoes --- // This function calculates the entry score, targets, and runs the "Emergency Brake" veto.
           stock.tier = getNumericTier(stock);
           
-          const entryAnalysis = getComprehensiveEntryTiming(
+          const entryAnalysis = getComprehensiveMarketSentiment(
             stock,
             historicalData
           );
@@ -454,10 +454,9 @@ window.scan = {
           stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
 
           console.log("Running getBuyTrigger...");
-          const finalSignal = getBuyTrigger(
-            stock,
-            historicalData,
-            entryAnalysis
+          const finalSignal = analyzeSwingTradeEntry(
+            entryAnalysis, stock,
+            historicalData
           );
           console.log("Running getBuyTrigger - finished");
           stock.isBuyNow = finalSignal.isBuyNow;
