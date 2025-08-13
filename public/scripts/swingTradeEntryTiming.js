@@ -1,15 +1,15 @@
-// swingTradeEntryTiming.js (flexible; explains WHY it's "no"; DIP + BREAKOUT only)
+// swingTradeEntryTiming.js (flexible, DIP-first; legacy breakout; clear reasons)
 
 /**
  * Usage:
- * const res = analyzeSwingTradeEntry(stock, candles, { debug: true });
- * Optional: { allowedKinds: ["DIP","BREAKOUT"] }
- * Returns: { buyNow, reason, stopLoss, priceTarget, debug? }
+ *   const res = analyzeSwingTradeEntry(stock, candles, { debug: true, allowedKinds: ["DIP","BREAKOUT"] });
+ * Returns:
+ *   { buyNow, reason, stopLoss?, priceTarget?, debug? }
  */
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
-  const reasons = []; // collect all "no" reasons
+  const reasons = [];
 
   // ---- Validate & prep data ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
@@ -37,12 +37,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  const ms = getMarketStructure(stock, data); // { trend, recentHigh, recentLow, ma25, ma50 }
+  const ms = getMarketStructure(stock, data); // { trend, recentHigh, recentLow, ma25, ma50, ma200 }
 
   // Price action gate (allow small red day to catch first bounce)
   const priceActionGate =
     px > Math.max(openPx, prevClose) ||
     (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
+
   const gateWhy = !priceActionGate
     ? `Price action gate failed: px ${fmt(px)} <= max(open ${fmt(
         openPx
@@ -61,48 +62,71 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const candidates = [];
   const checks = {};
 
+  // --- DIP path ---
   if (allow.has("DIP")) {
     const dip = detectDipBounce(stock, data, cfg);
     checks.dip = dip;
-    if (!dip.trigger) reasons.push(`DIP not ready: ${dip.waitReason}`);
-    else if (!priceActionGate) reasons.push(`DIP blocked by gate: ${gateWhy}`);
-    else {
-      const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg);
-      if (!rr.acceptable) {
-        reasons.push(
-          `DIP RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)} (risk ${fmt(
-            px - rr.stop
-          )}, reward ${fmt(rr.target - px)}).`
-        );
+
+    if (!dip.trigger) {
+      reasons.push(`DIP not ready: ${dip.waitReason}`);
+    } else {
+      // Gate override for strong early-dip pattern right at support
+      const gateOk =
+        priceActionGate || (dip.patternStrong && dip.nearSupportStrong);
+      if (!gateOk) {
+        reasons.push(`DIP blocked by gate: ${gateWhy}`);
       } else {
-        const gv = guardVeto(stock, data, px, rr, ms, cfg, dip.nearestRes);
-        if (gv.veto) {
+        const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg);
+        if (!rr.acceptable) {
           reasons.push(
-            `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+            `DIP RR too low: ratio ${rr.ratio.toFixed(
+              2
+            )} < need ${rr.need.toFixed(2)} (risk ${fmt(
+              px - rr.stop
+            )}, reward ${fmt(rr.target - px)}).`
           );
         } else {
-          candidates.push({
-            kind: "DIP ENTRY",
-            why: dip.why,
-            stop: rr.stop,
-            target: rr.target,
+          const gv = guardVeto(
+            stock,
+            data,
+            px,
             rr,
-            guard: gv.details,
-          });
+            ms,
+            cfg,
+            dip.nearestRes,
+            "DIP"
+          );
+          if (gv.veto) {
+            reasons.push(
+              `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(
+                gv.details
+              )}.`
+            );
+          } else {
+            candidates.push({
+              kind: "DIP ENTRY",
+              why: dip.why,
+              stop: rr.stop,
+              target: rr.target,
+              rr,
+              guard: gv.details,
+            });
+          }
         }
       }
     }
   }
 
+  // --- BREAKOUT (legacy strictified) ---
   if (allow.has("BREAKOUT")) {
     const bo = detectLegacyBreakoutStrict(stock, data, cfg);
-    checks.breakout = bo;
-    if (!bo.trigger) reasons.push(`BREAKOUT not ready: ${bo.waitReason}`);
-    else if (!priceActionGate)
+    checks.breakoutLegacy = bo;
+
+    if (!bo.trigger) {
+      reasons.push(`BREAKOUT not ready: ${bo.waitReason}`);
+    } else if (!priceActionGate) {
       reasons.push(`BREAKOUT blocked by gate: ${gateWhy}`);
-    else {
+    } else {
       const rr = analyzeRR(px, bo.stop, bo.target, stock, ms, cfg);
       if (!rr.acceptable) {
         reasons.push(
@@ -111,7 +135,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           )} < need ${rr.need.toFixed(2)}.`
         );
       } else {
-        const gv = guardVeto(stock, data, px, rr, ms, cfg, bo.nearestRes);
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          bo.nearestRes,
+          "BREAKOUT"
+        );
         if (gv.veto) {
           reasons.push(
             `BREAKOUT guard veto: ${gv.reason} ${summarizeGuardDetails(
@@ -157,7 +190,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return { buyNow: false, reason, debug };
   }
 
-  // Prefer dip first; otherwise choose highest RR
+  // Prefer DIP first; otherwise choose highest RR
   candidates.sort((a, b) =>
     a.kind === "DIP ENTRY"
       ? -1
@@ -197,19 +230,21 @@ function getConfig(opts) {
   return {
     // Price-action gate
     allowSmallRed: true,
-    redDayMaxDownPct: -1.6, // allow small red day to catch first bounce
+    redDayMaxDownPct: -2.2, // was -1.6
 
-    // Guards & thresholds
-    maxATRfromMA25: 1.8,
+    // Guards & thresholds (DIP vs BREAKOUT)
+    maxATRfromMA25_DIP: 2.2, // was 1.8 (DIP gets a bit more room)
+    maxATRfromMA25_BO: 1.8,
     maxConsecUp: 5,
-    nearResVetoATR: 0.5,
+    nearResVetoATR_DIP: 0.25, // was 0.5
+    nearResVetoATR_BO: 0.5,
     hardRSI: 77,
-    softRSI: 72,
+    softRSI: 74, // was 72
 
     // RR thresholds
-    minRRbase: 1.5,
-    minRRstrongUp: 1.2,
-    minRRweakUp: 1.6,
+    minRRbase: 1.35, // was 1.5
+    minRRstrongUp: 1.1, // was 1.2
+    minRRweakUp: 1.4, // was 1.6
 
     debug: !!opts.debug,
   };
@@ -247,7 +282,8 @@ function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005);
   const ma25 = num(stock.movingAverage25d),
-    ma50 = num(stock.movingAverage50d);
+    ma50 = num(stock.movingAverage50d),
+    ma200 = num(stock.movingAverage200d);
 
   const last5 = data.slice(-5);
   const d0 = last5.at(-1),
@@ -255,21 +291,27 @@ function detectDipBounce(stock, data, cfg) {
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const avgVol5 = avg(data.slice(-5).map((d) => num(d.volume)));
 
-  // Support proximity (MA25/50 or recent swings/pivots)
+  // --- Support proximity (broader) ---
   const nearMA =
-    (ma25 > 0 && Math.abs(px - ma25) <= 2.2 * atr) ||
-    (ma50 > 0 && Math.abs(px - ma50) <= 2.2 * atr);
-  const nearSwing = nearRecentSupportOrPivot(data, px, atr);
+    (ma25 > 0 && Math.abs(px - ma25) <= 2.6 * atr) ||
+    (ma50 > 0 && Math.abs(px - ma50) <= 2.6 * atr) ||
+    (ma200 > 0 && Math.abs(px - ma200) <= 2.8 * atr);
+  const nearSwing = nearRecentSupportOrPivot(data, px, atr, 0.03); // widened to 3%
   const nearSupport = nearMA || nearSwing;
 
-  // Higher low (allow tiny undercut OR dbl-bottom within 1.2%)
+  // Stronger support flag (for gate bypass)
+  const nearSupportStrong =
+    nearMA || (nearSwing && Math.abs(px - (ma25 || px)) <= 3.0 * atr);
+
+  // --- Higher low (allow small undercut / dbl-bottom within 1.5%) ---
   const pivotLow = Math.min(...last5.map((d) => num(d.low)));
   const prevZoneLow = Math.min(...data.slice(-10, -5).map((d) => num(d.low)));
   const higherLow =
-    pivotLow >= prevZoneLow * 0.96 ||
-    Math.abs(pivotLow - prevZoneLow) / Math.max(1, prevZoneLow) <= 0.012;
+    prevZoneLow > 0 &&
+    (pivotLow >= prevZoneLow * 0.955 ||
+      Math.abs(pivotLow - prevZoneLow) / Math.max(1, prevZoneLow) <= 0.015);
 
-  // Bounce confirmation (flexible)
+  // --- Bounce confirmation ---
   const closeAboveYHigh = num(d0.close) > num(d1.high);
   const hammer = (() => {
     const range = num(d0.high) - num(d0.low);
@@ -277,8 +319,8 @@ function detectDipBounce(stock, data, cfg) {
     const lower = Math.min(num(d0.close), num(d0.open)) - num(d0.low);
     return (
       range > 0 &&
-      body < 0.55 * range &&
-      lower > body * 1.1 &&
+      body <= 0.55 * range &&
+      lower >= 1.5 * body &&
       num(d0.close) >= num(d0.open)
     );
   })();
@@ -291,29 +333,48 @@ function detectDipBounce(stock, data, cfg) {
     num(d0.close) > num(d1.close) &&
     num(d0.low) > num(d1.low) &&
     num(d0.close) > num(d0.open);
+
+  const patternStrong = hammer || engulf;
   const bounceOK = closeAboveYHigh || hammer || engulf || twoBarRev;
 
-  // Volume (easier)
+  // --- Volume (slightly easier) ---
   const obv = num(stock.obv);
   const volOK =
-    num(d0.volume) >= avgVol20 * 0.9 || avgVol5 >= avgVol20 * 0.95 || obv > 0;
+    num(d0.volume) >= avgVol20 * 0.85 || // was 0.9
+    avgVol5 >= avgVol20 * 0.9 || // was 0.95
+    obv > 0;
 
-  const trigger = nearSupport && higherLow && bounceOK && volOK;
+  const trigger =
+    nearSupport && (higherLow || patternStrong) && bounceOK && volOK;
 
-  // Targets & stop
-  const recentHigh = Math.max(...data.slice(-20).map((d) => num(d.high)));
+  // --- Targets & stop (tighter if patternStrong) ---
+  const resList = findResistancesAbove(data, px);
+  const firstRes = resList[0] ?? null;
+  const secondRes = resList[1] ?? null;
+
+  let stop = patternStrong
+    ? Math.min(pivotLow, num(d0.low)) - 0.35 * atr
+    : pivotLow - 0.55 * atr;
+
+  // Prefer 2nd resistance if headroom to 1st is tiny
+  const targetCandidate =
+    secondRes && firstRes && firstRes - px < 0.8 * atr
+      ? secondRes
+      : firstRes || null;
+  const defaultTarget = px + Math.max(2.3 * atr, px * 0.02);
   const target =
-    recentHigh > px ? recentHigh : px + Math.max(2.3 * atr, px * 0.02);
-  const stop = pivotLow - 0.55 * atr;
+    targetCandidate && targetCandidate > px ? targetCandidate : defaultTarget;
 
-  const nearestRes = findNearestResistance(data, px);
-  const why = `Near support (MA/structure), higher low, bounce confirmed (pattern/2-bar), volume ≥ relaxed threshold.`;
+  const nearestRes = firstRes || null;
+  const why = `Near support (MA/structure), ${
+    higherLow ? "higher low" : "early-dip pattern"
+  }, bounce confirmed, volume OK${patternStrong ? " (strong pattern)" : ""}.`;
 
   const waitReason = trigger
     ? ""
     : !nearSupport
-    ? "price not near support (MA25/50 or swing/flip zone)"
-    : !higherLow
+    ? "price not near support (MA25/50/200 or swing/flip zone)"
+    : !(higherLow || patternStrong)
     ? "no higher low or dbl-bottom yet"
     : !bounceOK
     ? "bounce candle not confirmed"
@@ -326,8 +387,13 @@ function detectDipBounce(stock, data, cfg) {
     nearestRes,
     why,
     waitReason,
+    patternStrong,
+    nearSupportStrong,
     diagnostics: {
       nearMA,
+      ma25,
+      ma50,
+      ma200,
       nearSwing,
       higherLow,
       closeAboveYHigh,
@@ -340,46 +406,68 @@ function detectDipBounce(stock, data, cfg) {
   };
 }
 
-/* ================= BREAKOUT (LEGACY, STRICTIFIED) ================ */
+/* ============= LEGACY-FLAVOR BREAKOUT (STRICTIFIED) ============= */
 function detectLegacyBreakoutStrict(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005);
   const rsi = num(stock.rsi14);
 
-  const win = data.slice(-20, -2);
+  const win = data.slice(-22, -2); // slightly wider base
   if (win.length < 10) return { trigger: false, waitReason: "base too short" };
 
   const highs = win.map((d) => num(d.high));
   const top = Math.max(...highs);
-  const band = top * 0.0125; // 1.25% band
+
+  // Flat-top taps & contraction
+  const band = top * 0.0125; // 1.25%
   const touches = highs.filter((h) => Math.abs(h - top) <= band).length;
+  const atr5 = avg(data.slice(-5).map((d) => num(d.high) - num(d.low)));
+  const atr20 = avg(data.slice(-20).map((d) => num(d.high) - num(d.low)));
+  const contracted = atr20 > 0 && atr5 / atr20 <= 0.75;
 
-  const through = px > top * 1.0025; // 0.25% through
+  // Through + gap/volume + RSI
+  const throughHard = px > top * 1.0025; // 0.25%
   const prevClose = num(data.at(-2)?.close);
-  const gapOK = prevClose > 0 ? (px - prevClose) / prevClose <= 0.035 : true; // 3.5%
-  const notHot = rsi < cfg.softRSI;
+  const gapOK = prevClose > 0 ? (px - prevClose) / prevClose <= 0.05 : true; // 5% (was 3.5)
+  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  const volStrong = num(data.at(-1).volume) >= avgVol20 * 1.3;
 
-  const trigger = touches >= 2 && through && gapOK && notHot;
+  const through = throughHard || (volStrong && px > top * 1.0015); // allow 0.15% if vol is strong
+  const notHot = rsi < cfg.softRSI; // using 74
+
+  const enoughTaps = touches >= 2 || (contracted && touches >= 1);
+  const trigger = enoughTaps && through && gapOK && notHot;
+
   if (!trigger) {
-    const wr =
-      touches < 2
-        ? "not enough flat-top taps"
-        : !through
-        ? "not decisively through flat-top"
-        : !gapOK
-        ? "gap too large"
-        : "RSI too hot";
+    const wr = !enoughTaps
+      ? "not enough flat-top taps"
+      : !through
+      ? "not decisively through flat-top"
+      : !gapOK
+      ? "gap too large"
+      : "RSI too hot";
     return {
       trigger: false,
       waitReason: wr,
-      diagnostics: { touches, top, through, gapOK, notHot, atr },
+      diagnostics: {
+        touches,
+        top,
+        through,
+        gapOK,
+        volStrong,
+        contracted,
+        notHot,
+        atr,
+      },
     };
   }
 
   const stop = top - 0.75 * atr;
   const target = px + Math.max(2.4 * atr, px * 0.02);
   const nearestRes = findNearestResistance(data, px);
-  const why = `Flat-top (≥2 taps) & push-through; controlled gap allowed.`;
+  const why = `Flat-top (${touches} tap${touches !== 1 ? "s" : ""}${
+    contracted ? " w/ contraction" : ""
+  }) & push-through${volStrong ? " on strong vol" : ""}.`;
   return {
     trigger,
     stop,
@@ -387,14 +475,14 @@ function detectLegacyBreakoutStrict(stock, data, cfg) {
     nearestRes,
     why,
     waitReason: "",
-    diagnostics: { touches, top, through, gapOK, notHot, atr },
+    diagnostics: { touches, top, through, volStrong, contracted, atr },
   };
 }
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005);
-  const minStopDist = 1.2 * atr; // slightly tighter
+  const minStopDist = 1.2 * atr; // was 1.4
   if (entryPx - stop < minStopDist) stop = entryPx - minStopDist;
 
   const risk = Math.max(0.01, entryPx - stop);
@@ -418,7 +506,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg) {
 }
 
 /* ============================ Guards ============================ */
-function guardVeto(stock, data, px, rr, ms, cfg, nearestRes) {
+function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
   const details = {};
   const atr = Math.max(num(stock.atr14), px * 0.005);
   const rsi = num(stock.rsi14);
@@ -432,32 +520,36 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes) {
       details,
     };
 
+  // Headroom to nearest resistance
   if (nearestRes) {
     const headroom = (nearestRes - px) / atr;
     details.nearestRes = nearestRes;
     details.headroomATR = headroom;
-    if (headroom < cfg.nearResVetoATR)
+    const need =
+      kind === "DIP" ? cfg.nearResVetoATR_DIP : cfg.nearResVetoATR_BO;
+    if (headroom < need)
       return {
         veto: true,
-        reason: `Headroom ${headroom.toFixed(2)} ATR < ${
-          cfg.nearResVetoATR
-        } ATR to resistance`,
+        reason: `Headroom ${headroom.toFixed(
+          2
+        )} ATR < ${need} ATR to resistance`,
         details,
       };
   } else {
     details.nearestRes = null;
   }
 
+  // Distance above MA25 (looser for DIP)
   if (ma25 > 0) {
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    if (distMA25 > cfg.maxATRfromMA25)
+    const limit =
+      kind === "DIP" ? cfg.maxATRfromMA25_DIP : cfg.maxATRfromMA25_BO;
+    if (distMA25 > limit)
       return {
         veto: true,
-        reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${
-          cfg.maxATRfromMA25
-        })`,
+        reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${limit})`,
         details,
       };
   }
@@ -502,7 +594,7 @@ function countConsecutiveUpDays(data, k = 8) {
 // Nearest visible resistance above current price (simple swing-high scan)
 function findNearestResistance(data, px) {
   const ups = data
-    .slice(-50)
+    .slice(-60)
     .map((d) => num(d.high))
     .filter((h) => h > px);
   if (!ups.length) return null;
@@ -510,9 +602,19 @@ function findNearestResistance(data, px) {
   return ups[0];
 }
 
+// List of resistances (sorted ascending) for target selection
+function findResistancesAbove(data, px) {
+  const highs = data
+    .slice(-60)
+    .map((d) => num(d.high))
+    .filter((h) => h > px);
+  const uniq = Array.from(new Set(highs)).sort((a, b) => a - b);
+  return uniq;
+}
+
 // Treat recent swing-lows & prior breakout pivots as support if close enough
-function nearRecentSupportOrPivot(data, px, atr) {
-  const win = data.slice(-30);
+function nearRecentSupportOrPivot(data, px, atr, pctBand = 0.02) {
+  const win = data.slice(-35);
   const swingLows = [],
     swingHighs = [];
   for (let i = 2; i < win.length - 2; i++) {
@@ -527,12 +629,11 @@ function nearRecentSupportOrPivot(data, px, atr) {
     )
       swingHighs.push(num(win[i].high));
   }
-  const pivots = swingLows.concat(swingHighs); // polarity flips act as support
-  // within 2.2*ATR OR within 2.0%
+  const pivots = swingLows.concat(swingHighs); // polarity flips can act as support
   return pivots.some(
     (p) =>
-      (px >= p && px - p <= 2.2 * atr) ||
-      Math.abs(px - p) / Math.max(1, p) <= 0.02
+      (px >= p && px - p <= 2.8 * atr) || // within ATR band
+      Math.abs(px - p) / Math.max(1, p) <= pctBand // or within X%
   );
 }
 
