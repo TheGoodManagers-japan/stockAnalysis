@@ -1,5 +1,5 @@
-import { getComprehensiveEntryTiming } from "./marketSentimentOrchestrator.js";
-import { getBuyTrigger } from "./swingTradeEntryTiming.js";
+import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
+import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import {
   getTechnicalScore,
   getAdvancedFundamentalScore,
