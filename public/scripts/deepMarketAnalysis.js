@@ -726,35 +726,81 @@ function extractFeatureVector(...analyses) {
 function calculateMLScore(features) {
   let score = 0;
 
-  // f2 = priceActionQuality, f9 = trendQuality, f4 = longTermRegime
-  let qualityHurdle = 0;
-  if (features.f2_clean) qualityHurdle++;
-  if (features.f9_isHealthyTrend) qualityHurdle++;
-  if (features.f4_type_TRENDING) qualityHurdle++;
-  if (qualityHurdle < 2) score -= 2.0;
+  // STRICTER quality hurdle - require MORE signals
+  let qualityPoints = 0;
+  if (features.f2_clean) qualityPoints++;
+  if (features.f9_isHealthyTrend) qualityPoints++;
+  if (features.f4_type_TRENDING) qualityPoints++;
+  if (features.f2_trendEfficiency > 0.5) qualityPoints++;
 
-  // Learned combos
-  if (features.f0_bullishAuction && features.f1_pocRising && features.f2_clean)
+  // Penalize poor quality more heavily
+  if (qualityPoints < 2) score -= 3.0; // Was -2.0
+  else if (qualityPoints < 3) score -= 1.0; // Additional penalty
+
+  // Make positive combos more selective
+  if (
+    features.f0_bullishAuction &&
+    features.f1_pocRising &&
+    features.f2_clean
+  ) {
     score += 3.5;
-  if (features.f3_bullishHidden && features.f9_isHealthyTrend) score += 2.8;
-  if (features.f3_bearishHidden && features.f8_isExtended) score -= 2.8;
-  if (features.f5_wyckoffSpring && features.f7_buyingPressure) score += 4.0;
-  if (features.f0_sellerExhaustion && features.f6_compression) score += 2.5;
-
-  // Negatives
-  if (features.f5_threePushes && features.f8_parabolicMove) score -= 4.0;
-  if (features.f0_bearishAuction && features.f1_pocFalling) score -= 3.0;
-
-  // Non-linear momentum x trend
-  const momentumScore =
-    (features.f10_persistentStrength || 0) *
-    (1 + (features.f9_trendStrength || 0) / 10);
-  score += momentumScore;
-
-  // Volatility adjustment — fix key name to match one-hot encoding
-  if (features.f6_cyclePhase_EXPANSION_STARTING && features.f2_impulsive) {
-    score *= 1.3;
+  } else if (features.f0_bullishAuction && features.f1_pocRising) {
+    score += 1.5; // Reduced reward without clean price action
   }
+
+  // Stronger rewards for rare, high-quality signals
+  if (
+    features.f5_wyckoffSpring &&
+    features.f7_buyingPressure &&
+    features.f0_sellerExhaustion
+  ) {
+    score += 5.0; // Was 4.0 - reward the best setups more
+  } else if (features.f5_wyckoffSpring && features.f7_buyingPressure) {
+    score += 3.0;
+  }
+
+  if (
+    features.f3_bullishHidden &&
+    features.f9_isHealthyTrend &&
+    features.f2_clean
+  ) {
+    score += 3.5; // Require clean price action
+  } else if (features.f3_bullishHidden && features.f9_isHealthyTrend) {
+    score += 1.8; // Was 2.8
+  }
+
+  // STRONGER PENALTIES for negative signals
+  if (features.f3_bearishHidden && features.f8_isExtended) score -= 4.0; // Was -2.8
+  if (features.f5_threePushes && features.f8_parabolicMove) score -= 5.0; // Was -4.0
+  if (features.f0_bearishAuction && features.f1_pocFalling) score -= 4.0; // Was -3.0
+  if (features.f2_choppy) score -= 2.0; // New penalty for choppy action
+  if (features.f8_isExtended && !features.f9_isHealthyTrend) score -= 2.5; // Extended without trend
+
+  // More selective momentum scoring
+  const momentumStrength = features.f10_persistentStrength || 0;
+  const trendStrength = features.f9_trendStrength || 0;
+
+  // Only reward momentum if trend is healthy
+  if (trendStrength > 25) {
+    // ADX > 25
+    score += momentumStrength * (1 + trendStrength / 50); // Was /10
+  } else {
+    score += momentumStrength * 0.3; // Minimal reward without trend
+  }
+
+  // Volatility adjustments more selective
+  if (
+    features.f6_cyclePhase_EXPANSION_STARTING &&
+    features.f2_impulsive &&
+    features.f2_clean
+  ) {
+    score *= 1.3;
+  } else if (features.f6_cyclePhase_COMPRESSION_ONGOING) {
+    score *= 0.8; // Penalize compression phase
+  }
+
+  // Cap scores to prevent outliers
+  score = Math.max(-5, Math.min(5, score)); // Was -3 to 3
 
   return score;
 }

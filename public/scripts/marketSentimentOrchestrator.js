@@ -55,11 +55,23 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
   const normalizedShortTerm = 5 - shortTermScore;
 
   let safeMl = Number.isFinite(mlScore) ? mlScore : 0;
-  // Assume ML behaves like a z-score; cap extremes so thresholds remain meaningful
-  safeMl = Math.max(-3, Math.min(3, safeMl));
+  safeMl = Math.max(-5, Math.min(5, safeMl)); // Wider range
 
-  const combinedScore =
+  let combinedScore =
     normalizedShortTerm * weights.shortTerm + safeMl * weights.deepAnalysis;
+
+  // CRITICAL: ML veto power - if ML is negative, limit bullish scores
+  if (safeMl < -1 && normalizedShortTerm > 2) {
+    combinedScore = Math.min(combinedScore, 1.5); // Can't be Strong Buy/Buy
+  }
+  if (safeMl < -2) {
+    combinedScore = Math.min(combinedScore, 0.5); // Can't be better than Neutral
+  }
+
+  // Require positive ML for top scores
+  if (safeMl <= 0 && combinedScore > 3) {
+    combinedScore = 3; // Cap at 3 without positive ML
+  }
     
 
   // ---- 5) Score → bucket + confidence
@@ -177,17 +189,32 @@ function mapToSentimentScoreWithConfidence(
       ? -0.05
       : 0;
 
+  // Keep your current thresholds
   let finalScore;
   const s = combinedScore + trendingNudge;
-if (s >= 4.0) finalScore = 1;      // Was 3.5 - much harder to reach
-else if (s >= 3.0) finalScore = 2;  // Was 2.5
-else if (s >= 2.0) finalScore = 3;  // Was 1.5
-else if (s >= 0.8) finalScore = 4;  // Was 0.5
-else if (s >= -0.5) finalScore = 5;
-else if (s >= -1.5) finalScore = 6;
-else finalScore = 7;
+  if (s >= 4.2) finalScore = 1;
+  else if (s >= 3.3) finalScore = 2;
+  else if (s >= 2.2) finalScore = 3;
+  else if (s >= 0.8) finalScore = 4;
+  else if (s >= -0.5) finalScore = 5;
+  else if (s >= -1.5) finalScore = 6;
+  else finalScore = 7;
 
-  return { finalScore, confidence };
+  // FINAL SAFETY CHECK: Require minimum positive signals for buy ratings
+  const hasBullishSignals = [
+    features.f0_bullishAuction,
+    features.f1_pocRising,
+    features.f2_clean,
+    features.f5_wyckoffSpring,
+    features.f11_isAccumulating,
+    features.f9_isHealthyTrend,
+  ].filter(Boolean).length;
+
+  if (finalScore <= 2 && hasBullishSignals < 2) {
+    finalScore = Math.max(3, finalScore + 1); // Need at least 2 bullish signals
+  }
+
+  return { finalScore, confidence /* ... */ };
 }
 
 /* ───────────────── Key Insights ───────────────── */
