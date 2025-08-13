@@ -178,12 +178,12 @@ function mapToSentimentScoreWithConfidence(
 
   let finalScore;
   const s = combinedScore + trendingNudge;
-  if (s >= 4.5) finalScore = 1; // Strong Buy (was 3.5)
-  else if (s >= 3.5) finalScore = 2; // Buy (was 2.5)
-  else if (s >= 2.5) finalScore = 3; // Weak Buy (was 1.5)
-  else if (s >= 1.0) finalScore = 4; // Neutral (was 0.5)
-  else if (s >= -0.5) finalScore = 5; // Weak Avoid (was -0.5)
-  else if (s >= -2.0) finalScore = 6; // Avoid (was -1.5)
+  if (s >= 3.5) finalScore = 1; // Strong Buy (now reachable)
+  else if (s >= 2.5) finalScore = 2; // Buy
+  else if (s >= 1.5) finalScore = 3; // Weak Buy
+  else if (s >= 0.5) finalScore = 4; // Neutral
+  else if (s >= -0.5) finalScore = 5; // Weak Avoid
+  else if (s >= -1.5) finalScore = 6; // Avoid
   else finalScore = 7; // Strong Avoid
 
   return { finalScore, confidence };
