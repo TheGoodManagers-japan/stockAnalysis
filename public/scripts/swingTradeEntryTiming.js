@@ -401,6 +401,16 @@ function getConfig(opts) {
     reclaimMA25MinPct: 0.1, // 0.10% reclaim buffer
     insideDayUpperFrac: 0.66, // close in top 1/3 of range
 
+    // —— Breakout relax knobs (new) ——
+    breakoutTapBandPct: 1.25, // % band around flat-top to count a "tap"
+    breakoutBaseTightPct: 4.0, // if base range <= this %, treat as tight
+    breakoutMinThroughPctTight: 0.1, // smaller push-through for tight bases
+    breakoutAllowIntradayCloseFrac: 0.998, // allow intraday through + strong close near top
+    breakoutAltGapATR: 1.8, // allow bigger % gap if <= this many ATR
+    breakoutAllowHotRSIwithVol: true, // relax RSI if volume expands
+    breakoutMaxRSIwithVol: 76, // upper RSI cap when volume expands
+    breakoutMinVolExpansion: 1.15, // avgVol5 / avgVol20 ≥ this to relax RSI
+
     debug: !!opts.debug,
   };
 }
@@ -696,52 +706,112 @@ function detectInsideDayContinuation(stock, data, cfg, ms) {
 }
 
 /* =================== BREAKOUT (legacy flat-top, looser) =================== */
+/* =================== BREAKOUT (adaptive & slightly looser) =================== */
 function detectBreakoutLegacy(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
+  const d0 = data.at(-1);
+  const d1 = data.at(-2);
   const atr = Math.max(num(stock.atr14), px * 0.005);
   const rsi = num(stock.rsi14);
 
-  const win = data.slice(-20, -2);
+  // Build the flat-top window
+  const win = data.slice(-22, -2);
   if (win.length < 10) return { trigger: false, waitReason: "base too short" };
 
   const highs = win.map((d) => num(d.high));
-  const top = Math.max(...highs);
-  const band = top * 0.0125; // 1.25% band
+  const lows  = win.map((d) => num(d.low));
+  const top   = Math.max(...highs);
+  const bottom = Math.min(...lows);
+
+  // How tight is the base?
+  const baseRangePct = top > 0 ? ((top - bottom) / top) * 100 : 999;
+  const isTightBase = baseRangePct <= cfg.breakoutBaseTightPct;
+
+  // Count taps near the flat top using a percent band
+  const band = top * (cfg.breakoutTapBandPct / 100); // e.g. 1.25%
   const touches = highs.filter((h) => Math.abs(h - top) <= band).length;
 
-  const through = px > top * (1 + cfg.breakoutMinThroughPct / 100);
-  const prevClose = num(data.at(-2)?.close);
+  // Dynamic through requirement
+  const minThroughPct = isTightBase
+    ? cfg.breakoutMinThroughPctTight
+    : cfg.breakoutMinThroughPct; // your existing base (e.g. 0.20)
+
+  const needPx = top * (1 + minThroughPct / 100);
+
+  // Permit: (A) current price through OR (B) intraday pierced & closed very near top
+  const intradayPierceAndHold =
+    num(d0.high) >= needPx && num(d0.close) >= top * cfg.breakoutAllowIntradayCloseFrac;
+
+  const through = px >= needPx || intradayPierceAndHold;
+
+  // Slightly looser gap rule: allow larger % gap if it's not huge in ATR terms
+  const prevClose = num(d1?.close);
   const gapOK =
     prevClose > 0
-      ? (px - prevClose) / prevClose <= cfg.breakoutMaxGapPct / 100
+      ? ((px - prevClose) / prevClose) * 100 <= cfg.breakoutMaxGapPct ||
+        (px - prevClose) <= cfg.breakoutAltGapATR * atr
       : true;
-  const notHot = rsi < cfg.softRSI;
 
-  const trigger = touches >= cfg.breakoutTapsMin && through && gapOK && notHot;
+  // Permit a bit hotter RSI when there is visible volume expansion
+  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  const avgVol5  = avg(data.slice(-5).map((d) => num(d.volume)));
+  const volExp   = avgVol20 > 0 ? avgVol5 / avgVol20 : 1.0;
+
+  const notHot =
+    rsi < cfg.softRSI ||
+    (cfg.breakoutAllowHotRSIwithVol &&
+      rsi < cfg.breakoutMaxRSIwithVol &&
+      volExp >= cfg.breakoutMinVolExpansion);
+
+  // If the base is very tight, let 1 tap + higher lows count as enough "setup"
+  const higherLows3 =
+    num(d0.low) > num(d1.low) &&
+    num(d1.low) > num(data.at(-3).low);
+
+  const setupOK =
+    touches >= cfg.breakoutTapsMin ||
+    (isTightBase && touches >= 1 && higherLows3);
+
+  const trigger = setupOK && through && gapOK && notHot;
 
   if (!trigger) {
     const wr =
-      touches < cfg.breakoutTapsMin
-        ? "not enough flat-top taps"
-        : !through
+      !setupOK
+        ? (touches < cfg.breakoutTapsMin
+            ? (isTightBase ? "tight base but not enough taps/higher-lows" : "not enough flat-top taps")
+            : "setup not confirmed")
+      : !through
         ? "not decisively through flat-top"
-        : !gapOK
-        ? "gap too large"
-        : "RSI too hot";
+      : !gapOK
+        ? "gap too large vs rules"
+      : "RSI too hot without volume expansion";
     return {
       trigger: false,
       waitReason: wr,
-      diagnostics: { touches, top, through, gapOK, notHot, atr },
+      diagnostics: {
+        touches, top, bottom, baseRangePct, isTightBase,
+        minThroughPct, through, intradayPierceAndHold,
+        gapOK, rsi, volExp, atr
+      },
     };
   }
 
-  const stop = top - 0.7 * atr;
+  // Stops/targets (slightly tighter stop than legacy; keep your target scheme)
+  const stop = top - 0.65 * atr; // was 0.7 * ATR — a touch tighter to offset looser entry
   const resList = findResistancesAbove(data, px, stock);
   const target = resList[0]
     ? Math.max(resList[0], px + 2.3 * atr)
     : px + 2.6 * atr;
   const nearestRes = resList.length ? resList[0] : null;
-  const why = `Flat-top (≥${cfg.breakoutTapsMin} taps) & push-through; gap tolerated if moderate; RSI not hot.`;
+
+  const why = `Flat-top breakout (taps=${touches}${
+    isTightBase ? ", tight base" : ""
+  }), through≥${minThroughPct.toFixed(2)}%${
+    intradayPierceAndHold ? " (intraday pierce+hold)" : ""
+  }${
+    volExp >= cfg.breakoutMinVolExpansion ? `, volExp~${volExp.toFixed(2)}x` : ""
+  }${rsi >= cfg.softRSI ? `, RSI ${rsi.toFixed(1)}` : ""}.`;
+
   return {
     trigger,
     stop,
@@ -749,9 +819,14 @@ function detectBreakoutLegacy(stock, data, cfg) {
     nearestRes,
     why,
     waitReason: "",
-    diagnostics: { touches, top, through, gapOK, notHot, atr },
+    diagnostics: {
+      touches, top, bottom, baseRangePct, isTightBase,
+      minThroughPct, through, intradayPierceAndHold,
+      gapOK, rsi, volExp, atr
+    },
   };
 }
+
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
