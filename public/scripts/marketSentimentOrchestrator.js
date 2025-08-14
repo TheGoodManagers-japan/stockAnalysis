@@ -15,6 +15,15 @@ import { getDeepMarketAnalysis } from "./deepMarketAnalysis.js";
  * - No pre-open / PTS gap adjustments anywhere.
  */
 
+/* ── Session score smoothing to damp flip-flops ───────────────────────────── */
+const _scoreMemo = new Map(); // key per symbol
+function _smoothScore(key, raw, alpha = 0.5) {
+  const prev = _scoreMemo.get(key);
+  const smoothed = prev == null ? raw : alpha * raw + (1 - alpha) * prev;
+  _scoreMemo.set(key, smoothed);
+  return smoothed;
+}
+
 export function getComprehensiveMarketSentiment(stock, historicalData) {
   // ---- Validate inputs
   if (!stock || !historicalData || historicalData.length < 50) {
@@ -42,41 +51,48 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
   const {
     mlScore,
     features = {},
-    longTermRegime = { type: "UNKNOWN", strength: 0 },
-    shortTermRegime = { type: "UNKNOWN", strength: 0 },
+    longTermRegime = { type: "UNKNOWN", strength: 0, characteristics: [] },
+    shortTermRegime = { type: "UNKNOWN", strength: 0, characteristics: [] },
   } = getDeepMarketAnalysis(stock, sorted) || {};
 
   console.log("getDeepMarketAnalysis complete");
-  // ---- 3) Market-adaptive weighting (ensure 1 is reachable in trending regime)
+
+  // ---- 3) Market-adaptive weighting
   const weights = getAdaptiveSentimentWeights(longTermRegime, shortTermRegime);
 
-  // ---- 4) Normalization & clamping
-  // Map ShortTerm 1..7 -> 5..-3 linearly (1→+5, 4→+1, 7→-3)
-  const normalizedShortTerm = 5 - shortTermScore;
+  // ---- 4) Normalization & combination
+  // Map ShortTerm 1..7 → +3..−3 (centered at 0): 1→+3, 4→0, 7→−3
+  const normalizedShortTerm = 4 - shortTermScore;
 
-  let safeMl = Number.isFinite(mlScore) ? mlScore : 0;
-  safeMl = Math.max(-5, Math.min(5, safeMl)); // Wider range
+  // Compress ML smoothly to [-3, +3] for stability
+  const safeMl = Number.isFinite(mlScore) ? mlScore : 0; // original ML
+  const mlScaled = Math.tanh(safeMl / 3) * 3; // smooth clamp
 
   let combinedScore =
-    normalizedShortTerm * weights.shortTerm + safeMl * weights.deepAnalysis;
+    normalizedShortTerm * weights.shortTerm + mlScaled * weights.deepAnalysis;
 
-  // CRITICAL: ML veto power - if ML is negative, limit bullish scores
-  if (safeMl < -1 && normalizedShortTerm > 2) {
-    combinedScore = Math.min(combinedScore, 1.5); // Can't be Strong Buy/Buy
-  }
-  if (safeMl < -2) {
-    combinedScore = Math.min(combinedScore, 0.5); // Can't be better than Neutral
+  // Continuous ML penalty instead of hard caps
+  if (mlScaled < 0) {
+    const ltDown =
+      longTermRegime?.type === "TRENDING" &&
+      (longTermRegime.characteristics || []).includes("DOWNTREND");
+    const stDown =
+      shortTermRegime?.type === "TRENDING" &&
+      (shortTermRegime.characteristics || []).includes("DOWNTREND");
+    const regimeFactor = (ltDown ? 1.2 : 1.0) * (stDown ? 1.2 : 1.0);
+    let penalty = 0.6 * Math.abs(mlScaled) * regimeFactor;
+    if (normalizedShortTerm > 2) penalty *= 0.8; // small relief for very strong ST
+    combinedScore -= penalty;
   }
 
-  // Require positive ML for top scores
-  if (safeMl <= 0 && combinedScore > 3) {
-    combinedScore = 3; // Cap at 3 without positive ML
-  }
-    
+  // Smooth to avoid day-to-day churn
+  const scoreKey =
+    stock?.symbol || stock?.ticker || stock?.code || stock?.name || "unknown";
+  const smoothedCombined = _smoothScore(scoreKey, combinedScore, 0.5);
 
   // ---- 5) Score → bucket + confidence
   const { finalScore, confidence } = mapToSentimentScoreWithConfidence(
-    combinedScore,
+    smoothedCombined,
     features,
     longTermRegime,
     shortTermRegime
@@ -88,13 +104,20 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
     sorted, // use sorted everywhere
     finalScore,
     confidence,
-    combinedScore
+    smoothedCombined // use smoothed score downstream for intensity
   );
   result.confidence = confidence;
   result.longTermRegime = longTermRegime.type;
   result.shortTermRegime = shortTermRegime.type;
   result.keyInsights = generateSentimentInsights(features);
-  result.rawCombinedScore = combinedScore; // for debugging
+
+  // Debug surfaces
+  result.rawCombinedScore = smoothedCombined;
+  result.components = {
+    normalizedShortTerm,
+    mlScaled,
+    weights,
+  };
 
   return result;
 }
@@ -106,10 +129,10 @@ function getAdaptiveSentimentWeights(longTermRegime, shortTermRegime) {
   const st = shortTermRegime?.type || "UNKNOWN";
 
   if (lt === "TRENDING" && st === "TRENDING") {
-    // Make Strong Buy reachable: max = 5*0.3 + 3*0.7 = 3.6
+    // Strong setups should be reachable, but ML still dominates
     return { shortTerm: 0.3, deepAnalysis: 0.7 };
   } else if (lt === "CHOPPY" || st === "CHOPPY") {
-    // Slight bias to deep analysis, but keep short-term meaningful for mean reversion
+    // Slight bias to deep analysis, keep short-term meaningful for mean reversion
     return { shortTerm: 0.4, deepAnalysis: 0.6 };
   } else if (lt !== st && lt !== "UNKNOWN" && st !== "UNKNOWN") {
     // Transition → balance
@@ -132,8 +155,7 @@ function mapToSentimentScoreWithConfidence(
   // Count bullish/bearish signals from feature set
   const isOn = (v) => v === true || v === 1 || (typeof v === "number" && v > 0);
 
-  // Be specific to avoid double-counting (e.g., "wyckoffUpthrust" vs "wyckoffSpring",
-  // "pocRising" vs "pocFalling")
+  // Be specific to avoid double-counting
   const BULLISH_KEYS = [
     "bullish",
     "long",
@@ -177,44 +199,54 @@ function mapToSentimentScoreWithConfidence(
   ) {
     confidence -= 0.15; // conflict
   }
-  // Do NOT penalize CHOPPY-on-CHOPPY per your intent.
 
   // Bound confidence
   confidence = Math.max(0.2, Math.min(0.9, confidence));
 
-  // Map combinedScore to 1..7 buckets (1 best)
-  // With normalizedShortTerm in [-3..5] and ml in [-3..3], combined ~[-4..+5].
+  // Slight positive nudge for aligned trending regimes
   const trendingNudge =
     longTermRegime?.type === "TRENDING" && shortTermRegime?.type === "TRENDING"
-      ? -0.05
+      ? +0.1
       : 0;
 
-  // Keep your current thresholds
+  // Retuned cutoffs to match reachable post-penalty range
   let finalScore;
   const s = combinedScore + trendingNudge;
-  if (s >= 4.2) finalScore = 1;
-  else if (s >= 3.3) finalScore = 2;
-  else if (s >= 2.2) finalScore = 3;
-  else if (s >= 0.8) finalScore = 4;
-  else if (s >= -0.5) finalScore = 5;
-  else if (s >= -1.5) finalScore = 6;
+  if (s >= 3.8) finalScore = 1;
+  else if (s >= 2.8) finalScore = 2;
+  else if (s >= 1.8) finalScore = 3;
+  else if (s >= 0.4) finalScore = 4;
+  else if (s >= -0.8) finalScore = 5;
+  else if (s >= -1.8) finalScore = 6;
   else finalScore = 7;
 
-  // FINAL SAFETY CHECK: Require minimum positive signals for buy ratings
-  const hasBullishSignals = [
-    features.f0_bullishAuction,
-    features.f1_pocRising,
-    features.f2_clean,
-    features.f5_wyckoffSpring,
-    features.f11_isAccumulating,
-    features.f9_isHealthyTrend,
-  ].filter(Boolean).length;
-
-  if (finalScore <= 2 && hasBullishSignals < 2) {
-    finalScore = Math.max(3, finalScore + 1); // Need at least 2 bullish signals
+  // Confidence gate: don't allow soft 1/2s
+  if (finalScore <= 2 && confidence < 0.45) {
+    finalScore = 3;
   }
 
-  return { finalScore, confidence /* ... */ };
+  // Require minimum directional evidence for 1–2
+  const hasDir = [
+    features.f0_bullishAuction,
+    features.f1_pocRising,
+    features.f5_wyckoffSpring,
+    features.f7_buyingPressure,
+    features.f3_bullishHidden,
+  ].filter(Boolean).length;
+
+  if (finalScore <= 2 && hasDir < 2) {
+    finalScore = Math.max(3, finalScore + 1);
+  }
+
+  // Extra caution for classic exhaustion combos → demote 1 bucket
+  const exhaustionCombo =
+    (features.f5_threePushes && features.f8_parabolicMove) ||
+    (features.f3_bearishHidden && features.f8_isExtended);
+  if (exhaustionCombo) {
+    finalScore = Math.min(7, finalScore + 1);
+  }
+
+  return { finalScore, confidence };
 }
 
 /* ───────────────── Key Insights ───────────────── */
@@ -352,7 +384,7 @@ function estimateATR(stock, historicalData) {
       recent.length;
     if (avgRange > 0) return avgRange;
   }
-  // JP: conservative default if we must
+  // Conservative default if we must
   const est = 0.02; // 2% of price
   return price * est;
 }

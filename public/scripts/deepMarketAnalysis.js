@@ -1,9 +1,6 @@
 // ================== DEEP MARKET ANALYSIS (Layer 2) ==================
 // deepMarketAnalysis.js
 
-// [The entire Layer 2 code would go here - it's too long to include in full]
-// I'll just show the renamed main function:
-
 /**
  * Performs advanced (90-day) analysis including market structure, regime,
  * order flow, and institutional patterns to generate deep market insights.
@@ -13,10 +10,11 @@
  * @returns {{ mlScore:number, features:Object, longTermRegime:Object, shortTermRegime:Object }}
  */
 export function getDeepMarketAnalysis(stock, historicalData) {
+  // Soften behavior on thin history so the orchestrator doesn't auto-veto
   if (!historicalData || historicalData.length < 90) {
     return {
-      mlScore: -5,
-      features: {},
+      mlScore: -0.5, // mild caution only
+      features: { f4_characteristics_INSUFFICIENT_HISTORY: 1 },
       longTermRegime: {
         type: "UNKNOWN",
         characteristics: ["INSUFFICIENT_HISTORY"],
@@ -66,7 +64,7 @@ export function getDeepMarketAnalysis(stock, historicalData) {
 
   let mlScore = calculateMLScore(features);
 
-  // 3) REGIME-BASED & CONTEXTUAL ADJUSTMENTS
+  // 3) REGIME-BASED & CONTEXTUAL ADJUSTMENTS (softened/polished)
   let regimeAdjustment = 0;
   const has = (arr, s) => Array.isArray(arr) && arr.includes(s);
 
@@ -85,20 +83,22 @@ export function getDeepMarketAnalysis(stock, historicalData) {
   const isShortRange = shortTermRegime.type === "RANGE_BOUND";
 
   if (isLongDown) {
-    if (isShortDown) regimeAdjustment = -4.0;
-    else if (isShortRange) regimeAdjustment = -1.5;
-    else if (isShortUp) regimeAdjustment = 2.0;
+    if (isShortDown) regimeAdjustment = -3.0;
+    else if (isShortRange) regimeAdjustment = -1.2;
+    else if (isShortUp) regimeAdjustment = 1.5;
   } else if (isLongUp) {
     if (isShortUp && !extensionAnalysis.parabolicMove) regimeAdjustment = 1.5;
     else if (isShortDown) regimeAdjustment = 0.5;
   } else if (longTermRegime.type === "RANGE_BOUND") {
-    if (priceActionQuality.nearRangeLow) regimeAdjustment = 2.0;
-    else if (priceActionQuality.nearRangeHigh) regimeAdjustment = -2.5;
-  } else if (
-    longTermRegime.type === "CHOPPY" ||
-    longTermRegime.type === "UNKNOWN"
-  ) {
-    regimeAdjustment = -3.0;
+    if (priceActionQuality.nearRangeLow) regimeAdjustment = 1.5;
+    else if (priceActionQuality.nearRangeHigh) regimeAdjustment = -2.0;
+  } else if (longTermRegime.type === "CHOPPY") {
+    regimeAdjustment = -Math.min(
+      1.5,
+      (longTermRegime.strength || 0) * 0.8 || 1.0
+    );
+  } else if (longTermRegime.type === "UNKNOWN") {
+    regimeAdjustment = -0.8;
   }
   mlScore += regimeAdjustment;
 
@@ -421,10 +421,10 @@ function detectAdvancedPatterns(data, volatilityRegime) {
   const closes = data.map((d) => n(d.close));
   const volumes = data.map((d) => n(d.volume));
 
+  // --- Wyckoff Spring
   const recentLows = lows.slice(-20);
   const supportLevel = Math.min(...recentLows.slice(0, 15));
   const last5 = data.slice(-5);
-
   const avgVol15 = volumes.slice(-20, -5).reduce((a, b) => a + b, 0) / 15 || 0;
 
   const springCandidate = last5.find(
@@ -437,10 +437,45 @@ function detectAdvancedPatterns(data, volatilityRegime) {
     patterns.wyckoffSpring = true;
   }
 
+  // --- Upthrust / failed breakout / successful retest (resistance-based)
+  const baseWindow = data.slice(-25, -5);
+  if (baseWindow.length >= 5) {
+    const resistance = Math.max(...baseWindow.map((d) => n(d.high)));
+    const tol = 0.005; // 0.5%
+
+    // Upthrust: pierce above resistance intraday, close back below, on higher volume
+    const last3 = data.slice(-3);
+    const upthrustBar = last3.find(
+      (d) =>
+        n(d.high) > resistance * (1 + tol) &&
+        n(d.close) < resistance &&
+        n(d.volume) > (avgVol15 || 1)
+    );
+    if (upthrustBar) patterns.wyckoffUpthrust = true;
+
+    // Failed breakout: had a close above, then back below within 2 bars
+    const last5Bars = data.slice(-5);
+    const hadCloseAbove = last5Bars.some(
+      (d) => n(d.close) > resistance * (1 + tol / 2)
+    );
+    const nowBelow = n(closes[closes.length - 1]) < resistance;
+    if (hadCloseAbove && nowBelow) patterns.failedBreakout = true;
+
+    // Successful retest: close > resistance but low tags resistance ±0.3%
+    const today = data[data.length - 1];
+    const retestTouched =
+      n(today.low) <= resistance * 1.003 && n(today.low) >= resistance * 0.997;
+    if (n(today.close) > resistance * (1 + tol / 2) && retestTouched) {
+      patterns.successfulRetest = true;
+    }
+  }
+
+  // --- Three pushes
   const pushes = findPushes(highs.slice(-30));
   if (pushes.length >= 3 && pushes[pushes.length - 1].declining)
     patterns.threePushes = true;
 
+  // --- Coiled spring
   patterns.coiledSpring =
     Boolean(volatilityRegime?.compression) &&
     (volatilityRegime?.cyclePhase === "COMPRESSION_ONGOING" ||
@@ -734,10 +769,10 @@ function calculateMLScore(features) {
   if (features.f2_trendEfficiency > 0.5) qualityPoints++;
 
   // Penalize poor quality more heavily
-  if (qualityPoints < 2) score -= 3.0; // Was -2.0
-  else if (qualityPoints < 3) score -= 1.0; // Additional penalty
+  if (qualityPoints < 2) score -= 3.0;
+  else if (qualityPoints < 3) score -= 1.0;
 
-  // Make positive combos more selective
+  // Positive combos (more selective)
   if (
     features.f0_bullishAuction &&
     features.f1_pocRising &&
@@ -745,50 +780,59 @@ function calculateMLScore(features) {
   ) {
     score += 3.5;
   } else if (features.f0_bullishAuction && features.f1_pocRising) {
-    score += 1.5; // Reduced reward without clean price action
+    score += 1.5;
   }
 
-  // Stronger rewards for rare, high-quality signals
+  // High-quality bullish clusters
   if (
     features.f5_wyckoffSpring &&
     features.f7_buyingPressure &&
     features.f0_sellerExhaustion
   ) {
-    score += 5.0; // Was 4.0 - reward the best setups more
+    score += 5.0;
   } else if (features.f5_wyckoffSpring && features.f7_buyingPressure) {
     score += 3.0;
   }
-
   if (
     features.f3_bullishHidden &&
     features.f9_isHealthyTrend &&
     features.f2_clean
   ) {
-    score += 3.5; // Require clean price action
+    score += 3.5;
   } else if (features.f3_bullishHidden && features.f9_isHealthyTrend) {
-    score += 1.8; // Was 2.8
+    score += 1.8;
   }
 
-  // STRONGER PENALTIES for negative signals
-  if (features.f3_bearishHidden && features.f8_isExtended) score -= 4.0; // Was -2.8
-  if (features.f5_threePushes && features.f8_parabolicMove) score -= 5.0; // Was -4.0
-  if (features.f0_bearishAuction && features.f1_pocFalling) score -= 4.0; // Was -3.0
-  if (features.f2_choppy) score -= 2.0; // New penalty for choppy action
-  if (features.f8_isExtended && !features.f9_isHealthyTrend) score -= 2.5; // Extended without trend
+  // Bearish confirmations & breakout quality
+  if (features.f5_wyckoffUpthrust) score -= 3.2;
+  if (features.f5_failedBreakout) score -= 2.2;
+  if (features.f5_successfulRetest) score += 1.2;
 
-  // More selective momentum scoring
+  // Stronger penalties for negative signals
+  if (features.f3_bearishHidden && features.f8_isExtended) score -= 4.0;
+  if (features.f5_threePushes && features.f8_parabolicMove) score -= 5.0;
+  if (features.f0_bearishAuction && features.f1_pocFalling) score -= 4.0;
+  if (features.f2_choppy) score -= 2.0;
+  if (features.f8_isExtended && !features.f9_isHealthyTrend) score -= 2.5;
+
+  // Small nudges: volume/delta
+  if (features.f1_volumeTrend_INCREASING && features.f0_bullishAuction)
+    score += 0.8;
+  if (features.f1_volumeTrend_DECREASING && features.f4_type_TRENDING)
+    score -= 0.8;
+  if (features.f0_deltaProfile_STRONG_BULLISH) score += 0.6;
+  if (features.f0_deltaProfile_STRONG_BEARISH) score -= 0.6;
+
+  // Momentum rewarded only if trend is healthy
   const momentumStrength = features.f10_persistentStrength || 0;
   const trendStrength = features.f9_trendStrength || 0;
-
-  // Only reward momentum if trend is healthy
   if (trendStrength > 25) {
-    // ADX > 25
-    score += momentumStrength * (1 + trendStrength / 50); // Was /10
+    score += momentumStrength * (1 + trendStrength / 50);
   } else {
-    score += momentumStrength * 0.3; // Minimal reward without trend
+    score += momentumStrength * 0.3;
   }
 
-  // Volatility adjustments more selective
+  // Volatility-phase scaling
   if (
     features.f6_cyclePhase_EXPANSION_STARTING &&
     features.f2_impulsive &&
@@ -796,12 +840,11 @@ function calculateMLScore(features) {
   ) {
     score *= 1.3;
   } else if (features.f6_cyclePhase_COMPRESSION_ONGOING) {
-    score *= 0.8; // Penalize compression phase
+    score *= 0.8;
   }
 
-  // Cap scores to prevent outliers
-  score = Math.max(-5, Math.min(5, score)); // Was -3 to 3
-
+  // Clamp
+  score = Math.max(-5, Math.min(5, score));
   return score;
 }
 
