@@ -445,7 +445,10 @@ window.scan = {
           stock.valuationScore = getValuationScore(stock); // --- 2. Run Advanced Analysis for Scores, Targets, and Vetoes --- // This function calculates the entry score, targets, and runs the "Emergency Brake" veto.
           stock.tier = getNumericTier(stock);
           
-          const horizons = getShortAndLongTermScores(stock, historicalData);
+          const horizons = getComprehensiveMarketSentiment(
+            stock,
+            historicalData
+          );
 
           stock.shortTermScore = horizons.shortTerm.score; // 1..7
           stock.longTermScore  = horizons.longTerm.score;  // 1..7

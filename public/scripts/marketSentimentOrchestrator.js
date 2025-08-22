@@ -63,7 +63,7 @@ function longTermBucket(mlScore = 0, longTermRegime) {
  * - shortTerm.score:    1..7 (your 15-day engine)
  * - longTerm.score:     1..7 (derived from deep analysis only)
  */
-export function getShortAndLongTermScores(stock, historicalData) {
+export function getComprehensiveMarketSentiment(stock, historicalData) {
   if (!stock || !historicalData || historicalData.length < 15) {
     return {
       shortTerm: { score: 7, label: "bearish", confidence: 0.3 },
