@@ -1,5 +1,5 @@
 // swingTradeEntryTiming.js — flexible + looser + more entries (DIP, RETEST, MA25 RECLAIM, INSIDE, BREAKOUT)
-// Returns: { buyNow, reason, stopLoss, priceTarget, debug? }
+// Returns: { buyNow, reason, stopLoss, priceTarget, timeline?, debug? }
 // Usage: analyzeSwingTradeEntry(stock, candles, { debug:true, allowedKinds:["DIP","RETEST","RECLAIM","INSIDE","BREAKOUT"] })
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
@@ -318,7 +318,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           cfg,
         }
       : undefined;
-    return { buyNow: false, reason, debug };
+      return {
+        buyNow: true,
+        reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
+        stopLoss: best.stop,
+        priceTarget: best.target,
+        smartStopLoss: best.stop, // <- added
+        smartPriceTarget: best.target, // <- added
+        timeline: swingTimeline,
+        debug,
+      };
   }
 
   // prioritize: DIP > RETEST > RECLAIM > INSIDE > highest RR (BREAKOUT mixed in)
@@ -355,11 +364,15 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       }
     : undefined;
 
+  // Build a swing-trade strategy timeline (R-based milestones + trailing rule)
+  const swingTimeline = buildSwingTimeline(px, best, best.rr, ms);
+
   return {
     buyNow: true,
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
     stopLoss: best.stop,
     priceTarget: best.target,
+    timeline: swingTimeline,
     debug,
   };
 }
@@ -705,7 +718,6 @@ function detectInsideDayContinuation(stock, data, cfg, ms) {
   return { trigger, stop, target, nearestRes, why, waitReason: "" };
 }
 
-/* =================== BREAKOUT (legacy flat-top, looser) =================== */
 /* =================== BREAKOUT (adaptive & slightly looser) =================== */
 function detectBreakoutLegacy(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
@@ -734,7 +746,7 @@ function detectBreakoutLegacy(stock, data, cfg) {
   // Dynamic through requirement
   const minThroughPct = isTightBase
     ? cfg.breakoutMinThroughPctTight
-    : cfg.breakoutMinThroughPct; // your existing base (e.g. 0.20)
+    : cfg.breakoutMinThroughPct;
 
   const needPx = top * (1 + minThroughPct / 100);
 
@@ -797,7 +809,7 @@ function detectBreakoutLegacy(stock, data, cfg) {
   }
 
   // Stops/targets (slightly tighter stop than legacy; keep your target scheme)
-  const stop = top - 0.65 * atr; // was 0.7 * ATR — a touch tighter to offset looser entry
+  const stop = top - 0.65 * atr; // was 0.7 * ATR
   const resList = findResistancesAbove(data, px, stock);
   const target = resList[0]
     ? Math.max(resList[0], px + 2.3 * atr)
@@ -826,7 +838,6 @@ function detectBreakoutLegacy(stock, data, cfg) {
     },
   };
 }
-
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
@@ -930,6 +941,86 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
   return { veto: false, reason: "", details };
 }
 
+/* ============================ Timeline ============================ */
+/**
+ * Builds a swing trade strategy timeline with R-based milestones and a trailing rule.
+ * @param {number} entryPx
+ * @param {{kind:string, stop:number, target:number}} candidate
+ * @param {{atr:number, risk:number}} rr
+ * @param {{ma25:number}} ms
+ * @returns {Array<{when:string, condition:string, stopLoss?:number, stopLossRule?:string, stopLossHint?:number, priceTarget:number, note:string}>}
+ */
+function buildSwingTimeline(entryPx, candidate, rr, ms) {
+  const steps = [];
+  const atr = Number(rr?.atr) || 0;
+  const initialStop = Number(candidate.stop);
+  const finalTarget = Number(candidate.target);
+  const risk = Math.max(0.01, entryPx - initialStop); // R (per-share risk)
+  const kind = candidate.kind || "ENTRY";
+
+  if (!(risk > 0)) {
+    steps.push({
+      when: "T+0",
+      condition: "On fill",
+      stopLoss: initialStop,
+      priceTarget: finalTarget,
+      note: `${kind}: invalid R fallback`,
+    });
+    return steps;
+  }
+
+  // T+0 — on fill
+  steps.push({
+    when: "T+0",
+    condition: "On fill",
+    stopLoss: initialStop,
+    priceTarget: finalTarget,
+    note: `${kind}: initial plan`,
+  });
+
+  // +1R — move to breakeven
+  steps.push({
+    when: "+1R",
+    condition: `price ≥ ${entryPx + 1 * risk}`,
+    stopLoss: entryPx,
+    priceTarget: finalTarget,
+    note: "Lock risk: move stop to breakeven",
+  });
+
+  // +1.5R — lock in 0.5R
+  steps.push({
+    when: "+1.5R",
+    condition: `price ≥ ${entryPx + 1.5 * risk}`,
+    stopLoss: entryPx + 0.5 * risk,
+    priceTarget: finalTarget,
+    note: "Protect gains: stop = entry + 0.5R",
+  });
+
+  // +2R — lock in ~1.2R (trail start)
+  steps.push({
+    when: "+2R",
+    condition: `price ≥ ${entryPx + 2 * risk}`,
+    stopLoss: entryPx + 1.2 * risk,
+    priceTarget: finalTarget,
+    note: "Convert to runner: stop = entry + 1.2R",
+  });
+
+  // Trailing rule — structure/MA based; keep final target as ceiling
+  steps.push({
+    when: "TRAIL",
+    condition: "After +2R (or if momentum remains strong)",
+    stopLossRule: "max( last swing low − 0.5*ATR, MA25 − 0.6*ATR )",
+    stopLossHint: Math.max(
+      (ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop),
+      initialStop
+    ),
+    priceTarget: finalTarget,
+    note: "Trail with structure/MA; keep final target unless momentum justifies holding",
+  });
+
+  return steps;
+}
+
 /* =========================== Utilities =========================== */
 function num(v) {
   return Number.isFinite(v) ? v : 0;
@@ -1007,7 +1098,7 @@ function buildNoReason(top, list) {
 }
 
 function summarizeGuardDetails(d) {
-  if (!d) return "";
+  if (!d || typeof d !== "object") return "";
   const bits = [];
   if (typeof d.rsi === "number") bits.push(`RSI=${d.rsi.toFixed(1)}`);
   if (typeof d.headroomATR === "number")
@@ -1019,5 +1110,14 @@ function summarizeGuardDetails(d) {
 }
 
 function withNo(reason, debug) {
-  return { buyNow: false, reason, debug };
+  return {
+    buyNow: false,
+    reason,
+    stopLoss: null,
+    priceTarget: null,
+    smartStopLoss: null, // <- added
+    smartPriceTarget: null, // <- added
+    timeline: [],
+    debug,
+  };
 }

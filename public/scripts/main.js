@@ -445,21 +445,27 @@ window.scan = {
           stock.valuationScore = getValuationScore(stock); // --- 2. Run Advanced Analysis for Scores, Targets, and Vetoes --- // This function calculates the entry score, targets, and runs the "Emergency Brake" veto.
           stock.tier = getNumericTier(stock);
           
-          const entryAnalysis = getComprehensiveMarketSentiment(
-            stock,
-            historicalData
-          );
-          stock.entryTimingScore = entryAnalysis.score;
-          stock.smartStopLoss = entryAnalysis.stopLoss;
-          stock.smartPriceTarget = entryAnalysis.priceTarget; // --- 3. Generate the Final, Unified "Buy Now" Signal --- // This master function runs our Trend Reversal and Continuation checks, // then applies the "Intelligent Filter" vetoes (Overbought/Resistance).
+          const horizons = getShortAndLongTermScores(stock, historicalData);
+
+          stock.shortTermScore = horizons.shortTerm.score; // 1..7
+          stock.longTermScore  = horizons.longTerm.score;  // 1..7
+          stock.shortTermBias  = horizons.shortTerm.label; // "bullish"|"neutral"|"bearish"
+          stock.longTermBias   = horizons.longTerm.label;
+          stock.shortTermConf  = horizons.shortTerm.confidence; // 0..1
+          stock.longTermConf   = horizons.longTerm.confidence;  // 0..1
 
           console.log("Running getBuyTrigger...");
-          const finalSignal = analyzeSwingTradeEntry(stock,
-            historicalData
-          );
+          const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
           console.log("Running getBuyTrigger - finished");
+
           stock.isBuyNow = finalSignal.buyNow;
-          stock.buyNowReason = finalSignal.reason; // --- 4. Calculate Final Tier and Limit Order --- // Note: If a hard veto was triggered in entryAnalysis, the scores will be low, // resulting in a low Tier, which is the correct outcome.
+          stock.buyNowReason = finalSignal.reason;
+
+          // new aliases (fall back to legacy names just in case)
+          stock.smartStopLoss =
+            finalSignal.smartStopLoss ?? finalSignal.stopLoss;
+          stock.smartPriceTarget =
+            finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
 
           // Check if current stock exists in myPortfolio
           const portfolioEntry = myPortfolio.find(
@@ -486,7 +492,8 @@ window.scan = {
             _api_c2_ticker: stock.ticker,
             _api_c2_sector: stock.sector,
             _api_c2_currentPrice: stock.currentPrice,
-            _api_c2_entryTimingScore: stock.entryTimingScore,
+            _api_c2_shortTermScore: stock.shortTermScore,
+            _api_c2_longTermScore: stock.longTermScore,
             _api_c2_prediction: stock.prediction,
             _api_c2_stopLoss: stock.stopLoss,
             _api_c2_targetPrice: stock.targetPrice,

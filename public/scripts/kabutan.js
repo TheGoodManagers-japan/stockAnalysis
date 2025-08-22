@@ -2,6 +2,7 @@
 // Sends only ONE body field (body_text OR body_html) to cut payload size.
 // https://s.kabutan.jp/market_news/?day=15&month=8&page=1&search_archive_news=13&year=2025
 // === Kabutan -> POST { news: [...] } every 5 min (JP tickers only) ===
+// === Kabutan -> POST { news: [...] } every 5 min (JP tickers only; single "ticker") ===
 (() => {
     const CFG = {
       listUrl: location.href,
@@ -12,7 +13,7 @@
       sendOnlyNew: true,
       bodyField: "text",   // "text" => body_text  |  "html" => body_html
       maxBodyChars: 4000,  // 0 = no truncation
-      jpOnly: true         // << send only articles with JP tickers (####.T)
+      jpOnly: true         // send only articles with JP tickers (####.T)
     };
   
     // --- UI badge ---
@@ -29,9 +30,7 @@
     const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
     const normText = (el) => norm(el?.textContent || "");
     const trunc = (s, n) => (typeof s === "string" && n && n > 0 && s.length > n ? s.slice(0, n) : s);
-    const htmlDecode = (s) => {
-      const d = document.createElement("textarea"); d.innerHTML = s || ""; return d.value;
-    };
+    const htmlDecode = (s) => { const d = document.createElement("textarea"); d.innerHTML = s || ""; return d.value; };
     const toHanDigits = (s) => (s || "").replace(/[０-９]/g, d => String.fromCharCode(d.charCodeAt(0) - 0xFF10 + 0x30));
   
     async function fetchDoc(url) {
@@ -66,7 +65,7 @@
       return rows;
     }
   
-    // --- JP ticker extraction from detail doc ---
+    // --- JP ticker extraction from detail doc (returns array of ####.T) ---
     function extractJPTickers(doc) {
       const out = new Set();
   
@@ -90,14 +89,14 @@
         if (mQueryJP) out.add(`${mQueryJP[1]}.T`);
       });
   
-      // 2) Bracketed codes in anchor text like ＜3397＞ / 【3397】 / (3397)
+      // 2) Bracketed codes in anchor text
       doc.querySelectorAll('a').forEach(a => {
         const txt = toHanDigits(a.textContent || "").replace(/[<>\[\]［］【】()（）]/g, " ");
         const m = txt.match(/\b(\d{4})\b/);
         if (m) out.add(`${m[1]}.T`);
       });
   
-      // 3) Fallback: scan whole page text for lone 4-digit codes
+      // 3) Fallback: scan whole page text
       const allText = toHanDigits(doc.body?.textContent || "");
       (allText.match(/\b(\d{4})\b/g) || []).forEach(code => out.add(`${code}.T`));
   
@@ -108,7 +107,6 @@
       const doc = await fetchDoc(url);
       const bodyEl = doc.querySelector(".news-body");
   
-      // choose one body field
       let body_text = null, body_html = null;
       if (bodyEl) {
         if (CFG.bodyField === "text") {
@@ -123,7 +121,7 @@
       const artTimeEl = doc.querySelector("article time[datetime], time[datetime]");
       const article_datetime = artTimeEl?.getAttribute?.("datetime") || null;
   
-      const tickers = extractJPTickers(doc); // << JP tickers only (normalized ####.T)
+      const tickers = extractJPTickers(doc); // array of ####.T
   
       let footer = null;
       if (bodyEl) {
@@ -136,7 +134,12 @@
     }
   
     async function sendPayload(items) {
+      // choose the FIRST JP ticker (####.T) and send it as "ticker"
       const sanitized = items.map(x => {
+        const ticker = Array.isArray(x.tickers)
+          ? x.tickers.find(t => /^\d{4}\.T$/.test(t)) || null
+          : null;
+  
         const o = {
           title_ja: x.title_ja ?? null,
           url: x.url ?? null,
@@ -144,7 +147,7 @@
           datetime: x.datetime ?? null,
           isNew: !!x.isNew,
           article_datetime: x.article_datetime ?? null,
-          tickers: Array.isArray(x.tickers) ? x.tickers : [],
+          ticker,                    // << single string field
           footer: x.footer ?? null
         };
         if (CFG.bodyField === "text") o.body_text = x.body_text ?? null;
@@ -195,16 +198,14 @@
         const candidates = CFG.sendOnlyNew ? list.filter(x => !window.kabutanSeen.has(x.url)) : list;
         const targets = candidates.slice(0, CFG.maxPerCycle);
   
-        // fetch detail & enrich
         for (let i = 0; i < targets.length; i++) {
           try { Object.assign(targets[i], await extractArticle(targets[i].url)); } catch {}
           if (i < targets.length - 1) await wait(CFG.throttleMs);
         }
   
-        // mark all seen to avoid re-processing every cycle
         targets.forEach(x => window.kabutanSeen.add(x.url));
   
-        // FILTER: keep only those with at least one JP ticker (####.T)
+        // keep only those with at least one JP ticker (####.T)
         const jpTargets = CFG.jpOnly
           ? targets.filter(x => Array.isArray(x.tickers) && x.tickers.some(t => /^\d{4}\.T$/.test(t)))
           : targets;
@@ -212,7 +213,7 @@
         if (jpTargets.length) {
           console.table(jpTargets.map(r => ({
             title_ja: r.title_ja.slice(0, 40),
-            tickers: (r.tickers || []).join(","),
+            ticker: (r.tickers || []).find(t => /^\d{4}\.T$/.test(t)) || "",
             list_time: r.datetime,
             article_time: r.article_datetime,
             url: r.url
@@ -234,6 +235,6 @@
     cycle();
     const timer = setInterval(cycle, CFG.intervalMs);
     window.kabutanStop = () => { clearInterval(timer); badge.textContent = "Kabutan auto: stopped"; };
-    console.log("▶️ Running (JP tickers only). To stop: kabutanStop()");
+    console.log("▶️ Running (JP tickers only, single 'ticker'). To stop: kabutanStop()");
   })();
   
