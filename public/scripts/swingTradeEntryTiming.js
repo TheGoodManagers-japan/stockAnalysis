@@ -1,5 +1,5 @@
 // swingTradeEntryTiming.js — flexible + looser + more entries (DIP, RETEST, MA25 RECLAIM, INSIDE, BREAKOUT)
-// Returns: { buyNow, reason, stopLoss, priceTarget, timeline?, debug? }
+// Returns: { buyNow, reason, stopLoss, priceTarget, smartStopLoss, smartPriceTarget, timeline?, debug? }
 // Usage: analyzeSwingTradeEntry(stock, candles, { debug:true, allowedKinds:["DIP","RETEST","RECLAIM","INSIDE","BREAKOUT"] })
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
@@ -364,8 +364,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
     stopLoss: best.stop,
     priceTarget: best.target,
-    smartStopLoss: best.stop, // expose convenience fields
-    smartPriceTarget: best.target, // "
+    smartStopLoss: best.stop, // convenience fields
+    smartPriceTarget: best.target,
     timeline: swingTimeline,
     debug,
   };
@@ -425,9 +425,11 @@ function getConfig(opts) {
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
-  const ma25 = num(stock.movingAverage25d),
-    ma50 = num(stock.movingAverage50d),
-    ma200 = num(stock.movingAverage200d);
+
+  // MA fallbacks from data if missing on stock
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
+  const ma50 = num(stock.movingAverage50d) || sma(data, 50);
+  const ma200 = num(stock.movingAverage200d) || sma(data, 200);
 
   let score = 0;
   if (px > ma25 && ma25 > 0) score++;
@@ -453,9 +455,13 @@ function getMarketStructure(stock, data) {
 function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005);
-  const ma5 = num(stock.movingAverage5d);
-  const ma25 = num(stock.movingAverage25d),
-    ma50 = num(stock.movingAverage50d);
+
+  // MA5 fallback
+  const ma5 = num(stock.movingAverage5d) || sma(data, 5);
+
+  // MA fallbacks for distance checks
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
+  const ma50 = num(stock.movingAverage50d) || sma(data, 50);
 
   const last5 = data.slice(-5);
   const d0 = last5.at(-1),
@@ -590,12 +596,9 @@ function detectRetest(stock, data, cfg) {
   const holdAbove = num(last.low) >= pivot - 0.6 * atr;
   const greenish = num(last.close) >= Math.max(num(last.open), pivot);
 
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   const trigger =
-    hadBreak &&
-    nearPivot &&
-    holdAbove &&
-    greenish &&
-    num(stock.rsi14) < cfg.softRSI;
+    hadBreak && nearPivot && holdAbove && greenish && rsi < cfg.softRSI;
 
   if (!trigger) {
     const wr = !hadBreak
@@ -627,7 +630,7 @@ function detectRetest(stock, data, cfg) {
 /* ====================== MA25 RECLAIM (trend resume) ====================== */
 function detectMA25Reclaim(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
-  const ma25 = num(stock.movingAverage25d);
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   if (!(ma25 > 0)) return { trigger: false, waitReason: "MA25 unavailable" };
 
   const d0 = data.at(-1),
@@ -635,7 +638,7 @@ function detectMA25Reclaim(stock, data, cfg) {
   const reclaim =
     num(d1.close) < ma25 &&
     num(d0.close) > ma25 * (1 + cfg.reclaimMA25MinPct / 100);
-  const rsi = num(stock.rsi14);
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   const okRSI = rsi >= 42 && rsi <= cfg.softRSI;
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const volOK =
@@ -680,7 +683,7 @@ function detectInsideDayContinuation(stock, data, cfg, ms) {
   const upperThird = posFrac >= cfg.insideDayUpperFrac;
 
   const trendOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-  const rsi = num(stock.rsi14);
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   const okRSI = rsi >= 45 && rsi <= cfg.softRSI;
 
   const trigger = inside && upperThird && trendOK && okRSI;
@@ -718,7 +721,6 @@ function detectBreakoutLegacy(stock, data, cfg) {
   const d0 = data.at(-1);
   const d1 = data.at(-2);
   const atr = Math.max(num(stock.atr14), px * 0.005);
-  const rsi = num(stock.rsi14);
 
   // Build the flat-top window
   const win = data.slice(-22, -2);
@@ -764,6 +766,7 @@ function detectBreakoutLegacy(stock, data, cfg) {
   const avgVol5 = avg(data.slice(-5).map((d) => num(d.volume)));
   const volExp = avgVol20 > 0 ? avgVol5 / avgVol20 : 1.0;
 
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   const notHot =
     rsi < cfg.softRSI ||
     (cfg.breakoutAllowHotRSIwithVol &&
@@ -860,6 +863,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const minStopDist = 1.1 * atr;
   if (entryPx - stop < minStopDist) stop = entryPx - minStopDist;
 
+  // If first resistance is very close, jump further for target
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
@@ -893,8 +897,8 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
   const details = {};
   const atr = Math.max(num(stock.atr14), px * 0.005);
-  const rsi = num(stock.rsi14);
-  const ma25 = num(stock.movingAverage25d);
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
 
   details.rsi = rsi;
   if (rsi >= cfg.hardRSI)
@@ -904,10 +908,17 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
       details,
     };
 
+  // Dynamic near-resistance veto (looser for pullback-style entries; slight easing for trend-continuation)
   let nearResMin = cfg.nearResVetoATR;
   if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.3);
   if ((kind === "DIP" || kind === "RETEST") && rsi < 58)
     nearResMin = Math.min(nearResMin, 0.25);
+  if (
+    (kind === "RECLAIM" || kind === "INSIDE" || kind === "BREAKOUT") &&
+    (ms.trend === "UP" || ms.trend === "STRONG_UP")
+  ) {
+    nearResMin = Math.min(nearResMin, 0.35);
+  }
 
   if (nearestRes) {
     const headroom = (nearestRes - px) / atr;
@@ -967,7 +978,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   const atr = Number(rr?.atr) || 0;
   const initialStop = Number(candidate.stop);
   const finalTarget = Number(candidate.target);
-  const risk = Math.max(0.01, entryPx - initialStop); // R
+  const risk = Math.max(0.01, entryPx - initialStop); // R (per-share risk)
   const kind = candidate.kind || "ENTRY";
 
   if (!(risk > 0)) {
@@ -981,6 +992,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     return steps;
   }
 
+  // T+0 — on fill
   steps.push({
     when: "T+0",
     condition: "On fill",
@@ -989,6 +1001,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: `${kind}: initial plan`,
   });
 
+  // +1R — move to breakeven
   steps.push({
     when: "+1R",
     condition: `price ≥ ${entryPx + 1 * risk}`,
@@ -997,6 +1010,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Lock risk: move stop to breakeven",
   });
 
+  // +1.5R — lock in 0.5R
   steps.push({
     when: "+1.5R",
     condition: `price ≥ ${entryPx + 1.5 * risk}`,
@@ -1005,6 +1019,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Protect gains: stop = entry + 0.5R",
   });
 
+  // +2R — lock in ~1.2R (trail start)
   steps.push({
     when: "+2R",
     condition: `price ≥ ${entryPx + 2 * risk}`,
@@ -1013,10 +1028,11 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Convert to runner: stop = entry + 1.2R",
   });
 
+  // Trailing rule — structure/MA based; keep final target as ceiling
   steps.push({
     when: "TRAIL",
     condition: "After +2R (or if momentum remains strong)",
-    stopLossRule: "max( last swing low − 0.5*ATR, MA25 − 0.6*ATR )",
+    stopLossRule: "max( last swing low - 0.5*ATR, MA25 - 0.6*ATR )",
     stopLossHint: Math.max(
       ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop,
       initialStop
@@ -1029,6 +1045,32 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
 }
 
 /* =========================== Utilities =========================== */
+function sma(data, n, field = "close") {
+  if (!Array.isArray(data) || data.length < n) return 0;
+  let s = 0;
+  for (let i = data.length - n; i < data.length; i++)
+    s += Number(data[i][field]) || 0;
+  return s / n;
+}
+
+function rsiFromData(data, length = 14) {
+  const n = data.length;
+  if (n < length + 1) return 50; // neutral fallback
+  let gains = 0,
+    losses = 0;
+  for (let i = n - length; i < n; i++) {
+    const prev = Number(data[i - 1].close) || 0;
+    const curr = Number(data[i].close) || 0;
+    const diff = curr - prev;
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  const avgGain = gains / length;
+  const avgLoss = losses / length || 1e-9;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
 function num(v) {
   return Number.isFinite(v) ? v : 0;
 }
@@ -1089,7 +1131,7 @@ function nearRecentSupportOrPivot(data, px, atr, cfg2 = { pct: 0.02 }) {
   const pctBand = cfg2.pct ?? 0.02;
   return pivots.some(
     (p) =>
-      (px >= p && px - p <= 3.2 * atr) ||
+      (px >= p && px - p <= 3.2 * atr) || // allow up to 3.2 ATR
       Math.abs(px - p) / Math.max(1, p) <= pctBand
   );
 }
