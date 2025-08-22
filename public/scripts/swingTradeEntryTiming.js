@@ -249,7 +249,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  // ======================= BREAKOUT (legacy/flat-top) =======================
+  // ======================= BREAKOUT (adaptive & slightly looser) =======================
   if (allow.has("BREAKOUT")) {
     const bo = detectBreakoutLegacy(stock, data, cfg);
     checks.breakout = bo;
@@ -318,16 +318,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           cfg,
         }
       : undefined;
-      return {
-        buyNow: true,
-        reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
-        stopLoss: best.stop,
-        priceTarget: best.target,
-        smartStopLoss: best.stop, // <- added
-        smartPriceTarget: best.target, // <- added
-        timeline: swingTimeline,
-        debug,
-      };
+    // No referencing `best` here:
+    return withNo(reason, debug);
   }
 
   // prioritize: DIP > RETEST > RECLAIM > INSIDE > highest RR (BREAKOUT mixed in)
@@ -372,6 +364,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
     stopLoss: best.stop,
     priceTarget: best.target,
+    smartStopLoss: best.stop, // expose convenience fields
+    smartPriceTarget: best.target, // "
     timeline: swingTimeline,
     debug,
   };
@@ -731,8 +725,8 @@ function detectBreakoutLegacy(stock, data, cfg) {
   if (win.length < 10) return { trigger: false, waitReason: "base too short" };
 
   const highs = win.map((d) => num(d.high));
-  const lows  = win.map((d) => num(d.low));
-  const top   = Math.max(...highs);
+  const lows = win.map((d) => num(d.low));
+  const top = Math.max(...highs);
   const bottom = Math.min(...lows);
 
   // How tight is the base?
@@ -752,22 +746,23 @@ function detectBreakoutLegacy(stock, data, cfg) {
 
   // Permit: (A) current price through OR (B) intraday pierced & closed very near top
   const intradayPierceAndHold =
-    num(d0.high) >= needPx && num(d0.close) >= top * cfg.breakoutAllowIntradayCloseFrac;
+    num(d0.high) >= needPx &&
+    num(d0.close) >= top * cfg.breakoutAllowIntradayCloseFrac;
 
   const through = px >= needPx || intradayPierceAndHold;
 
-  // Slightly looser gap rule: allow larger % gap if it's not huge in ATR terms
+  // Slightly looser gap rule
   const prevClose = num(d1?.close);
   const gapOK =
     prevClose > 0
       ? ((px - prevClose) / prevClose) * 100 <= cfg.breakoutMaxGapPct ||
-        (px - prevClose) <= cfg.breakoutAltGapATR * atr
+        px - prevClose <= cfg.breakoutAltGapATR * atr
       : true;
 
-  // Permit a bit hotter RSI when there is visible volume expansion
+  // Volume expansion + RSI allowance
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
-  const avgVol5  = avg(data.slice(-5).map((d) => num(d.volume)));
-  const volExp   = avgVol20 > 0 ? avgVol5 / avgVol20 : 1.0;
+  const avgVol5 = avg(data.slice(-5).map((d) => num(d.volume)));
+  const volExp = avgVol20 > 0 ? avgVol5 / avgVol20 : 1.0;
 
   const notHot =
     rsi < cfg.softRSI ||
@@ -775,10 +770,9 @@ function detectBreakoutLegacy(stock, data, cfg) {
       rsi < cfg.breakoutMaxRSIwithVol &&
       volExp >= cfg.breakoutMinVolExpansion);
 
-  // If the base is very tight, let 1 tap + higher lows count as enough "setup"
+  // Tight base exception
   const higherLows3 =
-    num(d0.low) > num(d1.low) &&
-    num(d1.low) > num(data.at(-3).low);
+    num(d0.low) > num(d1.low) && num(d1.low) > num(data.at(-3).low);
 
   const setupOK =
     touches >= cfg.breakoutTapsMin ||
@@ -787,29 +781,39 @@ function detectBreakoutLegacy(stock, data, cfg) {
   const trigger = setupOK && through && gapOK && notHot;
 
   if (!trigger) {
-    const wr =
-      !setupOK
-        ? (touches < cfg.breakoutTapsMin
-            ? (isTightBase ? "tight base but not enough taps/higher-lows" : "not enough flat-top taps")
-            : "setup not confirmed")
+    const wr = !setupOK
+      ? touches < cfg.breakoutTapsMin
+        ? isTightBase
+          ? "tight base but not enough taps/higher-lows"
+          : "not enough flat-top taps"
+        : "setup not confirmed"
       : !through
-        ? "not decisively through flat-top"
+      ? "not decisively through flat-top"
       : !gapOK
-        ? "gap too large vs rules"
+      ? "gap too large vs rules"
       : "RSI too hot without volume expansion";
     return {
       trigger: false,
       waitReason: wr,
       diagnostics: {
-        touches, top, bottom, baseRangePct, isTightBase,
-        minThroughPct, through, intradayPierceAndHold,
-        gapOK, rsi, volExp, atr
+        touches,
+        top,
+        bottom,
+        baseRangePct,
+        isTightBase,
+        minThroughPct,
+        through,
+        intradayPierceAndHold,
+        gapOK,
+        rsi,
+        volExp,
+        atr,
       },
     };
   }
 
-  // Stops/targets (slightly tighter stop than legacy; keep your target scheme)
-  const stop = top - 0.65 * atr; // was 0.7 * ATR
+  // Stops/targets
+  const stop = top - 0.65 * atr;
   const resList = findResistancesAbove(data, px, stock);
   const target = resList[0]
     ? Math.max(resList[0], px + 2.3 * atr)
@@ -821,7 +825,9 @@ function detectBreakoutLegacy(stock, data, cfg) {
   }), through≥${minThroughPct.toFixed(2)}%${
     intradayPierceAndHold ? " (intraday pierce+hold)" : ""
   }${
-    volExp >= cfg.breakoutMinVolExpansion ? `, volExp~${volExp.toFixed(2)}x` : ""
+    volExp >= cfg.breakoutMinVolExpansion
+      ? `, volExp~${volExp.toFixed(2)}x`
+      : ""
   }${rsi >= cfg.softRSI ? `, RSI ${rsi.toFixed(1)}` : ""}.`;
 
   return {
@@ -832,9 +838,18 @@ function detectBreakoutLegacy(stock, data, cfg) {
     why,
     waitReason: "",
     diagnostics: {
-      touches, top, bottom, baseRangePct, isTightBase,
-      minThroughPct, through, intradayPierceAndHold,
-      gapOK, rsi, volExp, atr
+      touches,
+      top,
+      bottom,
+      baseRangePct,
+      isTightBase,
+      minThroughPct,
+      through,
+      intradayPierceAndHold,
+      gapOK,
+      rsi,
+      volExp,
+      atr,
     },
   };
 }
@@ -842,10 +857,9 @@ function detectBreakoutLegacy(stock, data, cfg) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005);
-  const minStopDist = 1.1 * atr; // slightly tighter floor
+  const minStopDist = 1.1 * atr;
   if (entryPx - stop < minStopDist) stop = entryPx - minStopDist;
 
-  // If first resistance is very close, jump further for target
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
@@ -890,7 +904,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
       details,
     };
 
-  // Dynamic near-resistance veto (looser for pullback-style entries)
   let nearResMin = cfg.nearResVetoATR;
   if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.3);
   if ((kind === "DIP" || kind === "RETEST") && rsi < 58)
@@ -916,7 +929,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    // make MA25 distance less strict for DIP/RETEST
     const maxDist =
       kind === "DIP" || kind === "RETEST"
         ? cfg.maxATRfromMA25 + 0.3
@@ -955,7 +967,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   const atr = Number(rr?.atr) || 0;
   const initialStop = Number(candidate.stop);
   const finalTarget = Number(candidate.target);
-  const risk = Math.max(0.01, entryPx - initialStop); // R (per-share risk)
+  const risk = Math.max(0.01, entryPx - initialStop); // R
   const kind = candidate.kind || "ENTRY";
 
   if (!(risk > 0)) {
@@ -969,7 +981,6 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     return steps;
   }
 
-  // T+0 — on fill
   steps.push({
     when: "T+0",
     condition: "On fill",
@@ -978,7 +989,6 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: `${kind}: initial plan`,
   });
 
-  // +1R — move to breakeven
   steps.push({
     when: "+1R",
     condition: `price ≥ ${entryPx + 1 * risk}`,
@@ -987,7 +997,6 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Lock risk: move stop to breakeven",
   });
 
-  // +1.5R — lock in 0.5R
   steps.push({
     when: "+1.5R",
     condition: `price ≥ ${entryPx + 1.5 * risk}`,
@@ -996,7 +1005,6 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Protect gains: stop = entry + 0.5R",
   });
 
-  // +2R — lock in ~1.2R (trail start)
   steps.push({
     when: "+2R",
     condition: `price ≥ ${entryPx + 2 * risk}`,
@@ -1005,13 +1013,12 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Convert to runner: stop = entry + 1.2R",
   });
 
-  // Trailing rule — structure/MA based; keep final target as ceiling
   steps.push({
     when: "TRAIL",
     condition: "After +2R (or if momentum remains strong)",
     stopLossRule: "max( last swing low − 0.5*ATR, MA25 − 0.6*ATR )",
     stopLossHint: Math.max(
-      (ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop),
+      ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop,
       initialStop
     ),
     priceTarget: finalTarget,
@@ -1082,7 +1089,7 @@ function nearRecentSupportOrPivot(data, px, atr, cfg2 = { pct: 0.02 }) {
   const pctBand = cfg2.pct ?? 0.02;
   return pivots.some(
     (p) =>
-      (px >= p && px - p <= 3.2 * atr) || // allow up to 3.2 ATR
+      (px >= p && px - p <= 3.2 * atr) ||
       Math.abs(px - p) / Math.max(1, p) <= pctBand
   );
 }
@@ -1115,8 +1122,8 @@ function withNo(reason, debug) {
     reason,
     stopLoss: null,
     priceTarget: null,
-    smartStopLoss: null, // <- added
-    smartPriceTarget: null, // <- added
+    smartStopLoss: null,
+    smartPriceTarget: null,
     timeline: [],
     debug,
   };
