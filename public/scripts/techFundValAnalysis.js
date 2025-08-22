@@ -1,6 +1,53 @@
+// scoring.js
+// -----------------------------------------------------------------------------
+// Helpers + Scoring functions:
+//   - toPercent(x), toRatio(x), isJPYFeed(stock)
+//   - getTechnicalScore(stock, customWeights?)
+//   - getAdvancedFundamentalScore(stock)
+//   - getValuationScore(stock, weightOverrides?)
+//   - getNumericTier(stock, weights?)
+// -----------------------------------------------------------------------------
+
+/** Normalize % fields that may arrive as:
+ *   • decimal (0.014) → 1.4
+ *   • percent (1.4)   → 1.4
+ *   • bps (140)       → 1.4
+ */
+export function toPercent(x) {
+  const v = Number.isFinite(x) ? x : 0;
+  if (v === 0) return 0;
+  if (v > 50 && v <= 5000) return v / 100; // bps → %
+  if (v > 0 && v <= 1) return v * 100; // decimal → %
+  return v; // already in %
+}
+
+/** Normalize ratios that may arrive as:
+ *   • ratio (0.75)
+ *   • percent (75) → 0.75
+ */
+export function toRatio(x) {
+  const v = Number.isFinite(x) ? x : 0;
+  return v > 10 ? v / 100 : v;
+}
+
+/** Heuristic JPY detector (useful for market-cap size bands). */
+export function isJPYFeed(stock = {}) {
+  const cur = (stock.currency || "").toUpperCase();
+  const tkr = (stock.ticker || stock.symbol || "").toUpperCase();
+  return (
+    cur === "JPY" || /\.T$/.test(tkr) || Number(stock.currentPrice) >= 1000
+  );
+}
+
+/* =============================================================================
+ * TECHNICAL SCORE
+ * – returns one number in the –50 … +50 range (logistic mapped around 0)
+ * =============================================================================
+ */
 export function getTechnicalScore(stock, customWeights = {}) {
   const n = (v) => (Number.isFinite(v) ? v : 0); // safe number
-  /* ---------- pull metrics ---------- */
+
+  // ---------- pull metrics ----------
   const {
     currentPrice = 0,
     movingAverage50d = 0,
@@ -15,10 +62,10 @@ export function getTechnicalScore(stock, customWeights = {}) {
     stochasticD = 50,
     atr14 = currentPrice * 0.02,
     obv = 0,
-    obvMA20 = 0, // supply if available
-  } = stock;
+    obvMA20 = 0, // optional
+  } = stock || {};
 
-  /* ---------- weights ---------- */
+  // ---------- weights ----------
   const W = {
     trend: 2.5,
     momentum: 2.0,
@@ -27,14 +74,14 @@ export function getTechnicalScore(stock, customWeights = {}) {
     ...customWeights,
   };
 
-  /* ---------- helpers ---------- */
+  // ---------- helpers ----------
   const pctDiff = (a, b) => Math.abs(a - b) / (Math.abs(b) || 1e-6);
 
-  /* ---------- scoring ---------- */
+  // ---------- scoring ----------
   let bull = 0,
     bear = 0;
 
-  /* --- TREND ---------------------------------------------------------- */
+  // --- TREND ----------------------------------------------------------
   const gc =
     movingAverage50d > movingAverage200d &&
     pctDiff(movingAverage50d, movingAverage200d) < 0.05;
@@ -49,11 +96,12 @@ export function getTechnicalScore(stock, customWeights = {}) {
   if (sbt) bull += W.trend * 1.3;
   else if (mbt) bull += W.trend;
   if (gc) bull += W.special * 2;
+
   if (sbr) bear += W.trend * 1.3;
   else if (mbr) bear += W.trend;
   if (dc) bear += W.special * 2;
 
-  /* --- MOMENTUM ------------------------------------------------------- */
+  // --- MOMENTUM -------------------------------------------------------
   const macdBase = Math.max(Math.abs(macd), 1e-4);
   const macdCross = Math.abs(macd - macdSignal) < macdBase * 0.1;
   const macdDiv = Math.abs(macd - macdSignal) > macdBase * 0.25;
@@ -86,7 +134,7 @@ export function getTechnicalScore(stock, customWeights = {}) {
     else if (obv < obvMA20) bear += W.momentum * 0.5;
   }
 
-  /* --- PRICE ACTION / VOLATILITY ------------------------------------- */
+  // --- PRICE ACTION / VOLATILITY -------------------------------------
   const mid = Math.max(bollingerMid, 1e-6);
   const bandW = (bollingerUpper - bollingerLower) / mid;
   const upperBreak = currentPrice > bollingerUpper;
@@ -104,7 +152,7 @@ export function getTechnicalScore(stock, customWeights = {}) {
   if (bandW > 0.08 && sbt) bull += W.volatility * 0.4;
   if (bandW > 0.08 && sbr) bear += W.volatility * 0.4;
 
-  /* --- ATR scaling ---------------------------------------------------- */
+  // --- ATR scaling ----------------------------------------------------
   if (atr14 >= currentPrice * 0.04) {
     bull *= 1.1;
     bear *= 1.2;
@@ -119,19 +167,23 @@ export function getTechnicalScore(stock, customWeights = {}) {
     bear *= 0.95;
   }
 
-  /* ---------- –50 … +50 logistic score ---------- */
+  // ---------- –50 … +50 logistic score ----------
   const raw = bull - bear;
   const logistic = 1 / (1 + Math.exp(-raw)); // 0 … 1
   const score = Math.round((logistic - 0.5) * 1000) / 10;
 
-  return score; // only the score
+  return score; // –50 … +50 (one decimal)
 }
 
-
+/* =============================================================================
+ * ADVANCED FUNDAMENTAL SCORE (0 … 10)
+ * – sector aware, %/ratio normalization (JPY-safe)
+ * =============================================================================
+ */
 export function getAdvancedFundamentalScore(stock) {
   const n = (v) => (Number.isFinite(v) ? v : 0); // safe number
 
-  /* ---------- canonical sector buckets ---------- */
+  // Canonical sector buckets
   const HIGH_GROWTH_SECTORS = new Set([
     "Technology",
     "Communications",
@@ -156,27 +208,28 @@ export function getAdvancedFundamentalScore(stock) {
     "Securities",
   ]);
 
-  const sector = stock.sector || "";
+  const sector = stock?.sector || "";
   const isHGrowth = HIGH_GROWTH_SECTORS.has(sector);
   const isDivFocus = DIVIDEND_FOCUS_SECTORS.has(sector);
   const isFinancial = FINANCIAL_SECTORS.has(sector);
-  /* ---------- pull metrics ---------- */
-  const pe = n(stock.peRatio);
-  const pb = n(stock.pbRatio);
-  const ps = n(stock.priceToSales);
-  const d2e = Math.max(n(stock.debtEquityRatio), 0);
-  const dy = n(stock.dividendYield); // %
-  const dg5 = n(stock.dividendGrowth5yr); // %
-  const epsG = n(stock.epsGrowthRate); // %
-  const epsF = n(stock.epsForward);
-  const epsT = n(stock.epsTrailingTwelveMonths);
-  /* ---------- pillar scores ---------- */
+
+  // Pull + normalize (bps/decimal → % ; percent → ratio)
+  const pe = n(stock?.peRatio);
+  const pb = n(stock?.pbRatio);
+  const ps = n(stock?.priceToSales);
+  const d2e = toRatio(stock?.debtEquityRatio);
+  const dy = toPercent(stock?.dividendYield);
+  const dg5 = toPercent(stock?.dividendGrowth5yr); // optional
+  const epsG = n(stock?.epsGrowthRate); // % already
+  const epsF = n(stock?.epsForward);
+  const epsT = n(stock?.epsTrailingTwelveMonths);
+
   let g = 0,
     v = 0,
     h = 0,
     d = 0;
 
-  /* --- GROWTH ------------------------------------------------------------ */
+  // --- Growth
   if (epsG >= 20) g += 3;
   else if (epsG >= 10) g += 2;
   else if (epsG >= 5) g += 1;
@@ -189,42 +242,37 @@ export function getAdvancedFundamentalScore(stock) {
 
   g = Math.max(0, Math.min(10, g * 2)); // 0-10
 
-  /* --- VALUE ------------------------------------------------------------- */
-  /* P/E */
+  // --- Value
   if (pe > 0 && pe < 10) v += 3;
   else if (pe < 15) v += 2;
   else if (pe < 20) v += 1;
   else if (pe > 30 || pe <= 0) v -= 1;
 
-  /* P/B */
   if (pb > 0 && pb < 1) v += 3;
   else if (pb < 2) v += 2;
   else if (pb < 3) v += 1;
   else if (pb > 5) v -= 1;
 
-  /* P/S (skip most financials) */
   if (!isFinancial) {
     if (ps > 0 && ps < 2) v += 1.5;
     else if (ps > 6) v -= 1;
   }
 
-  /* growth-sector premium tolerance */
   if (isHGrowth && pe > 0 && pe < 25) v += 1;
 
   v = Math.max(0, Math.min(10, v * 1.5));
 
-  /* --- FINANCIAL HEALTH -------------------------------------------------- */
+  // --- Financial Health (D/E now ratio)
   if (d2e < 0.25) h += 3;
   else if (d2e < 0.5) h += 2;
   else if (d2e < 1.0) h += 1;
   else if (d2e > 2.0) h -= 2;
   else if (d2e > 1.5) h -= 1;
 
-  if (isFinancial && d2e < 1.5) h += 1; // capital-intensive leeway
-
+  if (isFinancial && d2e < 1.5) h += 1; // leeway
   h = Math.max(0, Math.min(10, (h + 2) * 2));
 
-  /* --- DIVIDEND ---------------------------------------------------------- */
+  // --- Dividend (dy in %)
   if (dy > 0) {
     if (dy >= 6) d += 3;
     else if (dy >= 4) d += 2;
@@ -237,7 +285,7 @@ export function getAdvancedFundamentalScore(stock) {
     d = Math.max(0, Math.min(10, d * 2));
   }
 
-  /* ---------- sector-adjusted weights ---------- */
+  // --- Weights
   const w = {
     growth: isHGrowth ? 0.45 : isDivFocus ? 0.2 : 0.35,
     value: isHGrowth ? 0.2 : 0.3,
@@ -245,23 +293,18 @@ export function getAdvancedFundamentalScore(stock) {
     dividend: isDivFocus ? 0.25 : 0.1,
   };
 
-  /* ---------- composite 0-10 ---------- */
   const score = g * w.growth + v * w.value + h * w.health + d * w.dividend;
-
-  return Math.round(score * 10) / 10; // one-decimal 0-10
+  return Math.round(score * 10) / 10; // 0–10 (1dp)
 }
 
-/**
- *  getValuationScore(stock [, weightOverrides])
- *  -------------------------------------------
- *  • Returns ONE number in the 0‒10 range
- *  • Sector-aware bands for P/E, P/B, P/S  + PEG, Yield, Size
- *  • Optional weightOverrides = { pe, pb, ps, peg, yield, size }
+/* =============================================================================
+ * VALUATION SCORE (0 … 10)
+ * – sector-aware bands + JPY-aware size buckets + normalized yield
+ * =============================================================================
  */
 export function getValuationScore(stock, weightOverrides = {}) {
-  const n = (v) => (Number.isFinite(v) ? v : 0); // NaN-safe
+  const n = (v) => (Number.isFinite(v) ? v : 0);
 
-  /* 1 ─ Sector buckets ────────────────────────────────────────────── */
   const HG = new Set([
     "Technology",
     "Communications",
@@ -273,19 +316,17 @@ export function getValuationScore(stock, weightOverrides = {}) {
   ]);
   const VAL = new Set(["Banking", "Insurance", "Utilities", "Real Estate"]);
 
-  const sector = stock.sector || "";
+  const sector = stock?.sector || "";
   const isHG = HG.has(sector);
   const isVAL = VAL.has(sector);
 
-  /* 2 ─ Extract metrics ───────────────────────────────────────────── */
-  const pe = n(stock.peRatio);
-  const pb = n(stock.pbRatio);
-  const ps = n(stock.priceToSales);
-  const mc = n(stock.marketCap); // local currency
-  const gEPS = n(stock.epsGrowthRate); // %
-  const dy = n(stock.dividendYield); // %
+  const pe = n(stock?.peRatio);
+  const pb = n(stock?.pbRatio);
+  const ps = n(stock?.priceToSales);
+  const mc = n(stock?.marketCap);
+  const gEPS = n(stock?.epsGrowthRate); // %
+  const dy = toPercent(stock?.dividendYield); // normalize to %
 
-  /* 3 ─ Helper: linear score low-better metric ---------------------- */
   const scaleLowBetter = (val, good, ok, bad) => {
     if (val <= good) return 2; // very cheap
     if (val <= ok) return 1; // cheap
@@ -293,7 +334,7 @@ export function getValuationScore(stock, weightOverrides = {}) {
     return -2; // very expensive
   };
 
-  /* 4 ─ P/E, P/B, P/S ---------------------------------------------- */
+  // P/E, P/B, P/S
   const peS =
     pe <= 0
       ? -2
@@ -317,31 +358,37 @@ export function getValuationScore(stock, weightOverrides = {}) {
   const psS =
     ps <= 0 ? 0 : scaleLowBetter(ps, isHG ? 3 : 1, isHG ? 8 : 2, isHG ? 12 : 5);
 
-  /* 5 ─ PEG ratio (only if positive growth) ------------------------- */
+  // PEG ratio (only if positive growth)
   let pegS = 0;
   if (pe > 0 && gEPS > 0) {
-    const peg = pe / gEPS; // crude, gEPS is % so PEG≈PE/Δ%
+    const peg = pe / gEPS; // crude PEG with % growth
     if (peg < 1) pegS = 1.5;
     else if (peg < 2) pegS = 0.5;
     else if (peg > 3) pegS = -1;
   }
 
-  /* 6 ─ Dividend yield bonus --------------------------------------- */
+  // Dividend yield bonus (dy in %)
   const yieldS = dy >= 4 ? 0.6 : dy >= 2 ? 0.3 : 0;
 
-  /* 7 ─ Size premium / discount ------------------------------------ */
-  const sizeS =
-    mc >= 1e12
-      ? 0.5
-      : mc >= 1e11
-      ? 0.3
-      : mc >= 1e10
-      ? 0.0
-      : mc >= 2e9
-      ? -0.2
-      : -0.5;
+  // Size bands: USD vs JPY
+  const jpy = isJPYFeed(stock);
+  let sizeS;
+  if (jpy) {
+    // JPY bands (¥): 10T / 1T / 100B / 20B
+    if (mc >= 10e12) sizeS = 0.5; // mega cap (≥ ¥10T)
+    else if (mc >= 1e12) sizeS = 0.3; // large (≥ ¥1T)
+    else if (mc >= 1e11) sizeS = 0.0; // mid (≥ ¥100B)
+    else if (mc >= 2e10) sizeS = -0.2; // small (≥ ¥20B)
+    else sizeS = -0.5; // micro
+  } else {
+    // Typical USD-ish bands
+    if (mc >= 1e12) sizeS = 0.5;
+    else if (mc >= 1e11) sizeS = 0.3;
+    else if (mc >= 1e10) sizeS = 0.0;
+    else if (mc >= 2e9) sizeS = -0.2;
+    else sizeS = -0.5;
+  }
 
-  /* 8 ─ Combine with weights --------------------------------------- */
   const W = {
     pe: 1.6,
     pb: 1.2,
@@ -349,7 +396,7 @@ export function getValuationScore(stock, weightOverrides = {}) {
     peg: 1.1,
     yield: 0.6,
     size: 0.5,
-    ...weightOverrides, // caller tweaks on the fly
+    ...weightOverrides,
   };
 
   const raw =
@@ -360,44 +407,53 @@ export function getValuationScore(stock, weightOverrides = {}) {
     yieldS * W.yield +
     sizeS * W.size;
 
-  /* 9 ─ Map raw (-8 … +8) → 0 … 10 --------------------------------- */
+  // Map raw (-8 … +8) → 0 … 10
   const score = Math.max(0, Math.min(10, (raw + 8) * (10 / 16)));
-
-  return Math.round(score * 10) / 10; // 1-dp numeric
+  return Math.round(score * 10) / 10; // 0–10 (1dp)
 }
 
-
-
+/* =============================================================================
+ * NUMERIC TIER (1 … 6)
+ * – consumes precomputed technicalScore, fundamentalScore, valuationScore
+ *   • tech: –50…+50 → normalized to 0…10
+ *   • fund: either 0…10 (preferred) or –50…+50 (auto-normalized)
+ *   • val:  0…10
+ * =============================================================================
+ */
 export function getNumericTier(stock, weights = {}) {
   const w = { tech: 0.4, fund: 0.35, val: 0.25, ...weights };
 
-  /* ----------- safe pulls ------------- */
-  const tRaw = Number.isFinite(stock.technicalScore) ? stock.technicalScore : 0;
-  const fRaw = Number.isFinite(stock.fundamentalScore)
+  // safe pulls
+  const tRaw = Number.isFinite(stock?.technicalScore)
+    ? stock.technicalScore
+    : 0;
+  const fRaw = Number.isFinite(stock?.fundamentalScore)
     ? stock.fundamentalScore
     : 0;
-  const vRaw = Number.isFinite(stock.valuationScore) ? stock.valuationScore : 0;
+  const vRaw = Number.isFinite(stock?.valuationScore)
+    ? stock.valuationScore
+    : 0;
 
-  /* ----------- normalise to 0–10 ------ */
+  // normalize to 0–10
   const tech = Math.max(0, Math.min(10, (tRaw + 50) * 0.1)); // –50…+50 → 0…10
 
   const fund =
-    fRaw > 10 || fRaw < 0 // detect –50…+50 style input
-      ? Math.max(0, Math.min(10, (fRaw + 50) * 0.1))
+    fRaw > 10 || fRaw < 0
+      ? Math.max(0, Math.min(10, (fRaw + 50) * 0.1)) // was –50…+50
       : Math.max(0, Math.min(10, fRaw)); // already 0…10
 
   const val = Math.max(0, Math.min(10, vRaw)); // clamp
 
-  /* ----------- base composite --------- */
+  // base composite
   let score = tech * w.tech + fund * w.fund + val * w.val; // 0…10
 
-  /* ----------- contextual tweaks ------ */
-  if (fund >= 7.5 && val <= 2) score -= 0.4; // Over-valued quality
-  if (val >= 7 && fund <= 3) score -= 0.4; // Value trap
-  if (tech >= 7 && fund >= 7) score += 0.4; // Everything aligned
-  if (tech <= 2 && fund >= 7) score -= 0.4; // Great co. but chart ugly
+  // contextual tweaks
+  if (fund >= 7.5 && val <= 2) score -= 0.4; // over-valued quality
+  if (val >= 7 && fund <= 3) score -= 0.4; // value trap
+  if (tech >= 7 && fund >= 7) score += 0.4; // everything aligned
+  if (tech <= 2 && fund >= 7) score -= 0.4; // great co. but ugly chart
 
-  /* ----------- assign tier ------------ */
+  // tiers
   if (score >= 8) return 1; // Dream
   if (score >= 6.5) return 2; // Elite
   if (score >= 5) return 3; // Solid
@@ -405,3 +461,34 @@ export function getNumericTier(stock, weights = {}) {
   if (score >= 2) return 5; // Risky
   return 6; // Red Flag
 }
+
+/* =============================================================================
+ * Typical usage
+ * =============================================================================
+ *
+ * import {
+ *   toPercent, toRatio, isJPYFeed,
+ *   getTechnicalScore,
+ *   getAdvancedFundamentalScore,
+ *   getValuationScore,
+ *   getNumericTier
+ * } from "./scoring.js";
+ *
+ * const stock = { ...your feed... };
+ *
+ * const technicalScore   = getTechnicalScore(stock);             // –50…+50
+ * const fundamentalScore = getAdvancedFundamentalScore(stock);   // 0…10
+ * const valuationScore   = getValuationScore(stock);             // 0…10
+ *
+ * const tier = getNumericTier({
+ *   technicalScore,
+ *   fundamentalScore,
+ *   valuationScore,
+ * });
+ *
+ * // attach back if you like:
+ * stock.technicalScore   = technicalScore;
+ * stock.fundamentalScore = fundamentalScore;
+ * stock.valuationScore   = valuationScore;
+ * stock.tier             = tier;
+ */
