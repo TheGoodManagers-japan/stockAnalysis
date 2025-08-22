@@ -107,12 +107,6 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
       confidence: ltConf,
       regime: longTermRegime.type,
       strength: longTermRegime.strength ?? 0,
-    },
-    keyInsights: generateSentimentInsights?.(features) || [],
-    components: {
-      mlScore,
-      longTermRegime,
-      shortTermRegime,
-    },
+    }
   };
 }
