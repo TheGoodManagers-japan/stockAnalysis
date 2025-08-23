@@ -1,10 +1,11 @@
 // public/scripts/main.js
-// ESM module shared by browser and /api/scan
-// - Named export: fetchStockAnalysis({ tickers, myPortfolio, onItem })
-// - Browser adapter: window.scan.fetchStockAnalysis(tickerList, myPortfolio)
-//   (adapter wires bubble_fn_result / bubble_fn_finish; core never calls them)
+// ESM module used by both the browser and the /api/scan serverless function.
+// - Browser: call window.scan.fetchStockAnalysis(tickers, myPortfolio)
+// - Server:  /api/scan imports this file and calls fetchStockAnalysis({ ... })
+//   (no Bubble calls are made on the server)
 //
-// Imports
+// NOTE: API base is fixed and DEBUG is always true per your request.
+
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import {
@@ -15,209 +16,115 @@ import {
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
 
-/* ---------------------------------------------------------
-   0) Debug / env helpers
---------------------------------------------------------- */
-
-const IS_BROWSER = typeof window !== "undefined";
-
-const DEBUG =
-  (IS_BROWSER ? !!window.SCAN_DEBUG : !!process.env.SCAN_DEBUG) ||
-  (typeof process !== "undefined" && process.env?.NODE_ENV !== "production");
-
-const log = (...args) => {
-  if (DEBUG) console.log("[scan]", ...args);
-};
-const warn = (...args) => {
-  if (DEBUG) console.warn("[scan]", ...args);
-};
-const err = (...args) => {
-  console.error("[scan]", ...args);
-};
-
-// Default to the known-working Vercel deployment.
-// You can override at runtime:
-//   Browser: window.SCAN_API_BASE = "https://example.com"
-//   Server : SCAN_API_BASE=https://example.com
-const DEFAULT_API_BASE =
+/* -------------------------------------------
+   0) Constants + tiny logging helper
+------------------------------------------- */
+const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
+const DEBUG = true;
 
-function apiBase() {
-  const fromBrowser = IS_BROWSER ? window.SCAN_API_BASE : null;
-  const fromEnv =
-    (typeof process !== "undefined" && process.env?.SCAN_API_BASE) ||
-    (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_API_BASE) ||
-    (typeof process !== "undefined" && process.env?.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : null);
+const IS_BROWSER =
+  typeof window !== "undefined" &&
+  typeof document !== "undefined" &&
+  !!(window.document && window.document.nodeType === 9);
 
-  const base = fromBrowser || fromEnv || DEFAULT_API_BASE;
-  return String(base).replace(/\/+$/, ""); // trim trailing slash
+function log(...args) {
+  if (!DEBUG) return;
+  const where = IS_BROWSER ? "BROWSER" : "SERVER";
+  console.log(`[SCAN:${where}]`, ...args);
+}
+function warn(...args) {
+  if (!DEBUG) return;
+  const where = IS_BROWSER ? "BROWSER" : "SERVER";
+  console.warn(`[SCAN:${where}]`, ...args);
+}
+function errorLog(...args) {
+  const where = IS_BROWSER ? "BROWSER" : "SERVER";
+  console.error(`[SCAN:${where}]`, ...args);
 }
 
-log("API base:", apiBase());
-
-/* ---------------------------------------------------------
+/* -------------------------------------------
    1) Yahoo / API helpers
---------------------------------------------------------- */
-
-function normalizeTicker(input) {
-  if (!input) return null;
-  let s = String(input).trim().toUpperCase();
-  if (!/\.T$/.test(s)) {
-    s = s.replace(/\..*$/, "");
-    s = `${s}.T`;
-  }
-  return s;
-}
-
-const allByCode = new Map(allTickers.map((t) => [t.code.toUpperCase(), t]));
-
-function resolveTickers(tickers) {
-  if (!Array.isArray(tickers) || tickers.length === 0) {
-    log("resolveTickers → using full allTickers list:", allTickers.length);
-    return [...allTickers];
-  }
-  const out = [];
-  const seen = new Set();
-  for (const raw of tickers) {
-    const code = normalizeTicker(raw);
-    if (!code || seen.has(code)) continue;
-    seen.add(code);
-    const found = allByCode.get(code);
-    out.push(found || { code, sector: "Unknown" });
-  }
-  log(
-    "resolveTickers → resolved:",
-    out.map((t) => t.code)
-  );
-  return out;
-}
+------------------------------------------- */
 
 async function fetchSingleStockData(tickerObj) {
-  const code =
-    typeof tickerObj === "string"
-      ? normalizeTicker(tickerObj)
-      : normalizeTicker(tickerObj?.code || tickerObj?.ticker || "");
-  const sector = tickerObj?.sector || "";
-
-  const url = `${apiBase()}/api/stocks`;
-  const payload = { ticker: { code, sector } };
-
-  log("POST /api/stocks →", url, payload);
+  const url = `${API_BASE}/api/stocks`;
+  log(`POST ${url}`, { payload: { ticker: tickerObj } });
 
   try {
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ticker: tickerObj }),
     });
 
-    const text = await res.text();
-    log("POST /api/stocks status:", res.status, res.statusText);
-    if (DEBUG) log("POST /api/stocks body:", text?.slice(0, 400));
-
-    // Try JSON parse (some hosts return HTML on error)
-    let data = null;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
+    // read body as text first for better error visibility
+    const text = await response.text();
+    if (!response.ok) {
+      const snippet = text.slice(0, 300);
+      throw new Error(`HTTP ${response.status}  — ${snippet}`);
     }
 
-    if (!res.ok) {
-      // Fallback: try legacy GET shape if POST isn't supported on that host
-      if (res.status === 404 || res.status === 405) {
-        const getUrl = `${apiBase()}/api/stocks?ticker=${encodeURIComponent(
-          code
-        )}`;
-        log("Fallback GET /api/stocks →", getUrl);
-
-        const gRes = await fetch(getUrl, {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        });
-        const gText = await gRes.text();
-        log("GET /api/stocks status:", gRes.status, gRes.statusText);
-        if (DEBUG) log("GET /api/stocks body:", gText?.slice(0, 400));
-
-        let gData = null;
-        try {
-          gData = JSON.parse(gText);
-        } catch {
-          gData = null;
-        }
-        if (!gRes.ok || !gData || gData.success === false) {
-          throw new Error(
-            `HTTP ${gRes.status}  — ${gText?.slice(0, 300) || "no body"}`
-          );
-        }
-        return gData;
-      }
-
-      throw new Error(
-        `HTTP ${res.status} — ${text?.slice(0, 300) || "no body"}`
-      );
-    }
-
-    if (!data || data.success === false) {
-      throw new Error(data?.error || "Unknown /api/stocks error");
-    }
-
+    const data = safeJsonParse(text);
+    log("stocks response OK", {
+      code: tickerObj?.code,
+      success: data?.success,
+    });
     return data;
-  } catch (e) {
-    err("fetchSingleStockData error:", e?.message || e);
-    return { success: false, error: e?.message || String(e) };
+  } catch (err) {
+    errorLog("fetchSingleStockData failed:", err?.message || err);
+    return { success: false, error: String(err?.message || err) };
   }
 }
 
-/***********************************************
- * 2) FETCH HISTORICAL DATA
- ***********************************************/
 async function fetchHistoricalData(ticker) {
-  const url = `${apiBase()}/api/history?ticker=${encodeURIComponent(ticker)}`;
-  log("GET /api/history →", url);
+  const url = `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`;
+  log(`GET ${url}`);
 
   try {
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
-    const text = await res.text();
-    log("GET /api/history status:", res.status, res.statusText);
-    if (DEBUG) log("GET /api/history body:", text?.slice(0, 400));
 
-    let json = null;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = null;
+    const text = await response.text();
+    if (!response.ok) {
+      const snippet = text.slice(0, 300);
+      throw new Error(`HTTP ${response.status}  — ${snippet}`);
     }
 
-    if (!res.ok || !json?.success) {
-      throw new Error(
-        json?.error || `HTTP ${res.status} — ${text?.slice(0, 300)}`
-      );
+    const result = safeJsonParse(text);
+    if (!result?.success) {
+      throw new Error(result?.error || "history: success=false");
+    }
+    if (!Array.isArray(result?.data) || result.data.length === 0) {
+      warn(`No historical data for ${ticker}.`);
+      return [];
     }
 
-    const out = Array.isArray(json.data)
-      ? json.data.map((item) => ({
-          ...item,
-          date: new Date(item.date),
-        }))
-      : [];
-
-    log(`history(${ticker}) → ${out.length} bars`);
-    return out;
-  } catch (e) {
-    err(`history(${ticker}) failed:`, e?.message || e);
+    const mapped = result.data.map((item) => ({
+      ...item,
+      date: new Date(item.date),
+    }));
+    log(`history OK for ${ticker} — ${mapped.length} bars`);
+    return mapped;
+  } catch (err) {
+    errorLog(`fetchHistoricalData failed for ${ticker}:`, err?.message || err);
     return [];
   }
 }
 
-/***********************************************
- * 3) Trade Management Signal (V2)
- ***********************************************/
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+/* -------------------------------------------
+   2) Trade Management Signal (V2)
+------------------------------------------- */
 function getTradeManagementSignal_V2(stock, trade, historicalData) {
   const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
   const { entryPrice, stopLoss, priceTarget } = trade;
@@ -237,17 +144,14 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
 
   const isProfitable = currentPrice > entryPrice;
   if (isProfitable) {
-    const hasMacdBearishCross = macd < macdSignal;
-    if (hasMacdBearishCross) {
+    if (macd < macdSignal) {
       return {
         status: "Protect Profit",
         reason:
           "Warning: Momentum (MACD) has turned bearish. Consider taking profits.",
       };
     }
-
-    const below25dMA = currentPrice < movingAverage25d;
-    if (below25dMA) {
+    if (currentPrice < movingAverage25d) {
       return {
         status: "Protect Profit",
         reason:
@@ -279,9 +183,9 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
   };
 }
 
-/***********************************************
- * 4) Enrich for Technical Score (lightweight)
- ***********************************************/
+/* -------------------------------------------
+   3) Lightweight technical enrichment
+------------------------------------------- */
 export function enrichForTechnicalScore(stock) {
   const data = Array.isArray(stock.historicalData) ? stock.historicalData : [];
   if (data.length < 2) return stock;
@@ -301,7 +205,7 @@ export function enrichForTechnicalScore(stock) {
   if (!Number.isFinite(stock.movingAverage200d))
     stock.movingAverage200d = sma(closes, 200) || 0;
 
-  // OBV + rolling MA20
+  // OBV + MA20
   let obv = 0;
   const win = [0];
   for (let i = 1; i < data.length; i++) {
@@ -397,7 +301,7 @@ export function enrichForTechnicalScore(stock) {
     stock.rsi14 = 100 - 100 / (1 + rs);
   }
 
-  // MACD (12,26,9)
+  // MACD(12,26,9)
   if (
     (!Number.isFinite(stock.macd) || !Number.isFinite(stock.macdSignal)) &&
     closes.length >= 26
@@ -429,76 +333,91 @@ export function enrichForTechnicalScore(stock) {
   return stock;
 }
 
-/* ---------------------------------------------------------
+/* -------------------------------------------
+   4) Ticker normalization & resolution
+------------------------------------------- */
+
+function normalizeTicker(input) {
+  if (!input) return null;
+  let s = String(input).trim().toUpperCase();
+  if (!/\.T$/.test(s)) {
+    s = s.replace(/\..*$/, "");
+    s = `${s}.T`;
+  }
+  return s;
+}
+
+const allByCode = new Map(allTickers.map((t) => [t.code.toUpperCase(), t]));
+
+function resolveTickers(tickers) {
+  if (!Array.isArray(tickers) || tickers.length === 0) {
+    log("No tickers passed; scanning default allTickers list");
+    return [...allTickers];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const raw of tickers) {
+    const code = normalizeTicker(raw);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    const found = allByCode.get(code);
+    out.push(found || { code, sector: "Unknown" });
+  }
+  log(
+    "Resolved tickers:",
+    out.map((x) => x.code)
+  );
+  return out;
+}
+
+/* -------------------------------------------
    5) Main scan — exportable for server & browser
---------------------------------------------------------- */
+------------------------------------------- */
 
 /**
- * Core scanner (no Bubble calls).
- * Usage A (object): fetchStockAnalysis({ tickers, myPortfolio, onItem })
- * Usage B (arrays): fetchStockAnalysis(tickerList, myPortfolio)
- *
- * @param {Object|Array} arg1
- * @param {Array=} arg2
+ * @param {Object} opts
+ * @param {string[]} [opts.tickers=[]]   e.g. ["7203","6758"] (no .T needed)
+ * @param {Array} [opts.myPortfolio=[]]  e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
+ * @param {Function} [opts.onItem]       callback per stockObject
  * @returns {Promise<{count:number, errors:string[]}>}
  */
-export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
-  // Normalize arguments
-  let tickers = [];
-  let myPortfolio = [];
-  let onItem = undefined;
-
-  if (Array.isArray(arg1)) {
-    tickers = arg1;
-    myPortfolio = Array.isArray(arg2) ? arg2 : [];
-  } else {
-    const opts = arg1 || {};
-    tickers = Array.isArray(opts.tickers) ? opts.tickers : [];
-    myPortfolio = Array.isArray(opts.myPortfolio) ? opts.myPortfolio : [];
-    onItem = typeof opts.onItem === "function" ? opts.onItem : undefined;
-  }
-
-  // emit helper
+export async function fetchStockAnalysis({
+  tickers = [],
+  myPortfolio = [],
+  onItem,
+} = {}) {
+  log("Starting scan", { IS_BROWSER, API_BASE });
   const emit = typeof onItem === "function" ? onItem : () => {};
-
   const errors = [];
+
   const filteredTickers = resolveTickers(tickers);
-
-  log("fetchStockAnalysis start:", {
-    requested: Array.isArray(tickers) ? tickers.length : 0,
-    resolved: filteredTickers.length,
-  });
-
   let count = 0;
 
-  for (const tObj of filteredTickers) {
-    log(`\n--- Fetching data for ${tObj.code} ---`);
+  for (const tickerObj of filteredTickers) {
+    log(`\n--- Fetching data for ${tickerObj.code} ---`);
+
     try {
-      // 1) Fetch Yahoo + derived (server builds part of this)
-      const result = await fetchSingleStockData(tObj);
+      // 1) fetch fundamentals/technicals snapshot
+      const result = await fetchSingleStockData(tickerObj);
       if (!result?.success) {
-        const m = result?.error || "Unknown /api/stocks failure";
-        err(`stock fetch failed for ${tObj.code}:`, m);
-        throw new Error(`Yahoo data error: ${m}`);
+        const msg = result?.error || "Unknown /api/stocks failure";
+        throw new Error(`Yahoo data error: ${msg}`);
       }
 
       const { code, sector, yahooData } = result.data || {};
-      if (!yahooData) {
-        throw new Error("Yahoo data is completely missing.");
-      }
+      if (!yahooData) throw new Error("Yahoo data missing in payload");
 
-      // Minimal validation of criticals that our scoring expects
+      // quick validation logging
       const critical = ["currentPrice", "highPrice", "lowPrice"];
-      const missingCritical = critical.filter(
-        (k) => yahooData[k] === undefined || yahooData[k] === null
-      );
+      const missingCritical = critical.filter((k) => !yahooData[k]);
       if (missingCritical.length) {
         throw new Error(
-          `Missing critical fields: ${missingCritical.join(", ")}`
+          `Critical fields missing: ${missingCritical.join(", ")}`
         );
       }
+      log(`Yahoo OK for ${code}`);
 
-      // 2) Build stock object
+      // 2) build stock
       const stock = {
         ticker: code,
         sector,
@@ -520,7 +439,7 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
         debtEquityRatio: yahooData.debtEquityRatio,
         movingAverage50d: yahooData.movingAverage50d,
         movingAverage200d: yahooData.movingAverage200d,
-        // technicals (may be missing & enriched later)
+        // tech (may be enriched)
         rsi14: yahooData.rsi14,
         macd: yahooData.macd,
         macdSignal: yahooData.macdSignal,
@@ -533,22 +452,19 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
         atr14: yahooData.atr14,
       };
 
-      // 3) Historical + enrichment
+      // 3) history + enrichment
       const historicalData = await fetchHistoricalData(stock.ticker);
       stock.historicalData = historicalData || [];
       enrichForTechnicalScore(stock);
 
-      // 4) Scores
+      // 4) scores
       stock.technicalScore = getTechnicalScore(stock);
       stock.fundamentalScore = getAdvancedFundamentalScore(stock);
       stock.valuationScore = getValuationScore(stock);
       stock.tier = getNumericTier(stock);
 
-      // 5) Market sentiment horizons
-      const horizons = getComprehensiveMarketSentiment(
-        stock,
-        historicalData || []
-      );
+      // 5) sentiment horizons
+      const horizons = getComprehensiveMarketSentiment(stock, historicalData);
       stock.shortTermScore = horizons.shortTerm.score;
       stock.longTermScore = horizons.longTerm.score;
       stock.shortTermBias = horizons.shortTerm.label;
@@ -556,10 +472,10 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
       stock.shortTermConf = horizons.shortTerm.confidence;
       stock.longTermConf = horizons.longTerm.confidence;
 
-      // 6) Entry timing
-      log("Running analyzeSwingTradeEntry...");
-      const finalSignal = analyzeSwingTradeEntry(stock, historicalData || []);
-      log("analyzeSwingTradeEntry →", finalSignal);
+      // 6) entry timing
+      log("Running swing entry timing…");
+      const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
+      log("Swing entry timing done");
 
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
@@ -567,25 +483,23 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
       stock.smartPriceTarget =
         finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
 
-      // 7) Trade management (if in portfolio)
-      const portfolioEntry = myPortfolio.find(
-        (p) => normalizeTicker(p.ticker) === stock.ticker
-      );
-      if (portfolioEntry?.trade) {
-        const managementSignal = getTradeManagementSignal_V2(
+      // 7) trade management if held
+      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
+      if (portfolioEntry) {
+        const mgmt = getTradeManagementSignal_V2(
           stock,
           portfolioEntry.trade,
-          historicalData || []
+          historicalData
         );
-        stock.managementSignalStatus = managementSignal.status;
-        stock.managementSignalReason = managementSignal.reason;
+        stock.managementSignalStatus = mgmt.status;
+        stock.managementSignalReason = mgmt.reason;
       } else {
         stock.managementSignalStatus = null;
         stock.managementSignalReason = null;
       }
 
-      // 8) Output object (Bubble-friendly keys kept)
-      const outObj = {
+      // 8) Bubble-friendly payload
+      const stockObject = {
         _api_c2_ticker: stock.ticker,
         _api_c2_sector: stock.sector,
         _api_c2_currentPrice: stock.currentPrice,
@@ -597,7 +511,7 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
         _api_c2_growthPotential: stock.growthPotential,
         _api_c2_score: stock.score,
         _api_c2_finalScore: stock.finalScore,
-        _api_c2_tier: stock.tier,
+        _api_c2_tier: getNumericTier(stock),
         _api_c2_smartStopLoss: stock.smartStopLoss,
         _api_c2_smartPriceTarget: stock.smartPriceTarget,
         _api_c2_limitOrder: stock.limitOrder,
@@ -639,72 +553,57 @@ export async function fetchStockAnalysis(arg1 = {}, arg2 = []) {
         }),
       };
 
-      log(`✓ Emitting ${stock.ticker}`, {
-        tier: stock.tier,
-        buyNow: stock.isBuyNow,
-        short: stock.shortTermScore,
-        long: stock.longTermScore,
-      });
-
-      emit(outObj);
+      // emit per item (Bubble in browser; array collector on server)
+      emit(stockObject);
+      log(`📤 Emitted ${stock.ticker}`);
       count += 1;
-    } catch (e) {
-      const message = e?.message || String(e);
-      err(`✗ ${tObj.code} failed:`, message);
-      errors.push(`Ticker ${tObj.code}: ${message}`);
+    } catch (err) {
+      errorLog(`❌ Error processing ${tickerObj.code}:`, err?.message || err);
+      errors.push(`Ticker ${tickerObj.code}: ${err?.message || err}`);
     }
   }
 
-  log("fetchStockAnalysis done:", { count, errorsCount: errors.length });
+  log("Scan complete", { count, errorsCount: errors.length });
   return { count, errors };
 }
 
-/* ---------------------------------------------------------
-   6) Browser adapter (Bubble wiring only here)
---------------------------------------------------------- */
+/* -------------------------------------------
+   6) Browser adapter (Bubble)
+------------------------------------------- */
 if (IS_BROWSER) {
-  window.scan = window.scan || {};
-
-  // Allow overriding the API base at runtime
-  window.scan.setApiBase = function setApiBase(base) {
-    window.SCAN_API_BASE = base;
-    log("API base overridden:", apiBase());
-  };
-
-  /**
-   * Original browser API:
-   * @param {string[]} tickerList - like ["7203","6758"]
-   * @param {Array} myPortfolio   - e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
-   */
-  window.scan.fetchStockAnalysis = async function (
-    tickerList = [],
-    myPortfolio = []
-  ) {
-    log("Browser call: window.scan.fetchStockAnalysis()", {
-      tickers: tickerList.length,
-      portfolio: myPortfolio.length,
-    });
-
-    try {
-      await fetchStockAnalysis({
-        tickers: tickerList,
-        myPortfolio,
-        onItem: (obj) => {
-          try {
-            // Provided by Bubble runtime
-            bubble_fn_result(obj);
-          } catch (e) {
-            err("bubble_fn_result not available or failed:", e);
-          }
-        },
+  window.scan = {
+    /**
+     * @param {string[]} tickerList e.g. ["7203","6758"]
+     * @param {Array} myPortfolio   e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
+     */
+    async fetchStockAnalysis(tickerList = [], myPortfolio = []) {
+      log("window.scan.fetchStockAnalysis called", {
+        tickerList,
+        myPortfolioLen: myPortfolio.length,
       });
-    } finally {
       try {
-        // Provided by Bubble runtime
-        bubble_fn_finish();
-      } catch (e) {
-        err("bubble_fn_finish not available or failed:", e);
+        await fetchStockAnalysis({
+          tickers: tickerList,
+          myPortfolio,
+          onItem: (obj) => {
+            try {
+              // Provided by Bubble runtime
+              bubble_fn_result(obj);
+              log("bubble_fn_result OK for", obj?._api_c2_ticker);
+            } catch (e) {
+              errorLog("bubble_fn_result not available or failed:", e);
+            }
+          },
+        });
+      } finally {
+        try {
+          // Provided by Bubble runtime
+          bubble_fn_finish();
+          log("bubble_fn_finish called");
+        } catch (e) {
+          errorLog("bubble_fn_finish not available or failed:", e);
+        }
       }
-    }
+    },
   };
 }
