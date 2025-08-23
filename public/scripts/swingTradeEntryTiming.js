@@ -21,10 +21,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason: r,
-      stopLoss: prov.stop,
-      priceTarget: prov.target,
-      smartStopLoss: prov.stop,
-      smartPriceTarget: prov.target,
+      stopLoss: round0(prov.stop),
+      priceTarget: round0(prov.target),
+      smartStopLoss: round0(prov.stop),
+      smartPriceTarget: round0(prov.target),
       timeline: [],
       debug: opts.debug
         ? { reasons: [r], pxNow, ms: ms0, provisional: prov }
@@ -54,10 +54,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason: r,
-      stopLoss: prov.stop,
-      priceTarget: prov.target,
-      smartStopLoss: prov.stop,
-      smartPriceTarget: prov.target,
+      stopLoss: round0(prov.stop),
+      priceTarget: round0(prov.target),
+      smartStopLoss: round0(prov.stop),
+      smartPriceTarget: round0(prov.target),
       timeline: [],
       debug: opts.debug
         ? { reasons: [r], pxNow, ms: ms0, provisional: prov }
@@ -396,10 +396,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason, // why it's not an entry *now*
-      stopLoss: rr0.stop,
-      priceTarget: rr0.target,
-      smartStopLoss: rr0.stop,
-      smartPriceTarget: rr0.target,
+      stopLoss: round0(rr0.stop),
+      priceTarget: round0(rr0.target),
+      smartStopLoss: round0(rr0.stop),
+      smartPriceTarget: round0(rr0.target),
       timeline: [],
       debug,
     };
@@ -445,10 +445,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   return {
     buyNow: true,
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
-    stopLoss: best.stop,
-    priceTarget: best.target,
-    smartStopLoss: best.stop,
-    smartPriceTarget: best.target,
+    stopLoss: round0(best.stop),
+    priceTarget: round0(best.target),
+    smartStopLoss: round0(best.stop),
+    smartPriceTarget: round0(best.target),
     timeline: swingTimeline,
     debug,
   };
@@ -1175,6 +1175,10 @@ function sma(data, n, field = "close") {
   return s / n;
 }
 
+function round0(v) {
+  return Math.round(Number(v) || 0);
+}
+
 function rsiFromData(data, length = 14) {
   const n = data.length;
   if (n < length + 1) return 50; // neutral fallback
@@ -1313,10 +1317,10 @@ function withNo(reason, ctx = {}) {
   return {
     buyNow: false,
     reason,
-    stopLoss: prov.stop,
-    priceTarget: prov.target,
-    smartStopLoss: prov.stop,
-    smartPriceTarget: prov.target,
+    stopLoss: round0(prov.stop),
+    priceTarget: round0(prov.target),
+    smartStopLoss: round0(prov.stop),
+    smartPriceTarget: round0(prov.target),
     timeline: [],
     debug,
   };
