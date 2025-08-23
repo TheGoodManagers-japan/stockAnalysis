@@ -1,6 +1,9 @@
-// main.js (ESM + isomorphic)
-// - Exported function: fetchStockAnalysis({ tickers, myPortfolio, onItem })
-// - Browser adapter: window.scan.fetchStockAnalysis(tickerList, myPortfolio) -> uses bubble_fn_result / bubble_fn_finish
+// main.js (ESM + isomorphic, env-aware)
+// - Export: fetchStockAnalysis({ tickers, myPortfolio, onItem, mode })
+//   • If on server (or mode==="api"), returns { count, errors, results[] }.
+//   • If in browser with Bubble (or mode==="browser") and no onItem is given,
+//     it emits via bubble_fn_result and calls bubble_fn_finish at the end.
+// - Export: enrichForTechnicalScore(stock)
 
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -11,6 +14,15 @@ import {
   getNumericTier,
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
+
+/* ---------------------------------------------
+   Env detection
+--------------------------------------------- */
+const IS_BROWSER = typeof window !== "undefined";
+const HAS_BUBBLE =
+  IS_BROWSER &&
+  typeof bubble_fn_result === "function" &&
+  typeof bubble_fn_finish === "function";
 
 /* ---------------------------------------------------------
    1) Yahoo / API helpers
@@ -70,7 +82,6 @@ async function fetchHistoricalData(ticker) {
     return result.data.map((item) => ({
       ...item,
       date: new Date(item.date),
-      // e.g. { close, high, low, volume } expected
     }));
   } catch (error) {
     console.error(`Error fetching historical data for ${ticker}:`, error);
@@ -85,7 +96,6 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
   const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
   const { entryPrice, stopLoss, priceTarget } = trade;
 
-  // 1) Hard sells
   if (currentPrice >= priceTarget) {
     return {
       status: "Sell Now",
@@ -99,7 +109,6 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
     };
   }
 
-  // 2) Protect profit (only if profitable)
   const isProfitable = currentPrice > entryPrice;
   if (isProfitable) {
     const hasMacdBearishCross = macd < macdSignal;
@@ -121,7 +130,6 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
     }
   }
 
-  // 3) Bearish engulfing pattern
   if (historicalData.length >= 2) {
     const today = historicalData[historicalData.length - 1];
     const yesterday = historicalData[historicalData.length - 2];
@@ -139,7 +147,6 @@ function getTradeManagementSignal_V2(stock, trade, historicalData) {
     }
   }
 
-  // 4) Default: Hold
   return {
     status: "Hold",
     reason: "Uptrend remains intact. Price is above key support.",
@@ -157,7 +164,6 @@ export function enrichForTechnicalScore(stock) {
   const sma = (arr, p) =>
     arr.length >= p ? arr.slice(-p).reduce((a, b) => a + b, 0) / p : NaN;
 
-  // --- MAs (only if missing) ---
   if (!Number.isFinite(stock.movingAverage5d))
     stock.movingAverage5d = sma(closes, 5) || 0;
   if (!Number.isFinite(stock.movingAverage25d))
@@ -169,9 +175,8 @@ export function enrichForTechnicalScore(stock) {
   if (!Number.isFinite(stock.movingAverage200d))
     stock.movingAverage200d = sma(closes, 200) || 0;
 
-  // --- OBV + OBV MA20 (memory-light rolling window) ---
   let obv = 0;
-  const win = [0]; // last 20 OBV values
+  const win = [0];
   for (let i = 1; i < data.length; i++) {
     const dir = Math.sign((data[i].close ?? 0) - (data[i - 1].close ?? 0));
     obv += dir * (data[i].volume || 0);
@@ -183,7 +188,6 @@ export function enrichForTechnicalScore(stock) {
     stock.obvMA20 = win.reduce((a, b) => a + b, 0) / 20;
   }
 
-  // --- Bollinger(20) ---
   if (
     !Number.isFinite(stock.bollingerMid) ||
     !Number.isFinite(stock.bollingerUpper) ||
@@ -201,7 +205,6 @@ export function enrichForTechnicalScore(stock) {
     }
   }
 
-  // --- ATR14 ---
   if (!Number.isFinite(stock.atr14) && data.length >= 15) {
     const slice = data.slice(-15);
     let sumTR = 0;
@@ -218,7 +221,6 @@ export function enrichForTechnicalScore(stock) {
     stock.atr14 = sumTR / 14;
   }
 
-  // --- Stochastic(14,3) ---
   if (
     !Number.isFinite(stock.stochasticK) ||
     !Number.isFinite(stock.stochasticD)
@@ -250,7 +252,6 @@ export function enrichForTechnicalScore(stock) {
     }
   }
 
-  // --- RSI14 ---
   if (!Number.isFinite(stock.rsi14) && closes.length >= 15) {
     let gains = 0,
       losses = 0;
@@ -265,7 +266,6 @@ export function enrichForTechnicalScore(stock) {
     stock.rsi14 = 100 - 100 / (1 + rs);
   }
 
-  // --- MACD (12,26,9) ---
   if (
     (!Number.isFinite(stock.macd) || !Number.isFinite(stock.macdSignal)) &&
     closes.length >= 26
@@ -290,7 +290,6 @@ export function enrichForTechnicalScore(stock) {
     stock.macdSignal = sig[sig.length - 1] ?? 0;
   }
 
-  // --- current price fallback ---
   if (!Number.isFinite(stock.currentPrice) && data.length) {
     stock.currentPrice = data[data.length - 1].close ?? 0;
   }
@@ -298,30 +297,21 @@ export function enrichForTechnicalScore(stock) {
   return stock;
 }
 
-
-
-// --- Normalize & resolve tickers (handles "7203" or "7203.T" or "7203.jp") ---
+/* ---------------------------------------------
+   4.5) Ticker normalization + resolution
+--------------------------------------------- */
 function normalizeTicker(input) {
   if (!input) return null;
   let s = String(input).trim().toUpperCase();
-  // If it already ends with .T, keep; otherwise strip any suffix and add .T
   if (!/\.T$/.test(s)) {
-    s = s.replace(/\..*$/, ""); // drop any other suffix
+    s = s.replace(/\..*$/, "");
     s = `${s}.T`;
   }
   return s;
 }
 
-// Pre-index your allTickers for quick lookup by code
-const allByCode = new Map(allTickers.map(t => [t.code.toUpperCase(), t]));
+const allByCode = new Map(allTickers.map((t) => [t.code.toUpperCase(), t]));
 
-/**
- * Build the list of ticker objects to process.
- * - If `tickers` is empty -> return full `allTickers`
- * - For each provided ticker, normalize to ".T" and:
- *     - use existing object if found
- *     - else create a placeholder with sector "Unknown"
- */
 function resolveTickers(tickers) {
   if (!Array.isArray(tickers) || tickers.length === 0) {
     return [...allTickers];
@@ -338,313 +328,309 @@ function resolveTickers(tickers) {
   return out;
 }
 
-
-
-
 /* ---------------------------------------------------------
    5) Main scan — exportable for server & browser
 --------------------------------------------------------- */
-
 /**
- * Server- & browser-safe scanner.
- * @param {Object} opts
- * @param {string[]} [opts.tickers]           - like ["7203","6758"] (no ".T" needed)
- * @param {Array}    [opts.myPortfolio=[]]    - e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
- * @param {Function} [opts.onItem]            - called for every stockObject as it's produced
- * @returns {Promise<{count:number, errors:string[]}>}
+ * @param {Object}   opts
+ * @param {string[]} [opts.tickers]        - e.g. ["7203","6758.T"]
+ * @param {Array}    [opts.myPortfolio=[]] - e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
+ * @param {Function} [opts.onItem]         - optional per-item callback
+ * @param {"auto"|"browser"|"api"} [opts.mode="auto"] - force behavior if needed
+ * @returns {Promise<{count:number, errors:string[], results:any[]}>}
  */
 export async function fetchStockAnalysis({
   tickers = [],
   myPortfolio = [],
   onItem,
+  mode = "auto",
 } = {}) {
-  const emit = typeof onItem === "function" ? onItem : () => {};
-  const errors = [];
-
-  // Reuse your filtering logic
   const filteredTickers = resolveTickers(tickers);
 
+  const results = [];
+  const useBubble =
+    (mode === "browser" || (mode === "auto" && HAS_BUBBLE)) && !onItem;
 
+  // Decide emitter
+  const emit = onItem
+    ? onItem
+    : useBubble
+    ? (obj) => {
+        try {
+          bubble_fn_result(obj);
+        } catch (e) {
+          console.error("bubble_fn_result failed:", e);
+        }
+      }
+    : (obj) => results.push(obj);
+
+  const errors = [];
   let count = 0;
 
-  for (const tickerObj of filteredTickers) {
-    console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
-    try {
-      // 1) Fetch Yahoo data
-      const result = await fetchSingleStockData(tickerObj);
-      if (!result.success) {
-        console.error("Error fetching stock analysis:", result.error);
-        throw new Error("Failed to fetch Yahoo data.");
-      }
+  try {
+    for (const tickerObj of filteredTickers) {
+      console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
+      try {
+        // 1) Fetch Yahoo data
+        const result = await fetchSingleStockData(tickerObj);
+        if (!result.success) {
+          console.error("Error fetching stock analysis:", result.error);
+          throw new Error("Failed to fetch Yahoo data.");
+        }
 
-      const { code, sector, yahooData } = result.data;
+        const { code, sector, yahooData } = result.data;
+        if (!yahooData) {
+          console.error(
+            `Missing Yahoo data for ${code}. Aborting calculation.`
+          );
+          throw new Error("Yahoo data is completely missing.");
+        }
 
-      if (!yahooData) {
-        console.error(`Missing Yahoo data for ${code}. Aborting calculation.`);
-        throw new Error("Yahoo data is completely missing.");
-      }
+        // Validate
+        const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
+        const missingCriticalFields = criticalFields.filter(
+          (f) => !yahooData[f]
+        );
+        const nonCriticalFields = [
+          "openPrice",
+          "prevClosePrice",
+          "marketCap",
+          "peRatio",
+          "pbRatio",
+          "dividendYield",
+          "dividendGrowth5yr",
+          "fiftyTwoWeekHigh",
+          "fiftyTwoWeekLow",
+          "epsTrailingTwelveMonths",
+          "epsForward",
+          "epsGrowthRate",
+          "debtEquityRatio",
+          "movingAverage50d",
+          "movingAverage200d",
+          "rsi14",
+          "macd",
+          "macdSignal",
+          "bollingerMid",
+          "bollingerUpper",
+          "bollingerLower",
+          "stochasticK",
+          "stochasticD",
+          "obv",
+          "atr14",
+        ];
+        const missingNonCriticalFields = nonCriticalFields.filter(
+          (field) => yahooData[field] === undefined || yahooData[field] === null
+        );
+        const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
+          (field) =>
+            yahooData[field] !== undefined &&
+            yahooData[field] !== null &&
+            yahooData[field] === 0 &&
+            !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(
+              field
+            )
+        );
 
-      // Validate
-      const criticalFields = ["currentPrice", "highPrice", "lowPrice"];
-      const missingCriticalFields = criticalFields.filter(
-        (field) => !yahooData[field]
-      );
+        console.log(`Data validation for ${code}:`);
+        if (missingCriticalFields.length > 0) {
+          console.error(
+            `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+          );
+          throw new Error(
+            `Critical Yahoo data is missing: ${missingCriticalFields.join(
+              ", "
+            )}`
+          );
+        }
+        if (missingNonCriticalFields.length > 0) {
+          console.warn(
+            `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(
+              ", "
+            )}`
+          );
+        }
+        if (zeroFields.length > 0) {
+          console.warn(
+            `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
+              ", "
+            )}`
+          );
+        }
 
-      const nonCriticalFields = [
-        "openPrice",
-        "prevClosePrice",
-        "marketCap",
-        "peRatio",
-        "pbRatio",
-        "dividendYield",
-        "dividendGrowth5yr",
-        "fiftyTwoWeekHigh",
-        "fiftyTwoWeekLow",
-        "epsTrailingTwelveMonths",
-        "epsForward",
-        "epsGrowthRate",
-        "debtEquityRatio",
-        "movingAverage50d",
-        "movingAverage200d",
-        "rsi14",
-        "macd",
-        "macdSignal",
-        "bollingerMid",
-        "bollingerUpper",
-        "bollingerLower",
-        "stochasticK",
-        "stochasticD",
-        "obv",
-        "atr14",
-      ];
-      const missingNonCriticalFields = nonCriticalFields.filter(
-        (field) => yahooData[field] === undefined || yahooData[field] === null
-      );
+        // 2) Build stock object
+        const stock = {
+          ticker: code,
+          sector,
+          currentPrice: yahooData.currentPrice,
+          highPrice: yahooData.highPrice,
+          lowPrice: yahooData.lowPrice,
+          openPrice: yahooData.openPrice,
+          prevClosePrice: yahooData.prevClosePrice,
+          marketCap: yahooData.marketCap,
+          peRatio: yahooData.peRatio,
+          pbRatio: yahooData.pbRatio,
+          dividendYield: yahooData.dividendYield,
+          dividendGrowth5yr: yahooData.dividendGrowth5yr,
+          fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+          epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+          epsForward: yahooData.epsForward,
+          epsGrowthRate: yahooData.epsGrowthRate,
+          debtEquityRatio: yahooData.debtEquityRatio,
+          movingAverage50d: yahooData.movingAverage50d,
+          movingAverage200d: yahooData.movingAverage200d,
+          rsi14: yahooData.rsi14,
+          macd: yahooData.macd,
+          macdSignal: yahooData.macdSignal,
+          bollingerMid: yahooData.bollingerMid,
+          bollingerUpper: yahooData.bollingerUpper,
+          bollingerLower: yahooData.bollingerLower,
+          stochasticK: yahooData.stochasticK,
+          stochasticD: yahooData.stochasticD,
+          obv: yahooData.obv,
+          atr14: yahooData.atr14,
+        };
 
-      const zeroFields = [...criticalFields, ...nonCriticalFields].filter(
-        (field) =>
-          yahooData[field] !== undefined &&
-          yahooData[field] !== null &&
-          yahooData[field] === 0 &&
-          !["dividendYield", "dividendGrowth5yr", "epsGrowthRate"].includes(
-            field
-          )
-      );
+        // 3) Historical + enrichment
+        const historicalData = await fetchHistoricalData(stock.ticker);
+        stock.historicalData = historicalData || [];
+        enrichForTechnicalScore(stock);
 
-      console.log(`Data validation for ${code}:`);
-      if (missingCriticalFields.length > 0) {
+        // 4) Scores
+        stock.technicalScore = getTechnicalScore(stock);
+        stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+        stock.valuationScore = getValuationScore(stock);
+        stock.tier = getNumericTier(stock);
+
+        // 5) Market sentiment horizons
+        const horizons = getComprehensiveMarketSentiment(stock, historicalData);
+        stock.shortTermScore = horizons.shortTerm.score;
+        stock.longTermScore = horizons.longTerm.score;
+        stock.shortTermBias = horizons.shortTerm.label;
+        stock.longTermBias = horizons.longTerm.label;
+        stock.shortTermConf = horizons.shortTerm.confidence;
+        stock.longTermConf = horizons.longTerm.confidence;
+
+        // 6) Entry timing
+        console.log("Running getBuyTrigger...");
+        const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
+        console.log("Running getBuyTrigger - finished");
+
+        stock.isBuyNow = finalSignal.buyNow;
+        stock.buyNowReason = finalSignal.reason;
+        stock.smartStopLoss = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
+        stock.smartPriceTarget =
+          finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
+
+        // 7) Trade management if in portfolio
+        const portfolioEntry = myPortfolio.find(
+          (p) => p.ticker === stock.ticker
+        );
+        if (portfolioEntry) {
+          const managementSignal = getTradeManagementSignal_V2(
+            stock,
+            portfolioEntry.trade,
+            historicalData
+          );
+          stock.managementSignalStatus = managementSignal.status;
+          stock.managementSignalReason = managementSignal.reason;
+        } else {
+          stock.managementSignalStatus = null;
+          stock.managementSignalReason = null;
+        }
+
+        // 8) Output object (Bubble-friendly)
+        const stockObject = {
+          _api_c2_ticker: stock.ticker,
+          _api_c2_sector: stock.sector,
+          _api_c2_currentPrice: stock.currentPrice,
+          _api_c2_shortTermScore: stock.shortTermScore,
+          _api_c2_longTermScore: stock.longTermScore,
+          _api_c2_prediction: stock.prediction,
+          _api_c2_stopLoss: stock.stopLoss,
+          _api_c2_targetPrice: stock.targetPrice,
+          _api_c2_growthPotential: stock.growthPotential,
+          _api_c2_score: stock.score,
+          _api_c2_finalScore: stock.finalScore,
+          _api_c2_tier: getNumericTier(stock),
+          _api_c2_smartStopLoss: stock.smartStopLoss,
+          _api_c2_smartPriceTarget: stock.smartPriceTarget,
+          _api_c2_limitOrder: stock.limitOrder,
+          _api_c2_isBuyNow: stock.isBuyNow,
+          _api_c2_buyNowReason: stock.buyNowReason,
+          _api_c2_managementSignalStatus: stock.managementSignalStatus,
+          _api_c2_managementSignalReason: stock.managementSignalReason,
+          _api_c2_otherData: JSON.stringify({
+            highPrice: stock.highPrice,
+            lowPrice: stock.lowPrice,
+            openPrice: stock.openPrice,
+            prevClosePrice: stock.prevClosePrice,
+            marketCap: stock.marketCap,
+            peRatio: stock.peRatio,
+            pbRatio: stock.pbRatio,
+            dividendYield: stock.dividendYield,
+            dividendGrowth5yr: stock.dividendGrowth5yr,
+            fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+            fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+            epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+            epsForward: stock.epsForward,
+            epsGrowthRate: stock.epsGrowthRate,
+            debtEquityRatio: stock.debtEquityRatio,
+            movingAverage50d: stock.movingAverage50d,
+            movingAverage200d: stock.movingAverage200d,
+            rsi14: stock.rsi14,
+            macd: stock.macd,
+            macdSignal: stock.macdSignal,
+            bollingerMid: stock.bollingerMid,
+            bollingerUpper: stock.bollingerUpper,
+            bollingerLower: stock.bollingerLower,
+            stochasticK: stock.stochasticK,
+            stochasticD: stock.stochasticD,
+            obv: stock.obv,
+            atr14: stock.atr14,
+            technicalScore: stock.technicalScore,
+            fundamentalScore: stock.fundamentalScore,
+            valuationScore: stock.valuationScore,
+          }),
+        };
+
+        emit(stockObject);
+        console.log(`📤 Emitted ${stock.ticker}`);
+        count += 1;
+      } catch (error) {
         console.error(
-          `❌ Missing critical fields: ${missingCriticalFields.join(", ")}`
+          `❌ Error processing ticker ${tickerObj.code}:`,
+          error.message
         );
-        throw new Error(
-          `Critical Yahoo data is missing: ${missingCriticalFields.join(", ")}`
-        );
+        errors.push(`Ticker ${tickerObj.code}: ${error.message}`);
       }
-      if (missingNonCriticalFields.length > 0) {
-        console.warn(
-          `⚠️ Missing non-critical fields: ${missingNonCriticalFields.join(
-            ", "
-          )}`
-        );
+    }
+  } finally {
+    if (useBubble) {
+      try {
+        bubble_fn_finish();
+      } catch (e) {
+        console.error("bubble_fn_finish failed:", e);
       }
-      if (zeroFields.length > 0) {
-        console.warn(
-          `⚠️ Fields with zero values (potential calculation errors): ${zeroFields.join(
-            ", "
-          )}`
-        );
-      }
-
-      console.log(
-        `✅ All critical fields present for ${code}. Continuing analysis...`
-      );
-      console.log("Yahoo data:", yahooData);
-
-      // 2) Build stock object
-      const stock = {
-        ticker: code,
-        sector,
-        currentPrice: yahooData.currentPrice,
-        highPrice: yahooData.highPrice,
-        lowPrice: yahooData.lowPrice,
-        openPrice: yahooData.openPrice,
-        prevClosePrice: yahooData.prevClosePrice,
-        marketCap: yahooData.marketCap,
-        peRatio: yahooData.peRatio,
-        pbRatio: yahooData.pbRatio,
-        dividendYield: yahooData.dividendYield,
-        dividendGrowth5yr: yahooData.dividendGrowth5yr,
-        fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-        fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-        epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-        epsForward: yahooData.epsForward,
-        epsGrowthRate: yahooData.epsGrowthRate,
-        debtEquityRatio: yahooData.debtEquityRatio,
-        movingAverage50d: yahooData.movingAverage50d,
-        movingAverage200d: yahooData.movingAverage200d,
-
-        // Technicals (may be missing & enriched later)
-        rsi14: yahooData.rsi14,
-        macd: yahooData.macd,
-        macdSignal: yahooData.macdSignal,
-        bollingerMid: yahooData.bollingerMid,
-        bollingerUpper: yahooData.bollingerUpper,
-        bollingerLower: yahooData.bollingerLower,
-        stochasticK: yahooData.stochasticK,
-        stochasticD: yahooData.stochasticD,
-        obv: yahooData.obv,
-        atr14: yahooData.atr14,
-      };
-
-      // 3) Historical + enrichment
-      const historicalData = await fetchHistoricalData(stock.ticker);
-      stock.historicalData = historicalData || [];
-      enrichForTechnicalScore(stock);
-
-      // 4) Scores
-      stock.technicalScore = getTechnicalScore(stock);
-      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-      stock.valuationScore = getValuationScore(stock);
-      stock.tier = getNumericTier(stock);
-
-      // 5) Market sentiment horizons
-      const horizons = getComprehensiveMarketSentiment(stock, historicalData);
-      stock.shortTermScore = horizons.shortTerm.score; // 1..7
-      stock.longTermScore = horizons.longTerm.score; // 1..7
-      stock.shortTermBias = horizons.shortTerm.label; // "bullish"|"neutral"|"bearish"
-      stock.longTermBias = horizons.longTerm.label;
-      stock.shortTermConf = horizons.shortTerm.confidence; // 0..1
-      stock.longTermConf = horizons.longTerm.confidence; // 0..1
-
-      // 6) Entry timing
-      console.log("Running getBuyTrigger...");
-      const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
-      console.log("Running getBuyTrigger - finished");
-
-      stock.isBuyNow = finalSignal.buyNow;
-      stock.buyNowReason = finalSignal.reason;
-      stock.smartStopLoss = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
-      stock.smartPriceTarget =
-        finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
-
-      // 7) Trade management if in portfolio
-      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
-      if (portfolioEntry) {
-        const managementSignal = getTradeManagementSignal_V2(
-          stock,
-          portfolioEntry.trade,
-          historicalData
-        );
-        stock.managementSignalStatus = managementSignal.status;
-        stock.managementSignalReason = managementSignal.reason;
-      } else {
-        stock.managementSignalStatus = null;
-        stock.managementSignalReason = null;
-      }
-
-      // 8) Output object (Bubble-friendly)
-      const stockObject = {
-        _api_c2_ticker: stock.ticker,
-        _api_c2_sector: stock.sector,
-        _api_c2_currentPrice: stock.currentPrice,
-        _api_c2_shortTermScore: stock.shortTermScore,
-        _api_c2_longTermScore: stock.longTermScore,
-        _api_c2_prediction: stock.prediction,
-        _api_c2_stopLoss: stock.stopLoss,
-        _api_c2_targetPrice: stock.targetPrice,
-        _api_c2_growthPotential: stock.growthPotential,
-        _api_c2_score: stock.score,
-        _api_c2_finalScore: stock.finalScore,
-        _api_c2_tier: getNumericTier(stock),
-        _api_c2_smartStopLoss: stock.smartStopLoss,
-        _api_c2_smartPriceTarget: stock.smartPriceTarget,
-        _api_c2_limitOrder: stock.limitOrder,
-        _api_c2_isBuyNow: stock.isBuyNow,
-        _api_c2_buyNowReason: stock.buyNowReason,
-        _api_c2_managementSignalStatus: stock.managementSignalStatus,
-        _api_c2_managementSignalReason: stock.managementSignalReason,
-        _api_c2_otherData: JSON.stringify({
-          highPrice: stock.highPrice,
-          lowPrice: stock.lowPrice,
-          openPrice: stock.openPrice,
-          prevClosePrice: stock.prevClosePrice,
-          marketCap: stock.marketCap,
-          peRatio: stock.peRatio,
-          pbRatio: stock.pbRatio,
-          dividendYield: stock.dividendYield,
-          dividendGrowth5yr: stock.dividendGrowth5yr,
-          fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-          epsForward: stock.epsForward,
-          epsGrowthRate: stock.epsGrowthRate,
-          debtEquityRatio: stock.debtEquityRatio,
-          movingAverage50d: stock.movingAverage50d,
-          movingAverage200d: stock.movingAverage200d,
-          rsi14: stock.rsi14,
-          macd: stock.macd,
-          macdSignal: stock.macdSignal,
-          bollingerMid: stock.bollingerMid,
-          bollingerUpper: stock.bollingerUpper,
-          bollingerLower: stock.bollingerLower,
-          stochasticK: stock.stochasticK,
-          stochasticD: stock.stochasticD,
-          obv: stock.obv,
-          atr14: stock.atr14,
-          technicalScore: stock.technicalScore,
-          fundamentalScore: stock.fundamentalScore,
-          valuationScore: stock.valuationScore,
-        }),
-      };
-
-      // Emit per item
-      emit(stockObject);
-      console.log(`📤 Emitted ${stock.ticker}`);
-      count += 1;
-    } catch (error) {
-      console.error(
-        `❌ Error processing ticker ${tickerObj.code}:`,
-        error.message
-      );
-      errors.push(`Ticker ${tickerObj.code}: ${error.message}`);
     }
   }
 
-  return { count, errors };
+  // Always return results (empty if you streamed via Bubble or used a custom onItem)
+  return { count, errors, results };
 }
 
 /* ---------------------------------------------------------
-   6) Browser adapter (keeps your Bubble wiring intact)
+   6) Optional browser adapter (keeps old window.scan API)
 --------------------------------------------------------- */
-if (typeof window !== "undefined") {
+if (IS_BROWSER) {
   window.scan = {
-    /**
-     * Original browser API:
-     * @param {string[]} tickerList - like ["7203","6758"]
-     * @param {Array} myPortfolio   - e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
-     */
     async fetchStockAnalysis(tickerList = [], myPortfolio = []) {
-      try {
-        await fetchStockAnalysis({
-          tickers: tickerList,
-          myPortfolio,
-          onItem: (obj) => {
-            try {
-              // Provided by Bubble runtime
-              bubble_fn_result(obj);
-            } catch (e) {
-              console.error("bubble_fn_result not available or failed:", e);
-            }
-          },
-        });
-      } finally {
-        try {
-          // Provided by Bubble runtime
-          bubble_fn_finish();
-        } catch (e) {
-          console.error("bubble_fn_finish not available or failed:", e);
-        }
-      }
+      // No onItem => will auto-use Bubble emit; return value is ignored in Bubble path
+      return fetchStockAnalysis({
+        tickers: tickerList,
+        myPortfolio,
+        mode: "browser",
+      });
     },
   };
 }
