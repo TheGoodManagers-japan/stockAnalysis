@@ -1,5 +1,7 @@
-// api/scan.js  (CommonJS-compatible, ESM-friendly dynamic import)
+// api/scan.js
 const path = require("path");
+const fs = require("fs");
+const { pathToFileURL } = require("url");
 
 async function readJsonBody(req) {
   const chunks = [];
@@ -15,7 +17,6 @@ async function readJsonBody(req) {
 
 module.exports = async (req, res) => {
   try {
-    // CORS (optional)
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -26,9 +27,12 @@ module.exports = async (req, res) => {
         .json({ success: false, error: "Method Not Allowed" });
     }
 
-    // ✅ Correct path to your file: /public/script/main.js
-    const abs = path.join(process.cwd(), "public", "script", "main.js");
-    const mod = await import("file://" + abs); // works with ESM main.js
+    // ✅ Correct path (plural 'scripts')
+    const abs = path.join(process.cwd(), "public", "scripts", "main.js");
+    if (!fs.existsSync(abs)) {
+      throw new Error(`Shared module not found at ${abs}`);
+    }
+    const mod = await import(pathToFileURL(abs).href);
     const { fetchStockAnalysis } = mod;
 
     let tickers = [];
@@ -37,7 +41,7 @@ module.exports = async (req, res) => {
       const body = await readJsonBody(req);
       tickers = Array.isArray(body.tickers) ? body.tickers : [];
       portfolio = Array.isArray(body.portfolio) ? body.portfolio : [];
-    } else if (req.method === "GET") {
+    } else {
       tickers = String(req.query?.tickers || "")
         .split(",")
         .map((s) => s.trim())
