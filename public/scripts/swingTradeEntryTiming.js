@@ -9,8 +9,29 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // ---- Validate & prep ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
     const r = "Insufficient historical data (need ≥25 bars).";
-    return withNo(r, { reasons: [r] });
+    const data = Array.isArray(historicalData) ? historicalData : [];
+    const pxNow =
+      num(stock.currentPrice) ||
+      num(data.at?.(-1)?.close) ||
+      num(stock.prevClosePrice) ||
+      num(stock.openPrice) ||
+      1;
+    const ms0 = getMarketStructure(stock || {}, data || []);
+    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
+    return {
+      buyNow: false,
+      reason: r,
+      stopLoss: prov.stop,
+      priceTarget: prov.target,
+      smartStopLoss: prov.stop,
+      smartPriceTarget: prov.target,
+      timeline: [],
+      debug: opts.debug
+        ? { reasons: [r], pxNow, ms: ms0, provisional: prov }
+        : undefined,
+    };
   }
+
   const data = [...historicalData].sort(
     (a, b) => new Date(a.date) - new Date(b.date)
   );
@@ -23,7 +44,25 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     !isFiniteN(last.volume)
   ) {
     const r = "Invalid last bar OHLCV.";
-    return withNo(r, { reasons: [r] });
+    const pxNow =
+      num(stock.currentPrice) ||
+      num(stock.prevClosePrice) ||
+      num(stock.openPrice) ||
+      1;
+    const ms0 = getMarketStructure(stock || {}, data || []);
+    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
+    return {
+      buyNow: false,
+      reason: r,
+      stopLoss: prov.stop,
+      priceTarget: prov.target,
+      smartStopLoss: prov.stop,
+      smartPriceTarget: prov.target,
+      timeline: [],
+      debug: opts.debug
+        ? { reasons: [r], pxNow, ms: ms0, provisional: prov }
+        : undefined,
+    };
   }
 
   // Robust context
@@ -298,41 +337,46 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-      // ---- Final decision ----
+  // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
     if (!priceActionGate) top.push(gateWhy);
     if (ms.trend === "DOWN")
       top.push("Trend is DOWN (signals allowed, but RR/guards may reject).");
 
-    // Build a concise reason string (keeps your existing behavior)
     const reason = buildNoReason(top, reasons);
 
-    // === NEW: provisional stop/target even when not buyable ===
-    const atr = Math.max(num(stock.atr14), (num(stock.currentPrice) || num(last.close)) * 0.005);
-    const pxNow = num(stock.currentPrice) || num(last.close);
-
-    // Supports below (nearest first). Prefer swing-low − 0.5*ATR; fallback to MA25 − 0.6*ATR; final fallback: px − 1.2*ATR
+    // Provisional stop/target even when not buyable
+    const atr = Math.max(
+      num(stock.atr14),
+      (num(stock.currentPrice) || num(last.close)) * 0.005,
+      1e-6
+    );
+    const pxNow = num(stock.currentPrice) || num(last.close) || 1;
     const supports = findSupportsBelow(data, pxNow);
     const stopFromSwing = supports[0] != null ? supports[0] - 0.5 * atr : NaN;
-    const stopFromMA25  = (ms.ma25 > 0 && ms.ma25 < pxNow) ? ms.ma25 - 0.6 * atr : NaN;
+    const stopFromMA25 =
+      ms.ma25 > 0 && ms.ma25 < pxNow ? ms.ma25 - 0.6 * atr : NaN;
 
     let provisionalStop = [stopFromSwing, stopFromMA25, pxNow - 1.2 * atr]
       .filter(Number.isFinite)
       .reduce((m, v) => Math.min(m, v), Infinity);
     if (!Number.isFinite(provisionalStop)) provisionalStop = pxNow - 1.2 * atr;
 
-    // Resistance above for target (prefer nearest resistance, ensure min reward)
     const resList = findResistancesAbove(data, pxNow, stock);
     let provisionalTarget = resList[0]
       ? Math.max(resList[0], pxNow + 2.3 * atr)
       : pxNow + 2.6 * atr;
 
-    // Normalize via RR function (enforces min stop distance, can bump target)
-    const rr0 = analyzeRR(pxNow, provisionalStop, provisionalTarget, stock, ms, cfg, {
-      kind: "FALLBACK",
-      data,
-    });
+    const rr0 = analyzeRR(
+      pxNow,
+      provisionalStop,
+      provisionalTarget,
+      stock,
+      ms,
+      cfg,
+      { kind: "FALLBACK", data }
+    );
 
     const debug = opts.debug
       ? {
@@ -351,12 +395,12 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
     return {
       buyNow: false,
-      reason,                     // why it's not an entry *now*
-      stopLoss: rr0.stop,         // provisional but usable
-      priceTarget: rr0.target,    // provisional but usable
+      reason, // why it's not an entry *now*
+      stopLoss: rr0.stop,
+      priceTarget: rr0.target,
       smartStopLoss: rr0.stop,
       smartPriceTarget: rr0.target,
-      timeline: [],               // no entry plan when not actionable
+      timeline: [],
       debug,
     };
   }
@@ -410,7 +454,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   };
 } // ← CLOSES analyzeSwingTradeEntry
 
-  
 /* ============================ Config ============================ */
 function getConfig(opts) {
   return {
@@ -464,7 +507,7 @@ function getConfig(opts) {
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
-  const px = num(stock.currentPrice) || num(data.at(-1).close);
+  const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
 
   // MA fallbacks from data if missing on stock
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
@@ -486,8 +529,8 @@ function getMarketStructure(stock, data) {
       : "DOWN";
 
   const w = data.slice(-20);
-  const recentHigh = Math.max(...w.map((d) => d.high));
-  const recentLow = Math.min(...w.map((d) => d.low));
+  const recentHigh = Math.max(...w.map((d) => d.high ?? -Infinity));
+  const recentLow = Math.min(...w.map((d) => d.low ?? Infinity));
   return { trend, recentHigh, recentLow, ma25, ma50, ma200 };
 }
 
@@ -899,7 +942,7 @@ function detectBreakoutLegacy(stock, data, cfg) {
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
-  const atr = Math.max(num(stock.atr14), entryPx * 0.005);
+  const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
   const minStopDist = 1.1 * atr;
   if (entryPx - stop < minStopDist) stop = entryPx - minStopDist;
 
@@ -1084,6 +1127,45 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   return steps;
 }
 
+/* =========================== Provisional plan =========================== */
+function provisionalPlan(stock, data, ms, pxNow, cfg) {
+  const px = num(pxNow) || 1;
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+
+  const supports = Array.isArray(data) ? findSupportsBelow(data, px) : [];
+  const stopFromSwing = Number.isFinite(supports?.[0])
+    ? supports[0] - 0.5 * atr
+    : NaN;
+  const stopFromMA25 =
+    ms && ms.ma25 > 0 && ms.ma25 < px ? ms.ma25 - 0.6 * atr : NaN;
+
+  let stop = [stopFromSwing, stopFromMA25, px - 1.2 * atr]
+    .filter(Number.isFinite)
+    .reduce((m, v) => Math.min(m, v), Infinity);
+  if (!Number.isFinite(stop)) stop = px - 1.2 * atr;
+
+  const resList = Array.isArray(data)
+    ? findResistancesAbove(data, px, stock)
+    : [];
+  let target = Number.isFinite(resList?.[0])
+    ? Math.max(resList[0], px + 2.3 * atr)
+    : px + 2.6 * atr;
+
+  const rr = analyzeRR(
+    px,
+    stop,
+    target,
+    stock,
+    ms || { trend: "UP" },
+    cfg || getConfig({}),
+    {
+      kind: "FALLBACK",
+      data,
+    }
+  );
+  return { stop: rr.stop, target: rr.target, rr };
+}
+
 /* =========================== Utilities =========================== */
 function sma(data, n, field = "close") {
   if (!Array.isArray(data) || data.length < n) return 0;
@@ -1151,7 +1233,6 @@ function findResistancesAbove(data, px, stock) {
   return uniq;
 }
 
-
 function findSupportsBelow(data, px) {
   const downs = [];
   const win = data.slice(-60);
@@ -1166,7 +1247,6 @@ function findSupportsBelow(data, px) {
   ); // nearest support first (largest below px)
   return uniq;
 }
-
 
 function nearRecentSupportOrPivot(data, px, atr, cfg2 = { pct: 0.02 }) {
   const win = data.slice(-40);
@@ -1215,14 +1295,28 @@ function summarizeGuardDetails(d) {
   return bits.length ? `(${bits.join(", ")})` : "";
 }
 
-function withNo(reason, debug) {
+/* ============================ Safe withNo (never null) ============================ */
+function withNo(reason, ctx = {}) {
+  // Best-effort provisional even if minimal context provided
+  const stock = ctx.stock || {};
+  const data = Array.isArray(ctx.data) ? ctx.data : [];
+  const cfg = getConfig({});
+  const ms = getMarketStructure(stock, data);
+  const pxNow =
+    num(stock.currentPrice) ||
+    num(data.at?.(-1)?.close) ||
+    num(stock.prevClosePrice) ||
+    num(stock.openPrice) ||
+    1;
+  const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
+  const debug = ctx;
   return {
     buyNow: false,
     reason,
-    stopLoss: null,
-    priceTarget: null,
-    smartStopLoss: null,
-    smartPriceTarget: null,
+    stopLoss: prov.stop,
+    priceTarget: prov.target,
+    smartStopLoss: prov.stop,
+    smartPriceTarget: prov.target,
     timeline: [],
     debug,
   };
