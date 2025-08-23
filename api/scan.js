@@ -55,7 +55,13 @@ module.exports = async (req, res) => {
     const out = await fetchStockAnalysis({
       tickers,
       myPortfolio: portfolio,
-      onItem: (item) => results.push(item),
+      onItem: (item) => {
+        // Debug log to see what we're getting
+        console.log(
+          `Stock: ${item._api_c2_ticker}, BuyNow: ${item._api_c2_isBuyNow}, StopLoss: ${item._api_c2_stopLoss}, Target: ${item._api_c2_targetPrice}`
+        );
+        results.push(item);
+      },
     });
 
     return res.status(200).json({ success: true, ...out, results });
