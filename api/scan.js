@@ -27,11 +27,14 @@ module.exports = async (req, res) => {
         .json({ success: false, error: "Method Not Allowed" });
     }
 
-    // ✅ Correct path (plural 'scripts')
+    // 👉 minimal shim so importing main.js never throws on server
+    const g = globalThis;
+    if (typeof g.window === "undefined") g.window = {};
+
     const abs = path.join(process.cwd(), "public", "scripts", "main.js");
-    if (!fs.existsSync(abs)) {
+    if (!fs.existsSync(abs))
       throw new Error(`Shared module not found at ${abs}`);
-    }
+
     const mod = await import(pathToFileURL(abs).href);
     const { fetchStockAnalysis } = mod;
 
