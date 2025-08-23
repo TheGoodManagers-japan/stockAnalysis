@@ -1,5 +1,4 @@
 async function fetchYahooFinanceData(ticker, sector = "") {
-  // Small helper to throw typed errors you can inspect in the route handler
   const mkError = (code, message, details = {}) => {
     const err = new Error(message);
     err.name = "DataIntegrityError";
@@ -8,13 +7,11 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     return err;
   };
 
-  // Helper to convert values to numbers, returning 0 for invalid inputs
   const toNumber = (val) => {
     const num = parseFloat(val);
     return isNaN(num) ? 0 : num;
   };
 
-  // Helper to get dates in the past
   const getDateYearsAgo = (years) => {
     const date = new Date();
     date.setFullYear(date.getFullYear() - years);
@@ -22,13 +19,10 @@ async function fetchYahooFinanceData(ticker, sector = "") {
   };
 
   try {
-    console.log(`Fetching all data for ticker: ${ticker}`);
-
     const now = new Date();
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
-    // Fetch in parallel
     const [quote, historicalPrices, dividendEvents, summary] =
       await Promise.all([
         yahooFinance.quote(ticker),
@@ -53,7 +47,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
         }),
       ]);
 
-    // --- SAFETY CHECKS (now throwing) ---
+    // --- SAFETY CHECKS ---
     if (!Array.isArray(historicalPrices) || !historicalPrices.length) {
       throw mkError("NO_HISTORICAL", `No historical prices for ${ticker}`, {
         ticker,
@@ -66,10 +60,12 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const safeDividendEvents = Array.isArray(dividendEvents)
       ? dividendEvents
       : [];
+
+    // ✅ Declare once; reuse later
     const lastBar = historicalPrices[historicalPrices.length - 1] || {};
     const prevBar = historicalPrices[historicalPrices.length - 2] || {};
 
-    // --- INDICATOR HELPERS (unchanged) ---
+    // --- INDICATOR HELPERS ---
     function calculateMA(data, days) {
       if (data.length < days) return 0;
       const sum = data
@@ -204,7 +200,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const todayHighPrimary = toNumber(quote.regularMarketDayHigh);
     const todayLowPrimary = toNumber(quote.regularMarketDayLow);
     const todayOpenPrimary = toNumber(quote.regularMarketOpen);
-    const todayVolume = toNumber(quote.regularMarketVolume); // Now required
+    const todayVolumePrimary = toNumber(quote.regularMarketVolume);
 
     const highPrice = todayHighPrimary || toNumber(lastBar.high);
     const lowPrice = todayLowPrimary || toNumber(lastBar.low);
@@ -212,7 +208,6 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const prevClosePrice =
       toNumber(quote.regularMarketPreviousClose) || toNumber(prevBar.close);
 
-    // --- Robust PE/PB fallbacks ---
     const peRatio = toNumber(
       quote.trailingPE ??
         summary?.defaultKeyStatistics?.trailingPE ??
@@ -230,46 +225,41 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       ? ((epsForward - epsTrailing) / Math.abs(epsTrailing)) * 100
       : 0;
 
-    // --- FINAL DATA ---
     const yahooData = {
       currentPrice,
       highPrice,
       lowPrice,
       openPrice,
       prevClosePrice,
-      todayVolume,
-
+      todayVolume: todayVolumePrimary || toNumber(lastBar.volume || 0), // ✅ safe fallback
       marketCap: toNumber(quote.marketCap),
       peRatio,
       pbRatio,
       priceToSales: toNumber(
         summary?.summaryDetail?.priceToSalesTrailing12Months
       ),
-
       dividendYield: toNumber(quote.dividendYield) * 100,
       dividendGrowth5yr:
-        safeDividendEvents.length >= 2 && safeDividendEvents[0].dividends
-          ? (((safeDividendEvents[safeDividendEvents.length - 1].dividends -
+        Array.isArray(safeDividendEvents) &&
+        safeDividendEvents.length >= 2 &&
+        safeDividendEvents[0].dividends
+          ? (((safeDividendEvents.at(-1).dividends -
               safeDividendEvents[0].dividends) /
               safeDividendEvents[0].dividends) *
               100) /
             5
           : 0,
-
       fiftyTwoWeekHigh: toNumber(quote.fiftyTwoWeekHigh),
       fiftyTwoWeekLow: toNumber(quote.fiftyTwoWeekLow),
-
       epsTrailingTwelveMonths: epsTrailing,
       epsForward,
       epsGrowthRate,
       debtEquityRatio: toNumber(summary?.financialData?.debtToEquity),
-
       movingAverage5d: toNumber(movingAverage5d),
       movingAverage25d: toNumber(movingAverage25d),
       movingAverage50d: toNumber(movingAverage50d),
       movingAverage75d: toNumber(movingAverage75d),
       movingAverage200d: toNumber(movingAverage200d),
-
       rsi14: toNumber(rsi),
       macd: toNumber(macd),
       macdSignal: toNumber(signal),
@@ -280,17 +270,15 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       stochasticD: toNumber(stochastic.d),
       obv: toNumber(obv),
       atr14: toNumber(atr),
-
       regularMarketTime: quote.regularMarketTime || null,
       exchange: quote.fullExchangeName || quote.exchange || null,
     };
 
-    // --- STRICT DATA INTEGRITY CHECK (now throws) ---
+    // Relaxed requireds: allow 0 for some indicators; ensure core stuff exists
     const requiredFields = [
       "currentPrice",
       "highPrice",
       "lowPrice",
-      "todayVolume", // Added volume to required fields
       "fiftyTwoWeekHigh",
       "fiftyTwoWeekLow",
       "movingAverage5d",
@@ -302,34 +290,24 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       "atr14",
       "stochasticK",
       "stochasticD",
-      "obv",
     ];
-
-    const missingFields = requiredFields
-      .filter((field) => {
-        const v = yahooData[field];
-        return v === undefined || v === null || v === 0;
-      })
-      .filter((f) => !(f === "obv" && yahooData[f] === 0)); // OBV=0 allowed
-
+    const missingFields = requiredFields.filter((field) => {
+      const v = yahooData[field];
+      return v === undefined || v === null || v === 0;
+    });
     if (missingFields.length > 0) {
       throw mkError(
         "MISSING_FIELDS",
         `Missing/zero critical fields for ${ticker}: ${missingFields.join(
           ", "
         )}`,
-        // Added raw quote object to error details for easier debugging
         { ticker, missingFields, snapshot: yahooData, rawQuote: quote }
       );
     }
 
-    console.log(`✅ All critical data present for ${ticker}.`);
     return yahooData;
   } catch (error) {
-    // Re-throw as DataIntegrityError if it's not already, so your route can handle uniformly
-    if (error && error.name === "DataIntegrityError") {
-      throw error;
-    }
+    if (error && error.name === "DataIntegrityError") throw error;
     throw new Error(
       `fetchYahooFinanceData failed for ${ticker}: ${
         error.stack || error.message

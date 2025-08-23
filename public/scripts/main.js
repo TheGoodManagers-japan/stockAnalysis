@@ -374,9 +374,11 @@ export async function fetchStockAnalysis({
         // 1) Fetch Yahoo data
         const result = await fetchSingleStockData(tickerObj);
         if (!result.success) {
-          console.error("Error fetching stock analysis:", result.error);
-          throw new Error("Failed to fetch Yahoo data.");
+          throw new Error(
+            `Yahoo data error: ${result.error || "Unknown error"}`
+          );
         }
+        
 
         const { code, sector, yahooData } = result.data;
         if (!yahooData) {
