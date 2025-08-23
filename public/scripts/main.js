@@ -1,14 +1,5 @@
-// main.js (ESM + isomorphic, env-aware)
-//
-// Exports:
-//   - fetchStockAnalysis({ tickers, myPortfolio, onItem, mode })
-//       * Server/API (or mode: "api"): returns { count, errors, results[] } (no Bubble calls)
-//       * Browser with Bubble (or mode: "browser", no onItem): emits bubble_fn_result per item and calls bubble_fn_finish
-//   - enrichForTechnicalScore(stock)
-//
-// Requires your API routes:
-//   - /api/stocks  → returns { success, data: { code, sector, yahooData } } or { success:false, error, ... }
-//   - /api/history → returns { success, data: [{ date, open, high, low, close, volume }, ...] }
+// public/scripts/main.js
+// ESM module used by both the browser (Bubble) and api/scan.js (server)
 
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -20,26 +11,29 @@ import {
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
 
-/* ---------------------------------------------
-   Env detection + base URL
---------------------------------------------- */
+/* =========================
+   API base (fixes 404s)
+========================= */
 const IS_BROWSER = typeof window !== "undefined";
-const HAS_BUBBLE =
-  IS_BROWSER &&
-  typeof bubble_fn_result === "function" &&
-  typeof bubble_fn_finish === "function";
+const DEFAULT_API_BASE =
+  "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
 
 function apiBase() {
-  if (IS_BROWSER) return "";
-  const v = process.env.VERCEL_URL || process.env.NEXT_PUBLIC_VERCEL_URL;
-  if (v) return `https://${v}`;
-  // Fallback to your deployed domain if needed:
-  return "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
+  if (IS_BROWSER) {
+    return window.SCAN_API_BASE || DEFAULT_API_BASE;
+  }
+  return (
+    process.env.SCAN_API_BASE ||
+    process.env.NEXT_PUBLIC_API_BASE ||
+    (process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : DEFAULT_API_BASE)
+  );
 }
 
-/* ---------------------------------------------
-   Ticker normalization & resolution
---------------------------------------------- */
+/* =========================
+   Ticker helpers
+========================= */
 function normalizeTicker(input) {
   if (!input) return null;
   let s = String(input).trim().toUpperCase();
@@ -68,185 +62,66 @@ function resolveTickers(tickers) {
   return out;
 }
 
-/* ---------------------------------------------------------
-   1) Yahoo / API helpers
---------------------------------------------------------- */
-
+/* =========================
+   API calls
+========================= */
 async function fetchSingleStockData(tickerObj) {
-  const base = apiBase();
-  // Ensure we have a code string
   const code =
     typeof tickerObj === "string"
       ? normalizeTicker(tickerObj)
       : normalizeTicker(tickerObj?.code || tickerObj?.ticker || "");
+  const sector = tickerObj?.sector || "";
 
-  const attempts = [
-    // Preferred body (object with code + sector if available)
-    {
+  const url = `${apiBase()}/api/stocks`;
+  try {
+    const res = await fetch(url, {
       method: "POST",
-      body: { ticker: { code, sector: tickerObj?.sector || "" } },
-    },
-    // Alternate simple body
-    { method: "POST", body: { ticker: code } },
-    // Fallback GET
-    { method: "GET", query: `?ticker=${encodeURIComponent(code)}` },
-  ];
-
-  const errors = [];
-
-  for (const a of attempts) {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker: { code, sector } }),
+    });
+    const text = await res.text();
+    let data = null;
     try {
-      const url =
-        a.method === "GET"
-          ? `${base}/api/stocks${a.query || ""}`
-          : `${base}/api/stocks`;
-
-      const res = await fetch(url, {
-        method: a.method,
-        headers: { "Content-Type": "application/json" },
-        ...(a.method !== "GET" ? { body: JSON.stringify(a.body) } : {}),
-      });
-
-      const text = await res.text();
-      let json;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null;
-      }
-
-      if (!res.ok) {
-        errors.push(
-          `HTTP ${res.status} ${res.statusText} — ${text.slice(0, 400)}`
-        );
-        continue;
-      }
-      if (!json || typeof json.success === "undefined") {
-        errors.push(`Unexpected response: ${text.slice(0, 400)}`);
-        continue;
-      }
-      if (!json.success) {
-        // /api/stocks returns 200 with success:false for data issues — bubble up the reason
-        return {
-          success: false,
-          error: json.error || "Unknown data error",
-          code: json.code,
-          details: json.details,
-        };
-      }
-      return json; // { success:true, data:{ code, sector, yahooData } }
-    } catch (e) {
-      errors.push(`Network/parse error — ${String(e?.message || e)}`);
+      data = JSON.parse(text);
+    } catch {}
+    if (!res.ok)
+      throw new Error(`HTTP ${res.status} — ${(text || "").slice(0, 300)}`);
+    if (!data || data.success === false) {
+      throw new Error(data?.error || "Unknown /api/stocks error");
     }
+    return data;
+  } catch (err) {
+    return { success: false, error: err?.message || String(err) };
   }
-
-  return { success: false, error: errors.join(" | ") };
 }
 
-/***********************************************
- * 2) FETCH HISTORICAL DATA
- ***********************************************/
 async function fetchHistoricalData(ticker) {
-  const base = apiBase();
+  const url = `${apiBase()}/api/history?ticker=${encodeURIComponent(ticker)}`;
   try {
-    const code = normalizeTicker(ticker);
-    const apiUrl = `${base}/api/history?ticker=${encodeURIComponent(code)}`;
-
-    const res = await fetch(apiUrl, {
-      method: "GET",
+    const res = await fetch(url, {
       headers: { "Content-Type": "application/json" },
     });
-
     const text = await res.text();
-    let json;
+    let json = null;
     try {
       json = JSON.parse(text);
-    } catch {
-      json = null;
+    } catch {}
+    if (!res.ok || !json?.success) {
+      throw new Error(
+        json?.error || `HTTP ${res.status} — ${(text || "").slice(0, 300)}`
+      );
     }
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} — ${text.slice(0, 400)}`);
-    }
-    if (!json?.success) {
-      throw new Error(json?.error || "Unknown history API error");
-    }
-
-    const rows = Array.isArray(json.data) ? json.data : [];
-    if (!rows.length) return [];
-
-    return rows.map((item) => ({
-      ...item,
-      date: new Date(item.date),
-    }));
-  } catch (error) {
-    console.error(`Error fetching historical data for ${ticker}:`, error);
+    if (!Array.isArray(json.data)) return [];
+    return json.data.map((d) => ({ ...d, date: new Date(d.date) }));
+  } catch (err) {
+    console.error(`history(${ticker}) failed:`, err);
     return [];
   }
 }
 
-/***********************************************
- * 3) Trade Management Signal (V2)
- ***********************************************/
-function getTradeManagementSignal_V2(stock, trade, historicalData) {
-  const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
-  const { entryPrice, stopLoss, priceTarget } = trade;
-
-  if (currentPrice >= priceTarget) {
-    return {
-      status: "Sell Now",
-      reason: `Take Profit: Price reached target of ¥${priceTarget}.`,
-    };
-  }
-  if (currentPrice <= stopLoss) {
-    return {
-      status: "Sell Now",
-      reason: `Stop-Loss: Price hit stop-loss at ¥${stopLoss}.`,
-    };
-  }
-
-  if (currentPrice > entryPrice) {
-    if (macd < macdSignal) {
-      return {
-        status: "Protect Profit",
-        reason:
-          "Warning: Momentum (MACD) has turned bearish. Consider taking profits.",
-      };
-    }
-    if (currentPrice < movingAverage25d) {
-      return {
-        status: "Protect Profit",
-        reason:
-          "Warning: Price broke below 25-day MA support. Consider taking profits.",
-      };
-    }
-  }
-
-  if (historicalData.length >= 2) {
-    const today = historicalData[historicalData.length - 1];
-    const yesterday = historicalData[historicalData.length - 2];
-    const isBearishEngulfing =
-      today.close < today.open &&
-      yesterday.close > yesterday.open &&
-      today.close < yesterday.open &&
-      today.open > yesterday.close;
-    if (isBearishEngulfing) {
-      return {
-        status: "Sell Now",
-        reason: "Trend Reversal: Strong bearish engulfing pattern appeared.",
-      };
-    }
-  }
-
-  return {
-    status: "Hold",
-    reason: "Uptrend remains intact. Price is above key support.",
-  };
-}
-
-/***********************************************
- * 4) Enrich for Technical Score (lightweight)
- ***********************************************/
+/* =========================
+   Light-weight enrich
+========================= */
 export function enrichForTechnicalScore(stock) {
   const data = Array.isArray(stock.historicalData) ? stock.historicalData : [];
   if (data.length < 2) return stock;
@@ -259,13 +134,14 @@ export function enrichForTechnicalScore(stock) {
     stock.movingAverage5d = sma(closes, 5) || 0;
   if (!Number.isFinite(stock.movingAverage25d))
     stock.movingAverage25d = sma(closes, 25) || 0;
-  if (!Number.isFinite(stock.movingAverage75d))
-    stock.movingAverage75d = sma(closes, 75) || 0;
   if (!Number.isFinite(stock.movingAverage50d))
     stock.movingAverage50d = sma(closes, 50) || 0;
+  if (!Number.isFinite(stock.movingAverage75d))
+    stock.movingAverage75d = sma(closes, 75) || 0;
   if (!Number.isFinite(stock.movingAverage200d))
     stock.movingAverage200d = sma(closes, 200) || 0;
 
+  // OBV + MA20
   let obv = 0;
   const win = [0];
   for (let i = 1; i < data.length; i++) {
@@ -279,6 +155,7 @@ export function enrichForTechnicalScore(stock) {
     stock.obvMA20 = win.reduce((a, b) => a + b, 0) / 20;
   }
 
+  // Bollinger(20)
   if (
     !Number.isFinite(stock.bollingerMid) ||
     !Number.isFinite(stock.bollingerUpper) ||
@@ -296,6 +173,7 @@ export function enrichForTechnicalScore(stock) {
     }
   }
 
+  // ATR14
   if (!Number.isFinite(stock.atr14) && data.length >= 15) {
     const slice = data.slice(-15);
     let sumTR = 0;
@@ -312,6 +190,7 @@ export function enrichForTechnicalScore(stock) {
     stock.atr14 = sumTR / 14;
   }
 
+  // Stochastic(14,3)
   if (
     !Number.isFinite(stock.stochasticK) ||
     !Number.isFinite(stock.stochasticD)
@@ -334,7 +213,7 @@ export function enrichForTechnicalScore(stock) {
         kVals.push(hi !== lo ? ((cl - lo) / (hi - lo)) * 100 : 50);
       }
       if (!Number.isFinite(stock.stochasticK))
-        stock.stochasticK = kVals[kVals.length - 1] ?? 50;
+        stock.stochasticK = kVals.at(-1) ?? 50;
       if (!Number.isFinite(stock.stochasticD)) {
         stock.stochasticD = kVals.length
           ? kVals.reduce((a, b) => a + b, 0) / kVals.length
@@ -343,6 +222,7 @@ export function enrichForTechnicalScore(stock) {
     }
   }
 
+  // RSI14
   if (!Number.isFinite(stock.rsi14) && closes.length >= 15) {
     let gains = 0,
       losses = 0;
@@ -357,6 +237,7 @@ export function enrichForTechnicalScore(stock) {
     stock.rsi14 = 100 - 100 / (1 + rs);
   }
 
+  // MACD(12,26,9)
   if (
     (!Number.isFinite(stock.macd) || !Number.isFinite(stock.macdSignal)) &&
     closes.length >= 26
@@ -377,254 +258,280 @@ export function enrichForTechnicalScore(stock) {
       .slice(ema12.length - ema26.length)
       .map((v, i) => v - ema26[i]);
     const sig = ema(macdLine, 9);
-    stock.macd = macdLine[macdLine.length - 1] ?? 0;
-    stock.macdSignal = sig[sig.length - 1] ?? 0;
+    stock.macd = macdLine.at(-1) ?? 0;
+    stock.macdSignal = sig.at(-1) ?? 0;
   }
 
   if (!Number.isFinite(stock.currentPrice) && data.length) {
-    stock.currentPrice = data[data.length - 1].close ?? 0;
+    stock.currentPrice = data.at(-1).close ?? 0;
   }
 
   return stock;
 }
 
-/* ---------------------------------------------------------
-   5) Main scan — exportable for server & browser
---------------------------------------------------------- */
-/**
- * @param {Object}   opts
- * @param {string[]} [opts.tickers]        - e.g. ["7203","6758.T"]
- * @param {Array}    [opts.myPortfolio=[]] - e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
- * @param {Function} [opts.onItem]         - optional per-item callback
- * @param {"auto"|"browser"|"api"} [opts.mode="auto"] - force behavior if needed
- * @returns {Promise<{count:number, errors:string[], results:any[]}>}
- */
-export async function fetchStockAnalysis({
-  tickers = [],
-  myPortfolio = [],
-  onItem,
-  mode = "auto",
-} = {}) {
-  const filteredTickers = resolveTickers(tickers);
+/* =========================
+   Trade management (V2)
+========================= */
+function getTradeManagementSignal_V2(stock, trade, historicalData) {
+  const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
+  const { entryPrice, stopLoss, priceTarget } = trade;
 
-  const results = [];
-  const useBubble =
-    (mode === "browser" || (mode === "auto" && HAS_BUBBLE)) && !onItem;
+  if (currentPrice >= priceTarget) {
+    return {
+      status: "Sell Now",
+      reason: `Take Profit: Price reached target of ¥${priceTarget}.`,
+    };
+  }
+  if (currentPrice <= stopLoss) {
+    return {
+      status: "Sell Now",
+      reason: `Stop-Loss: Price hit stop-loss at ¥${stopLoss}.`,
+    };
+  }
 
-  // decide how to emit items
-  const emit = onItem
-    ? onItem
-    : useBubble
-    ? (obj) => {
-        try {
-          bubble_fn_result(obj);
-        } catch (e) {
-          console.error("bubble_fn_result failed:", e);
-        }
-      }
-    : (obj) => results.push(obj);
-
-  const errors = [];
-  let count = 0;
-
-  try {
-    for (const tickerObj of filteredTickers) {
-      console.log(`\n--- Fetching data for ${tickerObj.code} ---`);
-      try {
-        // 1) Yahoo data
-        const result = await fetchSingleStockData(tickerObj);
-        if (!result.success) {
-          throw new Error(
-            `Yahoo data error: ${result.error || "Unknown error"}`
-          );
-        }
-
-        const { code, sector, yahooData } = result.data;
-        if (!yahooData) {
-          throw new Error("Yahoo data is completely missing.");
-        }
-
-        // Validate some critical fields (defensive)
-        const critical = ["currentPrice", "highPrice", "lowPrice"];
-        const missingCritical = critical.filter(
-          (f) => !yahooData[f] && yahooData[f] !== 0
-        );
-        if (missingCritical.length) {
-          throw new Error(
-            `Missing critical fields: ${missingCritical.join(", ")}`
-          );
-        }
-
-        // 2) Build stock object
-        const stock = {
-          ticker: code,
-          sector,
-          currentPrice: yahooData.currentPrice,
-          highPrice: yahooData.highPrice,
-          lowPrice: yahooData.lowPrice,
-          openPrice: yahooData.openPrice,
-          prevClosePrice: yahooData.prevClosePrice,
-          marketCap: yahooData.marketCap,
-          peRatio: yahooData.peRatio,
-          pbRatio: yahooData.pbRatio,
-          dividendYield: yahooData.dividendYield,
-          dividendGrowth5yr: yahooData.dividendGrowth5yr,
-          fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
-          fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
-          epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
-          epsForward: yahooData.epsForward,
-          epsGrowthRate: yahooData.epsGrowthRate,
-          debtEquityRatio: yahooData.debtEquityRatio,
-          movingAverage50d: yahooData.movingAverage50d,
-          movingAverage200d: yahooData.movingAverage200d,
-          rsi14: yahooData.rsi14,
-          macd: yahooData.macd,
-          macdSignal: yahooData.macdSignal,
-          bollingerMid: yahooData.bollingerMid,
-          bollingerUpper: yahooData.bollingerUpper,
-          bollingerLower: yahooData.bollingerLower,
-          stochasticK: yahooData.stochasticK,
-          stochasticD: yahooData.stochasticD,
-          obv: yahooData.obv,
-          atr14: yahooData.atr14,
-        };
-
-        // 3) Historical + enrichment
-        const historicalData = await fetchHistoricalData(stock.ticker);
-        stock.historicalData = historicalData || [];
-        enrichForTechnicalScore(stock);
-
-        // 4) Scores
-        stock.technicalScore = getTechnicalScore(stock);
-        stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-        stock.valuationScore = getValuationScore(stock);
-        stock.tier = getNumericTier(stock);
-
-        // 5) Market sentiment horizons
-        const horizons = getComprehensiveMarketSentiment(stock, historicalData);
-        stock.shortTermScore = horizons.shortTerm.score;
-        stock.longTermScore = horizons.longTerm.score;
-        stock.shortTermBias = horizons.shortTerm.label;
-        stock.longTermBias = horizons.longTerm.label;
-        stock.shortTermConf = horizons.shortTerm.confidence;
-        stock.longTermConf = horizons.longTerm.confidence;
-
-        // 6) Entry timing
-        const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
-        stock.isBuyNow = finalSignal.buyNow;
-        stock.buyNowReason = finalSignal.reason;
-        stock.smartStopLoss = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
-        stock.smartPriceTarget =
-          finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
-
-        // 7) Trade management if in portfolio
-        const portfolioEntry = myPortfolio.find(
-          (p) => p.ticker === stock.ticker
-        );
-        if (portfolioEntry) {
-          const managementSignal = getTradeManagementSignal_V2(
-            stock,
-            portfolioEntry.trade,
-            historicalData
-          );
-          stock.managementSignalStatus = managementSignal.status;
-          stock.managementSignalReason = managementSignal.reason;
-        } else {
-          stock.managementSignalStatus = null;
-          stock.managementSignalReason = null;
-        }
-
-        // 8) Output object (Bubble-friendly)
-        const stockObject = {
-          _api_c2_ticker: stock.ticker,
-          _api_c2_sector: stock.sector,
-          _api_c2_currentPrice: stock.currentPrice,
-          _api_c2_shortTermScore: stock.shortTermScore,
-          _api_c2_longTermScore: stock.longTermScore,
-          _api_c2_prediction: stock.prediction,
-          _api_c2_stopLoss: stock.stopLoss,
-          _api_c2_targetPrice: stock.targetPrice,
-          _api_c2_growthPotential: stock.growthPotential,
-          _api_c2_score: stock.score,
-          _api_c2_finalScore: stock.finalScore,
-          _api_c2_tier: getNumericTier(stock),
-          _api_c2_smartStopLoss: stock.smartStopLoss,
-          _api_c2_smartPriceTarget: stock.smartPriceTarget,
-          _api_c2_limitOrder: stock.limitOrder,
-          _api_c2_isBuyNow: stock.isBuyNow,
-          _api_c2_buyNowReason: stock.buyNowReason,
-          _api_c2_managementSignalStatus: stock.managementSignalStatus,
-          _api_c2_managementSignalReason: stock.managementSignalReason,
-          _api_c2_otherData: JSON.stringify({
-            highPrice: stock.highPrice,
-            lowPrice: stock.lowPrice,
-            openPrice: stock.openPrice,
-            prevClosePrice: stock.prevClosePrice,
-            marketCap: stock.marketCap,
-            peRatio: stock.peRatio,
-            pbRatio: stock.pbRatio,
-            dividendYield: stock.dividendYield,
-            dividendGrowth5yr: stock.dividendGrowth5yr,
-            fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
-            fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
-            epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-            epsForward: stock.epsForward,
-            epsGrowthRate: stock.epsGrowthRate,
-            debtEquityRatio: stock.debtEquityRatio,
-            movingAverage50d: stock.movingAverage50d,
-            movingAverage200d: stock.movingAverage200d,
-            rsi14: stock.rsi14,
-            macd: stock.macd,
-            macdSignal: stock.macdSignal,
-            bollingerMid: stock.bollingerMid,
-            bollingerUpper: stock.bollingerUpper,
-            bollingerLower: stock.bollingerLower,
-            stochasticK: stock.stochasticK,
-            stochasticD: stock.stochasticD,
-            obv: stock.obv,
-            atr14: stock.atr14,
-            technicalScore: stock.technicalScore,
-            fundamentalScore: stock.fundamentalScore,
-            valuationScore: stock.valuationScore,
-          }),
-        };
-
-        emit(stockObject);
-        count += 1;
-      } catch (error) {
-        console.error(
-          `❌ Error processing ticker ${tickerObj.code}:`,
-          error.message
-        );
-        errors.push(`Ticker ${tickerObj.code}: ${error.message}`);
-      }
+  const isProfitable = currentPrice > entryPrice;
+  if (isProfitable) {
+    if (macd < macdSignal) {
+      return {
+        status: "Protect Profit",
+        reason:
+          "Warning: Momentum (MACD) has turned bearish. Consider taking profits.",
+      };
     }
-  } finally {
-    if (useBubble) {
-      try {
-        bubble_fn_finish();
-      } catch (e) {
-        console.error("bubble_fn_finish failed:", e);
-      }
+    if (currentPrice < movingAverage25d) {
+      return {
+        status: "Protect Profit",
+        reason:
+          "Warning: Price broke below 25-day MA support. Consider taking profits.",
+      };
     }
   }
 
-  // Always return (on browser Bubble path, results will likely be empty by design)
-  return { count, errors, results };
+  if (historicalData.length >= 2) {
+    const t = historicalData.at(-1);
+    const y = historicalData.at(-2);
+    const bearEngulf =
+      t.close < t.open &&
+      y.close > y.open &&
+      t.close < y.open &&
+      t.open > y.close;
+    if (bearEngulf) {
+      return {
+        status: "Sell Now",
+        reason: "Trend Reversal: Bearish engulfing pattern appeared.",
+      };
+    }
+  }
+
+  return {
+    status: "Hold",
+    reason: "Uptrend remains intact. Price is above key support.",
+  };
 }
 
-/* ---------------------------------------------------------
-   6) Optional browser adapter (keeps old window.scan API)
---------------------------------------------------------- */
+/* =========================
+   Main: two modes
+   - Browser: bubble_fn_result / bubble_fn_finish
+   - Server: no Bubble calls
+   Overloads:
+     fetchStockAnalysis(tickerList, myPortfolio, isFromBrowser)
+     fetchStockAnalysis({ tickers, myPortfolio, isFromBrowser, onItem })
+========================= */
+export async function fetchStockAnalysis(a, b, c) {
+  // Normalize args
+  let tickers = [];
+  let myPortfolio = [];
+  let isFromBrowser = false;
+  let onItem = null;
+
+  if (Array.isArray(a)) {
+    tickers = a;
+    myPortfolio = Array.isArray(b) ? b : [];
+    isFromBrowser = !!c;
+  } else {
+    const opts = a || {};
+    tickers = Array.isArray(opts.tickers) ? opts.tickers : [];
+    myPortfolio = Array.isArray(opts.myPortfolio) ? opts.myPortfolio : [];
+    isFromBrowser = !!opts.isFromBrowser;
+    onItem = typeof opts.onItem === "function" ? opts.onItem : null;
+  }
+
+  const emit = (obj) => {
+    if (onItem) {
+      try {
+        onItem(obj);
+      } catch (e) {
+        console.error("onItem failed:", e);
+      }
+    }
+    if (isFromBrowser && typeof bubble_fn_result === "function") {
+      try {
+        bubble_fn_result(obj);
+      } catch (e) {
+        console.error("bubble_fn_result failed:", e);
+      }
+    }
+  };
+
+  const errors = [];
+  const filteredTickers = resolveTickers(tickers);
+  let count = 0;
+
+  for (const tObj of filteredTickers) {
+    console.log(`\n--- Fetching data for ${tObj.code} ---`);
+    try {
+      const res = await fetchSingleStockData(tObj);
+      if (!res.success) throw new Error(`Yahoo data error: ${res.error}`);
+
+      const { code, sector, yahooData } = res.data || {};
+      if (!yahooData) throw new Error("Yahoo data is missing.");
+
+      const stock = {
+        ticker: code,
+        sector,
+        currentPrice: yahooData.currentPrice,
+        highPrice: yahooData.highPrice,
+        lowPrice: yahooData.lowPrice,
+        openPrice: yahooData.openPrice,
+        prevClosePrice: yahooData.prevClosePrice,
+        marketCap: yahooData.marketCap,
+        peRatio: yahooData.peRatio,
+        pbRatio: yahooData.pbRatio,
+        dividendYield: yahooData.dividendYield,
+        dividendGrowth5yr: yahooData.dividendGrowth5yr,
+        fiftyTwoWeekHigh: yahooData.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: yahooData.fiftyTwoWeekLow,
+        epsTrailingTwelveMonths: yahooData.epsTrailingTwelveMonths,
+        epsForward: yahooData.epsForward,
+        epsGrowthRate: yahooData.epsGrowthRate,
+        debtEquityRatio: yahooData.debtEquityRatio,
+        movingAverage50d: yahooData.movingAverage50d,
+        movingAverage200d: yahooData.movingAverage200d,
+        rsi14: yahooData.rsi14,
+        macd: yahooData.macd,
+        macdSignal: yahooData.macdSignal,
+        bollingerMid: yahooData.bollingerMid,
+        bollingerUpper: yahooData.bollingerUpper,
+        bollingerLower: yahooData.bollingerLower,
+        stochasticK: yahooData.stochasticK,
+        stochasticD: yahooData.stochasticD,
+        obv: yahooData.obv,
+        atr14: yahooData.atr14,
+      };
+
+      const historicalData = await fetchHistoricalData(stock.ticker);
+      stock.historicalData = historicalData;
+      enrichForTechnicalScore(stock);
+
+      stock.technicalScore = getTechnicalScore(stock);
+      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
+      stock.valuationScore = getValuationScore(stock);
+      stock.tier = getNumericTier(stock);
+
+      const horizons = getComprehensiveMarketSentiment(stock, historicalData);
+      stock.shortTermScore = horizons.shortTerm.score;
+      stock.longTermScore = horizons.longTerm.score;
+      stock.shortTermBias = horizons.shortTerm.label;
+      stock.longTermBias = horizons.longTerm.label;
+      stock.shortTermConf = horizons.shortTerm.confidence;
+      stock.longTermConf = horizons.longTerm.confidence;
+
+      const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
+      stock.isBuyNow = finalSignal.buyNow;
+      stock.buyNowReason = finalSignal.reason;
+      stock.smartStopLoss = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
+      stock.smartPriceTarget =
+        finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
+
+      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
+      if (portfolioEntry) {
+        const management = getTradeManagementSignal_V2(
+          stock,
+          portfolioEntry.trade,
+          historicalData
+        );
+        stock.managementSignalStatus = management.status;
+        stock.managementSignalReason = management.reason;
+      } else {
+        stock.managementSignalStatus = null;
+        stock.managementSignalReason = null;
+      }
+
+      const outObj = {
+        _api_c2_ticker: stock.ticker,
+        _api_c2_sector: stock.sector,
+        _api_c2_currentPrice: stock.currentPrice,
+        _api_c2_shortTermScore: stock.shortTermScore,
+        _api_c2_longTermScore: stock.longTermScore,
+        _api_c2_tier: stock.tier,
+        _api_c2_smartStopLoss: stock.smartStopLoss,
+        _api_c2_smartPriceTarget: stock.smartPriceTarget,
+        _api_c2_isBuyNow: stock.isBuyNow,
+        _api_c2_buyNowReason: stock.buyNowReason,
+        _api_c2_managementSignalStatus: stock.managementSignalStatus,
+        _api_c2_managementSignalReason: stock.managementSignalReason,
+        _api_c2_otherData: JSON.stringify({
+          highPrice: stock.highPrice,
+          lowPrice: stock.lowPrice,
+          openPrice: stock.openPrice,
+          prevClosePrice: stock.prevClosePrice,
+          marketCap: stock.marketCap,
+          peRatio: stock.peRatio,
+          pbRatio: stock.pbRatio,
+          dividendYield: stock.dividendYield,
+          dividendGrowth5yr: stock.dividendGrowth5yr,
+          fiftyTwoWeekHigh: stock.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
+          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+          epsForward: stock.epsForward,
+          epsGrowthRate: stock.epsGrowthRate,
+          debtEquityRatio: stock.debtEquityRatio,
+          movingAverage50d: stock.movingAverage50d,
+          movingAverage200d: stock.movingAverage200d,
+          rsi14: stock.rsi14,
+          macd: stock.macd,
+          macdSignal: stock.macdSignal,
+          bollingerMid: stock.bollingerMid,
+          bollingerUpper: stock.bollingerUpper,
+          bollingerLower: stock.bollingerLower,
+          stochasticK: stock.stochasticK,
+          stochasticD: stock.stochasticD,
+          obv: stock.obv,
+          atr14: stock.atr14,
+          technicalScore: stock.technicalScore,
+          fundamentalScore: stock.fundamentalScore,
+          valuationScore: stock.valuationScore,
+        }),
+      };
+
+      emit(outObj);
+      count += 1;
+    } catch (err) {
+      console.error(`❌ Error processing ${tObj.code}:`, err?.message || err);
+      errors.push(`Ticker ${tObj.code}: ${err?.message || String(err)}`);
+    }
+  }
+
+  if (isFromBrowser && typeof bubble_fn_finish === "function") {
+    try {
+      bubble_fn_finish();
+    } catch (e) {
+      console.error("bubble_fn_finish failed:", e);
+    }
+  }
+
+  return { count, errors };
+}
+
+/* =========================
+   Browser adapter for Bubble
+========================= */
 if (IS_BROWSER) {
-  window.scan = {
-    async fetchStockAnalysis(tickerList = [], myPortfolio = []) {
-      // No onItem => auto Bubble emit
-      return fetchStockAnalysis({
-        tickers: tickerList,
-        myPortfolio,
-        mode: "browser",
-      });
-    },
+  window.scan = window.scan || {};
+  window.scan.fetchStockAnalysis = async (
+    tickerList = [],
+    myPortfolio = []
+  ) => {
+    return fetchStockAnalysis(tickerList, myPortfolio, true);
   };
 }
