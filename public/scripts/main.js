@@ -479,9 +479,19 @@ export async function fetchStockAnalysis({
 
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
-      stock.smartStopLoss = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
-      stock.smartPriceTarget =
-        finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
+
+      // Normalize + mirror (handles both buyNow true/false)
+      const normSL = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
+      const normTP = finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
+
+      // “Smart” fields
+      stock.smartStopLoss = normSL;
+      stock.smartPriceTarget = normTP;
+
+      // Plain fields used by the API payload
+      stock.stopLoss = normSL;
+      stock.targetPrice = normTP; // NOTE: your payload uses targetPrice key
+      stock.priceTarget = normTP; // optional legacy alias (harmless)
 
       // 7) trade management if held
       const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
