@@ -298,13 +298,42 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  // ---- Final decision ----
+      // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
     if (!priceActionGate) top.push(gateWhy);
     if (ms.trend === "DOWN")
       top.push("Trend is DOWN (signals allowed, but RR/guards may reject).");
+
+    // Build a concise reason string (keeps your existing behavior)
     const reason = buildNoReason(top, reasons);
+
+    // === NEW: provisional stop/target even when not buyable ===
+    const atr = Math.max(num(stock.atr14), (num(stock.currentPrice) || num(last.close)) * 0.005);
+    const pxNow = num(stock.currentPrice) || num(last.close);
+
+    // Supports below (nearest first). Prefer swing-low − 0.5*ATR; fallback to MA25 − 0.6*ATR; final fallback: px − 1.2*ATR
+    const supports = findSupportsBelow(data, pxNow);
+    const stopFromSwing = supports[0] != null ? supports[0] - 0.5 * atr : NaN;
+    const stopFromMA25  = (ms.ma25 > 0 && ms.ma25 < pxNow) ? ms.ma25 - 0.6 * atr : NaN;
+
+    let provisionalStop = [stopFromSwing, stopFromMA25, pxNow - 1.2 * atr]
+      .filter(Number.isFinite)
+      .reduce((m, v) => Math.min(m, v), Infinity);
+    if (!Number.isFinite(provisionalStop)) provisionalStop = pxNow - 1.2 * atr;
+
+    // Resistance above for target (prefer nearest resistance, ensure min reward)
+    const resList = findResistancesAbove(data, pxNow, stock);
+    let provisionalTarget = resList[0]
+      ? Math.max(resList[0], pxNow + 2.3 * atr)
+      : pxNow + 2.6 * atr;
+
+    // Normalize via RR function (enforces min stop distance, can bump target)
+    const rr0 = analyzeRR(pxNow, provisionalStop, provisionalTarget, stock, ms, cfg, {
+      kind: "FALLBACK",
+      data,
+    });
+
     const debug = opts.debug
       ? {
           ms,
@@ -312,16 +341,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           priceActionGate,
           reasons,
           checks,
-          px,
+          px: pxNow,
           openPx,
           prevClose,
           cfg,
+          provisional: { atr, supports, resList, rr0 },
         }
       : undefined;
-    // No referencing `best` here:
-    return withNo(reason, debug);
+
+    return {
+      buyNow: false,
+      reason,                     // why it's not an entry *now*
+      stopLoss: rr0.stop,         // provisional but usable
+      priceTarget: rr0.target,    // provisional but usable
+      smartStopLoss: rr0.stop,
+      smartPriceTarget: rr0.target,
+      timeline: [],               // no entry plan when not actionable
+      debug,
+    };
   }
 
+  // === Positive path: pick best candidate and return actionable plan ===
   // prioritize: DIP > RETEST > RECLAIM > INSIDE > highest RR (BREAKOUT mixed in)
   const priority = (k) =>
     k === "DIP ENTRY"
@@ -356,7 +396,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       }
     : undefined;
 
-  // Build a swing-trade strategy timeline (R-based milestones + trailing rule)
   const swingTimeline = buildSwingTimeline(px, best, best.rr, ms);
 
   return {
@@ -364,13 +403,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
     stopLoss: best.stop,
     priceTarget: best.target,
-    smartStopLoss: best.stop, // convenience fields
+    smartStopLoss: best.stop,
     smartPriceTarget: best.target,
     timeline: swingTimeline,
     debug,
   };
-}
+} // ← CLOSES analyzeSwingTradeEntry
 
+  
 /* ============================ Config ============================ */
 function getConfig(opts) {
   return {
@@ -1110,6 +1150,23 @@ function findResistancesAbove(data, px, stock) {
   );
   return uniq;
 }
+
+
+function findSupportsBelow(data, px) {
+  const downs = [];
+  const win = data.slice(-60);
+  for (let i = 2; i < win.length - 2; i++) {
+    const l = num(win[i].low);
+    if (l < px && l < num(win[i - 1].low) && l < num(win[i + 1].low)) {
+      downs.push(l);
+    }
+  }
+  const uniq = Array.from(new Set(downs.map((v) => +v.toFixed(2)))).sort(
+    (a, b) => b - a
+  ); // nearest support first (largest below px)
+  return uniq;
+}
+
 
 function nearRecentSupportOrPivot(data, px, atr, cfg2 = { pct: 0.02 }) {
   const win = data.slice(-40);
