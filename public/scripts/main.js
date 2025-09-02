@@ -122,6 +122,150 @@ function safeJsonParse(text) {
   }
 }
 
+
+/* ---- Helpers required by getTradeManagementSignal_V3 ---- */
+
+// Round a number safely
+function round0(v) {
+  return Math.round(Number(v) || 0);
+}
+
+// Last close from candle array
+function lastClose(data) {
+  return Number(data?.at?.(-1)?.close) || 0;
+}
+
+// Simple moving average over candle arrays (field = "close" by default)
+function sma(data, n, field = "close") {
+  if (!Array.isArray(data) || data.length < n) return 0;
+  let s = 0;
+  for (let i = data.length - n; i < data.length; i++) {
+    s += Number(data[i]?.[field]) || 0;
+  }
+  return s / n;
+}
+
+// Average True Range with safe fallbacks to 'close'
+function calcATR(data, p = 14) {
+  if (!Array.isArray(data) || data.length < p + 1) return 0;
+  const trs = [];
+  for (let i = 1; i < data.length; i++) {
+    const h  = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l  = Number(data[i]?.low  ?? data[i]?.close ?? 0);
+    const pc = Number(data[i - 1]?.close ?? 0);
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  const slice = trs.slice(-p);
+  const sum = slice.reduce((a, b) => a + b, 0);
+  return sum / p;
+}
+
+// ADX(14) (Wilder smoothing) with safe fallbacks
+function calcADX14(data) {
+  if (!Array.isArray(data) || data.length < 16) return 0;
+
+  const plusDM = [];
+  const minusDM = [];
+  const tr = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const h  = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l  = Number(data[i]?.low  ?? data[i]?.close ?? 0);
+    const pc = Number(data[i - 1]?.close ?? 0);
+    const ph = Number(data[i - 1]?.high  ?? data[i - 1]?.close ?? 0);
+    const pl = Number(data[i - 1]?.low   ?? data[i - 1]?.close ?? 0);
+
+    const up   = h - ph;
+    const down = pl - l;
+
+    plusDM.push(up > down && up > 0 ? up : 0);
+    minusDM.push(down > up && down > 0 ? down : 0);
+    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+
+  const p = 14;
+
+  const smooth = (arr, period) => {
+    if (arr.length < period) return [];
+    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [s];
+    for (let i = period; i < arr.length; i++) {
+      s = out[out.length - 1] - out[out.length - 1] / period + arr[i];
+      out.push(s);
+    }
+    return out;
+  };
+
+  const smTR = smooth(tr, p);
+  const smP  = smooth(plusDM, p);
+  const smM  = smooth(minusDM, p);
+  if (!smTR.length) return 0;
+
+  const plusDI  = smTR.map((v, i) => 100 * ((smP[i] || 0) / (v || 1)));
+  const minusDI = smTR.map((v, i) => 100 * ((smM[i] || 0) / (v || 1)));
+  const dx = plusDI.map((pdi, i) => {
+    const mdi = minusDI[i] || 0;
+    const denom = Math.max(1e-8, pdi + mdi);
+    return 100 * (Math.abs(pdi - mdi) / denom);
+  });
+
+  const smDX = smooth(dx, p).map(v => v / p);
+  return smDX.at(-1) || 0;
+}
+
+// Last swing low (simple pivot scan on recent window)
+function lastSwingLow(data) {
+  if (!Array.isArray(data) || data.length < 5) return 0;
+  const w = data.slice(-40);
+  for (let i = w.length - 3; i >= 2; i--) {
+    const l  = Number(w[i]?.low  ?? w[i]?.close ?? 0);
+    const l0 = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? 0);
+    const l1 = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? 0);
+    if (l < l0 && l < l1) return l;
+  }
+  return Number(w.at(-1)?.low ?? w.at(-1)?.close ?? 0);
+}
+
+// Did price make a new lower low vs prior swing lows (recent window)?
+function madeLowerLow(data) {
+  if (!Array.isArray(data) || data.length < 4) return false;
+  const w = data.slice(-6);
+  let prevSwing = Infinity;
+  for (let i = 1; i < w.length - 1; i++) {
+    const li  = Number(w[i]?.low  ?? w[i]?.close ?? Infinity);
+    const lim = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? Infinity);
+    const lip = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? Infinity);
+    if (li < lim && li < lip) prevSwing = Math.min(prevSwing, li);
+  }
+  const lastLow = Number(w.at(-1)?.low ?? w.at(-1)?.close ?? Infinity);
+  return lastLow < prevSwing;
+}
+
+// Proximity helper (within pct of level)
+function near(px, lvl, pct) {
+  const a = Number(px);
+  const b = Number(lvl);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= 0) return false;
+  return Math.abs(a - b) / b <= pct;
+}
+
+// Recent pivot high (looks back ~20 bars excluding the last 2)
+function recentPivotHigh(data) {
+  if (!Array.isArray(data) || data.length < 12) return 0;
+  const win = data.slice(-22, -2);
+  if (!win.length) return 0;
+  return Math.max(...win.map(d => Number(d?.high ?? d?.close ?? 0)));
+}
+
+// Structural trailing stop: behind last swing low and/or under MA25
+function trailingStructStop(historicalData, ma25, atr) {
+  const swing = lastSwingLow(historicalData);
+  const bySwing = swing - 0.5 * atr;
+  const byMA    = (ma25 > 0 ? ma25 - 0.6 * atr : -Infinity);
+  return Math.max(bySwing, byMA);
+}
+
+
 /**
  * getTradeManagementSignal_V3
  *
