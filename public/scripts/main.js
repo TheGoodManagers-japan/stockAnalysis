@@ -123,65 +123,191 @@ function safeJsonParse(text) {
 }
 
 /* -------------------------------------------
-   2) Trade Management Signal (V2)
+   2) Trade Management Signal (V3) — dip & swing aligned
 ------------------------------------------- */
-function getTradeManagementSignal_V2(stock, trade, historicalData) {
-  const { currentPrice, movingAverage25d, macd, macdSignal } = stock;
-  const { entryPrice, stopLoss, priceTarget } = trade;
+function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = {}) {
+  const n = v => Number.isFinite(v) ? v : 0;
+  const px = n(stock.currentPrice);
+  const entry = n(trade.entryPrice);
+  const stop = n(trade.stopLoss);
+  const target = n(trade.priceTarget);
+  const ma25 = n(stock.movingAverage25d) || sma(historicalData, 25);
+  const atr = Math.max(n(stock.atr14), calcATR(historicalData, 14), px * 0.005, 1e-6);
 
-  if (currentPrice >= priceTarget) {
+  const sentiment = n(ctx.sentimentScore) || 4;    // 1..7 (your shortTerm)
+  const ml = n(ctx.deep?.mlScore);                 // optional
+  // NEW: ADX fallback so ctx.adx is optional
+  const adx = Number.isFinite(ctx.adx) ? ctx.adx : calcADX14(historicalData);
+  const isExtended = !!ctx.isExtended;
+
+  // R-multiple progress (use initialStop if provided; else fall back to current stop)
+  const initialStop = Number.isFinite(trade.initialStop) ? trade.initialStop : stop;
+  const riskPerShare = Math.max(0.01, entry - initialStop);
+  const progressR = (px - entry) / riskPerShare;
+
+  // Hard exits
+  if (px <= stop) {
+    return { status: "Sell Now", reason: `Stop-loss hit at ¥${round0(stop)}.` };
+  }
+
+  // Structural breakdown: close < MA25 + new lower low + bearish context
+  const brokeMA25 = lastClose(historicalData) < ma25 && ma25 > 0;
+  const bearishContext =
+    sentiment >= 6 || ml <= -1.5 ||
+    (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
+     ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
+  if (brokeMA25 && madeLowerLow(historicalData) && bearishContext) {
+    return { status: "Sell Now", reason: "Trend break: close < MA25 with lower low and bearish context." };
+  }
+
+  // Profit taking / extension logic
+  const strengthOK =
+    (sentiment <= 3) &&
+    (ml >= 1 || ctx.deep?.longTermRegime?.type === "TRENDING") &&
+    (!isExtended) &&
+    (adx ? adx > 25 : true);
+
+  if (px >= target) {
+    if (strengthOK) {
+      return {
+        status: "Scale Partial",
+        reason: `Target reached (¥${round0(target)}). Context strong — scale 50% and trail the rest.`,
+        updatedStopLoss: Math.max(stop, trailingStructStop(historicalData, ma25, atr)),
+        suggest: { takeProfitPct: 50 }
+      };
+    } else {
+      return { status: "Sell Now", reason: `Take profit at target (¥${round0(target)}). Context not strong enough to extend.` };
+    }
+  }
+
+  // R milestones
+  if (progressR >= 2) {
     return {
-      status: "Sell Now",
-      reason: `Take Profit: Price reached target of ¥${priceTarget}.`,
+      status: "Protect Profit",
+      reason: `Up ≥ +2R. Trail with structure/MA25 to lock gains.`,
+      updatedStopLoss: Math.max(stop, entry + 1.2 * riskPerShare, trailingStructStop(historicalData, ma25, atr))
     };
   }
-  if (currentPrice <= stopLoss) {
+  if (progressR >= 1) {
     return {
-      status: "Sell Now",
-      reason: `Stop-Loss: Price hit stop-loss at ¥${stopLoss}.`,
+      status: "Protect Profit",
+      reason: "Up ≥ +1R. Move stop to breakeven.",
+      updatedStopLoss: Math.max(stop, entry)
     };
   }
 
-  const isProfitable = currentPrice > entryPrice;
-  if (isProfitable) {
-    if (macd < macdSignal) {
-      return {
-        status: "Protect Profit",
-        reason:
-          "Warning: Momentum (MACD) has turned bearish. Consider taking profits.",
-      };
-    }
-    if (currentPrice < movingAverage25d) {
-      return {
-        status: "Protect Profit",
-        reason:
-          "Warning: Price broke below 25-day MA support. Consider taking profits.",
-      };
+  // Entry-kind aware holds
+  const entryKind = (ctx.entryKind || "").toUpperCase();
+  const aboveMA25 = px >= ma25 || ma25 === 0;
+
+  if ((entryKind === "DIP" || entryKind === "RETEST") && aboveMA25 && sentiment <= 4) {
+    return { status: "Hold", reason: "Healthy pullback above MA25 after DIP/RETEST entry; sentiment not bearish." };
+  }
+  if (entryKind === "BREAKOUT") {
+    const pivot = recentPivotHigh(historicalData);
+    const nearPivot = pivot > 0 && Math.abs(px - pivot) <= 1.3 * atr;
+    const heldZone = pivot > 0 && n(historicalData.at(-1)?.low) >= pivot - 0.6 * atr;
+    if (pivot && nearPivot && heldZone) {
+      return { status: "Hold", reason: "Breakout retest holding prior pivot zone." };
     }
   }
 
-  if (historicalData.length >= 2) {
-    const today = historicalData[historicalData.length - 1];
-    const yesterday = historicalData[historicalData.length - 2];
-    const isBearishEngulfing =
-      today.close < today.open &&
-      yesterday.close > yesterday.open &&
-      today.close < yesterday.open &&
-      today.open > yesterday.close;
-
-    if (isBearishEngulfing) {
-      return {
-        status: "Sell Now",
-        reason: "Trend Reversal: Strong bearish engulfing pattern appeared.",
-      };
+  // Near 52W high + bearish engulfing → tighten
+  const last = historicalData?.at?.(-1) || {};
+  const prev = historicalData?.at?.(-2) || {};
+  const bearishEngulf =
+    n(last.close) < n(last.open) &&
+    n(prev.close) > n(prev.open) &&
+    n(last.close) < n(prev.open) &&
+    n(last.open) > n(prev.close);
+  const near52wHigh = near(px, n(stock.fiftyTwoWeekHigh), 0.02);
+  if (near52wHigh && bearishEngulf) {
+    return {
+      status: "Protect Profit",
+      reason: "Bearish engulfing near resistance — tighten stop.",
+      updatedStopLoss: Math.max(stop, trailingStructStop(historicalData, ma25, atr))
+    };
     }
-  }
 
-  return {
-    status: "Hold",
-    reason: "Uptrend remains intact. Price is above key support.",
-  };
+  // Default: structure-first
+  if (aboveMA25) {
+    return { status: "Hold", reason: "Uptrend structure intact (≥ MA25). Allow normal volatility." };
+  } else {
+    return {
+      status: "Protect Profit",
+      reason: "Lost MA25 but no full breakdown — tighten to structure/MA stop.",
+      updatedStopLoss: Math.max(stop, trailingStructStop(historicalData, ma25, atr))
+    };
+  }
 }
+
+/* ---- tiny helpers used by V3 (self-contained) ---- */
+function trailingStructStop(historicalData, ma25, atr) {
+  return Math.max(lastSwingLow(historicalData) - 0.5 * atr, ma25 > 0 ? ma25 - 0.6 * atr : -Infinity);
+}
+function round0(v){ return Math.round(Number(v)||0); }
+function lastClose(data){ return Number(data?.at?.(-1)?.close) || 0; }
+function sma(data, n, f="close"){
+  if(!Array.isArray(data)||data.length<n) return 0;
+  let s=0; for(let i=data.length-n;i<data.length;i++) s+=Number(data[i][f])||0; return s/n;
+}
+function calcATR(data, p=14){
+  if(!Array.isArray(data)||data.length<p+1) return 0;
+  const trs=[]; for(let i=1;i<data.length;i++){
+    const h=data[i].high, l=data[i].low, pc=data[i-1].close;
+    trs.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
+  }
+  const slice = trs.slice(-p); return slice.reduce((a,b)=>a+b,0)/p;
+}
+// NEW: simple ADX(14) fallback
+function calcADX14(data){
+  if(!Array.isArray(data)||data.length<16) return 0;
+  const plusDM=[], minusDM=[], tr=[];
+  for(let i=1;i<data.length;i++){
+    const h=data[i].high, l=data[i].low, pc=data[i-1].close, ph=data[i-1].high, pl=data[i-1].low;
+    const up=h-ph, down=pl-l;
+    plusDM.push((up>down && up>0) ? up : 0);
+    minusDM.push((down>up && down>0) ? down : 0);
+    tr.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
+  }
+  const smooth=(arr,p)=>{ if(arr.length<p) return []; let s=arr.slice(0,p).reduce((a,b)=>a+b,0), out=[s];
+    for(let i=p;i<arr.length;i++){ s = out[out.length-1] - out[out.length-1]/p + arr[i]; out.push(s); }
+    return out;
+  };
+  const p=14, smTR=smooth(tr,p), smP=smooth(plusDM,p), smM=smooth(minusDM,p);
+  if(!smTR.length) return 0;
+  const plusDI=smTR.map((v,i)=> 100*((smP[i]||0)/(v||1)));
+  const minusDI=smTR.map((v,i)=> 100*((smM[i]||0)/(v||1)));
+  const dx=plusDI.map((pdi,i)=> 100*(Math.abs(pdi-(minusDI[i]||0))/Math.max(1e-8,pdi+(minusDI[i]||0))));
+  const adxSmooth=smooth(dx,p).map(v=>v/p);
+  return adxSmooth.at(-1) || 0;
+}
+function lastSwingLow(data){
+  if(!Array.isArray(data)||data.length<5) return 0;
+  const w = data.slice(-40);
+  for(let i=w.length-3;i>=2;i--){
+    const l=w[i].low, l0=w[i-1].low, l1=w[i+1].low;
+    if(l<l0 && l<l1) return l;
+  }
+  return w.at(-1)?.low || 0;
+}
+function madeLowerLow(data){
+  if(!Array.isArray(data)||data.length<4) return false;
+  const w = data.slice(-6);
+  let prevSwing = Infinity;
+  for(let i=1;i<w.length-1;i++){
+    if(w[i].low < w[i-1].low && w[i].low < w[i+1].low) prevSwing = Math.min(prevSwing, w[i].low);
+  }
+  return (w.at(-1)?.low ?? Infinity) < prevSwing;
+}
+function near(px, lvl, pct){ return Number.isFinite(px)&&Number.isFinite(lvl)&&lvl>0 ? Math.abs(px-lvl)/lvl <= pct : false; }
+function recentPivotHigh(data){
+  if(!Array.isArray(data)||data.length<12) return 0;
+  const win = data.slice(-22, -2);
+  if(win.length<10) return 0;
+  return Math.max(...win.map(d=>Number(d.high)||0));
+}
+
 
 /* -------------------------------------------
    3) Lightweight technical enrichment
@@ -370,6 +496,20 @@ function resolveTickers(tickers) {
   return out;
 }
 
+
+function extractEntryKindFromReason(reason = "") {
+  // reason examples from your entry engine:
+  // "DIP ENTRY: ...", "RETEST ENTRY: ...", "MA25 RECLAIM: ...", "INSIDE CONTINUATION: ...", "BREAKOUT: ..."
+  const head = String(reason).toUpperCase();
+  if (head.startsWith("DIP")) return "DIP";
+  if (head.startsWith("RETEST")) return "RETEST";
+  if (head.startsWith("MA25 RECLAIM")) return "RECLAIM";
+  if (head.startsWith("INSIDE")) return "INSIDE";
+  if (head.startsWith("BREAKOUT")) return "BREAKOUT";
+  return ""; // unknown/neutral
+}
+
+
 /* -------------------------------------------
    5) Main scan — exportable for server & browser
 ------------------------------------------- */
@@ -494,15 +634,46 @@ export async function fetchStockAnalysis({
       stock.priceTarget = normTP; // optional legacy alias (harmless)
 
       // 7) trade management if held
+      // 7) trade management if held
       const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
       if (portfolioEntry) {
-        const mgmt = getTradeManagementSignal_V2(
+        // Try to infer entry kind from your entry engine's reason text, if present
+        const entryKind = extractEntryKindFromReason(finalSignal?.reason); // DIP / RETEST / RECLAIM / INSIDE / BREAKOUT
+
+        const mgmt = getTradeManagementSignal_V3(
           stock,
-          portfolioEntry.trade,
-          historicalData
+          {
+            ...portfolioEntry.trade,
+            // helps V3 compute R progress correctly even if stopLoss has been trailed
+            initialStop:
+              portfolioEntry.trade.initialStop ?? portfolioEntry.trade.stopLoss,
+          },
+          historicalData,
+          {
+            entryKind, // optional but helpful
+            sentimentScore: stock.shortTermScore, // your 1..7 short-term score
+            // deep is optional; if your orchestrator exposes it, pass it:
+            // deep: horizons.deep,
+            // ADX is optional; V3 computes fallback if omitted
+            isExtended:
+              Number.isFinite(stock.bollingerMid) && stock.bollingerMid > 0
+                ? (stock.currentPrice - stock.bollingerMid) /
+                    stock.bollingerMid >
+                  0.15
+                : false,
+          }
         );
+
         stock.managementSignalStatus = mgmt.status;
         stock.managementSignalReason = mgmt.reason;
+
+        // If V3 suggests a tighter stop, surface it (without overwriting your portfolio by force)
+        if (Number.isFinite(mgmt.updatedStopLoss)) {
+          stock.managementUpdatedStop = Math.round(mgmt.updatedStopLoss);
+          // optionally reflect it in the "smart" fields shown in Bubble:
+          stock.smartStopLoss = stock.managementUpdatedStop;
+          stock.stopLoss = stock.managementUpdatedStop; // if you want UI to show the tightened stop
+        }
       } else {
         stock.managementSignalStatus = null;
         stock.managementSignalReason = null;

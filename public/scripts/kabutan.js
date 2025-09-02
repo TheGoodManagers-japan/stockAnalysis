@@ -1,6 +1,6 @@
 // === Kabutan -> POST { news: [...] } every 5 min ===
 // Sends only ONE body field (body_text OR body_html) to cut payload size.
-// https://s.kabutan.jp/market_news/?day=15&month=8&page=1&search_archive_news=13&year=2025
+// https://s.kabutan.jp/market_news/?day=15&month=9&page=1&search_archive_news=13&year=2025
 // === Kabutan -> POST { news: [...] } every 5 min (JP tickers only) ===
 // === Kabutan -> POST { news: [...] } every 5 min (JP tickers only; single "ticker") ===
 (() => {
