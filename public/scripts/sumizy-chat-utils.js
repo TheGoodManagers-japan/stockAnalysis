@@ -84,7 +84,7 @@ function waitForElement(selector, maxRetries = 50, retryDelay = 2000) {
       checkElement();
     });
   }
-
+  window.waitForElement = waitForElement; // <- add this
   
 /* ─────────── LANGUAGE TOGGLE ─────────── */
 function switchLanguage(lang) {
