@@ -12,7 +12,7 @@
         "headers": [
           {
             "key": "Access-Control-Allow-Origin",
-            "value": "https://thegoodmanagers.com"
+            "value": "*"
           },
           {
             "key": "Access-Control-Allow-Methods",
