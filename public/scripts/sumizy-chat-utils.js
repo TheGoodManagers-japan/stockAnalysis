@@ -126,3 +126,19 @@ window.findVisibleRG = () => {
     return null;
   };
   
+
+
+  Object.assign(window, {
+    DATE_LOCALE,
+    parseTime,
+    fmtTime,
+    fmtDate,
+    esc,
+    agg,
+    renderDivider,
+    waitForElement,
+    switchLanguage,
+    scrollToMessage,
+    findVisibleRG,
+  });
+  
