@@ -3,10 +3,7 @@ let typingIndicatorElement = null;
 let typingIndicatorTimeout = null;
 
 window.showAITypingIndicator = function (rgNum) {
-  const isAIChat =
-    window.location.pathname.includes("ai-chat") ||
-    window.location.search.includes("ai-chat");
-  if (!isAIChat) return;
+    if (!window.isAIChat()) return;
 
   const chatContainer = document.querySelector(`#rg${rgNum} .chat-messages`);
   if (!chatContainer) return;
@@ -110,14 +107,60 @@ if (!document.querySelector('#ai-chat-styles')) {
     document.head.appendChild(style);
   }
   
-  /* ─────────── AUTO-DETECT AI CHAT MODE ─────────── */
-  (function detectAIChatMode() {
-    if (window.location.pathname.includes('ai-chat') || 
-        window.location.search.includes('ai-chat')) {
-      document.body.classList.add('ai-chat-mode');
-      console.log('AI Chat mode activated');
+/* ─────────── AI CHAT MODE DETECTOR (SPA-SAFE) ─────────── */
+(function () {
+  const isAIChatUrl = (href = location.href) => {
+    const u = new URL(href, location.origin);
+    const q = u.searchParams;
+    const path = u.pathname.toLowerCase();
+    const hash = (u.hash || "").toLowerCase();
+    return (
+      path.includes("ai-chat") ||
+      q.has("ai-chat") ||
+      q.get("mode") === "ai" ||
+      q.get("chat") === "ai" ||
+      hash.includes("ai-chat")
+    );
+  };
+
+  const applyAIChatMode = () => {
+    const on = isAIChatUrl();
+    document.body.classList.toggle("ai-chat-mode", on);
+    // Optional: log only when state changes
+    if (document.body.dataset.aiChat !== String(on)) {
+      document.body.dataset.aiChat = String(on);
+      console.log(`AI Chat mode ${on ? "activated" : "deactivated"} → ${location.href}`);
     }
-  })();
+  };
+
+  // Run on DOM ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyAIChatMode, { once: true });
+  } else {
+    applyAIChatMode();
+  }
+
+  // React to history navigation in SPAs
+  const patchHistory = (method) => {
+    const orig = history[method];
+    history[method] = function () {
+      const ret = orig.apply(this, arguments);
+      window.dispatchEvent(new Event("locationchange"));
+      return ret;
+    };
+  };
+  patchHistory("pushState");
+  patchHistory("replaceState");
+
+  // Listen for any URL-related changes
+  window.addEventListener("popstate", applyAIChatMode);
+  window.addEventListener("hashchange", applyAIChatMode);
+  window.addEventListener("locationchange", applyAIChatMode);
+
+  // Expose helpers so the rest of your code can reuse them
+  window.isAIChat = () => isAIChatUrl();
+  window.applyAIChatMode = applyAIChatMode;
+})();
   
 
 
