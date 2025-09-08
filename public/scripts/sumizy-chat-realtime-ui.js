@@ -1079,6 +1079,73 @@ window.sendMessage = (messageData) => {
   }
 };
 
+
+/* ─────────── ENSURE-JOIN HANDSHAKE (idempotent + retry) ─────────── */
+window._historySeenByChat = window._historySeenByChat || {}; // { chatId: true }
+window._joinState         = window._joinState         || {}; // { chatId: {inFlight, retries, lastSentAt, gen} }
+
+function _chatIdFromUrl() {
+  try { return new URLSearchParams(location.search).get("chatid") || null; } catch { return null; }
+}
+
+window.ensureJoinForActiveChat = function ensureJoinForActiveChat(force = false) {
+  const chatId = _chatIdFromUrl();
+  if (!chatId) return;
+
+  // If we already got history for this chat (or not forcing), skip.
+  if (window._historySeenByChat[chatId] && !force) return;
+
+  // Channel must be ready
+  if (!window.currentChannel || !window.xanoRealtime) {
+    // Try again shortly
+    setTimeout(() => window.ensureJoinForActiveChat(force), 250);
+    return;
+  }
+
+  const gen = window._chatGen || 0;
+  const st = (window._joinState[chatId] ||= { inFlight: false, retries: 0, lastSentAt: 0, gen: gen });
+
+  // Don’t spam: if we just sent one, or one is in-flight, back off.
+  const justSent = Date.now() - st.lastSentAt < 1200;
+  if (st.inFlight || justSent) return;
+
+  // If we switched chats since we recorded state, reset retries.
+  if (st.gen !== gen) {
+    st.gen = gen;
+    st.retries = 0;
+  }
+
+  // Build the same join payload your server expects
+  const msg = {
+    isReaction: false,
+    isDelete:   false,
+    isJoin:     true,
+    conversation_id: chatId,
+    message:    ""
+  };
+
+  try {
+    st.inFlight   = true;
+    st.lastSentAt = Date.now();
+    console.log(`[ensureJoin] sending join for chat ${chatId} (try #${st.retries + 1})`);
+    window.sendMessage(msg);
+  } catch (e) {
+    console.warn("[ensureJoin] send failed", e);
+    st.inFlight = false;
+  } finally {
+    // After a short delay, if no history yet, retry up to 5 times
+    setTimeout(() => {
+      st.inFlight = false;
+      if (!window._historySeenByChat[chatId] && st.retries < 5) {
+        st.retries++;
+        window.ensureJoinForActiveChat();
+      }
+    }, 1200);
+  }
+};
+
+
+
 /* ─────────── EXTRACT LAST 10 MESSAGES ─────────── */
 function extractLast10Messages() {
   const container = document.querySelector(".chat-messages");

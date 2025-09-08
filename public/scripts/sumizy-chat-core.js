@@ -688,8 +688,9 @@ window.handleChatSwitchIfNeeded = function handleChatSwitchIfNeeded() {
   setTimeout(() => {
     try {
       window._flushPendingIfVisible?.();
+      window.ensureJoinForActiveChat?.(true); // <-- force a join for the new chat
     } catch {}
-  }, 0);
+  }, 0);  
 };
 
 // wire listeners once (guard against double-wiring)
