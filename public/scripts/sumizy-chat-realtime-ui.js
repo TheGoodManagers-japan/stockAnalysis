@@ -686,6 +686,11 @@ function _setupChatVisibilityWatchers() {
   window.addEventListener("resize", _flushPendingIfVisible);
 }
 
+// expose cross-module helpers for core (because scripts are loaded as modules)
+window._setupChatVisibilityWatchers = window._setupChatVisibilityWatchers || _setupChatVisibilityWatchers;
+window._flushPendingIfVisible      = window._flushPendingIfVisible      || _flushPendingIfVisible;
+
+
 /** One API surface for your realtime pipeline */
 window.enqueueOrInjectMessages = function (messages) {
   const chatId =

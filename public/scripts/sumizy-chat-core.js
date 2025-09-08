@@ -684,10 +684,10 @@ window.handleChatSwitchIfNeeded = function handleChatSwitchIfNeeded() {
   window._pendingChatInjections = window._pendingChatInjections || {};
   window._pendingChatInjections[next] ||= [];
   window._chatVis = window._chatVis || {};
-  window._chatVis.observersReady || _setupChatVisibilityWatchers?.();
+  window._chatVis.observersReady || window._setupChatVisibilityWatchers?.();
   setTimeout(() => {
     try {
-      _flushPendingIfVisible?.();
+      window._flushPendingIfVisible?.();
     } catch {}
   }, 0);
 };
