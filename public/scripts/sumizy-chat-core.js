@@ -613,3 +613,42 @@ window.setupScrollPagination = () => {
     }, 0);
   }
   
+
+
+  // make it global so other scripts can call it
+window.handleChatSwitchIfNeeded = function handleChatSwitchIfNeeded() {
+  const next = getChatIdFromURL();
+  if (!next) return;
+  if (window._activeChatId === next) return;
+
+  // switch
+  window._activeChatId = next;
+  window._chatGen++;
+
+  // reset per-chat dedupe and typing state
+  window._seenByChat[next] = new Set();
+  window.hideAITypingIndicator?.();
+
+  // clear DOM and reset injector cache
+  clearVisibleChatDOMOnce();
+
+  // ensure bucket + watchers; then flush
+  window._pendingChatInjections[next] ||= [];
+  _setupChatVisibilityWatchers?.();
+  setTimeout(() => { try { _flushPendingIfVisible(); } catch {} }, 0);
+};
+
+// wire listeners once (guard against double-wiring)
+(function wireChatSwitchListenersOnce() {
+  if (window._chatSwitchListenersWired) return;
+  window._chatSwitchListenersWired = true;
+
+  const h = () => window.handleChatSwitchIfNeeded?.();
+  window.addEventListener("locationchange", h);
+  window.addEventListener("popstate", h);
+  window.addEventListener("hashchange", h);
+  document.addEventListener("DOMContentLoaded", h, { once: true });
+
+  // run once now in case we loaded with a chatid already
+  h();
+})();
