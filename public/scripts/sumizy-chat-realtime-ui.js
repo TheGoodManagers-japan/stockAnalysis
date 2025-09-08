@@ -1,3 +1,5 @@
+//sumizy-chat-realtime-ui.js
+
 /* ─────────── AI TYPING INDICATOR ─────────── */
 let typingIndicatorElement = null;
 let typingIndicatorTimeout = null;
@@ -497,7 +499,10 @@ window.findVisibleRG ??= function () {
 };
 
 window._pendingChatInjections = window._pendingChatInjections || {}; // { [chatId]: Array<message> }
-window._seenRealtimeMsgIds = window._seenRealtimeMsgIds || new Set();
+window._activeChatId = window._activeChatId || null;
+window._seenByChat = window._seenByChat || {};   // { chatId: Set(ids) }
+window._chatGen = window._chatGen || 0;          // bumps on chat switch
+
 window._chatVis = window._chatVis || { observersReady: false };
 
 /* ---------- PATCH: robust visible-flush pipeline ---------- */
@@ -587,11 +592,15 @@ async function _flushPendingIfVisible() {
   window._chatVis = window._chatVis || {};
   window._chatVis.flushing = true;
 
+  const myGen = window._chatGen;
+
   try {
     const rg = window.findVisibleRG?.() ?? null;
     if (rg === null) return;
 
-    const chatId = new URLSearchParams(location.search).get("chatid");
+    const chatId =
+      window._activeChatId ||
+      new URLSearchParams(location.search).get("chatid");
     if (!chatId) return;
 
     const bucket = window._pendingChatInjections?.[chatId];
@@ -606,7 +615,7 @@ async function _flushPendingIfVisible() {
     // Try to inject and verify it "took"
     const ok = await _tryInject(rg, msgs);
 
-    if (ok) {
+    if (ok && myGen === window._chatGen) {
       // Commit: remove exactly the messages we injected
       bucket.splice(0, msgs.length);
       _rememberSnapshot(chatId, msgs);
@@ -620,6 +629,9 @@ async function _flushPendingIfVisible() {
       if (window.aiTypingActive && !typingIndicatorElement) {
         window.showAITypingIndicator(rg);
       }
+    } else if (ok && myGen !== window._chatGen) {
+      // late write from previous chat -> ignore
+      // (no-op)
     } else {
       // DOM likely not ready yet; retry shortly
       setTimeout(_flushPendingIfVisible, 120);
@@ -634,8 +646,9 @@ function _enqueueForLater(chatId, msgs) {
   const bucket = (window._pendingChatInjections[chatId] ||= []);
   for (const m of msgs) {
     if (!m || !m.id) continue;
-    if (window._seenRealtimeMsgIds.has(m.id)) continue;
-    window._seenRealtimeMsgIds.add(m.id);
+    const seen = (window._seenByChat[chatId] ||= new Set());
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
     bucket.push(m);
   }
 }
@@ -675,7 +688,8 @@ function _setupChatVisibilityWatchers() {
 
 /** One API surface for your realtime pipeline */
 window.enqueueOrInjectMessages = function (messages) {
-  const chatId = new URLSearchParams(window.location.search).get("chatid");
+  const chatId =
+    window._activeChatId || new URLSearchParams(location.search).get("chatid");
   if (!chatId) return;
 
   const rg = window.findVisibleRG?.() ?? null;
@@ -685,18 +699,21 @@ window.enqueueOrInjectMessages = function (messages) {
     return;
   }
 
+  const myGen = window._chatGen;
+
   const toInject = [];
   for (const m of messages) {
     if (!m || !m.id) continue;
-    if (window._seenRealtimeMsgIds.has(m.id)) continue;
-    window._seenRealtimeMsgIds.add(m.id);
+    const seen = (window._seenByChat[chatId] ||= new Set());
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
     toInject.push(m);
   }
   if (!toInject.length) return;
 
   (async () => {
     const ok = await _tryInject(rg, toInject);
-    if (ok) {
+    if (ok && myGen === window._chatGen) {
       _rememberSnapshot(chatId, toInject);
       const refreshFn = `bubble_fn_refreshConversations${rg}`;
       if (typeof window[refreshFn] === "function") {
@@ -704,6 +721,9 @@ window.enqueueOrInjectMessages = function (messages) {
           window[refreshFn]();
         } catch {}
       }
+    } else if (ok && myGen !== window._chatGen) {
+      // late write from previous chat -> ignore
+      // (no-op)
     } else {
       _enqueueForLater(chatId, toInject);
       setTimeout(_flushPendingIfVisible, 120);
@@ -1065,3 +1085,4 @@ function extractLast10Messages() {
     message: el.dataset.message || "",
   }));
 }
+

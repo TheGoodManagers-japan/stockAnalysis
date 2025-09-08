@@ -1,3 +1,5 @@
+//sumizy-chat-render.js
+
 /* ─────────── ROBUST MARKDOWN PARSER FOR NESTED LISTS ─────────── */
 function parseMarkdown(text) {
   if (!text) return "";
@@ -307,58 +309,64 @@ const renderMsgWithMarkdown = (m, cuid) => {
 // Replace the existing renderMsg with this new version
 window.renderMsg = renderMsgWithMarkdown;
 
-
-
 /* ─────────── FILE ATTACHMENT (message = URL) ─────────── */
 function renderFileAttachment(m) {
-    const url   = esc(m.message || '#');
-    const name  = esc(m.file_name || url.split('/').pop() || 'download');
-    const type  = (m.file_type || '').toLowerCase();
-    const cls   = type.startsWith('image') ? 'image-attachment' : 'generic-attachment';
-    const thumb = type.startsWith('image')
-        ? `<img src="${url}" alt="${name}" class="file-image-preview">`
-        : `<span class="file-icon">📎</span>`;
-  
-    return `
+  const url = esc(m.message || "#");
+  const name = esc(m.file_name || url.split("/").pop() || "download");
+  const type = (m.file_type || "").toLowerCase();
+  const cls = type.startsWith("image")
+    ? "image-attachment"
+    : "generic-attachment";
+  const thumb = type.startsWith("image")
+    ? `<img src="${url}" alt="${name}" class="file-image-preview">`
+    : `<span class="file-icon">📎</span>`;
+
+  return `
       <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
         <a href="#" class="file-open-trigger" tabindex="0">
           ${thumb}<span class="file-name">${name}</span>
         </a>
       </div>`;
-  }
+}
 
-
-
-  /* ─────────── INLINE REPLY PREVIEW ─────────── */
+/* ─────────── INLINE REPLY PREVIEW ─────────── */
 function renderInlineReplyPreview(r) {
-    if (!r?.id) return '';
-    const un   = esc(r._users?.name || 'Unknown');
-    const body = r.isFile
-        ? renderFileAttachment(r)
-        : `<div class="message-text lang-original">${esc(r.message)}</div>` +
-          (r._translations || []).map(tr => `
-            <div class="message-text lang-${esc(tr.language)}" style="display:none;">
+  if (!r?.id) return "";
+  const un = esc(r._users?.name || "Unknown");
+  const body = r.isFile
+    ? renderFileAttachment(r)
+    : `<div class="message-text lang-original">${esc(r.message)}</div>` +
+      (r._translations || [])
+        .map(
+          (tr) => `
+            <div class="message-text lang-${esc(
+              tr.language
+            )}" style="display:none;">
               ${esc(tr.translated_text)}
-            </div>`).join('');
-    return `
-      <div class="reply-preview reply-scroll-target" data-target-id="${esc(r.id)}">
+            </div>`
+        )
+        .join("");
+  return `
+      <div class="reply-preview reply-scroll-target" data-target-id="${esc(
+        r.id
+      )}">
         <div class="reply-preview-header">
           <span class="reply-to-name">${un}</span>
         </div>${body}
       </div>`;
-  }
-  
-  /* ─────────── REPLY HTML FOR BUBBLE ─────────── */
-  function buildReplyHtml(msgEl) {
-    const un   = esc(msgEl.dataset.username);
-    const file = msgEl.querySelector('.file-attachment');
-    const body = file
-        ? file.outerHTML
-        : Array.from(msgEl.querySelectorAll('.message-text')).map(el => el.outerHTML).join('');
-    return `<div class="reply-preview-custom">
+}
+
+/* ─────────── REPLY HTML FOR BUBBLE ─────────── */
+function buildReplyHtml(msgEl) {
+  const un = esc(msgEl.dataset.username);
+  const file = msgEl.querySelector(".file-attachment");
+  const body = file
+    ? file.outerHTML
+    : Array.from(msgEl.querySelectorAll(".message-text"))
+        .map((el) => el.outerHTML)
+        .join("");
+  return `<div class="reply-preview-custom">
               <strong class="reply-name">${un}</strong>
               <div class="reply-body">${body}</div>
             </div>`;
-  }
-  
-  
+}

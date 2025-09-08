@@ -1,3 +1,5 @@
+//sumizy-chat-core.js
+
 /* ─────────── INJECTOR FACTORY (FIXED) ─────────── */
 function makeChatInjector(chatEl, cuid) {
   const bottom = () =>
@@ -110,6 +112,7 @@ function makeChatInjector(chatEl, cuid) {
 
 /* ─────────── GLOBAL DISPATCHER WITH RETRY ─────────── */
 const cache = new Map();
+window.__sumizyInjectorCache = cache;  // expose for cross-file reset
 const pendingMessages = new Map(); // Store messages that couldn't be injected yet
 
 window.injectMessages = async (rg, payload, cuid, isOlderMessages = false) => {
@@ -583,3 +586,30 @@ window.setupScrollPagination = () => {
   setTimeout(() => {
     window.setupScrollPagination();
   }, 1000);
+
+  function handleChatSwitchIfNeeded() {
+    const next = getChatIdFromURL();
+    if (!next) return;
+    if (window._activeChatId === next) return;
+
+    // switch
+    window._activeChatId = next;
+    window._chatGen++;
+
+    // reset dedupe for this chat
+    window._seenByChat[next] = new Set();
+
+    // clear visible chat DOM and rebuild on demand
+    clearVisibleChatDOMOnce();
+
+    // ensure there is a pending bucket for the new chat
+    window._pendingChatInjections[next] ||= [];
+
+    // kick the flush
+    setTimeout(() => {
+      try {
+        _flushPendingIfVisible();
+      } catch {}
+    }, 0);
+  }
+  
