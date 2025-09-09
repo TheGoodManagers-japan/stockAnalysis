@@ -370,3 +370,5 @@ function buildReplyHtml(msgEl) {
               <div class="reply-body">${body}</div>
             </div>`;
 }
+
+window.buildReplyHtml = buildReplyHtml;
