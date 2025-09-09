@@ -1,12 +1,11 @@
 // sumizy-chat-realtime-ui.js
 // Minimal, duplicate-safe realtime UI: join -> history -> live.
-// Assumes server sends full history immediately after {isJoin:true}.
+// Handles server history via {action:"message"} and live updates via {action:"event", payload.data: "[]"}.
 
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
-
 function getChatIdFromUrl() {
   try {
     const v = new URLSearchParams(location.search).get("chatid");
@@ -15,7 +14,6 @@ function getChatIdFromUrl() {
     return null;
   }
 }
-
 window.findVisibleRG ??= function () {
   const containers = Array.from(
     document.querySelectorAll('[id^="rg"] .chat-messages')
@@ -34,12 +32,17 @@ window.findVisibleRG ??= function () {
   }
   return null;
 };
-
 function clearActiveChatDom() {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
   if (container) container.innerHTML = "";
+  // Also stop any lingering typing indicator
+  if (typeof window.hideAITypingIndicator === "function") {
+    try {
+      window.hideAITypingIndicator();
+    } catch {}
+  }
 }
 
 /* ─────────── Minimal per-chat state ─────────── */
@@ -55,7 +58,6 @@ function getState(chatId) {
     prebuffer: [],
   });
 }
-
 function resetState(chatId) {
   window._chatState[chatId] = {
     phase: "idle",
@@ -78,13 +80,24 @@ function dedupeById(list, seenSet) {
   }
   return out;
 }
-
 function sortAscByTs(list) {
   return (list || [])
     .slice()
     .sort((a, b) => parseTime(a.created_at) - parseTime(b.created_at));
 }
-
+function afterInjectUiRefresh(rg) {
+  const refreshFn = `bubble_fn_refreshConversations${rg}`;
+  if (typeof window[refreshFn] === "function") {
+    try {
+      window[refreshFn]();
+    } catch {}
+  }
+  if (typeof window.hideAITypingIndicator === "function") {
+    try {
+      window.hideAITypingIndicator();
+    } catch {}
+  }
+}
 function injectBatch(rg, chatId, batch) {
   if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
@@ -99,22 +112,14 @@ function injectBatch(rg, chatId, batch) {
       if (ts > st.lastTs) st.lastTs = ts;
     }
   }
-
-  const refreshFn = `bubble_fn_refreshConversations${rg}`;
-  if (typeof window[refreshFn] === "function") {
-    try {
-      window[refreshFn]();
-    } catch {}
-  }
+  afterInjectUiRefresh(rg);
 }
 
 /* Inject the one authoritative history (plus any prebuffer that arrived before) */
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
-
-  // If user navigated away during async, abort
-  if (chatId !== window._activeChatId) return;
+  if (chatId !== window._activeChatId) return; // navigated away
 
   const st = getState(chatId);
   st.phase = "injecting_history";
@@ -166,55 +171,84 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       channel.on((data) => {
         try {
-          // Let other event handlers (e.g., refresh triggers) consume if needed
+          // Allow refresh-style events to opt-out
           if (typeof window.handleRefreshEvent === "function") {
             try {
               if (window.handleRefreshEvent(data)) return;
             } catch {}
           }
 
-          // We only care about message payloads
-          if (data?.action !== "message") return;
-
           const active = window._activeChatId;
           if (!active) return;
 
-          // Normalize the payload to an array
-          let payload = Array.isArray(data.payload) ? data.payload : [];
-          if (!payload.length) return;
+          // Normalize incoming messages for both 'message' and 'event'
+          let incoming = [];
+          if (data?.action === "message") {
+            incoming = Array.isArray(data.payload) ? data.payload : [];
+          } else if (data?.action === "event") {
+            const raw = data?.payload?.data;
+            let parsed = null;
+            if (typeof raw === "string") {
+              try {
+                parsed = JSON.parse(raw);
+              } catch {
+                parsed = null;
+              }
+            } else {
+              parsed = raw;
+            }
+            if (Array.isArray(parsed)) {
+              incoming = parsed;
+            } else {
+              // Not a messages array? ignore.
+              return;
+            }
+          } else {
+            return;
+          }
+          if (!incoming.length) return;
 
           // Filter to the active conversation
-          let relevant = payload.filter(
+          let relevant = incoming.filter(
             (m) => String(m?.conversation_id ?? "") === String(active)
           );
           if (!relevant.length) return;
 
           const st = getState(active);
 
-          // If we're waiting for history, the first relevant payload IS the history
-          if (st.phase === "join_sent" || st.phase === "injecting_history") {
+          // HISTORY path: server sends full history with action === "message"
+          if (data.action === "message") {
             injectHistoryAndGoLive(active, relevant);
             return;
           }
 
-          // Live mode: inject new messages only, in arrival order (deduped)
+          // LIVE path: action === "event"
+          // If history not injected yet, prebuffer them and wait.
+          if (
+            st.phase === "join_sent" ||
+            st.phase === "injecting_history" ||
+            st.phase === "idle"
+          ) {
+            const fresh = dedupeById(relevant, st.seen);
+            if (fresh.length) {
+              st.prebuffer.push(...fresh);
+              for (const m of fresh) {
+                const ts = parseTime(m.created_at);
+                if (ts > st.lastTs) st.lastTs = ts;
+              }
+            }
+            return;
+          }
+
+          // Live mode: inject new messages only, deduped and ordered
           if (st.phase === "live") {
-            // Keep only unseen messages
-            relevant = dedupeById(relevant, st.seen);
-            if (!relevant.length) return;
-
-            // Simple rule: append if >= lastTs, otherwise ignore (out-of-order)
-            const toAppend = relevant.filter(
-              (m) => parseTime(m.created_at) >= st.lastTs
-            );
-            if (!toAppend.length) return;
-
+            const fresh = dedupeById(relevant, st.seen);
+            if (!fresh.length) return;
             const rg = window.findVisibleRG?.() ?? null;
             if (rg === null) return;
-            // Ensure still the same chat
-            if (active !== window._activeChatId) return;
-
-            injectBatch(rg, active, sortAscByTs(toAppend));
+            if (active !== window._activeChatId) return; // navigated away
+            injectBatch(rg, active, sortAscByTs(fresh));
+            return;
           }
         } catch (err) {
           console.error("Realtime handler error:", err);
@@ -408,11 +442,14 @@ function handleChatRouteChange() {
 (function wireNavigationWatch() {
   const patchHistory = (method) => {
     const orig = history[method];
-    history[method] = function () {
-      const ret = orig.apply(this, arguments);
-      window.dispatchEvent(new Event("locationchange"));
-      return ret;
-    };
+    if (!orig._sumizy_patched) {
+      history[method] = function () {
+        const ret = orig.apply(this, arguments);
+        window.dispatchEvent(new Event("locationchange"));
+        return ret;
+      };
+      history[method]._sumizy_patched = true;
+    }
   };
   patchHistory("pushState");
   patchHistory("replaceState");
