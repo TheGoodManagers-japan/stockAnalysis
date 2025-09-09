@@ -1,6 +1,7 @@
 // sumizy-chat-realtime-ui.js
 // Minimal, duplicate-safe realtime UI: join -> history -> live.
-// Handles server history via {action:"message"} and live updates via {action:"event", payload.data: "[]"}.
+// Handles server history via {action:"message"} (ONLY while joining)
+// and live updates via either {action:"event", payload.data:"[]"} or {action:"message"} after live.
 
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
@@ -37,7 +38,6 @@ function clearActiveChatDom() {
   if (rg === null) return;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
   if (container) container.innerHTML = "";
-  // Also stop any lingering typing indicator
   if (typeof window.hideAITypingIndicator === "function") {
     try {
       window.hideAITypingIndicator();
@@ -124,18 +124,15 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
   const st = getState(chatId);
   st.phase = "injecting_history";
 
-  // Combine: server history + anything that arrived before it
   const combined = dedupeById(
     [...(incomingHistory || []), ...(st.prebuffer || [])],
     st.seen
   );
   const ordered = sortAscByTs(combined);
 
-  // Clear DOM defensively and inject once
   clearActiveChatDom();
   injectBatch(rg, chatId, ordered);
 
-  // Done with prebuffer; go live
   st.prebuffer = [];
   st.phase = "live";
 }
@@ -171,7 +168,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       channel.on((data) => {
         try {
-          // Allow refresh-style events to opt-out
           if (typeof window.handleRefreshEvent === "function") {
             try {
               if (window.handleRefreshEvent(data)) return;
@@ -181,7 +177,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           const active = window._activeChatId;
           if (!active) return;
 
-          // Normalize incoming messages for both 'message' and 'event'
+          // Normalize incoming array for both 'message' and 'event'
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -197,18 +193,14 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             } else {
               parsed = raw;
             }
-            if (Array.isArray(parsed)) {
-              incoming = parsed;
-            } else {
-              // Not a messages array? ignore.
-              return;
-            }
+            if (Array.isArray(parsed)) incoming = parsed;
+            else return;
           } else {
             return;
           }
           if (!incoming.length) return;
 
-          // Filter to the active conversation
+          // Filter to active conversation
           let relevant = incoming.filter(
             (m) => String(m?.conversation_id ?? "") === String(active)
           );
@@ -216,38 +208,42 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
           const st = getState(active);
 
-          // HISTORY path: server sends full history with action === "message"
-          if (data.action === "message") {
-            injectHistoryAndGoLive(active, relevant);
-            return;
-          }
-
-          // LIVE path: action === "event"
-          // If history not injected yet, prebuffer them and wait.
+          // While joining: only treat action: "message" as history; events are prebuffered
           if (
             st.phase === "join_sent" ||
             st.phase === "injecting_history" ||
             st.phase === "idle"
           ) {
-            const fresh = dedupeById(relevant, st.seen);
-            if (fresh.length) {
-              st.prebuffer.push(...fresh);
-              for (const m of fresh) {
-                const ts = parseTime(m.created_at);
-                if (ts > st.lastTs) st.lastTs = ts;
+            if (data.action === "message") {
+              injectHistoryAndGoLive(active, relevant);
+            } else {
+              const fresh = dedupeById(relevant, st.seen);
+              if (fresh.length) {
+                st.prebuffer.push(...fresh);
+                for (const m of fresh) {
+                  const ts = parseTime(m.created_at);
+                  if (ts > st.lastTs) st.lastTs = ts;
+                }
               }
             }
             return;
           }
 
-          // Live mode: inject new messages only, deduped and ordered
+          // LIVE: treat both action types as live updates (append-only)
           if (st.phase === "live") {
             const fresh = dedupeById(relevant, st.seen);
             if (!fresh.length) return;
+
+            // Append in timestamp order; ignore out-of-order older than lastTs
+            const toAppend = sortAscByTs(fresh).filter(
+              (m) => parseTime(m.created_at) >= st.lastTs
+            );
+            if (!toAppend.length) return;
+
             const rg = window.findVisibleRG?.() ?? null;
             if (rg === null) return;
             if (active !== window._activeChatId) return; // navigated away
-            injectBatch(rg, active, sortAscByTs(fresh));
+            injectBatch(rg, active, toAppend);
             return;
           }
         } catch (err) {
@@ -397,7 +393,6 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     st.seen.clear();
     st.lastTs = 0;
 
-    // Clear DOM before requesting history
     clearActiveChatDom();
 
     window.sendMessage({
@@ -415,26 +410,21 @@ function handleChatRouteChange() {
   const next = getChatIdFromUrl();
   const prev = window._activeChatId || null;
 
-  // If no chatid -> clear and reset
   if (!next) {
-    if (prev !== null) {
-      clearActiveChatDom();
-    }
+    if (prev !== null) clearActiveChatDom();
     window._activeChatId = null;
     return;
   }
 
-  // If changed -> reset state, clear DOM, and ensure join
   if (next !== prev) {
     window._activeChatId = next;
     window._chatGen = (window._chatGen || 0) + 1;
     resetState(next);
     clearActiveChatDom();
-    window.ensureJoinForActiveChat(true); // force join on switch
+    window.ensureJoinForActiveChat(true);
     return;
   }
 
-  // Same chatid but maybe first load / container remounted
   window.ensureJoinForActiveChat(false);
 }
 
