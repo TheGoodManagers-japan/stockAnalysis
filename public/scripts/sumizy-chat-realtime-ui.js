@@ -478,7 +478,6 @@ document.addEventListener("click", (e) => {
 });
 
 /* ─────────── VISIBILITY QUEUE + OBSERVERS ─────────── */
-/** Fallback finder if you don’t already define one elsewhere */
 window.findVisibleRG ??= function () {
   const containers = Array.from(
     document.querySelectorAll('[id^="rg"] .chat-messages')
@@ -500,8 +499,8 @@ window.findVisibleRG ??= function () {
 
 window._pendingChatInjections = window._pendingChatInjections || {}; // { [chatId]: Array<message> }
 window._activeChatId = window._activeChatId || null;
-window._seenByChat = window._seenByChat || {};   // { chatId: Set(ids) }
-window._chatGen = window._chatGen || 0;          // bumps on chat switch
+window._seenByChat = window._seenByChat || {}; // { chatId: Set(ids) }
+window._chatGen = window._chatGen || 0; // bumps on chat switch
 
 window._chatVis = window._chatVis || { observersReady: false };
 
@@ -510,7 +509,6 @@ window._lastRenderedByChat = window._lastRenderedByChat || {}; // { chatId: Map<
 
 /** Manually hint from your toggle UI still works */
 window.signalChatMaybeVisible = function () {
-  // Give the DOM a couple of frames to settle before we attempt injection
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       setTimeout(_flushPendingIfVisible, 30);
@@ -523,15 +521,11 @@ function _tryInject(rg, msgs) {
   return new Promise((resolve) => {
     try {
       if (typeof window.injectMessages !== "function") return resolve(false);
-
       window.injectMessages(rg, msgs, window.currentUserId);
-
-      // Verify after 2 RAFs that at least one message id is present
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
           const container = document.querySelector(`#rg${rg} .chat-messages`);
           if (!container) return resolve(false);
-
           const ok = msgs.some((m) => {
             const id = String(m?.id ?? "");
             if (!id) return false;
@@ -542,7 +536,6 @@ function _tryInject(rg, msgs) {
             const sel = `.message[data-id="${safeId}"]`;
             return !!container.querySelector(sel);
           });
-
           resolve(ok);
         })
       );
@@ -629,9 +622,13 @@ async function _flushPendingIfVisible() {
       if (window.aiTypingActive && !typingIndicatorElement) {
         window.showAITypingIndicator(rg);
       }
+
+      // mark that we've received history for this chat
+      try {
+        if (chatId) window._historySeenByChat[chatId] = true;
+      } catch {}
     } else if (ok && myGen !== window._chatGen) {
       // late write from previous chat -> ignore
-      // (no-op)
     } else {
       // DOM likely not ready yet; retry shortly
       setTimeout(_flushPendingIfVisible, 120);
@@ -687,9 +684,10 @@ function _setupChatVisibilityWatchers() {
 }
 
 // expose cross-module helpers for core (because scripts are loaded as modules)
-window._setupChatVisibilityWatchers = window._setupChatVisibilityWatchers || _setupChatVisibilityWatchers;
-window._flushPendingIfVisible      = window._flushPendingIfVisible      || _flushPendingIfVisible;
-
+window._setupChatVisibilityWatchers =
+  window._setupChatVisibilityWatchers || _setupChatVisibilityWatchers;
+window._flushPendingIfVisible =
+  window._flushPendingIfVisible || _flushPendingIfVisible;
 
 /** One API surface for your realtime pipeline */
 window.enqueueOrInjectMessages = function (messages) {
@@ -726,9 +724,12 @@ window.enqueueOrInjectMessages = function (messages) {
           window[refreshFn]();
         } catch {}
       }
+      // mark that we've received history for this chat
+      try {
+        if (chatId) window._historySeenByChat[chatId] = true;
+      } catch {}
     } else if (ok && myGen !== window._chatGen) {
       // late write from previous chat -> ignore
-      // (no-op)
     } else {
       _enqueueForLater(chatId, toInject);
       setTimeout(_flushPendingIfVisible, 120);
@@ -744,8 +745,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     );
     return;
   }
-
-  let hasReceivedInitialHistory = false;
 
   try {
     const channelName = `sumizy/${userId}`;
@@ -767,11 +766,14 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     const channelKey = channelName.split("/").join("_");
 
     window.xanoRealtime = window.xanoRealtime || {};
-    let exists = !window.xanoRealtime[channelKey] == false;
+    const already = !!(window.xanoRealtime && window.xanoRealtime[channelKey]);
 
-    const channel = window.xano.channel(channelName, { ...channelOptions });
+    // Reuse existing channel if present, otherwise create
+    const channel = already
+      ? window.xanoRealtime[channelKey].channel
+      : window.xano.channel(channelName, { ...channelOptions });
 
-    if (exists == false) {
+    if (!already) {
       let isProcessing = false;
       const messageQueue = [];
 
@@ -797,18 +799,8 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
                 let messagesToProcess = [];
 
-                if (
-                  data.action === "message" &&
-                  data.payload &&
-                  Array.isArray(data.payload)
-                ) {
+                if (data.action === "message" && Array.isArray(data.payload)) {
                   messagesToProcess = data.payload;
-                  if (!hasReceivedInitialHistory) {
-                    hasReceivedInitialHistory = true;
-                    console.log(
-                      "Initial history received, processing all messages"
-                    );
-                  }
                 } else if (
                   data.action === "event" &&
                   data.payload &&
@@ -823,6 +815,21 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                     }
                   } else if (Array.isArray(data.payload.data)) {
                     messagesToProcess = data.payload.data;
+                  }
+                }
+
+                // Mark history-seen for conversations present in the payload (works for both 'message' and 'event')
+                if (
+                  Array.isArray(messagesToProcess) &&
+                  messagesToProcess.length
+                ) {
+                  const cids = new Set(
+                    messagesToProcess
+                      .map((m) => String(m?.conversation_id ?? ""))
+                      .filter(Boolean)
+                  );
+                  for (const cid of cids) {
+                    window._historySeenByChat[cid] = true;
                   }
                 }
 
@@ -1079,72 +1086,93 @@ window.sendMessage = (messageData) => {
   }
 };
 
-
 /* ─────────── ENSURE-JOIN HANDSHAKE (idempotent + retry) ─────────── */
 window._historySeenByChat = window._historySeenByChat || {}; // { chatId: true }
-window._joinState         = window._joinState         || {}; // { chatId: {inFlight, retries, lastSentAt, gen} }
+window._joinState = window._joinState || {}; // { chatId: {inFlight, retries, lastSentAt, gen} }
 
 function _chatIdFromUrl() {
-  try { return new URLSearchParams(location.search).get("chatid") || null; } catch { return null; }
+  try {
+    return new URLSearchParams(location.search).get("chatid") || null;
+  } catch {
+    return null;
+  }
 }
 
-window.ensureJoinForActiveChat = function ensureJoinForActiveChat(force = false) {
+window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
+  force = false
+) {
   const chatId = _chatIdFromUrl();
   if (!chatId) return;
 
-  // If we already got history for this chat (or not forcing), skip.
+  // STOP if we've already seen history (unless force)
   if (window._historySeenByChat[chatId] && !force) return;
+
+  // If DOM already has any .message for this chat, consider history loaded
+  const rg = window.findVisibleRG?.() ?? null;
+  if (!force && rg !== null) {
+    const container = document.querySelector(`#rg${rg} .chat-messages`);
+    if (container && container.querySelector(".message")) {
+      window._historySeenByChat[chatId] = true;
+      return;
+    }
+  }
 
   // Channel must be ready
   if (!window.currentChannel || !window.xanoRealtime) {
-    // Try again shortly
-    setTimeout(() => window.ensureJoinForActiveChat(force), 250);
+    setTimeout(() => window.ensureJoinForActiveChat(force), 300);
     return;
   }
 
+  const MAX_RETRIES = 3; // capped
   const gen = window._chatGen || 0;
-  const st = (window._joinState[chatId] ||= { inFlight: false, retries: 0, lastSentAt: 0, gen: gen });
+  const st = (window._joinState[chatId] ||= {
+    inFlight: false,
+    retries: 0,
+    lastSentAt: 0,
+    gen,
+  });
 
-  // Don’t spam: if we just sent one, or one is in-flight, back off.
-  const justSent = Date.now() - st.lastSentAt < 1200;
-  if (st.inFlight || justSent) return;
-
-  // If we switched chats since we recorded state, reset retries.
+  // Reset retries if chat switched
   if (st.gen !== gen) {
     st.gen = gen;
     st.retries = 0;
   }
 
-  // Build the same join payload your server expects
+  // Debounce repeated sends
+  const justSent = Date.now() - st.lastSentAt < 2000;
+  if (st.inFlight || justSent) return;
+
+  // Don’t spam past cap
+  if (st.retries >= MAX_RETRIES) return;
+
   const msg = {
     isReaction: false,
-    isDelete:   false,
-    isJoin:     true,
+    isDelete: false,
+    isJoin: true,
     conversation_id: chatId,
-    message:    ""
+    message: "",
   };
 
   try {
-    st.inFlight   = true;
+    st.inFlight = true;
     st.lastSentAt = Date.now();
-    console.log(`[ensureJoin] sending join for chat ${chatId} (try #${st.retries + 1})`);
+    console.log(
+      `[ensureJoin] sending join for chat ${chatId} (try #${st.retries + 1})`
+    );
     window.sendMessage(msg);
   } catch (e) {
     console.warn("[ensureJoin] send failed", e);
-    st.inFlight = false;
   } finally {
-    // After a short delay, if no history yet, retry up to 5 times
+    const backoff = Math.min(800 * 2 ** st.retries, 6000); // exp backoff, capped at 6s
     setTimeout(() => {
       st.inFlight = false;
-      if (!window._historySeenByChat[chatId] && st.retries < 5) {
+      if (!window._historySeenByChat[chatId] && st.retries < MAX_RETRIES) {
         st.retries++;
         window.ensureJoinForActiveChat();
       }
-    }, 1200);
+    }, backoff);
   }
 };
-
-
 
 /* ─────────── EXTRACT LAST 10 MESSAGES ─────────── */
 function extractLast10Messages() {
@@ -1157,4 +1185,3 @@ function extractLast10Messages() {
     message: el.dataset.message || "",
   }));
 }
-
