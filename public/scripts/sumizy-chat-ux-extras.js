@@ -1,4 +1,25 @@
-//sumizy-chat-ux-extras.js
+// sumizy-chat-ux-extras.js
+
+/* ─────────── SAFE FALLBACKS ─────────── */
+window.esc =
+  window.esc ||
+  function (s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  };
+
+window.buildReplyHtml =
+  window.buildReplyHtml ||
+  function (msgEl) {
+    const user = msgEl?.dataset?.username || "User";
+    const txt = msgEl?.dataset?.message || "";
+    return `<div class="reply-quote"><strong>${esc(user)}:</strong> ${esc(
+      txt
+    )}</div>`;
+  };
 
 /* ─────────── AI TYPING INDICATOR ─────────── */
 let typingIndicatorElement = null;
@@ -6,7 +27,7 @@ let typingIndicatorTimeout = null;
 window.aiTypingActive = false;
 
 window.showAITypingIndicator = function (rgNum) {
-  if (!window.isAIChat()) return;
+  if (!window.isAIChat || !window.isAIChat()) return;
   const chatContainer = document.querySelector(`#rg${rgNum} .chat-messages`);
   if (!chatContainer) return;
 
@@ -28,7 +49,17 @@ window.showAITypingIndicator = function (rgNum) {
     _translations: [],
   };
 
-  const typingHTML = renderMsg(typingMessage, null);
+  // renderMsg should exist from render file; if not, just inject the HTML wrapper
+  let typingHTML = "";
+  try {
+    typingHTML =
+      typeof renderMsg === "function"
+        ? renderMsg(typingMessage, null)
+        : `<div class="message typing-indicator">${typingMessage.message}</div>`;
+  } catch {
+    typingHTML = `<div class="message typing-indicator">${typingMessage.message}</div>`;
+  }
+
   typingIndicatorElement = document.createElement("div");
   typingIndicatorElement.innerHTML = typingHTML;
   typingIndicatorElement = typingIndicatorElement.firstChild;
@@ -56,7 +87,7 @@ window.hideAITypingIndicator = function () {
   window.aiTypingActive = false;
 };
 
-/* ─────────── ADD STYLES (typing + file viewer) ─────────── */
+/* ─────────── ADD STYLES (typing + file viewer + reaction pointer) ─────────── */
 if (!document.querySelector("#ai-chat-styles")) {
   const style = document.createElement("style");
   style.id = "ai-chat-styles";
@@ -85,6 +116,9 @@ if (!document.querySelector("#ai-chat-styles")) {
     @keyframes fadeOut{from{opacity:1} to{opacity:0}}
     @keyframes scaleOut{from{transform:none;opacity:1} to{transform:translateY(8px) scale(.98);opacity:0}}
     .reply-quote{display:inline-block;padding:6px 8px;background:#f3f4f6;border-left:3px solid #9ca3af;border-radius:4px}
+
+    /* Make reaction pills obviously clickable */
+    .reaction, .reaction-pill, .reaction-count { cursor: pointer; }
   `;
   document.head.appendChild(style);
 }
@@ -262,10 +296,10 @@ document.addEventListener("click", (e) => {
         <div class="reactions-list" style="display:flex;gap:6px;">
           ${emojis
             .map(
-              (e) =>
+              (emo) =>
                 `<span class="emoji-option" data-id="${esc(
                   msgId
-                )}" data-emoji="${e}" style="cursor:pointer">${e}</span>`
+                )}" data-emoji="${emo}" style="cursor:pointer">${emo}</span>`
             )
             .join("")}
         </div>
@@ -327,86 +361,102 @@ document.addEventListener("click", (e) => {
     hideActionMenu();
 });
 
-/* toggle reaction bubble click */
+/* ─────────── REACTION PILL CLICK (robust) ─────────── */
 document.addEventListener("click", (e) => {
-  const r = e.target.closest(".reaction");
-  if (!r) return;
-  const msg = r.closest(".message");
-  const rg = msg.closest('[id^="rg"]').id.replace("rg", "");
+  const pill = e.target.closest(".reaction, .reaction-pill, .reaction-count");
+  if (!pill) return;
+
+  const msg = pill.closest(".message");
+  const rgEl = msg?.closest('[id^="rg"]');
+  const msgId = msg?.dataset?.id || "";
+  if (!rgEl || !msgId) return;
+
+  // Try multiple ways to get the emoji value
+  let emoji =
+    pill.dataset?.emoji ||
+    pill.getAttribute?.("data-emoji") ||
+    pill.querySelector?.(".emoji")?.textContent ||
+    pill.textContent ||
+    "";
+
+  emoji = (emoji || "").trim().split(/\s+/)[0]; // if "👍 3", grab "👍"
+  if (!emoji) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const rg = rgEl.id.replace("rg", "");
   const fn = `bubble_fn_reaction${rg}`;
-  if (typeof window[fn] === "function")
-    window[fn]({ output1: msg.dataset.id, output2: r.dataset.emoji });
+  if (typeof window[fn] === "function") {
+    window[fn]({ output1: msgId, output2: emoji });
+  }
 });
 
 /* ─────────── AI CHAT MODE DETECTOR (robust + SPA-safe) ─────────── */
 (() => {
-    function isAIChatUrl(href = location.href) {
-      try {
-        const u = new URL(href, location.origin);
-        const q = u.searchParams;
-        const path = (u.pathname || "").toLowerCase();
-        const hash = (u.hash || "").toLowerCase();
-        return (
-          path.includes("ai-chat") ||
-          q.has("ai-chat") ||
-          q.get("mode") === "ai" ||
-          q.get("chat") === "ai" ||
-          hash.includes("ai-chat")
-        );
-      } catch {
-        return false;
-      }
+  function isAIChatUrl(href = location.href) {
+    try {
+      const u = new URL(href, location.origin);
+      const q = u.searchParams;
+      const path = (u.pathname || "").toLowerCase();
+      const hash = (u.hash || "").toLowerCase();
+      return (
+        path.includes("ai-chat") ||
+        q.has("ai-chat") ||
+        q.get("mode") === "ai" ||
+        q.get("chat") === "ai" ||
+        hash.includes("ai-chat")
+      );
+    } catch {
+      return false;
     }
-  
-    // Expose a stable global early so other modules can call it at any time
-    window.isAIChat = window.isAIChat || (() => isAIChatUrl());
-  
-    function applyAIChatMode() {
-      const on = isAIChatUrl();
-      const b = document.body || document.documentElement; // tolerate early runs
-      if (b && b.classList) {
-        b.classList.toggle("ai-chat-mode", on);
-        b.dataset.aiChat = String(on);
-      }
-      // Debug breadcrumb (shows once per apply)
-      if (typeof console !== "undefined") {
-        console.debug("[sumizy] applyAIChatMode:", { on, href: location.href });
-      }
+  }
+
+  // Expose a stable global early so other modules can call it at any time
+  window.isAIChat = window.isAIChat || (() => isAIChatUrl());
+
+  function applyAIChatMode() {
+    const on = isAIChatUrl();
+    const b = document.body || document.documentElement; // tolerate early runs
+    if (b && b.classList) {
+      b.classList.toggle("ai-chat-mode", on);
+      b.dataset.aiChat = String(on);
     }
-  
-    // Run now if possible, otherwise when DOM is ready
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", applyAIChatMode, { once: true });
-    } else {
-      // Body should exist for module scripts, but guard just in case
-      if (document.body) applyAIChatMode();
-      else window.addEventListener("load", applyAIChatMode, { once: true });
+    if (typeof console !== "undefined") {
+      console.debug("[sumizy] applyAIChatMode:", { on, href: location.href });
     }
-  
-    // Re-apply on any SPA navigation signal
-    const reapply = () => applyAIChatMode();
-    const patchHistory = (method) => {
-      const orig = history[method];
-      if (!orig._sumizy_patched) {
-        history[method] = function () {
-          const ret = orig.apply(this, arguments);
-          window.dispatchEvent(new Event("locationchange"));
-          return ret;
-        };
-        history[method]._sumizy_patched = true;
-      }
-    };
-    patchHistory("pushState");
-    patchHistory("replaceState");
-  
-    window.addEventListener("popstate", reapply);
-    window.addEventListener("hashchange", reapply);
-    window.addEventListener("locationchange", reapply);
-  
-    // Also expose manual trigger for debugging
-    window.applyAIChatMode = window.applyAIChatMode || applyAIChatMode;
-  })();
-  
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyAIChatMode, {
+      once: true,
+    });
+  } else {
+    if (document.body) applyAIChatMode();
+    else window.addEventListener("load", applyAIChatMode, { once: true });
+  }
+
+  const reapply = () => applyAIChatMode();
+  const patchHistory = (method) => {
+    const orig = history[method];
+    if (!orig._sumizy_patched) {
+      history[method] = function () {
+        const ret = orig.apply(this, arguments);
+        window.dispatchEvent(new Event("locationchange"));
+        return ret;
+      };
+      history[method]._sumizy_patched = true;
+    }
+  };
+  patchHistory("pushState");
+  patchHistory("replaceState");
+
+  window.addEventListener("popstate", reapply);
+  window.addEventListener("hashchange", reapply);
+  window.addEventListener("locationchange", reapply);
+
+  window.applyAIChatMode = window.applyAIChatMode || applyAIChatMode;
+})();
 
 /* ─────────── DYNAMIC REFRESH HANDLERS ─────────── */
 window.handleRefreshEvent = (data) => {
