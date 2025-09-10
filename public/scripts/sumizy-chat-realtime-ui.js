@@ -1,46 +1,9 @@
-// sumizy-chat-realtime-ui.js (DEBUG BUILD)
+// sumizy-chat-realtime-ui.js
 // Minimal, duplicate-safe realtime UI: join -> history -> live.
-// Adds detailed logs to trace any duplicate isJoin sends.
+// Handles server history via {action:"message"} (ONLY while joining)
+// and live updates via either {action:"event", payload.data:"[]"} or {action:"message"} after live.
 
-// ==== DEBUG UTIL ====
-(function () {
-  if (!window.__SUMIZY_DEBUG) {
-    window.__SUMIZY_DEBUG = true; // flip to false to silence
-  }
-  const ns = "[sumizy][realtime-ui]";
-  const toJSON = (v) => {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return String(v);
-    }
-  };
-  const short = (o) => {
-    if (!o || typeof o !== "object") return o;
-    return {
-      ...o,
-      seenSize: o.seen instanceof Set ? o.seen.size : undefined,
-      prebufferLen: Array.isArray(o.prebuffer) ? o.prebuffer.length : undefined,
-    };
-  };
-  window.__log = function (...args) {
-    if (!window.__SUMIZY_DEBUG) return;
-    console.debug(ns, ...args);
-  };
-  window.__trace = function (...args) {
-    if (!window.__SUMIZY_DEBUG) return;
-    console.debug(ns, ...args);
-    console.trace(ns + " trace");
-  };
-  window.__warn = function (...args) {
-    console.warn(ns, ...args);
-  };
-  window.__err = function (...args) {
-    console.error(ns, ...args);
-  };
-})();
-
-// ==== Helpers ====
+/* ─────────── Helpers ─────────── */
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
@@ -80,19 +43,10 @@ function clearActiveChatDom() {
       window.hideAITypingIndicator();
     } catch {}
   }
-  __log("clearActiveChatDom done for rg", rg);
 }
 function safeSelId(id) {
   const s = String(id ?? "");
   return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
-}
-function ensureEl(parent, selector, make) {
-  let el = parent.querySelector(selector);
-  if (!el && typeof make === "function") {
-    el = make();
-    if (el) parent.appendChild(el);
-  }
-  return el;
 }
 function _esc(s) {
   if (typeof window.esc === "function") return window.esc(s);
@@ -103,7 +57,7 @@ function _esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-// ==== Reactions aggregation (fallback) ====
+/* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
   const map = new Map();
   for (const r of raw || []) {
@@ -127,7 +81,9 @@ function aggregateReactionsFallback(raw, currentUserId) {
   return Array.from(map.values());
 }
 
-// ==== In-place updaters ====
+/* ─────────── In-place updaters (no node swaps) ─────────── */
+
+// Only patch the main message body, not nested reply preview content
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const translations = Array.isArray(msg._translations)
     ? msg._translations
@@ -140,6 +96,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
+  // ONLY direct children of content wrapper (avoid reply preview subtree)
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
     contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
@@ -150,9 +107,11 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       return d;
     })();
 
-  if (original)
+  if (original) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
+  }
 
+  // Update translation blocks that are direct children only
   const trNodes = Array.from(
     contentWrap.querySelectorAll(":scope > .message-text[class*='lang-']")
   );
@@ -166,12 +125,13 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     trNodes.forEach((node) => {
       const m = node.className.match(/lang-([a-zA-Z_]+)/);
       const lang = m ? m[1].toLowerCase() : "original";
-      if (lang === "original") return;
+      if (lang === "original") return; // already set
       const txt = forDelete ? deleteText : trMap.get(lang);
       if (typeof txt === "string") node.textContent = txt;
     });
   }
 
+  // Keep dataset.message in sync
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
@@ -192,6 +152,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   }
   if (!aggregated) aggregated = aggregateReactionsFallback(raw, currentUserId);
 
+  // No reactions → remove container entirely
   let rBox = msgEl.querySelector(".reactions");
   if (!aggregated.length) {
     if (rBox) rBox.remove();
@@ -204,6 +165,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     containerParent.appendChild(rBox);
   }
 
+  // Index existing chips
   const existing = new Map();
   Array.from(rBox.querySelectorAll(".reaction")).forEach((chip) => {
     const e = chip.getAttribute("data-emoji");
@@ -226,7 +188,10 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
       chip = document.createElement("div");
       chip.className = "reaction";
       chip.setAttribute("data-emoji", emoji);
-      chip.innerHTML = `<span class="reaction-emoji"></span><span class="reaction-count"></span>`;
+      chip.innerHTML = `
+        <span class="reaction-emoji"></span>
+        <span class="reaction-count"></span>
+      `;
       rBox.appendChild(chip);
     }
 
@@ -237,14 +202,16 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     chip.dataset.userIds = JSON.stringify(userIds);
   }
 
+  // Remove chips not present anymore
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
   }
 
+  // If no chips remain, remove the container too
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
-// Update reply previews
+/* ─────────── Update any reply previews that reference a message ─────────── */
 function updateReplyPreviewsForMessage(msg) {
   const id = String(msg?.id || "");
   if (!id) return;
@@ -299,6 +266,7 @@ function updateReplyPreviewsForMessage(msg) {
   nodes.forEach((node) => {
     const header = node.querySelector(".reply-preview-header .reply-to-name");
     if (header) header.textContent = name;
+
     const children = Array.from(node.children);
     children.forEach((c, i) => {
       if (i > 0) c.remove();
@@ -307,6 +275,7 @@ function updateReplyPreviewsForMessage(msg) {
   });
 }
 
+/** In-place message patcher (no node removal). */
 function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
@@ -334,10 +303,10 @@ function patchMessageInPlace(rg, msg) {
   return true;
 }
 
-// ==== Per-chat state ====
+/* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
-window._chatGen = window._chatGen || 0;
-window._chatState = window._chatState || {}; // { [chatId]: { ... } }
+window._chatGen = window._chatGen || 0; // increments on chat switch
+window._chatState = window._chatState || {}; // { [chatId]: { phase, seen, lastTs, prebuffer, join* } }
 
 function getState(chatId) {
   return (window._chatState[chatId] ||= {
@@ -346,8 +315,8 @@ function getState(chatId) {
     lastTs: 0,
     prebuffer: [],
     joinGen: -1, // which navigation this join belongs to
-    joinDispatched: false, // has an isJoin been sent this gen?
-    joinPending: false, // one in-flight attempt while container not ready
+    joinDispatched: false,
+    joinPending: false,
     joinRetryTid: 0,
     joinRetryCount: 0,
   });
@@ -359,11 +328,10 @@ function resetState(chatId) {
     lastTs: 0,
     prebuffer: [],
   };
-  __log("resetState", { chatId });
   return window._chatState[chatId];
 }
 
-// ==== History + live injection ====
+/* ─────────── History + live injection ─────────── */
 function dedupeById(list, seenSet) {
   const out = [];
   const local = new Set();
@@ -396,7 +364,6 @@ function afterInjectUiRefresh(rg) {
 function injectBatch(rg, chatId, batch) {
   if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
-  __log("injectBatch", { rg, chatId, count: batch.length });
   window.injectMessages(rg, batch, window.currentUserId);
 
   const st = getState(chatId);
@@ -424,13 +391,6 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
   );
   const ordered = sortAscByTs(combined);
 
-  __log("injectHistoryAndGoLive", {
-    chatId,
-    incoming: (incomingHistory || []).length,
-    prebuffer: (st.prebuffer || []).length,
-    ordered: ordered.length,
-  });
-
   if (ordered.length) {
     clearActiveChatDom();
     injectBatch(rg, chatId, ordered);
@@ -438,20 +398,14 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
-  __log("phase -> live", { chatId });
 }
 
-// ==== Channel join/leave/send ====
+/* ─────────── Channel join/leave/send ─────────── */
 window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
-  if (!userId || !authToken || !realtimeHash) {
-    __err("joinChannel: userId, authToken, and realtimeHash are required");
-  }
+  if (!userId || !authToken || !realtimeHash) return;
   try {
     const channelName = `sumizy/${userId}`;
-    if (!window.xano) {
-      __err("joinChannel: Xano realtime not initialized.");
-      return;
-    }
+    if (!window.xano) return;
 
     window.xano.setAuthToken(authToken);
     window.xano.setRealtimeAuthToken(authToken);
@@ -467,27 +421,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       : window.xano.channel(channelName, { ...channelOptions });
 
     if (!already) {
-      __log("joinChannel: binding channel.on for", channelName);
       channel.on((data) => {
         try {
-          __log("realtime inbound", {
-            action: data?.action,
-            payloadType: typeof data?.payload,
-            hasData: !!data?.payload,
-          });
-
-          if (typeof window.handleRefreshEvent === "function") {
-            try {
-              if (window.handleRefreshEvent(data)) {
-                __log("realtime inbound handled by handleRefreshEvent");
-                return;
-              }
-            } catch {}
-          }
-
           const active = window._activeChatId;
           if (!active) return;
 
+          // Normalize incoming array for both 'message' and 'event'
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -510,18 +449,15 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           }
           if (!incoming.length) return;
 
+          // Filter to active conversation
           let relevant = incoming.filter(
             (m) => String(m?.conversation_id ?? "") === String(active)
           );
           if (!relevant.length) return;
 
           const st = getState(active);
-          __log("inbound relevant", {
-            count: relevant.length,
-            phase: st.phase,
-            chatId: active,
-          });
 
+          // First, handle in-place updates (edits/deletes/reactions) for messages already in DOM
           const rg = window.findVisibleRG?.() ?? null;
           const updatedIds = new Set();
           if (rg !== null) {
@@ -541,15 +477,16 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             }
             if (updatedIds.size > 0) afterInjectUiRefresh(rg);
           }
+          // Drop updates from the list so only truly new messages remain
           relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
 
+          // While joining: only treat action: "message" as history; events are prebuffered
           if (
             st.phase === "join_sent" ||
             st.phase === "injecting_history" ||
             st.phase === "idle"
           ) {
             if (data.action === "message") {
-              __log("treat as HISTORY during join");
               injectHistoryAndGoLive(active, relevant);
             } else {
               const fresh = dedupeById(relevant, st.seen);
@@ -559,18 +496,17 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                   const ts = parseTime(m.created_at);
                   if (ts > st.lastTs) st.lastTs = ts;
                 }
-                __log("prebuffer appended", {
-                  prebufferLen: st.prebuffer.length,
-                });
               }
             }
             return;
           }
 
+          // LIVE: treat both action types as live updates (append-only)
           if (st.phase === "live") {
             const fresh = dedupeById(relevant, st.seen);
             if (!fresh.length) return;
 
+            // Append in timestamp order; ignore out-of-order older than lastTs
             const toAppend = sortAscByTs(fresh).filter(
               (m) => parseTime(m.created_at) >= st.lastTs
             );
@@ -578,13 +514,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
             const rg2 = window.findVisibleRG?.() ?? null;
             if (rg2 === null) return;
-            if (active !== window._activeChatId) return;
-            __log("append live", { count: toAppend.length });
+            if (active !== window._activeChatId) return; // navigated away
             injectBatch(rg2, active, toAppend);
             return;
           }
         } catch (err) {
-          __err("Realtime handler error:", err);
+          // swallow
         }
       });
     }
@@ -601,8 +536,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     window.currentUserId = userId;
     window.xanoRealtime[channelKey] = { channel };
 
-    __log("joinChannel: joined", { channelName, userId });
-
     setTimeout(() => {
       if (typeof window.bubble_fn_joinedChannel === "function") {
         try {
@@ -613,7 +546,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
     return channel;
   } catch (error) {
-    __err("joinChannel: Error joining channel", error);
     window.currentChannel = null;
     window.currentUserId = null;
     throw error;
@@ -621,27 +553,16 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 };
 
 window.leaveChannel = (rg, userId) => {
-  if (typeof rg !== "number") {
-    __err("leaveChannel: rg must be a number");
-    return;
-  }
-  if (!userId) {
-    __err("leaveChannel: userId is required");
-    return;
-  }
+  if (typeof rg !== "number") return;
+  if (!userId) return;
 
   const info = window.currentChannel;
   if (!info || info.userId !== userId || info.rg !== rg) {
-    __warn(
-      `leaveChannel: Not in channel for user ${userId} in rg${rg} or no active channel`
-    );
     return;
   }
 
   try {
     const channelKey = info.channelKey;
-    const channelName = info.channelName;
-
     if (window.xanoRealtime && window.xanoRealtime[channelKey]) {
       const channel = window.xanoRealtime[channelKey].channel;
       if (channel && typeof channel.disconnect === "function")
@@ -652,9 +573,7 @@ window.leaveChannel = (rg, userId) => {
 
     window.currentChannel = null;
     window.currentUserId = null;
-    __log("leaveChannel: left", { channelName, userId, rg });
   } catch (error) {
-    __err("leaveChannel: Error leaving channel", error);
     throw error;
   }
 };
@@ -663,77 +582,43 @@ window.getCurrentChannel = () => window.currentChannel || null;
 window.isInChannel = (rg, userId) =>
   window.currentChannel?.userId === userId && window.currentChannel?.rg === rg;
 
-// Wrap sendMessage to show outbound JOINs
-window.sendMessage = (function (orig) {
-  return function (messageData) {
-    if (!messageData || typeof messageData !== "object") {
-      __err("sendMessage: messageData is required and must be an object");
-      return Promise.reject(
-        new Error("Message data is required and must be an object")
-      );
+window.sendMessage = (messageData) => {
+  if (!messageData || typeof messageData !== "object") {
+    return Promise.reject(
+      new Error("Message data is required and must be an object")
+    );
+  }
+  const info = window.currentChannel;
+  if (!info) {
+    return Promise.reject(new Error("No active channel"));
+  }
+  try {
+    const channelKey = info.channelKey;
+    if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
+      return Promise.reject(new Error("Channel not found in xanoRealtime"));
     }
-    const info = window.currentChannel;
-    if (!info) {
-      __err("sendMessage: No active channel. Join a channel first.");
-      return Promise.reject(new Error("No active channel"));
+    const ch = window.xanoRealtime[channelKey].channel;
+    if (!ch) {
+      return Promise.reject(new Error("Channel object not found"));
     }
-    try {
-      const channelKey = info.channelKey;
-      if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
-        __err("sendMessage: Channel not found in xanoRealtime");
-        return Promise.reject(new Error("Channel not found in xanoRealtime"));
-      }
-      const ch = window.xanoRealtime[channelKey].channel;
-      if (!ch) {
-        __err("sendMessage: Channel object not found");
-        return Promise.reject(new Error("Channel object not found"));
-      }
+    ch.message(messageData);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+};
 
-      // DEBUG
-      if (messageData.isJoin) {
-        __trace("SEND isJoin:true", {
-          conversation_id: messageData.conversation_id,
-          url: location.href,
-          _chatGen: window._chatGen,
-          _activeChatId: window._activeChatId,
-        });
-      } else {
-        __log("SEND", messageData);
-      }
-
-      ch.message(messageData);
-      return Promise.resolve();
-    } catch (error) {
-      __err("sendMessage: Error sending message", error);
-      return Promise.reject(error);
-    }
-  };
-})(
-  window.sendMessage ||
-    function (msg) {
-      __warn(
-        "sendMessage wrapper: base sendMessage missing, using best-effort ch.message path"
-      );
-      const info = window.currentChannel;
-      const ch = info && window.xanoRealtime?.[info.channelKey]?.channel;
-      ch?.message?.(msg);
-      return Promise.resolve();
-    }
-);
-
-// ==== Ensure-join (idempotent per navigation) ====
+/* ─────────── Ensure-join on visible container (single-flight) ─────────── */
 window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   force = false
 ) {
   const chatId = getChatIdFromUrl();
-  if (!chatId) {
-    __log("ensureJoin: no chatId in URL");
-    return;
-  }
+  if (!chatId) return;
 
   const st = getState(chatId);
   const currentGen = window._chatGen || 0;
 
+  // Re-init on new navigation gen
   if (st.joinGen !== currentGen) {
     st.joinGen = currentGen;
     st.prebuffer = [];
@@ -745,25 +630,10 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     st.joinRetryCount = 0;
     st.phase = "idle";
     clearActiveChatDom();
-    __log("ensureJoin: init for gen", currentGen, { chatId });
   }
 
-  __log("ensureJoin: entry", {
-    chatId,
-    force,
-    gen: currentGen,
-    st: {
-      phase: st.phase,
-      joinDispatched: st.joinDispatched,
-      joinPending: st.joinPending,
-      joinRetryCount: st.joinRetryCount,
-    },
-  });
-
-  if (st.joinDispatched || st.joinPending) {
-    __log("ensureJoin: already dispatched or pending — skip");
-    return;
-  }
+  // Guard: if we've already dispatched or are pending, don't start another
+  if (st.joinDispatched || st.joinPending) return;
 
   const rg = window.findVisibleRG?.() ?? null;
   const container =
@@ -771,14 +641,8 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
 
   const trySend = () => {
     const s = getState(chatId);
-    if (s.joinGen !== currentGen) {
-      __log("ensureJoin: stale timer — abort");
-      return;
-    }
-    if (s.joinDispatched) {
-      __log("ensureJoin: timer sees already dispatched — abort");
-      return;
-    }
+    if (s.joinGen !== currentGen) return; // stale timer
+    if (s.joinDispatched) return;
 
     const rgNow = window.findVisibleRG?.() ?? null;
     const cNow =
@@ -789,10 +653,8 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     if (!cNow) {
       if (s.joinRetryCount < 10) {
         s.joinRetryCount++;
-        __log("ensureJoin: container missing, retry#", s.joinRetryCount);
         s.joinRetryTid = setTimeout(trySend, 200);
       } else {
-        __warn("ensureJoin: retries exhausted");
         s.joinPending = false;
         s.joinRetryTid = 0;
         s.joinRetryCount = 0;
@@ -801,8 +663,6 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     }
 
     const shouldJoin = s.phase === "idle" || (force && s.phase === "live");
-    __log("ensureJoin: timer trySend", { shouldJoin, phase: s.phase, force });
-
     if (!shouldJoin) {
       s.joinPending = false;
       return;
@@ -814,10 +674,6 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     s.joinRetryCount = 0;
     s.phase = "join_sent";
 
-    __trace("ensureJoin: SENDING isJoin (timer path)", {
-      chatId,
-      gen: currentGen,
-    });
     window.sendMessage({
       isReaction: false,
       isDelete: false,
@@ -827,23 +683,20 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     });
   };
 
+  // If container is not ready yet, schedule a (single-flight) retry chain
   if (!container) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
-      __log("ensureJoin: schedule first retry (no container yet)");
       st.joinRetryTid = setTimeout(trySend, 0);
     }
     return;
   }
 
+  // Immediate path (container ready)
   st.joinDispatched = true;
   st.phase = "join_sent";
 
-  __trace("ensureJoin: SENDING isJoin (immediate path)", {
-    chatId,
-    gen: currentGen,
-  });
   window.sendMessage({
     isReaction: false,
     isDelete: false,
@@ -853,18 +706,10 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   });
 };
 
-// ==== Route watcher ====
-function handleChatRouteChange(trigger) {
+/* ─────────── Route watcher: clear & (re)join on chat change ─────────── */
+function handleChatRouteChange() {
   const next = getChatIdFromUrl();
   const prev = window._activeChatId || null;
-
-  __log("route change", {
-    trigger,
-    url: location.href,
-    prev,
-    next,
-    gen: window._chatGen,
-  });
 
   if (!next) {
     if (prev !== null) clearActiveChatDom();
@@ -875,7 +720,6 @@ function handleChatRouteChange(trigger) {
   if (next !== prev) {
     window._activeChatId = next;
     window._chatGen = (window._chatGen || 0) + 1;
-    __log("chat switch", { next, newGen: window._chatGen });
     resetState(next);
     clearActiveChatDom();
     window.ensureJoinForActiveChat(true);
@@ -885,7 +729,7 @@ function handleChatRouteChange(trigger) {
   window.ensureJoinForActiveChat(false);
 }
 
-// Wire with guards and per-event wrappers so we can see the trigger
+/* ─────────── Wire up basic SPA navigation hooks ─────────── */
 (function wireNavigationWatch() {
   if (window.__sumizyRouteWatchWired) return;
   window.__sumizyRouteWatchWired = true;
@@ -904,34 +748,24 @@ function handleChatRouteChange(trigger) {
   patchHistory("pushState");
   patchHistory("replaceState");
 
-  const onPop = (e) => handleChatRouteChange("popstate");
-  const onHash = (e) => handleChatRouteChange("hashchange");
-  const onLoc = (e) => handleChatRouteChange("locationchange");
-
-  window.addEventListener("popstate", onPop);
-  window.addEventListener("hashchange", onHash);
-  window.addEventListener("locationchange", onLoc);
+  window.addEventListener("popstate", handleChatRouteChange);
+  window.addEventListener("hashchange", handleChatRouteChange);
+  window.addEventListener("locationchange", handleChatRouteChange);
 
   if (document.readyState === "loading") {
-    document.addEventListener(
-      "DOMContentLoaded",
-      () => {
-        handleChatRouteChange("DOMContentLoaded");
-      },
-      { once: true }
-    );
+    document.addEventListener("DOMContentLoaded", handleChatRouteChange, {
+      once: true,
+    });
   } else {
-    handleChatRouteChange("immediate");
+    handleChatRouteChange();
   }
-
-  __log("route watchers wired");
 })();
 
-// ==== Older messages API (no-op stubs) ====
+/* ─────────── Optional: Older messages API (no-op unless you wire data) ─────────── */
 window.loadOlderMessages = () => false;
 window.getOlderMessagesCount = () => 0;
 
-// ==== Expose helpers (optional) ====
+// (Optional) expose helpers if other modules need them
 Object.assign(window, {
   patchMessageInPlace,
   updateReplyPreviewsForMessage,
