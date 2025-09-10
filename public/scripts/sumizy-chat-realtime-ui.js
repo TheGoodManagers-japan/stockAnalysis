@@ -1,9 +1,46 @@
-// sumizy-chat-realtime-ui.js
+// sumizy-chat-realtime-ui.js (DEBUG BUILD)
 // Minimal, duplicate-safe realtime UI: join -> history -> live.
-// History arrives via {action:"message"} ONLY while joining.
-// Live updates arrive via {action:"event", payload.data:"[]"} OR {action:"message"} after live.
+// Adds detailed logs to trace any duplicate isJoin sends.
 
-/* ─────────── Helpers ─────────── */
+// ==== DEBUG UTIL ====
+(function () {
+  if (!window.__SUMIZY_DEBUG) {
+    window.__SUMIZY_DEBUG = true; // flip to false to silence
+  }
+  const ns = "[sumizy][realtime-ui]";
+  const toJSON = (v) => {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  };
+  const short = (o) => {
+    if (!o || typeof o !== "object") return o;
+    return {
+      ...o,
+      seenSize: o.seen instanceof Set ? o.seen.size : undefined,
+      prebufferLen: Array.isArray(o.prebuffer) ? o.prebuffer.length : undefined,
+    };
+  };
+  window.__log = function (...args) {
+    if (!window.__SUMIZY_DEBUG) return;
+    console.debug(ns, ...args);
+  };
+  window.__trace = function (...args) {
+    if (!window.__SUMIZY_DEBUG) return;
+    console.debug(ns, ...args);
+    console.trace(ns + " trace");
+  };
+  window.__warn = function (...args) {
+    console.warn(ns, ...args);
+  };
+  window.__err = function (...args) {
+    console.error(ns, ...args);
+  };
+})();
+
+// ==== Helpers ====
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
@@ -43,6 +80,7 @@ function clearActiveChatDom() {
       window.hideAITypingIndicator();
     } catch {}
   }
+  __log("clearActiveChatDom done for rg", rg);
 }
 function safeSelId(id) {
   const s = String(id ?? "");
@@ -60,12 +98,12 @@ function _esc(s) {
   if (typeof window.esc === "function") return window.esc(s);
   return String(s ?? "")
     .replace(/&/g, "&amp;")
-    .replace(/</ / g, "&lt;")
+    .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 
-/* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
+// ==== Reactions aggregation (fallback) ====
 function aggregateReactionsFallback(raw, currentUserId) {
   const map = new Map();
   for (const r of raw || []) {
@@ -89,9 +127,7 @@ function aggregateReactionsFallback(raw, currentUserId) {
   return Array.from(map.values());
 }
 
-/* ─────────── In-place updaters (no node swaps) ─────────── */
-
-// Only patch the main message body, not nested reply preview content
+// ==== In-place updaters ====
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const translations = Array.isArray(msg._translations)
     ? msg._translations
@@ -208,7 +244,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
-/* ─────────── Update any reply previews that reference a message ─────────── */
+// Update reply previews
 function updateReplyPreviewsForMessage(msg) {
   const id = String(msg?.id || "");
   if (!id) return;
@@ -271,7 +307,6 @@ function updateReplyPreviewsForMessage(msg) {
   });
 }
 
-/** In-place message patcher (no node removal). */
 function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
@@ -299,9 +334,9 @@ function patchMessageInPlace(rg, msg) {
   return true;
 }
 
-/* ─────────── Minimal per-chat state ─────────── */
+// ==== Per-chat state ====
 window._activeChatId = window._activeChatId || null;
-window._chatGen = window._chatGen || 0; // increments on chat switch
+window._chatGen = window._chatGen || 0;
 window._chatState = window._chatState || {}; // { [chatId]: { ... } }
 
 function getState(chatId) {
@@ -312,23 +347,23 @@ function getState(chatId) {
     prebuffer: [],
     joinGen: -1, // which navigation this join belongs to
     joinDispatched: false, // has an isJoin been sent this gen?
-    joinPending: false, // a single in-flight attempt while container not ready
-    joinRetryTid: 0, // single retry timer id per gen
-    joinRetryCount: 0, // bounded retries per gen
+    joinPending: false, // one in-flight attempt while container not ready
+    joinRetryTid: 0,
+    joinRetryCount: 0,
   });
 }
 function resetState(chatId) {
-  // Note: join guards are reinitialized inside ensureJoin when gen changes.
   window._chatState[chatId] = {
     phase: "idle",
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
   };
+  __log("resetState", { chatId });
   return window._chatState[chatId];
 }
 
-/* ─────────── History + live injection ─────────── */
+// ==== History + live injection ====
 function dedupeById(list, seenSet) {
   const out = [];
   const local = new Set();
@@ -361,6 +396,7 @@ function afterInjectUiRefresh(rg) {
 function injectBatch(rg, chatId, batch) {
   if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
+  __log("injectBatch", { rg, chatId, count: batch.length });
   window.injectMessages(rg, batch, window.currentUserId);
 
   const st = getState(chatId);
@@ -374,7 +410,6 @@ function injectBatch(rg, chatId, batch) {
   afterInjectUiRefresh(rg);
 }
 
-/* Inject the one authoritative history (plus any prebuffer that arrived before) */
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
@@ -389,7 +424,13 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
   );
   const ordered = sortAscByTs(combined);
 
-  // Only touch DOM if there's anything to render (prevents flicker on dup history)
+  __log("injectHistoryAndGoLive", {
+    chatId,
+    incoming: (incomingHistory || []).length,
+    prebuffer: (st.prebuffer || []).length,
+    ordered: ordered.length,
+  });
+
   if (ordered.length) {
     clearActiveChatDom();
     injectBatch(rg, chatId, ordered);
@@ -397,19 +438,18 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
+  __log("phase -> live", { chatId });
 }
 
-/* ─────────── Channel join/leave/send ─────────── */
+// ==== Channel join/leave/send ====
 window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   if (!userId || !authToken || !realtimeHash) {
-    console.error(
-      "joinChannel: userId, authToken, and realtimeHash are required"
-    );
+    __err("joinChannel: userId, authToken, and realtimeHash are required");
   }
   try {
     const channelName = `sumizy/${userId}`;
     if (!window.xano) {
-      console.error("joinChannel: Xano realtime not initialized.");
+      __err("joinChannel: Xano realtime not initialized.");
       return;
     }
 
@@ -427,11 +467,21 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       : window.xano.channel(channelName, { ...channelOptions });
 
     if (!already) {
+      __log("joinChannel: binding channel.on for", channelName);
       channel.on((data) => {
         try {
+          __log("realtime inbound", {
+            action: data?.action,
+            payloadType: typeof data?.payload,
+            hasData: !!data?.payload,
+          });
+
           if (typeof window.handleRefreshEvent === "function") {
             try {
-              if (window.handleRefreshEvent(data)) return;
+              if (window.handleRefreshEvent(data)) {
+                __log("realtime inbound handled by handleRefreshEvent");
+                return;
+              }
             } catch {}
           }
 
@@ -466,6 +516,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           if (!relevant.length) return;
 
           const st = getState(active);
+          __log("inbound relevant", {
+            count: relevant.length,
+            phase: st.phase,
+            chatId: active,
+          });
 
           const rg = window.findVisibleRG?.() ?? null;
           const updatedIds = new Set();
@@ -494,6 +549,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             st.phase === "idle"
           ) {
             if (data.action === "message") {
+              __log("treat as HISTORY during join");
               injectHistoryAndGoLive(active, relevant);
             } else {
               const fresh = dedupeById(relevant, st.seen);
@@ -503,6 +559,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                   const ts = parseTime(m.created_at);
                   if (ts > st.lastTs) st.lastTs = ts;
                 }
+                __log("prebuffer appended", {
+                  prebufferLen: st.prebuffer.length,
+                });
               }
             }
             return;
@@ -520,11 +579,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             const rg2 = window.findVisibleRG?.() ?? null;
             if (rg2 === null) return;
             if (active !== window._activeChatId) return;
+            __log("append live", { count: toAppend.length });
             injectBatch(rg2, active, toAppend);
             return;
           }
         } catch (err) {
-          console.error("Realtime handler error:", err);
+          __err("Realtime handler error:", err);
         }
       });
     }
@@ -541,7 +601,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     window.currentUserId = userId;
     window.xanoRealtime[channelKey] = { channel };
 
-    console.info(`joinChannel: joined ${channelName} for user ${userId}`);
+    __log("joinChannel: joined", { channelName, userId });
 
     setTimeout(() => {
       if (typeof window.bubble_fn_joinedChannel === "function") {
@@ -553,7 +613,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
     return channel;
   } catch (error) {
-    console.error("joinChannel: Error joining channel", error);
+    __err("joinChannel: Error joining channel", error);
     window.currentChannel = null;
     window.currentUserId = null;
     throw error;
@@ -562,17 +622,17 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
 window.leaveChannel = (rg, userId) => {
   if (typeof rg !== "number") {
-    console.error("leaveChannel: rg must be a number");
+    __err("leaveChannel: rg must be a number");
     return;
   }
   if (!userId) {
-    console.error("leaveChannel: userId is required");
+    __err("leaveChannel: userId is required");
     return;
   }
 
   const info = window.currentChannel;
   if (!info || info.userId !== userId || info.rg !== rg) {
-    console.warn(
+    __warn(
       `leaveChannel: Not in channel for user ${userId} in rg${rg} or no active channel`
     );
     return;
@@ -592,11 +652,9 @@ window.leaveChannel = (rg, userId) => {
 
     window.currentChannel = null;
     window.currentUserId = null;
-    console.info(
-      `leaveChannel: left ${channelName} for user ${userId} in rg${rg}`
-    );
+    __log("leaveChannel: left", { channelName, userId, rg });
   } catch (error) {
-    console.error("leaveChannel: Error leaving channel", error);
+    __err("leaveChannel: Error leaving channel", error);
     throw error;
   }
 };
@@ -605,48 +663,77 @@ window.getCurrentChannel = () => window.currentChannel || null;
 window.isInChannel = (rg, userId) =>
   window.currentChannel?.userId === userId && window.currentChannel?.rg === rg;
 
-window.sendMessage = (messageData) => {
-  if (!messageData || typeof messageData !== "object") {
-    console.error("sendMessage: messageData is required and must be an object");
-    return Promise.reject(
-      new Error("Message data is required and must be an object")
-    );
-  }
-  const info = window.currentChannel;
-  if (!info) {
-    console.error("sendMessage: No active channel. Join a channel first.");
-    return Promise.reject(new Error("No active channel"));
-  }
-  try {
-    const channelKey = info.channelKey;
-    if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
-      console.error("sendMessage: Channel not found in xanoRealtime");
-      return Promise.reject(new Error("Channel not found in xanoRealtime"));
+// Wrap sendMessage to show outbound JOINs
+window.sendMessage = (function (orig) {
+  return function (messageData) {
+    if (!messageData || typeof messageData !== "object") {
+      __err("sendMessage: messageData is required and must be an object");
+      return Promise.reject(
+        new Error("Message data is required and must be an object")
+      );
     }
-    const ch = window.xanoRealtime[channelKey].channel;
-    if (!ch) {
-      console.error("sendMessage: Channel object not found");
-      return Promise.reject(new Error("Channel object not found"));
+    const info = window.currentChannel;
+    if (!info) {
+      __err("sendMessage: No active channel. Join a channel first.");
+      return Promise.reject(new Error("No active channel"));
     }
-    ch.message(messageData);
-    return Promise.resolve();
-  } catch (error) {
-    console.error("sendMessage: Error sending message", error);
-    return Promise.reject(error);
-  }
-};
+    try {
+      const channelKey = info.channelKey;
+      if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
+        __err("sendMessage: Channel not found in xanoRealtime");
+        return Promise.reject(new Error("Channel not found in xanoRealtime"));
+      }
+      const ch = window.xanoRealtime[channelKey].channel;
+      if (!ch) {
+        __err("sendMessage: Channel object not found");
+        return Promise.reject(new Error("Channel object not found"));
+      }
 
-/* ─────────── Ensure-join on visible container (idempotent per nav) ─────────── */
+      // DEBUG
+      if (messageData.isJoin) {
+        __trace("SEND isJoin:true", {
+          conversation_id: messageData.conversation_id,
+          url: location.href,
+          _chatGen: window._chatGen,
+          _activeChatId: window._activeChatId,
+        });
+      } else {
+        __log("SEND", messageData);
+      }
+
+      ch.message(messageData);
+      return Promise.resolve();
+    } catch (error) {
+      __err("sendMessage: Error sending message", error);
+      return Promise.reject(error);
+    }
+  };
+})(
+  window.sendMessage ||
+    function (msg) {
+      __warn(
+        "sendMessage wrapper: base sendMessage missing, using best-effort ch.message path"
+      );
+      const info = window.currentChannel;
+      const ch = info && window.xanoRealtime?.[info.channelKey]?.channel;
+      ch?.message?.(msg);
+      return Promise.resolve();
+    }
+);
+
+// ==== Ensure-join (idempotent per navigation) ====
 window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   force = false
 ) {
   const chatId = getChatIdFromUrl();
-  if (!chatId) return;
+  if (!chatId) {
+    __log("ensureJoin: no chatId in URL");
+    return;
+  }
 
   const st = getState(chatId);
   const currentGen = window._chatGen || 0;
 
-  // New navigation or first time: re-init join guards ONCE
   if (st.joinGen !== currentGen) {
     st.joinGen = currentGen;
     st.prebuffer = [];
@@ -658,21 +745,40 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     st.joinRetryCount = 0;
     st.phase = "idle";
     clearActiveChatDom();
+    __log("ensureJoin: init for gen", currentGen, { chatId });
   }
 
-  // If we already sent (or are already trying to send) for this gen, bail
-  if (st.joinDispatched || st.joinPending) return;
+  __log("ensureJoin: entry", {
+    chatId,
+    force,
+    gen: currentGen,
+    st: {
+      phase: st.phase,
+      joinDispatched: st.joinDispatched,
+      joinPending: st.joinPending,
+      joinRetryCount: st.joinRetryCount,
+    },
+  });
 
-  // Only proceed when the container exists/visible; if not, set a SINGLE pending attempt
+  if (st.joinDispatched || st.joinPending) {
+    __log("ensureJoin: already dispatched or pending — skip");
+    return;
+  }
+
   const rg = window.findVisibleRG?.() ?? null;
   const container =
     rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
   const trySend = () => {
-    // Re-fetch current state inside timer
     const s = getState(chatId);
-    if (s.joinGen !== currentGen) return; // stale
-    if (s.joinDispatched) return; // already sent
+    if (s.joinGen !== currentGen) {
+      __log("ensureJoin: stale timer — abort");
+      return;
+    }
+    if (s.joinDispatched) {
+      __log("ensureJoin: timer sees already dispatched — abort");
+      return;
+    }
 
     const rgNow = window.findVisibleRG?.() ?? null;
     const cNow =
@@ -681,12 +787,12 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
         : null;
 
     if (!cNow) {
-      // bounded retry loop (per gen)
       if (s.joinRetryCount < 10) {
         s.joinRetryCount++;
+        __log("ensureJoin: container missing, retry#", s.joinRetryCount);
         s.joinRetryTid = setTimeout(trySend, 200);
       } else {
-        // give up this gen; allow a future ensureJoin call to re-arm
+        __warn("ensureJoin: retries exhausted");
         s.joinPending = false;
         s.joinRetryTid = 0;
         s.joinRetryCount = 0;
@@ -694,20 +800,24 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
       return;
     }
 
-    // Decide whether to send (idle, or force from live)
     const shouldJoin = s.phase === "idle" || (force && s.phase === "live");
+    __log("ensureJoin: timer trySend", { shouldJoin, phase: s.phase, force });
+
     if (!shouldJoin) {
       s.joinPending = false;
       return;
     }
 
-    // Latch BEFORE sending to prevent races
     s.joinDispatched = true;
     s.joinPending = false;
     s.joinRetryTid = 0;
     s.joinRetryCount = 0;
     s.phase = "join_sent";
 
+    __trace("ensureJoin: SENDING isJoin (timer path)", {
+      chatId,
+      gen: currentGen,
+    });
     window.sendMessage({
       isReaction: false,
       isDelete: false,
@@ -721,15 +831,19 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
-      st.joinRetryTid = setTimeout(trySend, 0); // kick off immediately
+      __log("ensureJoin: schedule first retry (no container yet)");
+      st.joinRetryTid = setTimeout(trySend, 0);
     }
     return;
   }
 
-  // Container is ready → send once
   st.joinDispatched = true;
   st.phase = "join_sent";
 
+  __trace("ensureJoin: SENDING isJoin (immediate path)", {
+    chatId,
+    gen: currentGen,
+  });
   window.sendMessage({
     isReaction: false,
     isDelete: false,
@@ -739,10 +853,18 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   });
 };
 
-/* ─────────── Route watcher: clear & (re)join on chat change ─────────── */
-function handleChatRouteChange() {
+// ==== Route watcher ====
+function handleChatRouteChange(trigger) {
   const next = getChatIdFromUrl();
   const prev = window._activeChatId || null;
+
+  __log("route change", {
+    trigger,
+    url: location.href,
+    prev,
+    next,
+    gen: window._chatGen,
+  });
 
   if (!next) {
     if (prev !== null) clearActiveChatDom();
@@ -753,6 +875,7 @@ function handleChatRouteChange() {
   if (next !== prev) {
     window._activeChatId = next;
     window._chatGen = (window._chatGen || 0) + 1;
+    __log("chat switch", { next, newGen: window._chatGen });
     resetState(next);
     clearActiveChatDom();
     window.ensureJoinForActiveChat(true);
@@ -762,7 +885,7 @@ function handleChatRouteChange() {
   window.ensureJoinForActiveChat(false);
 }
 
-/* ─────────── Wire up basic SPA navigation hooks (guarded) ─────────── */
+// Wire with guards and per-event wrappers so we can see the trigger
 (function wireNavigationWatch() {
   if (window.__sumizyRouteWatchWired) return;
   window.__sumizyRouteWatchWired = true;
@@ -781,24 +904,34 @@ function handleChatRouteChange() {
   patchHistory("pushState");
   patchHistory("replaceState");
 
-  window.addEventListener("popstate", handleChatRouteChange);
-  window.addEventListener("hashchange", handleChatRouteChange);
-  window.addEventListener("locationchange", handleChatRouteChange);
+  const onPop = (e) => handleChatRouteChange("popstate");
+  const onHash = (e) => handleChatRouteChange("hashchange");
+  const onLoc = (e) => handleChatRouteChange("locationchange");
+
+  window.addEventListener("popstate", onPop);
+  window.addEventListener("hashchange", onHash);
+  window.addEventListener("locationchange", onLoc);
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", handleChatRouteChange, {
-      once: true,
-    });
+    document.addEventListener(
+      "DOMContentLoaded",
+      () => {
+        handleChatRouteChange("DOMContentLoaded");
+      },
+      { once: true }
+    );
   } else {
-    handleChatRouteChange();
+    handleChatRouteChange("immediate");
   }
+
+  __log("route watchers wired");
 })();
 
-/* ─────────── Optional: Older messages API (no-op unless you wire data) ─────────── */
+// ==== Older messages API (no-op stubs) ====
 window.loadOlderMessages = () => false;
 window.getOlderMessagesCount = () => 0;
 
-// (Optional) expose helpers if other modules need them
+// ==== Expose helpers (optional) ====
 Object.assign(window, {
   patchMessageInPlace,
   updateReplyPreviewsForMessage,
