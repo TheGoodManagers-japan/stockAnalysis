@@ -82,8 +82,6 @@ function aggregateReactionsFallback(raw, currentUserId) {
 }
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
-
-// Only patch the main message body, not nested reply preview content
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const translations = Array.isArray(msg._translations)
     ? msg._translations
@@ -96,7 +94,6 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // ONLY direct children of content wrapper (avoid reply preview subtree)
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
     contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
@@ -111,7 +108,6 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  // Update translation blocks that are direct children only
   const trNodes = Array.from(
     contentWrap.querySelectorAll(":scope > .message-text[class*='lang-']")
   );
@@ -125,13 +121,12 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     trNodes.forEach((node) => {
       const m = node.className.match(/lang-([a-zA-Z_]+)/);
       const lang = m ? m[1].toLowerCase() : "original";
-      if (lang === "original") return; // already set
+      if (lang === "original") return;
       const txt = forDelete ? deleteText : trMap.get(lang);
       if (typeof txt === "string") node.textContent = txt;
     });
   }
 
-  // Keep dataset.message in sync
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
@@ -152,7 +147,6 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   }
   if (!aggregated) aggregated = aggregateReactionsFallback(raw, currentUserId);
 
-  // No reactions → remove container entirely
   let rBox = msgEl.querySelector(".reactions");
   if (!aggregated.length) {
     if (rBox) rBox.remove();
@@ -165,7 +159,6 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     containerParent.appendChild(rBox);
   }
 
-  // Index existing chips
   const existing = new Map();
   Array.from(rBox.querySelectorAll(".reaction")).forEach((chip) => {
     const e = chip.getAttribute("data-emoji");
@@ -188,10 +181,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
       chip = document.createElement("div");
       chip.className = "reaction";
       chip.setAttribute("data-emoji", emoji);
-      chip.innerHTML = `
-        <span class="reaction-emoji"></span>
-        <span class="reaction-count"></span>
-      `;
+      chip.innerHTML = `<span class="reaction-emoji"></span><span class="reaction-count"></span>`;
       rBox.appendChild(chip);
     }
 
@@ -202,12 +192,10 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     chip.dataset.userIds = JSON.stringify(userIds);
   }
 
-  // Remove chips not present anymore
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
   }
 
-  // If no chips remain, remove the container too
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
@@ -266,7 +254,6 @@ function updateReplyPreviewsForMessage(msg) {
   nodes.forEach((node) => {
     const header = node.querySelector(".reply-preview-header .reply-to-name");
     if (header) header.textContent = name;
-
     const children = Array.from(node.children);
     children.forEach((c, i) => {
       if (i > 0) c.remove();
@@ -306,7 +293,7 @@ function patchMessageInPlace(rg, msg) {
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
 window._chatGen = window._chatGen || 0; // increments on chat switch
-window._chatState = window._chatState || {}; // { [chatId]: { phase, seen, lastTs, prebuffer, join* } }
+window._chatState = window._chatState || {};
 
 function getState(chatId) {
   return (window._chatState[chatId] ||= {
@@ -314,7 +301,8 @@ function getState(chatId) {
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
-    joinGen: -1, // which navigation this join belongs to
+    // Join guards (single-flight)
+    joinGen: -1,
     joinDispatched: false,
     joinPending: false,
     joinRetryTid: 0,
@@ -376,7 +364,6 @@ function injectBatch(rg, chatId, batch) {
   }
   afterInjectUiRefresh(rg);
 }
-
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
@@ -426,7 +413,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           const active = window._activeChatId;
           if (!active) return;
 
-          // Normalize incoming array for both 'message' and 'event'
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -449,7 +435,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           }
           if (!incoming.length) return;
 
-          // Filter to active conversation
           let relevant = incoming.filter(
             (m) => String(m?.conversation_id ?? "") === String(active)
           );
@@ -457,7 +442,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
           const st = getState(active);
 
-          // First, handle in-place updates (edits/deletes/reactions) for messages already in DOM
           const rg = window.findVisibleRG?.() ?? null;
           const updatedIds = new Set();
           if (rg !== null) {
@@ -477,10 +461,8 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             }
             if (updatedIds.size > 0) afterInjectUiRefresh(rg);
           }
-          // Drop updates from the list so only truly new messages remain
           relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
 
-          // While joining: only treat action: "message" as history; events are prebuffered
           if (
             st.phase === "join_sent" ||
             st.phase === "injecting_history" ||
@@ -501,12 +483,10 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             return;
           }
 
-          // LIVE: treat both action types as live updates (append-only)
           if (st.phase === "live") {
             const fresh = dedupeById(relevant, st.seen);
             if (!fresh.length) return;
 
-            // Append in timestamp order; ignore out-of-order older than lastTs
             const toAppend = sortAscByTs(fresh).filter(
               (m) => parseTime(m.created_at) >= st.lastTs
             );
@@ -514,13 +494,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
             const rg2 = window.findVisibleRG?.() ?? null;
             if (rg2 === null) return;
-            if (active !== window._activeChatId) return; // navigated away
+            if (active !== window._activeChatId) return;
             injectBatch(rg2, active, toAppend);
             return;
           }
-        } catch (err) {
-          // swallow
-        }
+        } catch (err) {}
       });
     }
 
@@ -540,6 +518,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       if (typeof window.bubble_fn_joinedChannel === "function") {
         try {
           window.bubble_fn_joinedChannel(true);
+        } catch {}
+      }
+      // Nudge ensureJoin in case initial attempt happened before channel became ready
+      if (typeof window.ensureJoinForActiveChat === "function") {
+        try {
+          window.ensureJoinForActiveChat(true);
         } catch {}
       }
     }, 1000);
@@ -608,7 +592,14 @@ window.sendMessage = (messageData) => {
   }
 };
 
-/* ─────────── Ensure-join on visible container (single-flight) ─────────── */
+/* ─────────── Ensure-join on visible container (single-flight + channel-ready) ─────────── */
+function isChannelReady() {
+  const info = window.currentChannel;
+  if (!info) return false;
+  const ch = window.xanoRealtime?.[info.channelKey]?.channel;
+  return !!(ch && typeof ch.message === "function");
+}
+
 window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   force = false
 ) {
@@ -650,8 +641,10 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
         ? document.querySelector(`#rg${rgNow} .chat-messages`)
         : null;
 
-    if (!cNow) {
-      if (s.joinRetryCount < 10) {
+    // Wait for BOTH container and channel
+    if (!cNow || !isChannelReady()) {
+      if (s.joinRetryCount < 40) {
+        // ~8s at 200ms steps
         s.joinRetryCount++;
         s.joinRetryTid = setTimeout(trySend, 200);
       } else {
@@ -683,8 +676,8 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     });
   };
 
-  // If container is not ready yet, schedule a (single-flight) retry chain
-  if (!container) {
+  // If container or channel is not ready yet, schedule the (single-flight) retry chain
+  if (!container || !isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
@@ -693,7 +686,7 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     return;
   }
 
-  // Immediate path (container ready)
+  // Immediate path (everything ready)
   st.joinDispatched = true;
   st.phase = "join_sent";
 
