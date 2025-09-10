@@ -44,6 +44,30 @@ function clearActiveChatDom() {
     } catch {}
   }
 }
+function safeSelId(id) {
+  const s = String(id ?? "");
+  return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
+}
+function replaceMessageInDom(rg, msg) {
+  if (!rg || !msg || !msg.id) return false;
+  const container = document.querySelector(`#rg${rg} .chat-messages`);
+  if (!container) return false;
+
+  const oldEl = container.querySelector(
+    `.message[data-id="${safeSelId(msg.id)}"]`
+  );
+  if (!oldEl) return false;
+
+  if (typeof renderMsg !== "function") return false;
+  const html = renderMsg(msg, null);
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = html;
+  const fresh = wrapper.firstChild;
+  if (!fresh) return false;
+
+  oldEl.replaceWith(fresh);
+  return true;
+}
 
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
@@ -168,6 +192,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       channel.on((data) => {
         try {
+          // Allow external refresh events to short-circuit
           if (typeof window.handleRefreshEvent === "function") {
             try {
               if (window.handleRefreshEvent(data)) return;
@@ -208,6 +233,31 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
           const st = getState(active);
 
+          // First, handle in-place updates (edits/deletes) for messages already in DOM
+          const rg = window.findVisibleRG?.() ?? null;
+          const updatedIds = new Set();
+          if (rg !== null) {
+            for (const m of relevant) {
+              if (!m || !m.id) continue;
+              const exists = document.querySelector(
+                `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
+              );
+              if (exists) {
+                if (replaceMessageInDom(rg, m)) {
+                  // bookkeeping
+                  st.seen.add(String(m.id));
+                  const ts = parseTime(m.created_at);
+                  if (ts > st.lastTs) st.lastTs = ts;
+                  updatedIds.add(String(m.id));
+                }
+              }
+            }
+            // If any updated, refresh UI once
+            if (updatedIds.size > 0) afterInjectUiRefresh(rg);
+          }
+          // Drop updates from the list so only truly new messages remain
+          relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
+
           // While joining: only treat action: "message" as history; events are prebuffered
           if (
             st.phase === "join_sent" ||
@@ -240,10 +290,10 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             );
             if (!toAppend.length) return;
 
-            const rg = window.findVisibleRG?.() ?? null;
-            if (rg === null) return;
+            const rg2 = window.findVisibleRG?.() ?? null;
+            if (rg2 === null) return;
             if (active !== window._activeChatId) return; // navigated away
-            injectBatch(rg, active, toAppend);
+            injectBatch(rg2, active, toAppend);
             return;
           }
         } catch (err) {
