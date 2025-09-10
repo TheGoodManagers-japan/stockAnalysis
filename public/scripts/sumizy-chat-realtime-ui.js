@@ -1,7 +1,7 @@
 // sumizy-chat-realtime-ui.js
 // Minimal, duplicate-safe realtime UI: join -> history -> live.
-// Handles server history via {action:"message"} (ONLY while joining)
-// and live updates via either {action:"event", payload.data:"[]"} or {action:"message"} after live.
+// History arrives via {action:"message"} ONLY while joining.
+// Live updates arrive via {action:"event", payload.data:"[]"} OR {action:"message"} after live.
 
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
@@ -60,14 +60,13 @@ function _esc(s) {
   if (typeof window.esc === "function") return window.esc(s);
   return String(s ?? "")
     .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
+    .replace(/</ / g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
-  // raw: array of entries like { id, emoji, user_id, _user, ... }
   const map = new Map();
   for (const r of raw || []) {
     const emoji = r?.emoji || r?.e || r?.key || r?.symbol;
@@ -105,7 +104,6 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // ONLY direct children of content wrapper (avoid reply preview subtree)
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
     contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
@@ -116,11 +114,9 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       return d;
     })();
 
-  if (original) {
+  if (original)
     original.textContent = forDelete ? deleteText : msg.message ?? "";
-  }
 
-  // Update translation blocks that are direct children only
   const trNodes = Array.from(
     contentWrap.querySelectorAll(":scope > .message-text[class*='lang-']")
   );
@@ -134,13 +130,12 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     trNodes.forEach((node) => {
       const m = node.className.match(/lang-([a-zA-Z_]+)/);
       const lang = m ? m[1].toLowerCase() : "original";
-      if (lang === "original") return; // already set
+      if (lang === "original") return;
       const txt = forDelete ? deleteText : trMap.get(lang);
       if (typeof txt === "string") node.textContent = txt;
     });
   }
 
-  // Keep dataset.message in sync
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
@@ -150,7 +145,6 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   const containerParent =
     msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // Aggregate from raw rows
   const raw = Array.isArray(msg._reactions) ? msg._reactions : [];
   let aggregated = null;
   if (typeof window.agg === "function") {
@@ -160,24 +154,8 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
       aggregated = null;
     }
   }
-  if (!aggregated) {
-    const map = new Map();
-    for (const r of raw) {
-      const e = r?.emoji;
-      if (!e) continue;
-      let x = map.get(e);
-      if (!x) {
-        x = { e, c: 0, users: [], userIds: [] };
-        map.set(e, x);
-      }
-      x.c++;
-      if (r?._user?.name) x.users.push(r._user.name);
-      if (r?.user_id) x.userIds.push(r.user_id);
-    }
-    aggregated = Array.from(map.values());
-  }
+  if (!aggregated) aggregated = aggregateReactionsFallback(raw, currentUserId);
 
-  // No reactions → remove container entirely
   let rBox = msgEl.querySelector(".reactions");
   if (!aggregated.length) {
     if (rBox) rBox.remove();
@@ -190,7 +168,6 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     containerParent.appendChild(rBox);
   }
 
-  // Index existing chips
   const existing = new Map();
   Array.from(rBox.querySelectorAll(".reaction")).forEach((chip) => {
     const e = chip.getAttribute("data-emoji");
@@ -213,10 +190,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
       chip = document.createElement("div");
       chip.className = "reaction";
       chip.setAttribute("data-emoji", emoji);
-      chip.innerHTML = `
-        <span class="reaction-emoji"></span>
-        <span class="reaction-count"></span>
-      `;
+      chip.innerHTML = `<span class="reaction-emoji"></span><span class="reaction-count"></span>`;
       rBox.appendChild(chip);
     }
 
@@ -227,17 +201,14 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     chip.dataset.userIds = JSON.stringify(userIds);
   }
 
-  // Remove chips not present anymore
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
   }
 
-  // If no chips remain, remove the container too
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
 /* ─────────── Update any reply previews that reference a message ─────────── */
-// NEW: keep all "replied to" tiles in sync if the original message changes
 function updateReplyPreviewsForMessage(msg) {
   const id = String(msg?.id || "");
   if (!id) return;
@@ -253,10 +224,8 @@ function updateReplyPreviewsForMessage(msg) {
   const isDeleted = !!msg?.isDeleted;
   const deleteText = "Message Unsent";
 
-  // Build body HTML similar to the renderer
   let bodyHTML = "";
   if (msg?.isFile && !isDeleted) {
-    // Recreate the same markup used for file attachments
     const url = _esc(msg.message || "#");
     const fname = _esc(msg.file_name || url.split("/").pop() || "download");
     const type = (msg.file_type || "").toLowerCase();
@@ -274,7 +243,6 @@ function updateReplyPreviewsForMessage(msg) {
         </a>
       </div>`;
   } else {
-    // Text + (optional) translations
     const originalText = isDeleted ? deleteText : msg.message || "";
     bodyHTML =
       `<div class="message-text lang-original">${_esc(originalText)}</div>` +
@@ -292,14 +260,9 @@ function updateReplyPreviewsForMessage(msg) {
         : "");
   }
 
-  // Apply to each preview node
   nodes.forEach((node) => {
-    // Update header name
     const header = node.querySelector(".reply-preview-header .reply-to-name");
     if (header) header.textContent = name;
-
-    // Remove everything after the header, then append our fresh body
-    // (Keep classes/dataset on the wrapper intact)
     const children = Array.from(node.children);
     children.forEach((c, i) => {
       if (i > 0) c.remove();
@@ -308,10 +271,7 @@ function updateReplyPreviewsForMessage(msg) {
   });
 }
 
-/** In-place message patcher (no node removal).
- *  Updates flags, text/translation blocks, reactions, and datasets.
- *  Returns true if we successfully patched the existing element.
- */
+/** In-place message patcher (no node removal). */
 function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
@@ -322,25 +282,18 @@ function patchMessageInPlace(rg, msg) {
   );
   if (!el) return false;
 
-  // Update flags (deleted)
   if (typeof msg.isDeleted === "boolean") {
     el.dataset.deleted = String(!!msg.isDeleted);
     el.classList.toggle("is-deleted", !!msg.isDeleted);
   }
 
-  // Update timestamp dataset if provided
   if (msg.created_at != null) {
     const ts = parseTime(msg.created_at);
     if (!Number.isNaN(ts)) el.dataset.ts = String(ts);
   }
 
-  // Update message texts (and translations) in place
   updateMessageTextsInPlace(el, msg, { forDelete: !!msg.isDeleted });
-
-  // Update reactions in place
   updateReactionsInPlace(el, msg, window.currentUserId);
-
-  // NEW: propagate changes to any reply previews referencing this message
   updateReplyPreviewsForMessage(msg);
 
   return true;
@@ -349,7 +302,7 @@ function patchMessageInPlace(rg, msg) {
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
 window._chatGen = window._chatGen || 0; // increments on chat switch
-window._chatState = window._chatState || {}; // { [chatId]: { phase, seen, lastTs, prebuffer, joinGen, joinDispatched } }
+window._chatState = window._chatState || {}; // { [chatId]: { ... } }
 
 function getState(chatId) {
   return (window._chatState[chatId] ||= {
@@ -357,18 +310,20 @@ function getState(chatId) {
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
-    joinGen: -1, // <-- guard: which navigation this join belongs to
-    joinDispatched: false, // <-- guard: have we sent the isJoin message yet?
+    joinGen: -1, // which navigation this join belongs to
+    joinDispatched: false, // has an isJoin been sent this gen?
+    joinPending: false, // a single in-flight attempt while container not ready
+    joinRetryTid: 0, // single retry timer id per gen
+    joinRetryCount: 0, // bounded retries per gen
   });
 }
 function resetState(chatId) {
+  // Note: join guards are reinitialized inside ensureJoin when gen changes.
   window._chatState[chatId] = {
     phase: "idle",
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
-    // joinGen/joinDispatched intentionally omitted; they are reinitialized
-    // in ensureJoinForActiveChat when a new _chatGen is detected.
   };
   return window._chatState[chatId];
 }
@@ -408,7 +363,6 @@ function injectBatch(rg, chatId, batch) {
   if (typeof window.injectMessages !== "function") return;
   window.injectMessages(rg, batch, window.currentUserId);
 
-  // Mark as seen and bump lastTs
   const st = getState(chatId);
   for (const m of batch) {
     if (m?.id) st.seen.add(String(m.id));
@@ -424,7 +378,7 @@ function injectBatch(rg, chatId, batch) {
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
-  if (chatId !== window._activeChatId) return; // navigated away
+  if (chatId !== window._activeChatId) return;
 
   const st = getState(chatId);
   st.phase = "injecting_history";
@@ -475,7 +429,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       channel.on((data) => {
         try {
-          // Allow external refresh events to short-circuit
           if (typeof window.handleRefreshEvent === "function") {
             try {
               if (window.handleRefreshEvent(data)) return;
@@ -485,7 +438,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           const active = window._activeChatId;
           if (!active) return;
 
-          // Normalize incoming array for both 'message' and 'event'
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -508,7 +460,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           }
           if (!incoming.length) return;
 
-          // Filter to active conversation
           let relevant = incoming.filter(
             (m) => String(m?.conversation_id ?? "") === String(active)
           );
@@ -516,7 +467,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
           const st = getState(active);
 
-          // First, handle in-place updates (edits/deletes/reactions) for messages already in DOM
           const rg = window.findVisibleRG?.() ?? null;
           const updatedIds = new Set();
           if (rg !== null) {
@@ -527,7 +477,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
               );
               if (exists) {
                 if (patchMessageInPlace(rg, m)) {
-                  // bookkeeping
                   st.seen.add(String(m.id));
                   const ts = parseTime(m.created_at);
                   if (ts > st.lastTs) st.lastTs = ts;
@@ -535,13 +484,10 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                 }
               }
             }
-            // If any updated, refresh UI once
             if (updatedIds.size > 0) afterInjectUiRefresh(rg);
           }
-          // Drop updates from the list so only truly new messages remain
           relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
 
-          // While joining: only treat action: "message" as history; events are prebuffered
           if (
             st.phase === "join_sent" ||
             st.phase === "injecting_history" ||
@@ -562,12 +508,10 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             return;
           }
 
-          // LIVE: treat both action types as live updates (append-only)
           if (st.phase === "live") {
             const fresh = dedupeById(relevant, st.seen);
             if (!fresh.length) return;
 
-            // Append in timestamp order; ignore out-of-order older than lastTs
             const toAppend = sortAscByTs(fresh).filter(
               (m) => parseTime(m.created_at) >= st.lastTs
             );
@@ -575,7 +519,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
             const rg2 = window.findVisibleRG?.() ?? null;
             if (rg2 === null) return;
-            if (active !== window._activeChatId) return; // navigated away
+            if (active !== window._activeChatId) return;
             injectBatch(rg2, active, toAppend);
             return;
           }
@@ -692,7 +636,7 @@ window.sendMessage = (messageData) => {
   }
 };
 
-/* ─────────── Ensure-join on visible container ─────────── */
+/* ─────────── Ensure-join on visible container (idempotent per nav) ─────────── */
 window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   force = false
 ) {
@@ -702,41 +646,87 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   const st = getState(chatId);
   const currentGen = window._chatGen || 0;
 
-  // New navigation or first time: reset per-chat join state ONCE
+  // New navigation or first time: re-init join guards ONCE
   if (st.joinGen !== currentGen) {
     st.joinGen = currentGen;
     st.prebuffer = [];
     st.seen.clear();
     st.lastTs = 0;
     st.joinDispatched = false;
+    st.joinPending = false;
+    st.joinRetryTid = 0;
+    st.joinRetryCount = 0;
     st.phase = "idle";
     clearActiveChatDom();
   }
 
-  // If we've already sent isJoin for this gen, bail
-  if (st.joinDispatched) return;
+  // If we already sent (or are already trying to send) for this gen, bail
+  if (st.joinDispatched || st.joinPending) return;
 
-  // Only proceed when the container exists/visible
+  // Only proceed when the container exists/visible; if not, set a SINGLE pending attempt
   const rg = window.findVisibleRG?.() ?? null;
   const container =
     rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
-  // If container not ready, ONE bounded retry loop keyed by gen
+  const trySend = () => {
+    // Re-fetch current state inside timer
+    const s = getState(chatId);
+    if (s.joinGen !== currentGen) return; // stale
+    if (s.joinDispatched) return; // already sent
+
+    const rgNow = window.findVisibleRG?.() ?? null;
+    const cNow =
+      rgNow !== null
+        ? document.querySelector(`#rg${rgNow} .chat-messages`)
+        : null;
+
+    if (!cNow) {
+      // bounded retry loop (per gen)
+      if (s.joinRetryCount < 10) {
+        s.joinRetryCount++;
+        s.joinRetryTid = setTimeout(trySend, 200);
+      } else {
+        // give up this gen; allow a future ensureJoin call to re-arm
+        s.joinPending = false;
+        s.joinRetryTid = 0;
+        s.joinRetryCount = 0;
+      }
+      return;
+    }
+
+    // Decide whether to send (idle, or force from live)
+    const shouldJoin = s.phase === "idle" || (force && s.phase === "live");
+    if (!shouldJoin) {
+      s.joinPending = false;
+      return;
+    }
+
+    // Latch BEFORE sending to prevent races
+    s.joinDispatched = true;
+    s.joinPending = false;
+    s.joinRetryTid = 0;
+    s.joinRetryCount = 0;
+    s.phase = "join_sent";
+
+    window.sendMessage({
+      isReaction: false,
+      isDelete: false,
+      isJoin: true,
+      conversation_id: chatId,
+      message: "",
+    });
+  };
+
   if (!container) {
-    const retryKey = "__join_retry_" + currentGen;
-    const count = (window[retryKey] ||= 0);
-    if (count < 10) {
-      window[retryKey] = count + 1;
-      setTimeout(() => window.ensureJoinForActiveChat(force), 200);
+    st.joinPending = true;
+    if (!st.joinRetryTid) {
+      st.joinRetryCount = 0;
+      st.joinRetryTid = setTimeout(trySend, 0); // kick off immediately
     }
     return;
   }
 
-  // Send join only if idle, or if explicitly forcing from live
-  const shouldJoin = st.phase === "idle" || (force && st.phase === "live");
-  if (!shouldJoin) return;
-
-  // Latch BEFORE sending so a concurrent caller can't double-send
+  // Container is ready → send once
   st.joinDispatched = true;
   st.phase = "join_sent";
 
@@ -772,8 +762,11 @@ function handleChatRouteChange() {
   window.ensureJoinForActiveChat(false);
 }
 
-/* ─────────── Wire up basic SPA navigation hooks ─────────── */
+/* ─────────── Wire up basic SPA navigation hooks (guarded) ─────────── */
 (function wireNavigationWatch() {
+  if (window.__sumizyRouteWatchWired) return;
+  window.__sumizyRouteWatchWired = true;
+
   const patchHistory = (method) => {
     const orig = history[method];
     if (!orig._sumizy_patched) {
