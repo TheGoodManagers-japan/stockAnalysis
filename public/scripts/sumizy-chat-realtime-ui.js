@@ -349,7 +349,7 @@ function patchMessageInPlace(rg, msg) {
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
 window._chatGen = window._chatGen || 0; // increments on chat switch
-window._chatState = window._chatState || {}; // { [chatId]: { phase, seen, lastTs, prebuffer } }
+window._chatState = window._chatState || {}; // { [chatId]: { phase, seen, lastTs, prebuffer, joinGen, joinDispatched } }
 
 function getState(chatId) {
   return (window._chatState[chatId] ||= {
@@ -357,6 +357,8 @@ function getState(chatId) {
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
+    joinGen: -1, // <-- guard: which navigation this join belongs to
+    joinDispatched: false, // <-- guard: have we sent the isJoin message yet?
   });
 }
 function resetState(chatId) {
@@ -365,6 +367,8 @@ function resetState(chatId) {
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
+    // joinGen/joinDispatched intentionally omitted; they are reinitialized
+    // in ensureJoinForActiveChat when a new _chatGen is detected.
   };
   return window._chatState[chatId];
 }
@@ -431,8 +435,11 @@ function injectHistoryAndGoLive(chatId, incomingHistory) {
   );
   const ordered = sortAscByTs(combined);
 
-  clearActiveChatDom();
-  injectBatch(rg, chatId, ordered);
+  // Only touch DOM if there's anything to render (prevents flicker on dup history)
+  if (ordered.length) {
+    clearActiveChatDom();
+    injectBatch(rg, chatId, ordered);
+  }
 
   st.prebuffer = [];
   st.phase = "live";
@@ -693,42 +700,53 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   if (!chatId) return;
 
   const st = getState(chatId);
+  const currentGen = window._chatGen || 0;
 
-  // If already live and not forcing, do nothing
-  if (st.phase === "live" && !force) return;
+  // New navigation or first time: reset per-chat join state ONCE
+  if (st.joinGen !== currentGen) {
+    st.joinGen = currentGen;
+    st.prebuffer = [];
+    st.seen.clear();
+    st.lastTs = 0;
+    st.joinDispatched = false;
+    st.phase = "idle";
+    clearActiveChatDom();
+  }
+
+  // If we've already sent isJoin for this gen, bail
+  if (st.joinDispatched) return;
 
   // Only proceed when the container exists/visible
   const rg = window.findVisibleRG?.() ?? null;
   const container =
     rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+
+  // If container not ready, ONE bounded retry loop keyed by gen
   if (!container) {
-    // Small, bounded retry loop
-    const key = "__join_retry_" + (window._chatGen || 0);
-    const count = (window[key] ||= 0);
+    const retryKey = "__join_retry_" + currentGen;
+    const count = (window[retryKey] ||= 0);
     if (count < 10) {
-      window[key] = count + 1;
+      window[retryKey] = count + 1;
       setTimeout(() => window.ensureJoinForActiveChat(force), 200);
     }
     return;
   }
 
-  // Send join only once per switch (or when forced)
-  if (st.phase === "idle" || force) {
-    st.phase = "join_sent";
-    st.prebuffer = [];
-    st.seen.clear();
-    st.lastTs = 0;
+  // Send join only if idle, or if explicitly forcing from live
+  const shouldJoin = st.phase === "idle" || (force && st.phase === "live");
+  if (!shouldJoin) return;
 
-    clearActiveChatDom();
+  // Latch BEFORE sending so a concurrent caller can't double-send
+  st.joinDispatched = true;
+  st.phase = "join_sent";
 
-    window.sendMessage({
-      isReaction: false,
-      isDelete: false,
-      isJoin: true,
-      conversation_id: chatId,
-      message: "",
-    });
-  }
+  window.sendMessage({
+    isReaction: false,
+    isDelete: false,
+    isJoin: true,
+    conversation_id: chatId,
+    message: "",
+  });
 };
 
 /* ─────────── Route watcher: clear & (re)join on chat change ─────────── */
