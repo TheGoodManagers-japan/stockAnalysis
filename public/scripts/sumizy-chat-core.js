@@ -1,3 +1,6 @@
+
+//sumizy-chat-core.js
+
 /* ─────────── INJECTOR FACTORY (FIXED) ─────────── */
 function makeChatInjector(chatEl, cuid) {
   const bottom = () =>

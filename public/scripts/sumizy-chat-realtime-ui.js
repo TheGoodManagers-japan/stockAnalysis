@@ -141,52 +141,44 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   }
 }
 
-// Update reactions area in place
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
   const containerParent =
     msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  let reactions = Array.isArray(msg._reactions) ? msg._reactions : [];
+  // ALWAYS aggregate from raw server rows: [{ emoji, user_id, _user }, ...]
+  const raw = Array.isArray(msg._reactions) ? msg._reactions : [];
 
-  // Prefer app-provided aggregator when present
-  let entries = null;
+  // Prefer app's aggregator if present (it already handles raw rows)
+  let aggregated = null;
   if (typeof window.agg === "function") {
     try {
-      entries = window.agg(reactions);
+      aggregated = window.agg(raw);
     } catch {
-      entries = null;
+      aggregated = null;
     }
   }
 
-  if (!entries) {
-    // If it's already aggregated shape (has 'c' or 'count' or 'userIds' on first item), use as-is
-    const r0 = reactions[0];
-    const looksAggregated =
-      r0 &&
-      ("c" in r0 ||
-        "count" in r0 ||
-        "userIds" in r0 ||
-        ("e" in r0 && !("user_id" in r0)));
-    if (looksAggregated) {
-      entries = reactions.map((r) => ({
-        emoji: r.emoji || r.e || r.key || r.symbol,
-        count: typeof r.c === "number" ? r.c : r.count || 0,
-        users: Array.isArray(r.users) ? r.users : [],
-        userIds: Array.isArray(r.userIds) ? r.userIds : [],
-        mine:
-          Array.isArray(r.userIds) && currentUserId
-            ? r.userIds.map(String).includes(String(currentUserId))
-            : false,
-      }));
-    } else {
-      // Fallback: aggregate raw per-user reactions
-      entries = aggregateReactionsFallback(reactions, currentUserId);
+  // Fallback aggregator for raw rows
+  if (!aggregated) {
+    const map = new Map();
+    for (const r of raw) {
+      const e = r?.emoji;
+      if (!e) continue;
+      let x = map.get(e);
+      if (!x) {
+        x = { e, c: 0, users: [], userIds: [] };
+        map.set(e, x);
+      }
+      x.c++;
+      if (r?._user?.name) x.users.push(r._user.name);
+      if (r?.user_id) x.userIds.push(r.user_id);
     }
+    aggregated = Array.from(map.values());
   }
 
-  // No reactions → clear the container if it exists
+  // No reactions → clear
   let rBox = msgEl.querySelector(".reactions");
-  if (!entries || !entries.length) {
+  if (!aggregated.length) {
     if (rBox) rBox.innerHTML = "";
     return;
   }
@@ -197,25 +189,21 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     containerParent.appendChild(rBox);
   }
 
-  // Build a quick index of existing chips by emoji
+  // Index existing chips
   const existing = new Map();
   Array.from(rBox.querySelectorAll(".reaction")).forEach((chip) => {
     const e = chip.getAttribute("data-emoji");
     if (e) existing.set(e, chip);
   });
 
-  // Update / create chips
   const seen = new Set();
-  for (const entry of entries) {
-    const emoji = entry.emoji || entry.e || entry.key || entry.symbol;
-    if (!emoji) continue;
-    const count = typeof entry.count === "number" ? entry.count : 0;
-    const mine =
-      typeof entry.mine === "boolean"
-        ? entry.mine
-        : Array.isArray(entry.userIds) &&
-          currentUserId &&
-          entry.userIds.map(String).includes(String(currentUserId));
+  for (const r of aggregated) {
+    const emoji = r.e;
+    const count = r.c;
+    const userIds = Array.isArray(r.userIds) ? r.userIds : [];
+    const mine = currentUserId
+      ? userIds.map(String).includes(String(currentUserId))
+      : false;
 
     seen.add(emoji);
 
@@ -232,58 +220,18 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     }
 
     chip.classList.toggle("user-reacted", !!mine);
-
-    const emojiSpan = chip.querySelector(".reaction-emoji");
-    const countSpan = chip.querySelector(".reaction-count");
-    if (emojiSpan) emojiSpan.textContent = emoji;
-    if (countSpan) countSpan.textContent = String(count);
-
-    if (Array.isArray(entry.users))
-      chip.dataset.users = JSON.stringify(entry.users);
-    if (Array.isArray(entry.userIds))
-      chip.dataset.userIds = JSON.stringify(entry.userIds);
+    chip.querySelector(".reaction-emoji").textContent = emoji;
+    chip.querySelector(".reaction-count").textContent = String(count);
+    chip.dataset.users = JSON.stringify(r.users || []);
+    chip.dataset.userIds = JSON.stringify(userIds);
   }
 
-  // Remove chips that no longer exist in the payload
+  // Remove chips not present anymore
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
   }
 }
 
-/** In-place message patcher (no node removal).
- *  Updates flags, text/translation blocks, reactions, and datasets.
- *  Returns true if we successfully patched the existing element.
- */
-function patchMessageInPlace(rg, msg) {
-  if (!rg || !msg || !msg.id) return false;
-  const container = document.querySelector(`#rg${rg} .chat-messages`);
-  if (!container) return false;
-
-  const el = container.querySelector(
-    `.message[data-id="${safeSelId(msg.id)}"]`
-  );
-  if (!el) return false;
-
-  // Update flags (deleted)
-  if (typeof msg.isDeleted === "boolean") {
-    el.dataset.deleted = String(!!msg.isDeleted);
-    el.classList.toggle("is-deleted", !!msg.isDeleted);
-  }
-
-  // Update timestamp dataset if provided
-  if (msg.created_at != null) {
-    const ts = parseTime(msg.created_at);
-    if (!Number.isNaN(ts)) el.dataset.ts = String(ts);
-  }
-
-  // Update message texts (and translations) in place
-  updateMessageTextsInPlace(el, msg, { forDelete: !!msg.isDeleted });
-
-  // Update reactions in place
-  updateReactionsInPlace(el, msg, window.currentUserId);
-
-  return true;
-}
 
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
