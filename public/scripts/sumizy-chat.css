@@ -1196,9 +1196,6 @@ body.ai-chat-mode .message-actions-trigger {
 }
 
 
-/* ─────────── DELETED MESSAGE (full message) ─────────── */
-.message.is-deleted,
-.message[data-deleted="true"] {}
 
 .message.is-deleted .message-content-wrapper,
 .message[data-deleted="true"] .message-content-wrapper {
@@ -1206,6 +1203,8 @@ body.ai-chat-mode .message-actions-trigger {
     border: 1px dashed #e5e7eb !important;
     box-shadow: none !important;
     border-radius: 8px !important;
+    padding: 10px 12px !important;
+    /* added padding */
 }
 
 .message.is-deleted .username,
@@ -1225,11 +1224,7 @@ body.ai-chat-mode .message-actions-trigger {
     font-style: italic;
 }
 
-.message.is-deleted .message-text::before,
-.message[data-deleted="true"] .message-text::before {
-    content: "🚫 ";
-    opacity: 0.9;
-}
+/* (removed the red icon) */
 
 /* disable interactions for deleted */
 .message.is-deleted .message-actions-trigger,
@@ -1247,6 +1242,10 @@ body.ai-chat-mode .message-actions-trigger {
 .reply-preview[data-deleted="true"] {
     background: #f5f5f5;
     border-left-color: #d1d5db;
+    padding: 10px 12px;
+    /* added padding */
+    border-radius: 8px;
+    /* subtle rounding */
 }
 
 .reply-preview.is-deleted .reply-to-name,
