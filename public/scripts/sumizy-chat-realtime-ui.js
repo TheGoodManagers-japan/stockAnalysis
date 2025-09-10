@@ -56,6 +56,14 @@ function ensureEl(parent, selector, make) {
   }
   return el;
 }
+function _esc(s) {
+  if (typeof window.esc === "function") return window.esc(s);
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
@@ -84,9 +92,8 @@ function aggregateReactionsFallback(raw, currentUserId) {
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 
-// Update text blocks (.message-text.*) safely without replacing the message node
+// Only patch the main message body, not nested reply preview content
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
-  // Compute display text(s)
   const translations = Array.isArray(msg._translations)
     ? msg._translations
     : [];
@@ -96,46 +103,44 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const deleteText =
     (enTr && enTr.translated_text) || msg.message || "Message Unsent";
 
-  // Original text container (create if missing)
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
-  const original = ensureEl(
-    contentWrap,
-    ".message-text.lang-original, .message-text:not([class*='lang-'])",
-    () => {
+
+  // ONLY direct children of content wrapper (avoid reply preview subtree)
+  const original =
+    contentWrap.querySelector(":scope > .message-text.lang-original") ||
+    contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
+    (() => {
       const d = document.createElement("div");
       d.className = "message-text lang-original";
+      contentWrap.appendChild(d);
       return d;
-    }
-  );
+    })();
 
   if (original) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  // Update known translation nodes if present
+  // Update translation blocks that are direct children only
   const trNodes = Array.from(
-    msgEl.querySelectorAll(".message-text[class*='lang-']")
+    contentWrap.querySelectorAll(":scope > .message-text[class*='lang-']")
   );
+
   if (trNodes.length) {
-    // Map of language -> text
     const trMap = new Map();
     for (const t of translations) {
-      if (!t || !t.language) continue;
-      trMap.set(String(t.language).toLowerCase(), t.translated_text || "");
+      if (t && t.language)
+        trMap.set(String(t.language).toLowerCase(), t.translated_text || "");
     }
     trNodes.forEach((node) => {
       const m = node.className.match(/lang-([a-zA-Z_]+)/);
       const lang = m ? m[1].toLowerCase() : "original";
-      if (lang === "original") {
-        // already set above
-        return;
-      }
+      if (lang === "original") return; // already set
       const txt = forDelete ? deleteText : trMap.get(lang);
       if (typeof txt === "string") node.textContent = txt;
     });
   }
 
-  // Sync dataset.message for reply builder, etc.
+  // Keep dataset.message in sync
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
@@ -231,7 +236,77 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
+/* ─────────── Update any reply previews that reference a message ─────────── */
+// NEW: keep all "replied to" tiles in sync if the original message changes
+function updateReplyPreviewsForMessage(msg) {
+  const id = String(msg?.id || "");
+  if (!id) return;
 
+  const selId =
+    window.CSS && CSS.escape ? CSS.escape(id) : id.replace(/"/g, '\\"');
+  const nodes = document.querySelectorAll(
+    `.reply-preview[data-target-id="${selId}"]`
+  );
+  if (!nodes.length) return;
+
+  const name = msg?._users?.name || msg?._user?.name || "Unknown";
+  const isDeleted = !!msg?.isDeleted;
+  const deleteText = "Message Unsent";
+
+  // Build body HTML similar to the renderer
+  let bodyHTML = "";
+  if (msg?.isFile && !isDeleted) {
+    // Recreate the same markup used for file attachments
+    const url = _esc(msg.message || "#");
+    const fname = _esc(msg.file_name || url.split("/").pop() || "download");
+    const type = (msg.file_type || "").toLowerCase();
+    const isImg = type.startsWith("image");
+    const cls = isImg ? "image-attachment" : "generic-attachment";
+    const thumb = isImg
+      ? `<img src="${url}" alt="${fname}" class="file-image-preview">`
+      : `<span class="file-icon">📎</span>`;
+    bodyHTML = `
+      <div class="file-attachment ${cls}" data-url="${url}" data-name="${fname}" data-type="${_esc(
+      type
+    )}">
+        <a href="#" class="file-open-trigger" tabindex="0">
+          ${thumb}<span class="file-name">${fname}</span>
+        </a>
+      </div>`;
+  } else {
+    // Text + (optional) translations
+    const originalText = isDeleted ? deleteText : msg.message || "";
+    bodyHTML =
+      `<div class="message-text lang-original">${_esc(originalText)}</div>` +
+      (!isDeleted && Array.isArray(msg._translations)
+        ? msg._translations
+            .map(
+              (tr) => `
+        <div class="message-text lang-${_esc(
+          tr.language
+        )}" style="display:none;">
+          ${_esc(tr.translated_text)}
+        </div>`
+            )
+            .join("")
+        : "");
+  }
+
+  // Apply to each preview node
+  nodes.forEach((node) => {
+    // Update header name
+    const header = node.querySelector(".reply-preview-header .reply-to-name");
+    if (header) header.textContent = name;
+
+    // Remove everything after the header, then append our fresh body
+    // (Keep classes/dataset on the wrapper intact)
+    const children = Array.from(node.children);
+    children.forEach((c, i) => {
+      if (i > 0) c.remove();
+    });
+    node.insertAdjacentHTML("beforeend", bodyHTML);
+  });
+}
 
 /** In-place message patcher (no node removal).
  *  Updates flags, text/translation blocks, reactions, and datasets.
@@ -264,6 +339,9 @@ function patchMessageInPlace(rg, msg) {
 
   // Update reactions in place
   updateReactionsInPlace(el, msg, window.currentUserId);
+
+  // NEW: propagate changes to any reply previews referencing this message
+  updateReplyPreviewsForMessage(msg);
 
   return true;
 }
@@ -708,3 +786,11 @@ function handleChatRouteChange() {
 /* ─────────── Optional: Older messages API (no-op unless you wire data) ─────────── */
 window.loadOlderMessages = () => false;
 window.getOlderMessagesCount = () => 0;
+
+// (Optional) expose helpers if other modules need them
+Object.assign(window, {
+  patchMessageInPlace,
+  updateReplyPreviewsForMessage,
+  updateMessageTextsInPlace,
+  updateReactionsInPlace,
+});
