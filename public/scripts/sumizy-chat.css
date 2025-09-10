@@ -1194,3 +1194,82 @@ body.ai-chat-mode .message-actions-trigger {
 .chat-container {
     position: relative;
 }
+
+
+/* ─────────── DELETED MESSAGE (full message) ─────────── */
+.message.is-deleted,
+.message[data-deleted="true"] {}
+
+.message.is-deleted .message-content-wrapper,
+.message[data-deleted="true"] .message-content-wrapper {
+    background: #f3f4f6 !important;
+    border: 1px dashed #e5e7eb !important;
+    box-shadow: none !important;
+    border-radius: 8px !important;
+}
+
+.message.is-deleted .username,
+.message[data-deleted="true"] .username {
+    color: #9ca3af !important;
+}
+
+.message.is-deleted .timestamp,
+.message[data-deleted="true"] .timestamp {
+    color: #c7cdd4 !important;
+}
+
+.message.is-deleted .message-text,
+.message[data-deleted="true"] .message-text {
+    color: #6b7280 !important;
+    /* slate-500 */
+    font-style: italic;
+}
+
+.message.is-deleted .message-text::before,
+.message[data-deleted="true"] .message-text::before {
+    content: "🚫 ";
+    opacity: 0.9;
+}
+
+/* disable interactions for deleted */
+.message.is-deleted .message-actions-trigger,
+.message[data-deleted="true"] .message-actions-trigger,
+.message.is-deleted .reactions,
+.message[data-deleted="true"] .reactions,
+.message.is-deleted .file-attachment,
+.message[data-deleted="true"] .file-attachment {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+/* ─────────── DELETED REPLY PREVIEW (the “replied to” tile) ─────────── */
+.reply-preview.is-deleted,
+.reply-preview[data-deleted="true"] {
+    background: #f5f5f5;
+    border-left-color: #d1d5db;
+}
+
+.reply-preview.is-deleted .reply-to-name,
+.reply-preview[data-deleted="true"] .reply-to-name {
+    color: #9ca3af;
+}
+
+.reply-preview.is-deleted .message-text,
+.reply-preview[data-deleted="true"] .message-text {
+    color: #9ca3af;
+    font-style: italic;
+}
+
+/* hide attachments inside a deleted reply preview */
+.reply-preview.is-deleted .file-attachment,
+.reply-preview[data-deleted="true"] .file-attachment {
+    display: none;
+}
+
+/* fallback text if preview body is empty */
+.reply-preview.is-deleted .message-text:empty::after,
+.reply-preview[data-deleted="true"] .message-text:empty::after {
+    content: "Message Unsent";
+    color: #9ca3af;
+    font-style: italic;
+}

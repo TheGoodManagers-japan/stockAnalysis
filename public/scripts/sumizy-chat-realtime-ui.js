@@ -260,6 +260,17 @@ function updateReplyPreviewsForMessage(msg) {
     });
     node.insertAdjacentHTML("beforeend", bodyHTML);
   });
+
+  nodes.forEach((node) => {
+    if (isDeleted) {
+      node.dataset.deleted = "true";
+      node.classList.add("is-deleted");
+    } else {
+      node.dataset.deleted = "false";
+      node.classList.remove("is-deleted");
+    }
+  });
+  
 }
 
 /** In-place message patcher (no node removal). */

@@ -329,32 +329,39 @@ function renderFileAttachment(m) {
       </div>`;
 }
 
-/* ─────────── INLINE REPLY PREVIEW ─────────── */
 function renderInlineReplyPreview(r) {
   if (!r?.id) return "";
   const un = esc(r._users?.name || "Unknown");
-  const body = r.isFile
+  const isDeleted = !!r.isDeleted;
+  const body = isDeleted
+    ? `<div class="message-text lang-original">${esc("Message Unsent")}</div>`
+    : r.isFile
     ? renderFileAttachment(r)
     : `<div class="message-text lang-original">${esc(r.message)}</div>` +
       (r._translations || [])
         .map(
           (tr) => `
-            <div class="message-text lang-${esc(
-              tr.language
-            )}" style="display:none;">
-              ${esc(tr.translated_text)}
-            </div>`
+              <div class="message-text lang-${esc(
+                tr.language
+              )}" style="display:none;">
+                ${esc(tr.translated_text)}
+              </div>`
         )
         .join("");
+
+  const deletedAttrs = isDeleted
+    ? ' data-deleted="true" class="is-deleted"'
+    : "";
   return `
-      <div class="reply-preview reply-scroll-target" data-target-id="${esc(
-        r.id
-      )}">
-        <div class="reply-preview-header">
-          <span class="reply-to-name">${un}</span>
-        </div>${body}
-      </div>`;
+    <div class="reply-preview reply-scroll-target"${deletedAttrs} data-target-id="${esc(
+    r.id
+  )}">
+      <div class="reply-preview-header">
+        <span class="reply-to-name">${un}</span>
+      </div>${body}
+    </div>`;
 }
+
 
 /* ─────────── REPLY HTML FOR BUBBLE ─────────── */
 function buildReplyHtml(msgEl) {
