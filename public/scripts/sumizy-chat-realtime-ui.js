@@ -48,10 +48,211 @@ function safeSelId(id) {
   const s = String(id ?? "");
   return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
 }
+function ensureEl(parent, selector, make) {
+  let el = parent.querySelector(selector);
+  if (!el && typeof make === "function") {
+    el = make();
+    if (el) parent.appendChild(el);
+  }
+  return el;
+}
+
+/* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
+function aggregateReactionsFallback(raw, currentUserId) {
+  // raw: array of entries like { id, emoji, user_id, _user, ... }
+  const map = new Map();
+  for (const r of raw || []) {
+    const emoji = r?.emoji || r?.e || r?.key || r?.symbol;
+    if (!emoji) continue;
+    let entry = map.get(emoji);
+    if (!entry) {
+      entry = { emoji, count: 0, users: [], userIds: [], mine: false };
+      map.set(emoji, entry);
+    }
+    entry.count++;
+    const uid = r?.user_id;
+    if (uid) {
+      entry.userIds.push(uid);
+      if (currentUserId && String(uid) === String(currentUserId)) {
+        entry.mine = true;
+      }
+    }
+    if (r?._user) entry.users.push(r._user);
+  }
+  return Array.from(map.values());
+}
+
+/* ─────────── In-place updaters (no node swaps) ─────────── */
+
+// Update text blocks (.message-text.*) safely without replacing the message node
+function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
+  // Compute display text(s)
+  const translations = Array.isArray(msg._translations)
+    ? msg._translations
+    : [];
+  const enTr = translations.find(
+    (t) => t && (t.language === "en" || t.language === "en_us")
+  );
+  const deleteText =
+    (enTr && enTr.translated_text) || msg.message || "Message Unsent";
+
+  // Original text container (create if missing)
+  const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
+  const original = ensureEl(
+    contentWrap,
+    ".message-text.lang-original, .message-text:not([class*='lang-'])",
+    () => {
+      const d = document.createElement("div");
+      d.className = "message-text lang-original";
+      return d;
+    }
+  );
+
+  if (original) {
+    original.textContent = forDelete ? deleteText : msg.message ?? "";
+  }
+
+  // Update known translation nodes if present
+  const trNodes = Array.from(
+    msgEl.querySelectorAll(".message-text[class*='lang-']")
+  );
+  if (trNodes.length) {
+    // Map of language -> text
+    const trMap = new Map();
+    for (const t of translations) {
+      if (!t || !t.language) continue;
+      trMap.set(String(t.language).toLowerCase(), t.translated_text || "");
+    }
+    trNodes.forEach((node) => {
+      const m = node.className.match(/lang-([a-zA-Z_]+)/);
+      const lang = m ? m[1].toLowerCase() : "original";
+      if (lang === "original") {
+        // already set above
+        return;
+      }
+      const txt = forDelete ? deleteText : trMap.get(lang);
+      if (typeof txt === "string") node.textContent = txt;
+    });
+  }
+
+  // Sync dataset.message for reply builder, etc.
+  if (typeof msg.message === "string") {
+    msgEl.dataset.message = msg.message;
+  }
+}
+
+// Update reactions area in place
+function updateReactionsInPlace(msgEl, msg, currentUserId) {
+  const containerParent =
+    msgEl.querySelector(".message-content-wrapper") || msgEl;
+
+  let reactions = Array.isArray(msg._reactions) ? msg._reactions : [];
+
+  // Prefer app-provided aggregator when present
+  let entries = null;
+  if (typeof window.agg === "function") {
+    try {
+      entries = window.agg(reactions);
+    } catch {
+      entries = null;
+    }
+  }
+
+  if (!entries) {
+    // If it's already aggregated shape (has 'c' or 'count' or 'userIds' on first item), use as-is
+    const r0 = reactions[0];
+    const looksAggregated =
+      r0 &&
+      ("c" in r0 ||
+        "count" in r0 ||
+        "userIds" in r0 ||
+        ("e" in r0 && !("user_id" in r0)));
+    if (looksAggregated) {
+      entries = reactions.map((r) => ({
+        emoji: r.emoji || r.e || r.key || r.symbol,
+        count: typeof r.c === "number" ? r.c : r.count || 0,
+        users: Array.isArray(r.users) ? r.users : [],
+        userIds: Array.isArray(r.userIds) ? r.userIds : [],
+        mine:
+          Array.isArray(r.userIds) && currentUserId
+            ? r.userIds.map(String).includes(String(currentUserId))
+            : false,
+      }));
+    } else {
+      // Fallback: aggregate raw per-user reactions
+      entries = aggregateReactionsFallback(reactions, currentUserId);
+    }
+  }
+
+  // No reactions → clear the container if it exists
+  let rBox = msgEl.querySelector(".reactions");
+  if (!entries || !entries.length) {
+    if (rBox) rBox.innerHTML = "";
+    return;
+  }
+
+  if (!rBox) {
+    rBox = document.createElement("div");
+    rBox.className = "reactions";
+    containerParent.appendChild(rBox);
+  }
+
+  // Build a quick index of existing chips by emoji
+  const existing = new Map();
+  Array.from(rBox.querySelectorAll(".reaction")).forEach((chip) => {
+    const e = chip.getAttribute("data-emoji");
+    if (e) existing.set(e, chip);
+  });
+
+  // Update / create chips
+  const seen = new Set();
+  for (const entry of entries) {
+    const emoji = entry.emoji || entry.e || entry.key || entry.symbol;
+    if (!emoji) continue;
+    const count = typeof entry.count === "number" ? entry.count : 0;
+    const mine =
+      typeof entry.mine === "boolean"
+        ? entry.mine
+        : Array.isArray(entry.userIds) &&
+          currentUserId &&
+          entry.userIds.map(String).includes(String(currentUserId));
+
+    seen.add(emoji);
+
+    let chip = existing.get(emoji);
+    if (!chip) {
+      chip = document.createElement("div");
+      chip.className = "reaction";
+      chip.setAttribute("data-emoji", emoji);
+      chip.innerHTML = `
+        <span class="reaction-emoji"></span>
+        <span class="reaction-count"></span>
+      `;
+      rBox.appendChild(chip);
+    }
+
+    chip.classList.toggle("user-reacted", !!mine);
+
+    const emojiSpan = chip.querySelector(".reaction-emoji");
+    const countSpan = chip.querySelector(".reaction-count");
+    if (emojiSpan) emojiSpan.textContent = emoji;
+    if (countSpan) countSpan.textContent = String(count);
+
+    if (Array.isArray(entry.users))
+      chip.dataset.users = JSON.stringify(entry.users);
+    if (Array.isArray(entry.userIds))
+      chip.dataset.userIds = JSON.stringify(entry.userIds);
+  }
+
+  // Remove chips that no longer exist in the payload
+  for (const [emoji, chip] of existing) {
+    if (!seen.has(emoji)) chip.remove();
+  }
+}
 
 /** In-place message patcher (no node removal).
- *  Updates message text / flags on the existing .message[data-id] element.
- *  Returns true if we successfully patched in place.
+ *  Updates flags, text/translation blocks, reactions, and datasets.
+ *  Returns true if we successfully patched the existing element.
  */
 function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
@@ -63,82 +264,24 @@ function patchMessageInPlace(rg, msg) {
   );
   if (!el) return false;
 
-  // Update flags on the existing node
+  // Update flags (deleted)
   if (typeof msg.isDeleted === "boolean") {
     el.dataset.deleted = String(!!msg.isDeleted);
-    if (msg.isDeleted) el.classList.add("is-deleted");
-    else el.classList.remove("is-deleted");
+    el.classList.toggle("is-deleted", !!msg.isDeleted);
   }
 
-  // Prefer an English translation for delete text; fallback to msg.message
-  let displayText = "";
-  if (msg.isDeleted) {
-    const translations = Array.isArray(msg._translations)
-      ? msg._translations
-      : [];
-    const en = translations.find(
-      (t) => t && (t.language === "en" || t.language === "en_us")
-    );
-    displayText = (en && en.translated_text) || msg.message || "Message Unsent";
-  } else {
-    // normal edit/update case
-    displayText = msg.message ?? "";
+  // Update timestamp dataset if provided
+  if (msg.created_at != null) {
+    const ts = parseTime(msg.created_at);
+    if (!Number.isNaN(ts)) el.dataset.ts = String(ts);
   }
 
-  // Try to locate a text container inside the message
-  const textSelectors = [
-    '[data-role="message-text"]',
-    "[data-msg-text]",
-    ".message-text",
-    ".message__text",
-    ".bubble-text",
-    ".message-body",
-    ".message-content",
-    ".content",
-    ".text",
-    ".body",
-  ];
-  let target = null;
-  for (const sel of textSelectors) {
-    const node = el.querySelector(sel);
-    if (node) {
-      target = node;
-      break;
-    }
-  }
+  // Update message texts (and translations) in place
+  updateMessageTextsInPlace(el, msg, { forDelete: !!msg.isDeleted });
 
-  if (target) {
-    // Use textContent for safety (delete text should be plain text)
-    target.textContent = displayText;
-    return true;
-  }
+  // Update reactions in place
+  updateReactionsInPlace(el, msg, window.currentUserId);
 
-  // If we can't find a specific text node, fallback to rewriting innerHTML only,
-  // keeping the same outer <div class="message" data-id="...">
-  if (typeof renderMsg === "function") {
-    try {
-      const html = renderMsg(msg, null);
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html;
-      const fresh = wrapper.firstChild;
-      if (fresh) {
-        // Copy inner markup only; preserve the same outer node and dataset attributes
-        el.innerHTML = fresh.innerHTML;
-
-        // Optionally, mirror a few common attributes if present
-        const copyAttr = (name) => {
-          const val = fresh.getAttribute(name);
-          if (val != null) el.setAttribute(name, val);
-        };
-        copyAttr("data-uid");
-        copyAttr("data-ts");
-        return true;
-      }
-    } catch {}
-  }
-
-  // Last resort: set plain text (keeps node)
-  el.textContent = displayText;
   return true;
 }
 
@@ -240,7 +383,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     console.error(
       "joinChannel: userId, authToken, and realtimeHash are required"
     );
-    return;
   }
   try {
     const channelName = `sumizy/${userId}`;
@@ -306,7 +448,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
           const st = getState(active);
 
-          // First, handle in-place updates (edits/deletes) for messages already in DOM
+          // First, handle in-place updates (edits/deletes/reactions) for messages already in DOM
           const rg = window.findVisibleRG?.() ?? null;
           const updatedIds = new Set();
           if (rg !== null) {
