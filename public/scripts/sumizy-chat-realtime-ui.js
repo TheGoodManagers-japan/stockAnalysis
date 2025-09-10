@@ -94,6 +94,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
+  // Ensure we have the "original" node
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
     contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
@@ -108,29 +109,51 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  const trNodes = Array.from(
-    contentWrap.querySelectorAll(":scope > .message-text[class*='lang-']")
-  );
+  // --- NEW: ensure translation nodes exist and update them
+  const isAIChat =
+    typeof window.isAIChat === "function" ? window.isAIChat() : false;
+  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+  const isAIMessage = String(msg.user_id) === AI_USER_ID;
 
-  if (trNodes.length) {
-    const trMap = new Map();
-    for (const t of translations) {
-      if (t && t.language)
-        trMap.set(String(t.language).toLowerCase(), t.translated_text || "");
+  const renderTr = (txt) => {
+    const s = String(txt || "");
+    if (isAIChat && isAIMessage && typeof window.parseMarkdown === "function") {
+      // For AI messages in AI chat, keep Markdown rendering behavior
+      return window.parseMarkdown(s);
     }
-    trNodes.forEach((node) => {
-      const m = node.className.match(/lang-([a-zA-Z_]+)/);
-      const lang = m ? m[1].toLowerCase() : "original";
-      if (lang === "original") return;
-      const txt = forDelete ? deleteText : trMap.get(lang);
-      if (typeof txt === "string") node.textContent = txt;
-    });
+    // Else, keep it escaped text
+    return _esc(s);
+  };
+
+  // Build a set of langs we just received
+  const langsIncoming = new Set();
+  for (const t of translations) {
+    const lang = String(t?.language || "").toLowerCase();
+    if (!lang || lang === "original") continue;
+    langsIncoming.add(lang);
+
+    // Find or create the node for this language
+    let node = contentWrap.querySelector(`:scope > .message-text.lang-${lang}`);
+    if (!node) {
+      node = document.createElement("div");
+      node.className = `message-text lang-${lang}`;
+      node.style.display = "none"; // hidden until switchLanguage() shows it
+      contentWrap.appendChild(node);
+    }
+    node.innerHTML = renderTr(t.translated_text || "");
   }
 
+  // If you want to also clear removed languages, you could remove nodes whose
+  // lang-* class isn’t in langsIncoming. (Usually not necessary.)
+  // [...contentWrap.querySelectorAll(':scope > .message-text[class*="lang-"]')]
+  //   .forEach(n => { /* optional cleanup */ });
+
+  // Keep data-message in sync
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
 }
+
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
   const containerParent =
