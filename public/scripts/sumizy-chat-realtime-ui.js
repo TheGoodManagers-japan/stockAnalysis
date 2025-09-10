@@ -233,6 +233,41 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
 }
 
 
+/** In-place message patcher (no node removal).
+ *  Updates flags, text/translation blocks, reactions, and datasets.
+ *  Returns true if we successfully patched the existing element.
+ */
+function patchMessageInPlace(rg, msg) {
+  if (!rg || !msg || !msg.id) return false;
+  const container = document.querySelector(`#rg${rg} .chat-messages`);
+  if (!container) return false;
+
+  const el = container.querySelector(
+    `.message[data-id="${safeSelId(msg.id)}"]`
+  );
+  if (!el) return false;
+
+  // Update flags (deleted)
+  if (typeof msg.isDeleted === "boolean") {
+    el.dataset.deleted = String(!!msg.isDeleted);
+    el.classList.toggle("is-deleted", !!msg.isDeleted);
+  }
+
+  // Update timestamp dataset if provided
+  if (msg.created_at != null) {
+    const ts = parseTime(msg.created_at);
+    if (!Number.isNaN(ts)) el.dataset.ts = String(ts);
+  }
+
+  // Update message texts (and translations) in place
+  updateMessageTextsInPlace(el, msg, { forDelete: !!msg.isDeleted });
+
+  // Update reactions in place
+  updateReactionsInPlace(el, msg, window.currentUserId);
+
+  return true;
+}
+
 /* ─────────── Minimal per-chat state ─────────── */
 window._activeChatId = window._activeChatId || null;
 window._chatGen = window._chatGen || 0; // increments on chat switch
