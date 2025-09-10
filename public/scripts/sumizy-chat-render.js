@@ -137,8 +137,10 @@ function parseMarkdown(text) {
   html = processLists(html);
 
   // Step 5: Process inline formatting for non-list content
+  // Split by lines to avoid processing list items again
   const lines = html.split("\n");
   const processedLines = lines.map((line) => {
+    // Skip if line is a list tag or list item
     if (
       line.match(/^<[uo]l/) ||
       line.match(/^<\/[uo]l>/) ||
@@ -147,12 +149,15 @@ function parseMarkdown(text) {
       return line;
     }
 
+    // Process bold (not already in lists)
     line = line.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
     line = line.replace(/__([^_]+)__/g, "<strong>$1</strong>");
 
+    // Process italic (not already in lists)
     line = line.replace(/(?<!\*)\*([^\*\n]+)\*(?!\*)/g, "<em>$1</em>");
     line = line.replace(/(?<!_)_([^_\n]+)_(?!_)/g, "<em>$1</em>");
 
+    // Process links
     line = line.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener">$1</a>'
@@ -164,10 +169,12 @@ function parseMarkdown(text) {
   html = processedLines.join("\n");
 
   // Step 6: Handle paragraphs and line breaks
+  // Split on double newlines for paragraphs
   const blocks = html.split(/\n\n+/);
 
   html = blocks
     .map((block) => {
+      // Don't wrap lists, code blocks, or empty blocks
       if (
         block.trim() === "" ||
         block.includes("<ul") ||
@@ -177,10 +184,12 @@ function parseMarkdown(text) {
         return block;
       }
 
+      // Check if the entire block is already wrapped in HTML tags
       if (block.trim().match(/^<[^>]+>.*<\/[^>]+>$/s)) {
         return block;
       }
 
+      // Convert single newlines to <br> and wrap in paragraph
       const withBreaks = block.trim().replace(/\n/g, "<br>");
       return `<p>${withBreaks}</p>`;
     })
@@ -211,7 +220,6 @@ const renderMsgWithMarkdown = (m, cuid) => {
 
   const u = m._user ?? {};
   const ts = parseTime(m.created_at);
-  const isDeleted = !!m.isDeleted;
 
   // Handle avatar for AI in AI chat mode
   let avatarStyle = "";
@@ -227,8 +235,8 @@ const renderMsgWithMarkdown = (m, cuid) => {
     avatarContent = initial;
   }
 
-  // Parse markdown for AI messages in AI chat mode, otherwise escape
-  let messageContent = "";
+  // Parse markdown for AI messages in AI chat mode, otherwise use regular escaping
+  let messageContent;
   if (isAIChat && isAIMessage && m.message) {
     messageContent = parseMarkdown(m.message);
   } else if (m.message) {
@@ -266,24 +274,16 @@ const renderMsgWithMarkdown = (m, cuid) => {
     })
     .join("");
 
-  // Hide action trigger on deleted messages
-  const actionTrigger =
-    isAIChat || isDeleted ? "" : '<div class="message-actions-trigger">⋮</div>';
+  const actionTrigger = isAIChat
+    ? ""
+    : '<div class="message-actions-trigger">⋮</div>';
 
-  const classes = [
-    "message",
-    m._reply && m._reply.id ? "has-reply" : "",
-    isAIChat && isAIMessage ? "ai-message" : "",
-    isDeleted ? "is-deleted" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return `<div class="${classes}"
+  return `<div class="message${m._reply ? " has-reply" : ""}${
+    isAIChat && isAIMessage ? " ai-message" : ""
+  }"
                  data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
                  data-username="${esc(u.name || "Unknown")}"
-                 data-message="${esc(m.isFile ? m.file_name : m.message || "")}"
-                 data-deleted="${isDeleted ? "true" : "false"}">
+                 data-message="${esc(m.isFile ? m.file_name : m.message)}">
               <div class="message-wrapper">
                 <div class="message-gutter">
                   <div class="avatar" ${avatarStyle}>${avatarContent}</div>
@@ -329,30 +329,15 @@ function renderFileAttachment(m) {
       </div>`;
 }
 
-/* ─────────── INLINE REPLY PREVIEW ─────────── */
 function renderInlineReplyPreview(r) {
   if (!r?.id) return "";
-
-  const un = esc(r._users?.name || r._user?.name || "Unknown");
+  const un = esc(r._users?.name || "Unknown");
   const isDeleted = !!r.isDeleted;
-
-  // Always use the server’s message; it’s already overwritten for unsent
-  const displayText =
-    typeof r.message === "string" && r.message.trim()
-      ? r.message
-      : isDeleted
-      ? "Message Unsent"
-      : "";
-
-  const classes = `reply-preview reply-scroll-target${
-    isDeleted ? " is-deleted" : ""
-  }`;
-
   const body = isDeleted
-    ? `<div class="message-text lang-original">${esc(displayText)}</div>`
+    ? `<div class="message-text lang-original">${esc("Message Unsent")}</div>`
     : r.isFile
     ? renderFileAttachment(r)
-    : `<div class="message-text lang-original">${esc(displayText)}</div>` +
+    : `<div class="message-text lang-original">${esc(r.message)}</div>` +
       (r._translations || [])
         .map(
           (tr) => `
@@ -364,14 +349,19 @@ function renderInlineReplyPreview(r) {
         )
         .join("");
 
+  const deletedAttrs = isDeleted
+    ? ' data-deleted="true" class="is-deleted"'
+    : "";
   return `
-    <div class="${classes}" data-deleted="${isDeleted ? "true" : "false"}"
-         data-target-id="${esc(r.id)}">
+    <div class="reply-preview reply-scroll-target"${deletedAttrs} data-target-id="${esc(
+    r.id
+  )}">
       <div class="reply-preview-header">
         <span class="reply-to-name">${un}</span>
       </div>${body}
     </div>`;
 }
+
 
 /* ─────────── REPLY HTML FOR BUBBLE ─────────── */
 function buildReplyHtml(msgEl) {
