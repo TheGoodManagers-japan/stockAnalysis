@@ -145,10 +145,8 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   const containerParent =
     msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // ALWAYS aggregate from raw server rows: [{ emoji, user_id, _user }, ...]
+  // Aggregate from raw rows
   const raw = Array.isArray(msg._reactions) ? msg._reactions : [];
-
-  // Prefer app's aggregator if present (it already handles raw rows)
   let aggregated = null;
   if (typeof window.agg === "function") {
     try {
@@ -157,8 +155,6 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
       aggregated = null;
     }
   }
-
-  // Fallback aggregator for raw rows
   if (!aggregated) {
     const map = new Map();
     for (const r of raw) {
@@ -176,10 +172,10 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     aggregated = Array.from(map.values());
   }
 
-  // No reactions → clear
+  // No reactions → remove container entirely
   let rBox = msgEl.querySelector(".reactions");
   if (!aggregated.length) {
-    if (rBox) rBox.innerHTML = "";
+    if (rBox) rBox.remove();
     return;
   }
 
@@ -199,7 +195,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   const seen = new Set();
   for (const r of aggregated) {
     const emoji = r.e;
-    const count = r.c;
+    const count = Number(r.c) || 0;
     const userIds = Array.isArray(r.userIds) ? r.userIds : [];
     const mine = currentUserId
       ? userIds.map(String).includes(String(currentUserId))
@@ -230,7 +226,11 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
   }
+
+  // If no chips remain, remove the container too
+  if (!rBox.querySelector(".reaction")) rBox.remove();
 }
+
 
 
 /** In-place message patcher (no node removal).
