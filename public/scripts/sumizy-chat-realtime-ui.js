@@ -200,6 +200,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
 }
 
 /* ─────────── Update any reply previews that reference a message ─────────── */
+/* ─────────── Update any reply previews that reference a message ─────────── */
 function updateReplyPreviewsForMessage(msg) {
   const id = String(msg?.id || "");
   if (!id) return;
@@ -211,10 +212,28 @@ function updateReplyPreviewsForMessage(msg) {
   );
   if (!nodes.length) return;
 
-  const name = msg?._users?.name || msg?._user?.name || "Unknown";
+  const name =
+    (msg?._user && msg._user.name) ||
+    (msg?._users && msg._users.name) ||
+    "Unknown";
   const isDeleted = !!msg?.isDeleted;
-  const deleteText = "Message Unsent";
 
+  // Choose the text to display: prefer msg.message, then EN translation, then first translation, then placeholder.
+  const pickDisplayText = (m) => {
+    const raw = (m?.message || "").trim();
+    if (raw) return raw;
+    const trs = Array.isArray(m?._translations) ? m._translations : [];
+    const en = trs.find(
+      (t) => String(t?.language || "").toLowerCase().startsWith("en")
+    );
+    if (en?.translated_text) return en.translated_text;
+    if (trs[0]?.translated_text) return trs[0].translated_text;
+    return "Message Unsent";
+  };
+
+  const displayText = pickDisplayText(msg);
+
+  // Build body: if it's a file and NOT deleted, show attachment; otherwise show text
   let bodyHTML = "";
   if (msg?.isFile && !isDeleted) {
     const url = _esc(msg.message || "#");
@@ -234,34 +253,27 @@ function updateReplyPreviewsForMessage(msg) {
         </a>
       </div>`;
   } else {
-    const originalText = isDeleted ? deleteText : msg.message || "";
-    bodyHTML =
-      `<div class="message-text lang-original">${_esc(originalText)}</div>` +
-      (!isDeleted && Array.isArray(msg._translations)
-        ? msg._translations
-            .map(
-              (tr) => `
-        <div class="message-text lang-${_esc(
-          tr.language
-        )}" style="display:none;">
-          ${_esc(tr.translated_text)}
-        </div>`
-            )
-            .join("")
-        : "");
+    // Text only; do not force our own placeholder when deleted—use server text.
+    bodyHTML = `<div class="message-text lang-original">${_esc(
+      displayText
+    )}</div>`;
   }
 
   nodes.forEach((node) => {
+    // Update header name
     const header = node.querySelector(".reply-preview-header .reply-to-name");
     if (header) header.textContent = name;
+
+    // Clear existing body (keep the header as first child)
     const children = Array.from(node.children);
     children.forEach((c, i) => {
       if (i > 0) c.remove();
     });
-    node.insertAdjacentHTML("beforeend", bodyHTML);
-  });
 
-  nodes.forEach((node) => {
+    // Insert body
+    node.insertAdjacentHTML("beforeend", bodyHTML);
+
+    // Toggle deleted state for styling
     if (isDeleted) {
       node.dataset.deleted = "true";
       node.classList.add("is-deleted");
@@ -270,8 +282,8 @@ function updateReplyPreviewsForMessage(msg) {
       node.classList.remove("is-deleted");
     }
   });
-  
 }
+
 
 /** In-place message patcher (no node removal). */
 function patchMessageInPlace(rg, msg) {
