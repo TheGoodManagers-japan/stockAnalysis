@@ -2,6 +2,9 @@
 //sumizy-chat-core.js
 
 /* ─────────── INJECTOR FACTORY (FIXED) ─────────── */
+// sumizy-chat-core.js
+
+/* ─────────── INJECTOR FACTORY (FIXED: keep deleted messages) ─────────── */
 function makeChatInjector(chatEl, cuid) {
   const bottom = () =>
     requestAnimationFrame(() => (chatEl.scrollTop = chatEl.scrollHeight));
@@ -14,27 +17,31 @@ function makeChatInjector(chatEl, cuid) {
     if (payload.length === 1 && !isOlderMessages) {
       const m = payload[0];
 
-      /* delete handling */
+      // Build fresh element (even if deleted)
+      const frag = document
+        .createRange()
+        .createContextualFragment(renderMsg(m, cuid));
+      const el = frag.firstElementChild;
+
+      // Mark deleted so CSS can style it
       if (m.isDeleted) {
-        chatEl.querySelector(`[data-id="${m.id}"]`)?.remove();
-        return;
+        el.classList.add("is-deleted");
+        el.dataset.deleted = "true";
+      } else {
+        el.classList.remove("is-deleted");
+        el.dataset.deleted = "false";
       }
 
       const old = chatEl.querySelector(`[data-id="${m.id}"]`);
-      const el = document
-        .createRange()
-        .createContextualFragment(renderMsg(m, cuid)).firstElementChild;
-
       if (old) {
         old.replaceWith(el);
-        // Don't scroll when updating existing messages
+        // don't auto-scroll when updating existing messages
       } else {
-        // Check if we need a date divider for this single message
+        // Date divider logic for a single message
         const msgDate = fmtDate(m.created_at);
         const existingDivider = chatEl.querySelector(
           `[data-date="${msgDate}"]`
         );
-
         const allDividers = chatEl.querySelectorAll(".date-divider");
         const lastDivider = allDividers[allDividers.length - 1];
         const lastDate = lastDivider ? lastDivider.dataset.date : "";
@@ -47,7 +54,8 @@ function makeChatInjector(chatEl, cuid) {
         }
 
         chatEl.appendChild(el);
-        // Scroll for messages from current user OR AI
+
+        // Scroll only for messages from current user OR AI
         if (m.user_id === cuid || m.user_id === AI_USER_ID) {
           bottom();
         }
@@ -56,7 +64,7 @@ function makeChatInjector(chatEl, cuid) {
     }
 
     /* ---- bulk insert ---- */
-    const frag = document.createDocumentFragment();
+    const outFrag = document.createDocumentFragment();
     let shouldScroll = false;
 
     const sortedMessages = [...payload].sort(
@@ -72,43 +80,47 @@ function makeChatInjector(chatEl, cuid) {
     let batchLastDate = "";
 
     for (const m of sortedMessages) {
-      if (m.isDeleted) {
-        chatEl.querySelector(`[data-id="${m.id}"]`)?.remove();
-        continue;
-      }
-
       const lbl = fmtDate(m.created_at);
 
       if (lbl !== batchLastDate && !existingDates.has(lbl)) {
-        frag.appendChild(
+        outFrag.appendChild(
           document.createRange().createContextualFragment(renderDivider(lbl))
         );
         existingDates.add(lbl);
         batchLastDate = lbl;
       }
 
-      frag.appendChild(
-        document.createRange().createContextualFragment(renderMsg(m, cuid))
-      );
+      // Build message node (even if deleted)
+      const msgFrag = document
+        .createRange()
+        .createContextualFragment(renderMsg(m, cuid));
+      const msgEl = msgFrag.firstElementChild;
 
-      // Check if any message in bulk is from current user OR AI
+      if (m.isDeleted) {
+        msgEl.classList.add("is-deleted");
+        msgEl.dataset.deleted = "true";
+      } else {
+        msgEl.classList.remove("is-deleted");
+        msgEl.dataset.deleted = "false";
+      }
+
+      outFrag.appendChild(msgFrag);
+
+      // Any message in bulk from current user or AI triggers scroll
       if (m.user_id === cuid || m.user_id === AI_USER_ID) {
         shouldScroll = true;
       }
     }
 
     if (isOlderMessages) {
-      chatEl.insertBefore(frag, chatEl.firstChild);
+      chatEl.insertBefore(outFrag, chatEl.firstChild);
     } else {
-      chatEl.appendChild(frag);
-
-      // Scroll if there's at least one message from current user or AI
-      if (shouldScroll) {
-        bottom();
-      }
+      chatEl.appendChild(outFrag);
+      if (shouldScroll) bottom();
     }
   };
 }
+
 
 /* ─────────── GLOBAL DISPATCHER WITH RETRY ─────────── */
 const cache = new Map();
