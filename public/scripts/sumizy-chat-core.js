@@ -657,56 +657,56 @@ setTimeout(() => {
   window.setupScrollPagination();
 }, 1000);
 
-/* ─────────── CHAT SWITCH HANDLER (self-contained) ─────────── */
-window.handleChatSwitchIfNeeded = function handleChatSwitchIfNeeded() {
-  // read chatid directly (avoid cross-file helper deps)
-  const next = new URLSearchParams(location.search).get("chatid") || null;
-  if (!next) return;
-  if (window._activeChatId === next) return;
+// /* ─────────── CHAT SWITCH HANDLER (self-contained) ─────────── */
+// window.handleChatSwitchIfNeeded = function handleChatSwitchIfNeeded() {
+//   // read chatid directly (avoid cross-file helper deps)
+//   const next = new URLSearchParams(location.search).get("chatid") || null;
+//   if (!next) return;
+//   if (window._activeChatId === next) return;
 
-  // switch
-  window._activeChatId = next;
-  window._chatGen = (window._chatGen || 0) + 1;
+//   // switch
+//   window._activeChatId = next;
+//   window._chatGen = (window._chatGen || 0) + 1;
 
-  // reset per-chat dedupe + typing
-  window._seenByChat = window._seenByChat || {};
-  window._seenByChat[next] = new Set();
-  window.hideAITypingIndicator?.();
+//   // reset per-chat dedupe + typing
+//   window._seenByChat = window._seenByChat || {};
+//   window._seenByChat[next] = new Set();
+//   window.hideAITypingIndicator?.();
 
-  // clear visible chat DOM + reset injector cache (inline)
-  const rg = window.findVisibleRG?.() ?? null;
-  if (rg !== null) {
-    const chat = document.querySelector(`#rg${rg} .chat-messages`);
-    if (chat) {
-      while (chat.firstChild) chat.firstChild.remove();
-      window.__sumizyInjectorCache?.delete?.(rg);
-    }
-  }
+//   // clear visible chat DOM + reset injector cache (inline)
+//   const rg = window.findVisibleRG?.() ?? null;
+//   if (rg !== null) {
+//     const chat = document.querySelector(`#rg${rg} .chat-messages`);
+//     if (chat) {
+//       while (chat.firstChild) chat.firstChild.remove();
+//       window.__sumizyInjectorCache?.delete?.(rg);
+//     }
+//   }
 
-  // ensure bucket + watchers; then flush
-  window._pendingChatInjections = window._pendingChatInjections || {};
-  window._pendingChatInjections[next] ||= [];
-  window._chatVis = window._chatVis || {};
-  window._chatVis.observersReady || window._setupChatVisibilityWatchers?.();
-  setTimeout(() => {
-    try {
-      window._flushPendingIfVisible?.();
-      window.ensureJoinForActiveChat?.(true); // <-- force a join for the new chat
-    } catch {}
-  }, 0);  
-};
+//   // ensure bucket + watchers; then flush
+//   window._pendingChatInjections = window._pendingChatInjections || {};
+//   window._pendingChatInjections[next] ||= [];
+//   window._chatVis = window._chatVis || {};
+//   window._chatVis.observersReady || window._setupChatVisibilityWatchers?.();
+//   setTimeout(() => {
+//     try {
+//       window._flushPendingIfVisible?.();
+//       window.ensureJoinForActiveChat?.(true); // <-- force a join for the new chat
+//     } catch {}
+//   }, 0);  
+// };
 
-// wire listeners once (guard against double-wiring)
-(function wireChatSwitchListenersOnce() {
-  if (window._chatSwitchListenersWired) return;
-  window._chatSwitchListenersWired = true;
+// // wire listeners once (guard against double-wiring)
+// (function wireChatSwitchListenersOnce() {
+//   if (window._chatSwitchListenersWired) return;
+//   window._chatSwitchListenersWired = true;
 
-  const h = () => window.handleChatSwitchIfNeeded?.();
-  window.addEventListener("locationchange", h);
-  window.addEventListener("popstate", h);
-  window.addEventListener("hashchange", h);
-  document.addEventListener("DOMContentLoaded", h, { once: true });
+//   const h = () => window.handleChatSwitchIfNeeded?.();
+//   window.addEventListener("locationchange", h);
+//   window.addEventListener("popstate", h);
+//   window.addEventListener("hashchange", h);
+//   document.addEventListener("DOMContentLoaded", h, { once: true });
 
-  // run once now in case we loaded with a chatid already
-  h();
-})();
+//   // run once now in case we loaded with a chatid already
+//   h();
+// })();
