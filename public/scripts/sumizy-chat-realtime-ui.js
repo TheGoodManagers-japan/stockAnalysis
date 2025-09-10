@@ -375,21 +375,8 @@ function afterInjectUiRefresh(rg) {
 function injectBatch(rg, chatId, batch) {
   if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
-  __log("injectBatch", { rg, chatId, count: batch.length });
-
-  // Inject the batch as usual
   window.injectMessages(rg, batch, window.currentUserId);
 
-  // NEW: immediately refresh any reply-previews pointing at these messages
-  for (const m of batch) {
-    if (m && m.id) {
-      try {
-        updateReplyPreviewsForMessage(m);
-      } catch {}
-    }
-  }
-
-  // Bookkeeping
   const st = getState(chatId);
   for (const m of batch) {
     if (m?.id) st.seen.add(String(m.id));
@@ -400,7 +387,6 @@ function injectBatch(rg, chatId, batch) {
   }
   afterInjectUiRefresh(rg);
 }
-
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
