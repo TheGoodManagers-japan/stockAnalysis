@@ -345,8 +345,16 @@ document.addEventListener("click", (e) => {
     }
     if (ev.target.closest(".delete-action")) {
       const fn = `bubble_fn_deleteMessage${rgNum}`;
-      if (typeof window[fn] === "function") window[fn]({ output1: msgId });
-      msgEl.remove();
+      if (typeof window[fn] === "function") {
+        msgEl.classList.add("is-deleting"); // (optional) visual feedback
+        Promise.resolve(window[fn]({ output1: msgId }))
+          .catch(() => {
+            // you can surface an error toast here if you want
+          })
+          .finally(() => {
+            msgEl.classList.remove("is-deleting"); // revert pending style
+          });
+      }
       hideActionMenu();
       return;
     }
