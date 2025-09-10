@@ -286,7 +286,7 @@ document.addEventListener("click", (e) => {
   const uid = msgEl.dataset.uid;
   const ts = +msgEl.dataset.ts;
   const canDelete = window.currentUserId === uid && Date.now() - ts < 3600_000;
-  const emojis = ["👍", "❤️", "😂", "😮", "😢", "🎉", "🔥", "👏"];
+  const emojis = ["👍", "✅", "🙂", "👀", "👏"];
 
   hideActionMenu();
   const menu = document.createElement("div");
