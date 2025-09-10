@@ -48,24 +48,97 @@ function safeSelId(id) {
   const s = String(id ?? "");
   return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
 }
-function replaceMessageInDom(rg, msg) {
+
+/** In-place message patcher (no node removal).
+ *  Updates message text / flags on the existing .message[data-id] element.
+ *  Returns true if we successfully patched in place.
+ */
+function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
   if (!container) return false;
 
-  const oldEl = container.querySelector(
+  const el = container.querySelector(
     `.message[data-id="${safeSelId(msg.id)}"]`
   );
-  if (!oldEl) return false;
+  if (!el) return false;
 
-  if (typeof renderMsg !== "function") return false;
-  const html = renderMsg(msg, null);
-  const wrapper = document.createElement("div");
-  wrapper.innerHTML = html;
-  const fresh = wrapper.firstChild;
-  if (!fresh) return false;
+  // Update flags on the existing node
+  if (typeof msg.isDeleted === "boolean") {
+    el.dataset.deleted = String(!!msg.isDeleted);
+    if (msg.isDeleted) el.classList.add("is-deleted");
+    else el.classList.remove("is-deleted");
+  }
 
-  oldEl.replaceWith(fresh);
+  // Prefer an English translation for delete text; fallback to msg.message
+  let displayText = "";
+  if (msg.isDeleted) {
+    const translations = Array.isArray(msg._translations)
+      ? msg._translations
+      : [];
+    const en = translations.find(
+      (t) => t && (t.language === "en" || t.language === "en_us")
+    );
+    displayText = (en && en.translated_text) || msg.message || "Message Unsent";
+  } else {
+    // normal edit/update case
+    displayText = msg.message ?? "";
+  }
+
+  // Try to locate a text container inside the message
+  const textSelectors = [
+    '[data-role="message-text"]',
+    "[data-msg-text]",
+    ".message-text",
+    ".message__text",
+    ".bubble-text",
+    ".message-body",
+    ".message-content",
+    ".content",
+    ".text",
+    ".body",
+  ];
+  let target = null;
+  for (const sel of textSelectors) {
+    const node = el.querySelector(sel);
+    if (node) {
+      target = node;
+      break;
+    }
+  }
+
+  if (target) {
+    // Use textContent for safety (delete text should be plain text)
+    target.textContent = displayText;
+    return true;
+  }
+
+  // If we can't find a specific text node, fallback to rewriting innerHTML only,
+  // keeping the same outer <div class="message" data-id="...">
+  if (typeof renderMsg === "function") {
+    try {
+      const html = renderMsg(msg, null);
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      const fresh = wrapper.firstChild;
+      if (fresh) {
+        // Copy inner markup only; preserve the same outer node and dataset attributes
+        el.innerHTML = fresh.innerHTML;
+
+        // Optionally, mirror a few common attributes if present
+        const copyAttr = (name) => {
+          const val = fresh.getAttribute(name);
+          if (val != null) el.setAttribute(name, val);
+        };
+        copyAttr("data-uid");
+        copyAttr("data-ts");
+        return true;
+      }
+    } catch {}
+  }
+
+  // Last resort: set plain text (keeps node)
+  el.textContent = displayText;
   return true;
 }
 
@@ -243,7 +316,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                 `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
               );
               if (exists) {
-                if (replaceMessageInDom(rg, m)) {
+                if (patchMessageInPlace(rg, m)) {
                   // bookkeeping
                   st.seen.add(String(m.id));
                   const ts = parseTime(m.created_at);
