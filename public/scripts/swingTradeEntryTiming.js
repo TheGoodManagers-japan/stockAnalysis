@@ -253,9 +253,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       });
       if (!rr.acceptable) {
         reasons.push(
-          `INSIDE RR too low: ratio ${idc.ratio?.toFixed?.(2) ?? "?"} < need ${
-            cfg.minRRbase
-          }.`
+          `INSIDE RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}.`
         );
       } else {
         const gv = guardVeto(
@@ -457,9 +457,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 /* ============================ Config ============================ */
 function getConfig(opts) {
   return {
-    // Price-action gate (looser)
+    // Price-action gate (slightly looser)
     allowSmallRed: true,
-    redDayMaxDownPct: -2.5, // was -1.6
+    redDayMaxDownPct: -3.0, // was -2.5 — allows small red days up to ~-3%
 
     // Guards & thresholds (looser)
     maxATRfromMA25: 2.2, // was 1.8
@@ -474,7 +474,7 @@ function getConfig(opts) {
     minRRweakUp: 1.3, // was 1.6
 
     // Breakout strictness (looser)
-    breakoutMinThroughPct: 0.2, // 0.20% above flat-top
+    breakoutMinThroughPct: 0.2,
     breakoutMaxGapPct: 4.0, // was 3.5
     breakoutTapsMin: 2, // keep 2 taps min
 
@@ -483,7 +483,7 @@ function getConfig(opts) {
     nearSupportATRNormal: 2.6, // was 2.2
     nearSupportATRHigh: 3.2, // was 2.8
 
-    // Bounce volume (looser)
+    // Bounce volume (slightly looser)
     volBounce20x: 0.85, // was 0.90
     volBounce5x: 0.9, // was 0.95
 
@@ -501,16 +501,16 @@ function getConfig(opts) {
     breakoutMaxRSIwithVol: 76, // upper RSI cap when volume expands
     breakoutMinVolExpansion: 1.15, // avgVol5 / avgVol20 ≥ this to relax RSI
 
-    // —— DIP-specific knobs (new) ——
-    dipMinPullbackPct: 2.5,
-    dipMinPullbackATR: 1.5,
-    dipMaxBounceAgeBars: 3, // low must be within last N bars
-    dipMaSupportPctBand: 2.0, // ±% band around MA25/50 counts as support
-    dipStructMinTouches: 2, // tested structure touches
-    dipStructTolATR: 0.5, // ATR tolerance for structure touch
-    dipStructTolPct: 1.0, // OR ±% tolerance for structure touch
-    dipMinBounceStrengthATR: 0.5, // bounce from low must be ≥ this (ATR)
-    dipMaxRecoveryPct: 60, // if recovered more than this, it's late
+    // —— DIP-specific knobs (balanced) ——
+    dipMinPullbackPct: 2.0, // was 2.5
+    dipMinPullbackATR: 1.2, // was 1.5
+    dipMaxBounceAgeBars: 4, // was 3 (catch slower Vs)
+    dipMaSupportPctBand: 2.5, // was 2.0 (slightly wider MA band)
+    dipStructMinTouches: 2, // keep 2
+    dipStructTolATR: 0.6, // was 0.5 (a bit more lenient)
+    dipStructTolPct: 1.2, // was 1.0
+    dipMinBounceStrengthATR: 0.4, // was 0.5 (still not hyper-aggressive)
+    dipMaxRecoveryPct: 70, // was 60 (don’t disqualify mid-retraces too soon)
 
     debug: !!opts.debug,
   };
@@ -696,11 +696,11 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 6) Higher-low + basic volume confirmation
+  // 6) Higher-low + basic volume confirmation (slightly eased)
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
   const higherLow = dipLow > prevLow * 0.99; // small tolerance
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
-  const volOK = num(d0.volume) >= avgVol20 * 0.85;
+  const volOK = num(d0.volume) >= avgVol20 * 0.8; // was 0.85
 
   const trigger =
     hadPullback &&
@@ -726,7 +726,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // Targets & stops (A-style)
+  // Targets & stops
   const resList = findResistancesAbove(data, px, stock);
   let target = Math.max(
     px + Math.max(2.4 * atr, px * 0.022),
@@ -1103,8 +1103,11 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
   // Dynamic near-resistance veto (looser for pullback-style entries; slight easing for trend-continuation)
   let nearResMin = cfg.nearResVetoATR;
   if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.3);
-  if ((kind === "DIP" || kind === "RETEST") && rsi < 58)
+  if (kind === "DIP") {
+    if (rsi < 60) nearResMin = Math.min(nearResMin, 0.22); // was 0.25
+  } else if (kind === "RETEST" && rsi < 58) {
     nearResMin = Math.min(nearResMin, 0.25);
+  }
   if (
     (kind === "RECLAIM" || kind === "INSIDE" || kind === "BREAKOUT") &&
     (ms.trend === "UP" || ms.trend === "STRONG_UP")
@@ -1133,7 +1136,9 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, kind) {
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
     const maxDist =
-      kind === "DIP" || kind === "RETEST"
+      kind === "DIP"
+        ? cfg.maxATRfromMA25 + 0.5 // was +0.3
+        : kind === "RETEST"
         ? cfg.maxATRfromMA25 + 0.3
         : cfg.maxATRfromMA25;
     if (distMA25 > maxDist)
