@@ -669,12 +669,16 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     clearActiveChatDom();
   }
 
-  // Guard: if we've already dispatched or are pending, don't start another
-  if (st.joinDispatched || st.joinPending) return;
+  // ⬇⬇⬇ CHANGE 1: allow force to break out of "pending" state
+  if (force && st.joinPending) {
+    if (st.joinRetryTid) clearTimeout(st.joinRetryTid);
+    st.joinRetryTid = 0;
+    st.joinRetryCount = 0;
+    st.joinPending = false;
+  }
 
-  const rg = window.findVisibleRG?.() ?? null;
-  const container =
-    rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+  // ⬇⬇⬇ CHANGE 2: only block when NOT forced
+  if (!force && (st.joinDispatched || st.joinPending)) return;
 
   const trySend = () => {
     const s = getState(chatId);
@@ -689,8 +693,8 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
 
     // Wait for BOTH container and channel
     if (!cNow || !isChannelReady()) {
-      if (s.joinRetryCount < 40) {
-        // ~8s at 200ms steps
+      if (s.joinRetryCount < 80) {
+        // ⬅ bump to ~16s @ 200ms
         s.joinRetryCount++;
         s.joinRetryTid = setTimeout(trySend, 200);
       } else {
@@ -701,8 +705,13 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
       return;
     }
 
-    const shouldJoin = s.phase === "idle" || (force && s.phase === "live");
-    if (!shouldJoin) {
+    // ⬇⬇⬇ CHANGE 3: broaden when a join is allowed on force
+    const canJoin =
+      s.phase === "idle" ||
+      s.phase === "injecting_history" ||
+      (force && s.phase !== "join_sent");
+
+    if (!canJoin) {
       s.joinPending = false;
       return;
     }
@@ -722,11 +731,19 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     });
   };
 
-  // If container or channel is not ready yet, schedule the (single-flight) retry chain
+  const rg = window.findVisibleRG?.() ?? null;
+  const container =
+    rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+
+  // If container or channel not ready, start (or restart) single-flight retries
   if (!container || !isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
+      st.joinRetryTid = setTimeout(trySend, 0);
+    } else if (force) {
+      // If we forced our way here while a timer exists, kick it immediately
+      clearTimeout(st.joinRetryTid);
       st.joinRetryTid = setTimeout(trySend, 0);
     }
     return;
@@ -735,7 +752,6 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
   // Immediate path (everything ready)
   st.joinDispatched = true;
   st.phase = "join_sent";
-
   window.sendMessage({
     isReaction: false,
     isDelete: false,
@@ -744,6 +760,7 @@ window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
     message: "",
   });
 };
+
 
 /* ─────────── Route watcher: clear & (re)join on chat change ─────────── */
 function handleChatRouteChange() {
