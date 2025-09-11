@@ -253,9 +253,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       });
       if (!rr.acceptable) {
         reasons.push(
-          `INSIDE RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)}.`
+          `INSIDE RR too low: ratio ${idc.ratio?.toFixed?.(2) ?? "?"} < need ${
+            cfg.minRRbase
+          }.`
         );
       } else {
         const gv = guardVeto(
@@ -501,6 +501,17 @@ function getConfig(opts) {
     breakoutMaxRSIwithVol: 76, // upper RSI cap when volume expands
     breakoutMinVolExpansion: 1.15, // avgVol5 / avgVol20 ≥ this to relax RSI
 
+    // —— DIP-specific knobs (new) ——
+    dipMinPullbackPct: 2.5,
+    dipMinPullbackATR: 1.5,
+    dipMaxBounceAgeBars: 3, // low must be within last N bars
+    dipMaSupportPctBand: 2.0, // ±% band around MA25/50 counts as support
+    dipStructMinTouches: 2, // tested structure touches
+    dipStructTolATR: 0.5, // ATR tolerance for structure touch
+    dipStructTolPct: 1.0, // OR ±% tolerance for structure touch
+    dipMinBounceStrengthATR: 0.5, // bounce from low must be ≥ this (ATR)
+    dipMaxRecoveryPct: 60, // if recovered more than this, it's late
+
     debug: !!opts.debug,
   };
 }
@@ -535,103 +546,203 @@ function getMarketStructure(stock, data) {
 }
 
 /* ===================== DIP + BOUNCE DETECTOR ===================== */
+// Improved "fresh dip" detector with real pullback/support/recency/strength guards
 function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005);
 
-  // MA5 fallback
+  // MAs (fallbacks)
   const ma5 = num(stock.movingAverage5d) || sma(data, 5);
-
-  // MA fallbacks for distance checks
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   const ma50 = num(stock.movingAverage50d) || sma(data, 50);
 
-  const last5 = data.slice(-5);
-  const d0 = last5.at(-1),
-    d1 = last5.at(-2);
-  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
-  const avgVol5 = avg(data.slice(-5).map((d) => num(d.volume)));
-  const hiVol = atr / Math.max(1, px) > cfg.hiVolATRpct;
+  // 1) Must have a meaningful pullback (lookback 10 bars: high from older 5 vs. low from last 5)
+  const recentBars = data.slice(-10);
+  const recentHigh = Math.max(
+    ...recentBars.slice(0, 5).map((d) => num(d.high))
+  );
+  const dipLow = Math.min(...recentBars.slice(-5).map((d) => num(d.low)));
+  const pullbackPct =
+    recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
+  const pullbackATR = (recentHigh - dipLow) / Math.max(atr, 1e-9);
+  const hadPullback =
+    pullbackPct >= cfg.dipMinPullbackPct ||
+    pullbackATR >= cfg.dipMinPullbackATR;
+  if (!hadPullback) {
+    return {
+      trigger: false,
+      waitReason: `no meaningful pullback (${pullbackPct.toFixed(
+        1
+      )}% / ${pullbackATR.toFixed(1)} ATR)`,
+      diagnostics: { pullbackPct, pullbackATR, recentHigh, dipLow },
+    };
+  }
 
-  // Near support (MA25/50 OR swing/flip zone), looser distance
-  const nearMA =
-    (ma25 > 0 &&
-      Math.abs(px - ma25) <=
-        (hiVol ? cfg.nearSupportATRHigh : cfg.nearSupportATRNormal) * atr) ||
-    (ma50 > 0 &&
-      Math.abs(px - ma50) <=
-        (hiVol ? cfg.nearSupportATRHigh : cfg.nearSupportATRNormal) * atr);
-  const nearSwing = nearRecentSupportOrPivot(data, px, atr, { pct: 0.03 }); // widen band to 3%
-  const nearSupport = nearMA || nearSwing;
+  // 2) Bounce must be fresh — where did the low occur?
+  let lowBarIndex = -1; // 0=last bar, 1=prev bar, ...
+  for (let i = 0; i < 5; i++) {
+    if (num(recentBars.at(-(i + 1)).low) === dipLow) {
+      lowBarIndex = i;
+      break;
+    }
+  }
+  if (lowBarIndex < 0 || lowBarIndex > cfg.dipMaxBounceAgeBars - 1) {
+    return {
+      trigger: false,
+      waitReason: `bounce too old (${lowBarIndex + 1} bars ago)`,
+      diagnostics: { lowBarIndex, dipLow },
+    };
+  }
 
-  // Higher low OR small dbl-bottom allowance (1.5%)
-  const pivotLow = Math.min(...last5.map((d) => num(d.low)));
-  const prevZoneLow = Math.min(...data.slice(-10, -5).map((d) => num(d.low)));
-  const higherLow =
-    pivotLow >= prevZoneLow * 0.97 ||
-    Math.abs(pivotLow - prevZoneLow) / Math.max(1, prevZoneLow) <= 0.015;
+  // 3) Support must be meaningful: MA25/50 band OR tested structure
+  const nearMA25 =
+    ma25 > 0 &&
+    dipLow <= ma25 * (1 + cfg.dipMaSupportPctBand / 100) &&
+    dipLow >= ma25 * (1 - cfg.dipMaSupportPctBand / 100);
+  const nearMA50 =
+    ma50 > 0 &&
+    dipLow <= ma50 * (1 + cfg.dipMaSupportPctBand / 100) &&
+    dipLow >= ma50 * (1 - cfg.dipMaSupportPctBand / 100);
 
-  // Bounce confirmation (looser + MA5 reclaim)
-  const closeAboveYHigh = num(d0.close) > num(d1.high);
+  const structureSupport = (() => {
+    const lookback = data.slice(-60, -10); // avoid ultra-recent noise
+    const tolAbs = Math.max(
+      cfg.dipStructTolATR * atr,
+      dipLow * (cfg.dipStructTolPct / 100)
+    );
+    let touches = 0;
+    for (const bar of lookback) {
+      if (
+        Math.abs(num(bar.low) - dipLow) <= tolAbs ||
+        Math.abs(num(bar.high) - dipLow) <= tolAbs
+      ) {
+        touches++;
+        if (touches >= cfg.dipStructMinTouches) return true;
+      }
+    }
+    return false;
+  })();
+
+  const nearSupport = nearMA25 || nearMA50 || structureSupport;
+  if (!nearSupport) {
+    return {
+      trigger: false,
+      waitReason: "pullback not at MA25/50 or tested structure",
+      diagnostics: { dipLow, ma25, ma50, nearMA25, nearMA50, structureSupport },
+    };
+  }
+
+  // 4) Bounce confirmation + minimum strength (≥ X ATR off the low)
+  const d0 = data.at(-1),
+    d1 = data.at(-2);
+  const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
+  const minStr = cfg.dipMinBounceStrengthATR;
+
+  const closeAboveYHigh =
+    num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
+
   const hammer = (() => {
     const range = num(d0.high) - num(d0.low);
     const body = Math.abs(num(d0.close) - num(d0.open));
     const lower = Math.min(num(d0.close), num(d0.open)) - num(d0.low);
     return (
       range > 0 &&
-      body < 0.6 * range &&
-      lower > body * 1.0 &&
-      num(d0.close) >= num(d0.open)
+      body < 0.4 * range &&
+      lower > 1.5 * body &&
+      num(d0.close) >= num(d0.open) &&
+      bounceStrengthATR >= minStr
     );
   })();
+
   const engulf =
     num(d1.close) < num(d1.open) &&
     num(d0.close) > num(d0.open) &&
     num(d0.open) <= num(d1.close) &&
-    num(d0.close) > num(d1.open);
+    num(d0.close) > num(d1.open) &&
+    num(d0.close) > num(d1.high) &&
+    bounceStrengthATR >= minStr;
+
   const twoBarRev =
     num(d0.close) > num(d1.close) &&
     num(d0.low) > num(d1.low) &&
-    num(d0.close) > num(d0.open);
-  const ma5Reclaim =
-    ma5 > 0 && num(d0.close) > ma5 && num(d0.close) > num(d0.open);
+    num(d0.close) > num(d0.open) &&
+    bounceStrengthATR >= minStr;
 
-  const bounceOK =
-    closeAboveYHigh || hammer || engulf || twoBarRev || ma5Reclaim;
+  const bounceOK = closeAboveYHigh || hammer || engulf || twoBarRev;
+  if (!bounceOK) {
+    return {
+      trigger: false,
+      waitReason: `bounce not strong enough (${bounceStrengthATR.toFixed(
+        2
+      )} ATR) / no pattern`,
+      diagnostics: {
+        bounceStrengthATR,
+        closeAboveYHigh,
+        hammer,
+        engulf,
+        twoBarRev,
+      },
+    };
+  }
 
-  // Volume (looser)
-  const obv = num(stock.obv);
-  const volOK =
-    num(d0.volume) >= avgVol20 * cfg.volBounce20x ||
-    avgVol5 >= avgVol20 * cfg.volBounce5x ||
-    obv > 0;
+  // 5) Don't enter if most of the move is already gone
+  const recoveryPct =
+    recentHigh - dipLow > 0 ? ((px - dipLow) / (recentHigh - dipLow)) * 100 : 0;
+  if (recoveryPct > cfg.dipMaxRecoveryPct) {
+    return {
+      trigger: false,
+      waitReason: `already recovered ${recoveryPct.toFixed(0)}%`,
+      diagnostics: { recoveryPct, px, dipLow, recentHigh },
+    };
+  }
 
-  const trigger = nearSupport && higherLow && bounceOK && volOK;
+  // 6) Higher-low + basic volume confirmation
+  const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
+  const higherLow = dipLow > prevLow * 0.99; // small tolerance
+  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  const volOK = num(d0.volume) >= avgVol20 * 0.85;
 
-  // Target/stop (smarter target using resistances list)
+  const trigger =
+    hadPullback &&
+    nearSupport &&
+    bounceOK &&
+    higherLow &&
+    volOK &&
+    recoveryPct <= cfg.dipMaxRecoveryPct;
+
+  if (!trigger) {
+    return {
+      trigger: false,
+      waitReason: "DIP conditions not fully met",
+      diagnostics: {
+        hadPullback,
+        nearSupport,
+        bounceOK,
+        higherLow,
+        volOK,
+        lowBarIndex,
+        recoveryPct,
+      },
+    };
+  }
+
+  // Targets & stops (A-style)
   const resList = findResistancesAbove(data, px, stock);
   let target = Math.max(
     px + Math.max(2.4 * atr, px * 0.022),
     Math.max(...data.slice(-20).map((d) => num(d.high)))
   );
-  if (resList.length) {
-    const head0 = resList[0] - px;
-    if (head0 < 0.6 * atr && resList[1]) target = Math.max(target, resList[1]);
+  if (resList.length && resList[0] - px < 0.6 * atr && resList[1]) {
+    target = Math.max(target, resList[1]);
   }
-  let stop = pivotLow - 0.5 * atr;
 
+  const stop = dipLow - 0.5 * atr;
   const nearestRes = resList.length ? resList[0] : null;
-  const why = `Near support (MA/structure), higher low/dbl-bottom, bounce confirmed (pattern/MA5), volume OK.`;
-
-  const waitReason = trigger
-    ? ""
-    : !nearSupport
-    ? "price not near support (MA25/50 or swing/flip zone)"
-    : !higherLow
-    ? "no higher low or dbl-bottom yet"
-    : !bounceOK
-    ? "bounce candle not confirmed"
-    : "bounce volume below relaxed threshold";
+  const why = `Fresh pullback ${pullbackPct.toFixed(
+    1
+  )}% at support; strong bounce ${bounceStrengthATR.toFixed(
+    1
+  )} ATR; recovery ${recoveryPct.toFixed(0)}%.`;
 
   return {
     trigger,
@@ -639,16 +750,14 @@ function detectDipBounce(stock, data, cfg) {
     target,
     nearestRes,
     why,
-    waitReason,
+    waitReason: "",
     diagnostics: {
-      nearMA,
-      nearSwing,
-      higherLow,
-      closeAboveYHigh,
-      hammer,
-      engulf,
-      twoBarRev,
-      ma5Reclaim,
+      pullbackPct,
+      pullbackATR,
+      lowBarIndex,
+      bounceStrengthATR,
+      recoveryPct,
+      nearSupport,
       volOK,
       atr,
     },
