@@ -1408,7 +1408,7 @@ function summarizeGuardDetails(d) {
   return bits.length ? `(${bits.join(", ")})` : "";
 }
 
-/* ============================ Safe withNo (never null) ============================ */
+/* ============================ Safe withNo (never null)  ============================ */
 function withNo(reason, ctx = {}) {
   // Best-effort provisional even if minimal context provided
   const stock = ctx.stock || {};
