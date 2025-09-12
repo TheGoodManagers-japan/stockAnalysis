@@ -487,7 +487,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 function getConfig(opts) {
   return {
     // --- Perfect Setup mode (STRICT) ---
-    perfectMode: false, // set to true for only A+ setups
+    perfectMode: true, // set to true for only A+ setups
     requireStackedMAs: true, // applies to DIP/RETEST/RECLAIM/INSIDE
 
     // Price-action gate (looser)
