@@ -251,47 +251,49 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 } // ← CLOSES analyzeSwingTradeEntry
 
 /* ============================ Config (DIP-only) ============================ */
+/* ============================ Config (DIP-only) ============================ */
 function getConfig(opts) {
   return {
     // --- Perfect Setup mode (STRICT) ---
-    perfectMode: false,            // keep off for broader entries
-    requireStackedMAs: false,      // was true — relax MA stack requirement
+    perfectMode: false,
+    requireStackedMAs: false,      // relax MA stack requirement
 
     // Price-action gate (looser)
     allowSmallRed: true,
-    redDayMaxDownPct: -4.0,        // was -2.5
+    redDayMaxDownPct: -6.0,        // was -2.5/-4.0
 
     // Guards & thresholds
-    maxATRfromMA25: 2.8,           // was 2.2
-    maxConsecUp: 9,                // was 6
-    nearResVetoATR: 0.25,          // was 0.45
+    maxATRfromMA25: 3.2,           // was 2.2/2.8
+    maxConsecUp: 10,               // was 6/9
+    nearResVetoATR: 0.15,          // was 0.45/0.25
     hardRSI: 78,
     softRSI: 74,
 
     // RR thresholds (perfectMode overrides to ≥3R)
-    minRRbase: 1.1,                // was 1.2
-    minRRstrongUp: 1.05,
-    minRRweakUp: 1.3,
+    minRRbase: 1.0,                // was 1.2/1.1
+    minRRstrongUp: 1.0,            // allow strong uptrends with 1R
+    minRRweakUp: 1.2,              // slightly easier than 1.3
 
     // —— DIP-specific knobs ——
-    dipMinPullbackPct: 1.5,        // was 2.5
-    dipMinPullbackATR: 1.0,        // was 1.5
-    dipMaxBounceAgeBars: 5,        // was 3
-    dipMaSupportPctBand: 3.0,      // was 2.0
-    dipStructMinTouches: 1,        // was 2
-    dipStructTolATR: 0.8,          // was 0.5
-    dipStructTolPct: 1.0,
-    dipMinBounceStrengthATR: 0.3,  // was 0.5
-    dipMaxRecoveryPct: 75,         // was 60
-    fibTolerancePct: 5,            // was 2 (keeps 50–61.8% band but wider)
+    dipMinPullbackPct: 0.8,        // was 2.5/1.5
+    dipMinPullbackATR: 0.6,        // was 1.5/1.0
+    dipMaxBounceAgeBars: 7,        // was 3/5
+    dipMaSupportPctBand: 4.0,      // was 2.0/3.0
+    dipStructMinTouches: 1,        // was 2/1
+    dipStructTolATR: 1.2,          // was 0.5/0.8
+    dipStructTolPct: 2.5,          // was 1.0
+    dipMinBounceStrengthATR: 0.0,  // was 0.5/0.3 (let tiny pushes qualify)
+    dipMaxRecoveryPct: 85,         // was 60/75
+    fibTolerancePct: 20,           // was 2/5  → effectively 50%±20% (30–71.8%)
 
-    // Volume regime: dry pullback + hot bounce (slightly looser)
-    pullbackDryFactor: 1.1,        // was 0.9
-    bounceHotFactor: 1.1,          // was 1.2
+    // Volume regime: dry pullback + hot bounce (looser)
+    pullbackDryFactor: 1.2,        // was 0.9/1.1
+    bounceHotFactor: 1.0,          // was 1.2/1.1 (no spike required)
 
     debug: !!opts.debug,
   };
 }
+
 
 
 /* ======================= Market Structure ======================= */
