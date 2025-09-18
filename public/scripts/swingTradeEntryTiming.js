@@ -1,4 +1,4 @@
-// swingTradeEntryTiming.js — DIP-only version (relaxed + bugfix)
+// swingTradeEntryTiming.js — DIP-only version (tightened)
 // Returns: { buyNow, reason, stopLoss, priceTarget, smartStopLoss, smartPriceTarget, timeline?, debug? }
 // Usage: analyzeSwingTradeEntry(stock, candles, { debug:true })
 
@@ -84,6 +84,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       }% threshold.`
     : "";
 
+  // NEW: Structure gate — require uptrend & price ≥ MA5 (tolerance)
+  const structureGateOk =
+    !cfg.requireUptrend ||
+    ((ms.trend === "UP" ||
+      ms.trend === "STRONG_UP" ||
+      ms.trend === "WEAK_UP") &&
+      px >= (ms.ma5 || 0) * 0.998);
+
   // Perfect mode: MA stack gate (applies to DIP)
   const stackedOk =
     !cfg.perfectMode || !cfg.requireStackedMAs || !!ms.stackedBull;
@@ -94,6 +102,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // ======================= DIP (pullback + bounce) =======================
   if (!stackedOk) {
     reasons.push("DIP blocked (Perfect gate): MAs not stacked bullishly.");
+  } else if (!structureGateOk) {
+    reasons.push("Structure gate: trend not up or price < MA5.");
   } else {
     const dip = detectDipBounce(stock, data, cfg);
     checks.dip = dip;
@@ -254,44 +264,46 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
 /* ============================ Config (DIP-only) ============================ */
 function getConfig(opts = {}) {
+  const debug = !!opts.debug;
   return {
-    // Perfect/A+ gating
+    // Gates
     perfectMode: false,
     requireStackedMAs: false,
+    requireUptrend: true, // NEW: block entries in DOWN trend or under MA5
 
     // Price-action gate
     allowSmallRed: true,
-    redDayMaxDownPct: -10.0, // allow deep intraday red
+    redDayMaxDownPct: -2.0, // tighter small-red tolerance
 
     // Guards
-    maxATRfromMA25: 4.0, // more extension allowed
-    maxConsecUp: 12,
-    nearResVetoATR: 0.1, // headroom only 0.10 ATR
+    maxATRfromMA25: 3.0, // tighter extension
+    maxConsecUp: 9, // less runway
+    nearResVetoATR: 0.3, // require more headroom to resistance
     hardRSI: 78,
-    softRSI: 74,
+    softRSI: 72,
 
     // RR
-    minRRbase: 0.95, // diagnostic: let borderline 1R pass
-    minRRstrongUp: 1.0,
-    minRRweakUp: 1.1,
+    minRRbase: 1.25,
+    minRRstrongUp: 1.35,
+    minRRweakUp: 1.45,
 
-    // DIP specifics (slightly looser)
-    dipMinPullbackPct: 0.5,
-    dipMinPullbackATR: 0.4,
-    dipMaxBounceAgeBars: 8, // respects this now (bugfix)
-    dipMaSupportPctBand: 8.0, // was 6.0
-    dipStructMinTouches: 1,
-    dipStructTolATR: 1.8, // was 1.5
-    dipStructTolPct: 4.0, // was 3.5
-    dipMinBounceStrengthATR: 0.0, // accept tiny push
-    dipMaxRecoveryPct: 92, // was 90
-    fibTolerancePct: 55, // very wide (effectively softens Fib)
+    // DIP specifics (tighter)
+    dipMinPullbackPct: 0.8,
+    dipMinPullbackATR: 0.5,
+    dipMaxBounceAgeBars: 6, // respects this (bugfix in detector)
+    dipMaSupportPctBand: 5.0,
+    dipStructMinTouches: 2,
+    dipStructTolATR: 1.2,
+    dipStructTolPct: 2.5,
+    dipMinBounceStrengthATR: 0.6, // need ≥0.6 ATR for bounce patterns
+    dipMaxRecoveryPct: 85,
+    fibTolerancePct: 40, // still wide but narrower than 55
 
     // Volume regime
-    pullbackDryFactor: 1.5, // was 1.3
-    bounceHotFactor: 0.8, // was 0.9
+    pullbackDryFactor: 1.3, // pullback volume ≤ 1.3x avg
+    bounceHotFactor: 1.0, // bounce vol must be ≥ avg for soft pattern
 
-    debug: !!opts.debug,
+    debug,
   };
 }
 
@@ -341,8 +353,7 @@ function getMarketStructure(stock, data) {
 }
 
 /* ===================== DIP + BOUNCE DETECTOR ===================== */
-// Enhanced with: real pullback, wide Fib(50–61.8 with tol), support, fresh bounce,
-// tolerant higher-low, relaxed volume regime, and basic close-up bounce confirmation.
+// Pullback, Fib window, support, fresh bounce, stricter bounce & volume rules.
 function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
@@ -397,10 +408,9 @@ function detectDipBounce(stock, data, cfg) {
 
   // 2) Bounce must be fresh — where did the low occur?
   let lowBarIndex = -1; // 0=last bar, 1=prev bar, ...
-  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length); // BUGFIX: respect config
+  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length); // respect config
   for (let i = 0; i < ageWin; i++) {
     const lowVal = num(recentBars.at(-(i + 1)).low);
-    // tolerate tiny float diffs
     if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {
       lowBarIndex = i;
       break;
@@ -452,7 +462,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 3b) Volume regime: dry pullback + (hot or decent bounce if strong)
+  // 3b) Volume regime: dry pullback + bounce heat
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const pullbackBars = recentBars.filter(
     (b) => num(b.high) <= recentHigh && num(b.low) >= dipLow
@@ -464,9 +474,9 @@ function detectDipBounce(stock, data, cfg) {
     d1 = data.at(-2);
   const bounceVolHot = num(d0.volume) >= avgVol20 * cfg.bounceHotFactor;
 
-  // 4) Bounce confirmation + minimum strength (≥ X ATR off the low)
+  // 4) Bounce confirmation + minimum strength
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
-  const minStr = cfg.dipMinBounceStrengthATR;
+  const minStr = Math.max(cfg.dipMinBounceStrengthATR, 0.6);
 
   const closeAboveYHigh =
     num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
@@ -496,13 +506,14 @@ function detectDipBounce(stock, data, cfg) {
     num(d0.close) > num(d1.close) &&
     num(d0.low) > num(d1.low) &&
     num(d0.close) > num(d0.open) &&
-    bounceStrengthATR >= minStr;
+    bounceStrengthATR >= Math.max(0.8, cfg.dipMinBounceStrengthATR);
 
-  // NEW: simple green + up vs yesterday (for clean V-bounces)
+  // Stricter: basic green+up only if volume hot and strength ≥ 0.8 ATR
   const basicCloseUp =
     num(d0.close) > num(d0.open) &&
     num(d0.close) > num(d1.close) &&
-    bounceStrengthATR >= minStr;
+    bounceVolHot &&
+    bounceStrengthATR >= Math.max(0.8, cfg.dipMinBounceStrengthATR);
 
   const bounceOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
@@ -535,14 +546,14 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 6) Higher-low confirmation (tolerate tiny undercuts)
+  // 6) Higher-low confirmation (tiny undercuts allowed)
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
-  // allow equal or a small undercut (≤0.25 ATR or ≤0.5%)
   const higherLow = dipLow >= prevLow * 0.995 || dipLow >= prevLow - 0.25 * atr;
 
-  // Relaxed volume regime: dry pullback AND (hot bounce OR half-ATR bounce)
+  // Stricter volume regime: dry pullback AND (hot bounce OR strong + clears Y-high)
   const volumeRegimeOK =
-    dryPullback && (bounceVolHot || bounceStrengthATR >= 0.5);
+    dryPullback &&
+    (bounceVolHot || (bounceStrengthATR >= 0.8 && closeAboveYHigh));
 
   const trigger =
     hadPullback &&
@@ -584,7 +595,7 @@ function detectDipBounce(stock, data, cfg) {
 
   const stop = dipLow - 0.5 * atr;
   const nearestRes = resList.length ? resList[0] : null;
-  const why = `Fresh 50–61.8% retrace at support; dry pullback + adequate bounce; bounce ${bounceStrengthATR.toFixed(
+  const why = `Fresh retrace at support; dry pullback + strong bounce; bounce ${bounceStrengthATR.toFixed(
     1
   )} ATR; recovery ${recoveryPct.toFixed(0)}%.`;
 
@@ -614,7 +625,7 @@ function detectDipBounce(stock, data, cfg) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const minStopDist = 1.1 * atr;
+  const minStopDist = 1.25 * atr; // tighter: avoid flimsy stops
 
   // Ensure minimum stop distance
   let adjStop = stop;
@@ -707,7 +718,7 @@ function guardVeto(
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    const maxDist = cfg.maxATRfromMA25 + 0.3; // DIP gets a small allowance
+    const maxDist = cfg.maxATRfromMA25 + 0.3; // small allowance for DIP
     if (distMA25 > maxDist)
       return {
         veto: true,
