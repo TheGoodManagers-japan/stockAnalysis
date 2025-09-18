@@ -1,4 +1,4 @@
-// swingTradeEntryTiming.js — DIP-only version
+// swingTradeEntryTiming.js — DIP-only version (relaxed + bugfix)
 // Returns: { buyNow, reason, stopLoss, priceTarget, smartStopLoss, smartPriceTarget, timeline?, debug? }
 // Usage: analyzeSwingTradeEntry(stock, candles, { debug:true })
 
@@ -240,7 +240,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   return {
     buyNow: true,
-    reason: `${best.kind}: ${best.why} RR ${best.rr.ratio.toFixed(2)}:1.`,
+    reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
+      best.why
+    }`,
     stopLoss: round0(best.stop),
     priceTarget: round0(best.target),
     smartStopLoss: round0(best.stop),
@@ -251,7 +253,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 } // ← CLOSES analyzeSwingTradeEntry
 
 /* ============================ Config (DIP-only) ============================ */
-function getConfig(opts) {
+function getConfig(opts = {}) {
   return {
     // Perfect/A+ gating
     perfectMode: false,
@@ -259,42 +261,39 @@ function getConfig(opts) {
 
     // Price-action gate
     allowSmallRed: true,
-    redDayMaxDownPct: -10.0,       // allow deep intraday red
+    redDayMaxDownPct: -10.0, // allow deep intraday red
 
     // Guards
-    maxATRfromMA25: 4.0,           // more extension allowed
+    maxATRfromMA25: 4.0, // more extension allowed
     maxConsecUp: 12,
-    nearResVetoATR: 0.10,          // headroom only 0.10 ATR
+    nearResVetoATR: 0.1, // headroom only 0.10 ATR
     hardRSI: 78,
     softRSI: 74,
 
     // RR
-    minRRbase: 0.95,               // diagnostic: let borderline 1R pass
+    minRRbase: 0.95, // diagnostic: let borderline 1R pass
     minRRstrongUp: 1.0,
     minRRweakUp: 1.1,
 
-    // DIP specifics
+    // DIP specifics (slightly looser)
     dipMinPullbackPct: 0.5,
     dipMinPullbackATR: 0.4,
-    dipMaxBounceAgeBars: 7,        // let “low” be a few bars back
-    dipMaSupportPctBand: 6.0,      // wider MA25/50 band
+    dipMaxBounceAgeBars: 8, // respects this now (bugfix)
+    dipMaSupportPctBand: 8.0, // was 6.0
     dipStructMinTouches: 1,
-    dipStructTolATR: 1.5,
-    dipStructTolPct: 3.5,
-    dipMinBounceStrengthATR: 0.0,  // accept tiny push
-    dipMaxRecoveryPct: 90,
-    fibTolerancePct: 50,           // effectively disables tight 50–61.8
+    dipStructTolATR: 1.8, // was 1.5
+    dipStructTolPct: 4.0, // was 3.5
+    dipMinBounceStrengthATR: 0.0, // accept tiny push
+    dipMaxRecoveryPct: 92, // was 90
+    fibTolerancePct: 55, // very wide (effectively softens Fib)
 
     // Volume regime
-    pullbackDryFactor: 1.3,        // pullback can be ~20–30% below avg
-    bounceHotFactor: 0.9,          // “hot” = >=90% of 20d avg
+    pullbackDryFactor: 1.5, // was 1.3
+    bounceHotFactor: 0.8, // was 0.9
 
     debug: !!opts.debug,
   };
 }
-
-
-
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
@@ -342,10 +341,11 @@ function getMarketStructure(stock, data) {
 }
 
 /* ===================== DIP + BOUNCE DETECTOR ===================== */
-// Enhanced with: real pullback, Fib(50–61.8), support, fresh bounce, dry pullback + hot bounce
+// Enhanced with: real pullback, wide Fib(50–61.8 with tol), support, fresh bounce,
+// tolerant higher-low, relaxed volume regime, and basic close-up bounce confirmation.
 function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
-  const atr = Math.max(num(stock.atr14), px * 0.005);
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
   // MAs (fallbacks)
   const ma5 = num(stock.movingAverage5d) || sma(data, 5);
@@ -397,8 +397,11 @@ function detectDipBounce(stock, data, cfg) {
 
   // 2) Bounce must be fresh — where did the low occur?
   let lowBarIndex = -1; // 0=last bar, 1=prev bar, ...
-  for (let i = 0; i < 5; i++) {
-    if (num(recentBars.at(-(i + 1)).low) === dipLow) {
+  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length); // BUGFIX: respect config
+  for (let i = 0; i < ageWin; i++) {
+    const lowVal = num(recentBars.at(-(i + 1)).low);
+    // tolerate tiny float diffs
+    if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {
       lowBarIndex = i;
       break;
     }
@@ -449,7 +452,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 3b) Volume regime: dry pullback + hot bounce
+  // 3b) Volume regime: dry pullback + (hot or decent bounce if strong)
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const pullbackBars = recentBars.filter(
     (b) => num(b.high) <= recentHigh && num(b.low) >= dipLow
@@ -495,7 +498,15 @@ function detectDipBounce(stock, data, cfg) {
     num(d0.close) > num(d0.open) &&
     bounceStrengthATR >= minStr;
 
-  const bounceOK = closeAboveYHigh || hammer || engulf || twoBarRev;
+  // NEW: simple green + up vs yesterday (for clean V-bounces)
+  const basicCloseUp =
+    num(d0.close) > num(d0.open) &&
+    num(d0.close) > num(d1.close) &&
+    bounceStrengthATR >= minStr;
+
+  const bounceOK =
+    closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
+
   if (!bounceOK) {
     return {
       trigger: false,
@@ -508,6 +519,7 @@ function detectDipBounce(stock, data, cfg) {
         hammer,
         engulf,
         twoBarRev,
+        basicCloseUp,
       },
     };
   }
@@ -523,9 +535,14 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 6) Higher-low confirmation
+  // 6) Higher-low confirmation (tolerate tiny undercuts)
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
-  const higherLow = dipLow > prevLow * 0.99; // small tolerance
+  // allow equal or a small undercut (≤0.25 ATR or ≤0.5%)
+  const higherLow = dipLow >= prevLow * 0.995 || dipLow >= prevLow - 0.25 * atr;
+
+  // Relaxed volume regime: dry pullback AND (hot bounce OR half-ATR bounce)
+  const volumeRegimeOK =
+    dryPullback && (bounceVolHot || bounceStrengthATR >= 0.5);
 
   const trigger =
     hadPullback &&
@@ -533,8 +550,7 @@ function detectDipBounce(stock, data, cfg) {
     nearSupport &&
     bounceOK &&
     higherLow &&
-    dryPullback &&
-    bounceVolHot &&
+    volumeRegimeOK &&
     recoveryPct <= cfg.dipMaxRecoveryPct;
 
   if (!trigger) {
@@ -549,6 +565,7 @@ function detectDipBounce(stock, data, cfg) {
         higherLow,
         dryPullback,
         bounceVolHot,
+        volumeRegimeOK,
         lowBarIndex,
         recoveryPct,
       },
@@ -567,7 +584,7 @@ function detectDipBounce(stock, data, cfg) {
 
   const stop = dipLow - 0.5 * atr;
   const nearestRes = resList.length ? resList[0] : null;
-  const why = `Fresh 50–61.8% retrace at support; dry pullback + hot bounce; bounce ${bounceStrengthATR.toFixed(
+  const why = `Fresh 50–61.8% retrace at support; dry pullback + adequate bounce; bounce ${bounceStrengthATR.toFixed(
     1
   )} ATR; recovery ${recoveryPct.toFixed(0)}%.`;
 
@@ -588,6 +605,7 @@ function detectDipBounce(stock, data, cfg) {
       nearSupport,
       dryPullback,
       bounceVolHot,
+      volumeRegimeOK,
       atr,
     },
   };
@@ -865,6 +883,9 @@ function avg(arr) {
 }
 function fmt(x) {
   return Number.isFinite(x) ? x.toFixed(2) : String(x);
+}
+function near(a, b, eps = 1e-8) {
+  return Math.abs((Number(a) || 0) - (Number(b) || 0)) <= eps;
 }
 
 function countConsecutiveUpDays(data, k = 8) {
