@@ -153,6 +153,64 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
+  // ======================= PRE-BREAKOUT SETUP (stop-limit plan) =======================
+  if (candidates.length === 0) {
+    // Only consider pre-breakout if trend is not DOWN and we’re below resistance
+    if (ms.trend !== "DOWN") {
+      const bo = detectPreBreakoutSetup(stock, data, cfg);
+      checks.preBreakout = bo;
+
+      // We *do not* buy now; we return a plan to place a buy-stop (stop-limit)
+      if (bo.ready) {
+        const debug = opts.debug
+          ? {
+              ms,
+              dayPct,
+              priceActionGate,
+              checks,
+              px,
+              openPx,
+              prevClose,
+              cfg,
+              preBreakout: bo,
+            }
+          : undefined;
+
+        return {
+          buyNow: false,
+          reason: `PRE_BREAKOUT SETUP: place stop-limit. ${bo.why}`,
+          stopLoss: round0(bo.initialStop), // proposed initial stop for when it fills
+          priceTarget: round0(bo.firstTarget), // proposed first target
+          smartStopLoss: round0(bo.initialStop),
+          smartPriceTarget: round0(bo.firstTarget),
+          trigger: round0(bo.entryTrigger),
+          timeline: [
+            {
+              when: "ON TRIGGER",
+              condition: `price ≥ ${round0(bo.entryTrigger)}`,
+              note: "Place/keep stop-limit pending breakout",
+            },
+            {
+              when: "ON FILL",
+              condition: "Order executes",
+              stopLoss: round0(bo.initialStop),
+              priceTarget: round0(bo.firstTarget),
+              note: "Initial plan applied",
+            },
+          ],
+          suggestedOrder: {
+            type: "BUY_STOP_LIMIT",
+            trigger: round0(bo.entryTrigger),
+            limit: round0(bo.entryLimit),
+            initialStop: round0(bo.initialStop),
+            firstTarget: round0(bo.firstTarget),
+          },
+          debug,
+        };
+      }
+    }
+  }
+
   // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
@@ -266,46 +324,48 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // Gates
+    // --- existing DIP config (unchanged) ---
     perfectMode: false,
     requireStackedMAs: false,
-    requireUptrend: true, // NEW: block entries in DOWN trend or under MA5
-
-    // Price-action gate
+    requireUptrend: true,
     allowSmallRed: true,
-    redDayMaxDownPct: -2.0, // tighter small-red tolerance
-
-    // Guards
-    maxATRfromMA25: 3.0, // tighter extension
-    maxConsecUp: 9, // less runway
-    nearResVetoATR: 0.3, // require more headroom to resistance
+    redDayMaxDownPct: -2.0,
+    maxATRfromMA25: 3.0,
+    maxConsecUp: 9,
+    nearResVetoATR: 0.3,
     hardRSI: 78,
     softRSI: 72,
-
-    // RR
     minRRbase: 1.25,
     minRRstrongUp: 1.35,
     minRRweakUp: 1.45,
-
-    // DIP specifics (tighter)
     dipMinPullbackPct: 0.8,
     dipMinPullbackATR: 0.5,
-    dipMaxBounceAgeBars: 6, // respects this (bugfix in detector)
+    dipMaxBounceAgeBars: 6,
     dipMaSupportPctBand: 5.0,
     dipStructMinTouches: 2,
     dipStructTolATR: 1.2,
     dipStructTolPct: 2.5,
-    dipMinBounceStrengthATR: 0.6, // need ≥0.6 ATR for bounce patterns
+    dipMinBounceStrengthATR: 0.6,
     dipMaxRecoveryPct: 85,
-    fibTolerancePct: 40, // still wide but narrower than 55
+    fibTolerancePct: 40,
+    pullbackDryFactor: 1.3,
+    bounceHotFactor: 1.0,
 
-    // Volume regime
-    pullbackDryFactor: 1.3, // pullback volume ≤ 1.3x avg
-    bounceHotFactor: 1.0, // bounce vol must be ≥ avg for soft pattern
-
+    // --- NEW: Pre-breakout setup parameters ---
+    boLookbackBars: 40, // window to find the nearest resistance
+    boNearResATR: 1.0, // price must be within ≤ 1.0 ATR of resistance
+    boNearResPct: 1.2, // OR within ≤ 1.2% of resistance
+    boTightenFactor: 0.75, // recent true range ≤ 0.75× its 20-bar avg
+    boHigherLowsMin: 2, // need ≥2 higher lows into the resistance
+    boMinDryPullback: 1.2, // pullbacks avg vol ≤ 1.2× 20-bar avg
+    boMinRR: 1.5, // minimum RR for the setup plan
+    boSlipTicks: 0.002, // +0.2% headroom for stop-limit’s limit price
+    boStopUnderLowsATR: 0.7, // stop below the mini-base lows by 0.7 ATR
+    boTargetATR: 2.4, // default target bump if no clear next res
     debug,
   };
 }
+
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
@@ -983,5 +1043,110 @@ function withNo(reason, ctx = {}) {
     smartPriceTarget: round0(prov.target),
     timeline: [],
     debug,
+  };
+}
+
+
+
+function detectPreBreakoutSetup(stock, data, cfg) {
+  if (!Array.isArray(data) || data.length < 25) {
+    return { ready: false, waitReason: "insufficient data" };
+  }
+  const px = num(stock.currentPrice) || num(data.at(-1).close);
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
+
+  // 1) Find nearest resistance above current price
+  const resList = findResistancesAbove(
+    data.slice(-cfg.boLookbackBars),
+    px,
+    stock
+  );
+  const resistance = resList[0];
+  if (!Number.isFinite(resistance)) {
+    return { ready: false, waitReason: "no clear resistance overhead" };
+  }
+
+  // 2) Must be "near" resistance but NOT through it yet
+  const dist = resistance - px;
+  const nearByATR = dist / atr <= cfg.boNearResATR;
+  const nearByPct =
+    (dist / Math.max(resistance, 1e-9)) * 100 <= cfg.boNearResPct;
+  if (!(nearByATR || nearByPct) || dist <= 0) {
+    return { ready: false, waitReason: "not coiled near resistance" };
+  }
+
+  // 3) Tightening volatility: recent true range vs. avg
+  const tr = (b) =>
+    Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
+  const last20 = data.slice(-20);
+  const avgTR = avg(last20.map(tr)) || 1e-9;
+  const recentTR = avg(data.slice(-6).map(tr)); // short window
+  const tightening = recentTR <= cfg.boTightenFactor * avgTR;
+
+  // 4) Higher-lows count into resistance (mini-base)
+  const lows = data.slice(-12).map((b) => num(b.low));
+  let higherLows = 0;
+  for (let i = 2; i < lows.length; i++) {
+    if (lows[i] > lows[i - 1] && lows[i - 1] > lows[i - 2]) higherLows++;
+  }
+  const structureOK = higherLows >= cfg.boHigherLowsMin;
+
+  // 5) Volume regime: pullbacks not heavy
+  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  const pullbackBars = data
+    .slice(-10)
+    .filter((b) => num(b.close) < num(b.open));
+  const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
+  const dryPullback =
+    pullbackVol <= avgVol20 * cfg.boMinDryPullback || !avgVol20;
+
+  // 6) Build a plan (stop and target) and check RR
+  const baseLow = Math.min(...data.slice(-10).map((b) => num(b.low)));
+  const initialStop = baseLow - cfg.boStopUnderLowsATR * atr;
+  let firstTarget = resList[1];
+  if (!Number.isFinite(firstTarget)) firstTarget = px + cfg.boTargetATR * atr;
+
+  const trigger = resistance + Math.max(0.02, 0.1 * atr); // a tiny “through” to avoid head-fake
+  const limit = trigger * (1 + cfg.boSlipTicks); // cap the fill a hair above trigger
+
+  const risk = Math.max(0.01, trigger - initialStop);
+  const reward = Math.max(0, firstTarget - trigger);
+  const ratio = reward / risk;
+
+  const ready =
+    tightening &&
+    structureOK &&
+    dryPullback &&
+    ratio >= Math.max(cfg.boMinRR, 1.2);
+
+  return {
+    ready,
+    waitReason: ready
+      ? ""
+      : `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
+          2
+        )}`,
+    entryTrigger: trigger,
+    entryLimit: limit,
+    initialStop,
+    firstTarget,
+    nearestRes: resistance,
+    why: ready
+      ? `Coil near ${resistance.toFixed(
+          0
+        )} with tightening ranges, higher lows, dry pullback; RR ${ratio.toFixed(
+          2
+        )}`
+      : "",
+    diagnostics: {
+      resistance,
+      nearByATR,
+      nearByPct,
+      recentTR,
+      avgTR,
+      higherLows,
+      atr,
+      ratio,
+    },
   };
 }

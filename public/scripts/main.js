@@ -819,6 +819,7 @@ export async function fetchStockAnalysis({
       // “Smart” fields
       stock.smartStopLoss = normSL;
       stock.smartPriceTarget = normTP;
+      stock.trigger = finalSignal.trigger ?? null;
 
       // Plain fields used by the API payload
       stock.stopLoss = normSL;
@@ -883,6 +884,7 @@ export async function fetchStockAnalysis({
         _api_c2_targetPrice: stock.targetPrice,
         _api_c2_growthPotential: stock.growthPotential,
         _api_c2_score: stock.score,
+        _api_c2_trigger: stock.trigger,
         _api_c2_finalScore: stock.finalScore,
         _api_c2_tier: getNumericTier(stock),
         _api_c2_smartStopLoss: stock.smartStopLoss,
