@@ -132,11 +132,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           let exit = null;
 
           if (today.low <= open.stop) {
-            exit = { price: open.stop, result: "LOSS" };
+            exit = { type: "STOP", price: open.stop, result: "LOSS" };
           } else if (today.high >= open.target) {
-            exit = { price: open.target, result: "WIN" };
+            exit = { type: "TARGET", price: open.target, result: "WIN" };
           } else if (daysHeld >= HOLD_BARS) {
             exit = {
+              type: "TIME",
               price: today.close,
               result: today.close > open.entry ? "WIN" : "LOSS",
             };
@@ -155,6 +156,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               stop: open.stopInit,
               target: open.target,
               result: exit.result,
+              exitType: exit.type, // <-- new
               R: Math.round(((exit.price - open.entry) / risk) * 100) / 100,
               returnPct: Math.round(pctRet * 100) / 100,
             };
@@ -188,7 +190,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         }
       }
 
-      byTicker.push({ ticker: code, trades });
+      // per-ticker exit counts
+      const tStops = trades.filter((x) => x.exitType === "STOP").length;
+      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
+      const tTimes = trades.filter((x) => x.exitType === "TIME").length;
+
+      byTicker.push({
+        ticker: code,
+        trades,
+        counts: { target: tTargets, stop: tStops, time: tTimes },
+      });
 
       // running averages after finishing this ticker
       const total = globalTrades.length;
@@ -201,7 +212,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRate}% | current avg return=${avgRet}%`
+        } | current avg win=${winRate}% | current avg return=${avgRet}% | ticker exits — target:${tTargets} stop:${tStops} time:${tTimes}`
       );
     } catch (e) {
       byTicker.push({
@@ -229,8 +240,19 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? pct(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
     : 0;
 
+  // global exit counts
+  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
+  const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
+  const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
+  const timeExitWins = all.filter(
+    (t) => t.exitType === "TIME" && t.result === "WIN"
+  ).length;
+  const timeExitLosses = all.filter(
+    (t) => t.exitType === "TIME" && t.result === "LOSS"
+  ).length;
+
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
   );
 
   return {
@@ -241,16 +263,22 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     winRate,
     avgReturnPct,
     avgHoldingDays,
+    exitCounts: {
+      target: hitTargetCount,
+      stop: hitStopCount,
+      time: timeExitCount,
+      timeWins: timeExitWins,
+      timeLosses: timeExitLosses,
+    },
     byTicker,
   };
 }
-  
 
 // Expose for Bubble
 // Usage:
-//   await window.backtest()                          // allTickers, last 6 months, holdBars=10
-//   await window.backtest({ holdBars: 8, months: 3 })// custom swing window / range
-//   await window.backtest(["8058","6981"])           // custom list
+//   window.backtest().then(...)
+//   window.backtest({ holdBars: 8, months: 3 }).then(...)
+//   window.backtest(["8058","6981"]).then(...)
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
@@ -263,6 +291,7 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       winRate: 0,
       avgReturnPct: 0,
       avgHoldingDays: 0,
+      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
       byTicker: [],
       error: String(e?.message || e),
     };
