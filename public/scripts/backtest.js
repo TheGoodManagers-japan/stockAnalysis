@@ -110,7 +110,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   );
 
   // Breakout execution options (ALWAYS ON)
-  const ENABLE_BO = true;
+  const ENABLE_BO = false;
   const BO_MAX_AGE = Number.isFinite(opts.boMaxAgeBars)
     ? opts.boMaxAgeBars
     : 15;

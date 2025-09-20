@@ -1,6 +1,5 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP + PRE-BREAKOUT)
+// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only)
 import { detectDipBounce } from "./dip.js";
-import { detectPreBreakoutSetup } from "./breakout.js";
 
 // Public API
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
@@ -180,72 +179,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  // ======================= PRE-BREAKOUT (always enabled if no DIP) =======================
-  if (candidates.length === 0 && ms.trend !== "DOWN") {
-    const bo = detectPreBreakoutSetup(stock, data, cfg, U);
-    checks.preBreakout = bo;
-
-    if (bo.ready) {
-      const debug = opts.debug
-        ? {
-            ms,
-            dayPct,
-            priceActionGate,
-            checks,
-            px,
-            openPx,
-            prevClose,
-            cfg,
-            preBreakout: bo,
-          }
-        : undefined;
-
-      return {
-        buyNow: false,
-        reason: `PRE_BREAKOUT SETUP: place stop-${
-          bo.useStopMarket ? "market" : "limit"
-        }. ${bo.why}`,
-        stopLoss: deRound(toTick(round0(bo.initialStop), stock)),
-        priceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
-        smartStopLoss: deRound(toTick(round0(bo.initialStop), stock)),
-        smartPriceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
-        trigger: deRound(toTick(round0(bo.entryTrigger), stock)),
-        timeline: [
-          {
-            when: "ON TRIGGER",
-            condition: `price ≥ ${deRound(
-              toTick(round0(bo.entryTrigger), stock)
-            )}`,
-            note: "Place/keep stop order",
-          },
-          {
-            when: "ON FILL",
-            condition: "Order executes (prefer thrust/volume)",
-            stopLoss: deRound(toTick(round0(bo.initialStop), stock)),
-            priceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
-            note: bo.retestPlan
-              ? "Weak thrust → prefer retest buy plan"
-              : "Initial plan",
-          },
-          {
-            when: "D+1 ~ D+3",
-            condition: "Holds above breakout zone midpoint",
-            note: "Follow-through check; if not, reduce/exit",
-          },
-        ],
-        suggestedOrder: {
-          type: bo.useStopMarket ? "BUY_STOP" : "BUY_STOP_LIMIT",
-          trigger: deRound(toTick(round0(bo.entryTrigger), stock)),
-          limit: deRound(toTick(round0(bo.entryLimit), stock)),
-          initialStop: deRound(toTick(round0(bo.initialStop), stock)),
-          firstTarget: deRound(toTick(round0(bo.firstTarget), stock)),
-          retest: bo.retestPlan || null,
-        },
-        debug,
-      };
-    }
-  }
-
   // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
@@ -351,11 +284,12 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     debug,
   };
 }
-/* ============================ Config (DIP loosened) ============================ */
+
+/* ============================ Config (DIP only) ============================ */
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // DIP (looser)
+    // DIP settings (looser)
     perfectMode: false,
     requireStackedMAs: false,
     requireUptrend: true,
@@ -365,61 +299,34 @@ function getConfig(opts = {}) {
     maxConsecUp: 9,
 
     // headroom veto (looser)
-    nearResVetoATR: 0.35, // was 0.5 in your version
-    nearResVetoPct: 0.9, // was 1.2
+    nearResVetoATR: 0.35,
+    nearResVetoPct: 0.9,
 
     hardRSI: 78,
     softRSI: 72,
 
     // RR thresholds (slightly easier)
-    minRRbase: 1.2, // was 1.25
-    minRRstrongUp: 1.3, // was 1.35
-    minRRweakUp: 1.4, // was 1.45
+    minRRbase: 1.2,
+    minRRstrongUp: 1.3,
+    minRRweakUp: 1.4,
 
     // pullback/bounce looseners
     dipMinPullbackPct: 0.8,
-    dipMinPullbackATR: 0.4, // was 0.5
-    dipMaxBounceAgeBars: 8, // was 6
-    dipMaSupportPctBand: 9.0, // was 7.5
-    dipStructMinTouches: 1, // was 1 (kept)
+    dipMinPullbackATR: 0.4,
+    dipMaxBounceAgeBars: 8,
+    dipMaSupportPctBand: 9.0,
+    dipStructMinTouches: 1,
     dipStructTolATR: 1.2,
     dipStructTolPct: 3.5,
-    dipMinBounceStrengthATR: 0.6, // was 0.65
-    dipMaxRecoveryPct: 115, // was 100
-    fibTolerancePct: 12, // was 10
-    pullbackDryFactor: 1.3, // was 1.4 (slightly easier)
-    bounceHotFactor: 1.18, // was 1.22
-
-    // PRE-BREAKOUT (tuning)
-    boLookbackBars: 55,
-    boNearResATR: 1.6,
-    boNearResPct: 2.0,
-    boTightenFactor: 0.85,
-    boHigherLowsMin: 1,
-    boMinDryPullback: 1.05,
-
-    // OLD: boMinRR: 1.35,
-    // NEW: split thresholds so thrust can accept slightly lower RR
-    boMinRRThrust: 1.4, // 1.35–1.45 is fine; start 1.4
-    boMinRRNoThrust: 1.65, // demand more when no thrust
-
-    boCloseThroughATR: 0.1,
-    boVolThrustX: 1.4,
-    boSlipTicks: 0.008,
-    boUseStopMarketOnTrigger: true,
-    boStopUnderLowsATR: 0.6,
-    boTargetATR: 2.2, // (kept; firstTarget logic is now adjusted anyway)
-    boUseRetestPlan: true,
-    boRetestDepthATR: 0.3,
-    boRetestInvalidATE: 0.5,
-    boAltTriggerBars: 3,
-    boAllowInsideBreak: true,
+    dipMinBounceStrengthATR: 0.6,
+    dipMaxRecoveryPct: 115,
+    fibTolerancePct: 12,
+    pullbackDryFactor: 1.3,
+    bounceHotFactor: 1.18,
 
     debug,
   };
- }
-
-
+}
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
