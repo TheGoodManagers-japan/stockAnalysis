@@ -1,5 +1,5 @@
-// swingTradeEntryTiming.js — DIP-only version (tightened + quick-winner patches)
-// Returns: { buyNow, reason, stopLoss, priceTarget, smartStopLoss, smartPriceTarget, timeline?, debug? }
+// swingTradeEntryTiming.js — DIP + (looser) PRE-BREAKOUT
+// Returns: { buyNow, reason, stopLoss, priceTarget, smartStopLoss, smartPriceTarget, trigger?, suggestedOrder?, timeline?, debug? }
 // Usage: analyzeSwingTradeEntry(stock, candles, { debug:true })
 
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
@@ -71,9 +71,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  const ms = getMarketStructure(stock, data); // { trend, recentHigh, recentLow, ma5, ma25, ma50, ma75, ma200, stackedBull }
+  const ms = getMarketStructure(stock, data);
 
-  // PATCH: regime presets to slightly adapt thresholds
+  // Regime presets
   const presets = {
     STRONG_UP: {
       minRRbase: 1.35,
@@ -82,11 +82,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     },
     UP: {
       minRRbase: Math.max(cfg.minRRbase, 1.4),
-      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.35),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.32),
     },
     WEAK_UP: {
       minRRbase: Math.max(cfg.minRRbase, 1.45),
-      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.4),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.35),
       nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.3),
     },
     DOWN: {
@@ -169,7 +169,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
             kind: "DIP ENTRY",
             why: dip.why,
             stop: rr.stop,
-            target: rr.target,
+            target: rr.target, // softened inside detectDipBounce
             rr,
             guard: gv.details,
           });
@@ -180,12 +180,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   // ======================= PRE-BREAKOUT SETUP (stop-limit plan) =======================
   if (candidates.length === 0) {
-    // Only consider pre-breakout if trend is not DOWN and we’re below resistance
     if (ms.trend !== "DOWN") {
       const bo = detectPreBreakoutSetup(stock, data, cfg);
       checks.preBreakout = bo;
 
-      // We *do not* buy now; we return a plan to place a buy-stop (stop-limit)
       if (bo.ready) {
         const debug = opts.debug
           ? {
@@ -204,8 +202,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         return {
           buyNow: false,
           reason: `PRE_BREAKOUT SETUP: place stop-limit. ${bo.why}`,
-          stopLoss: deRound(toTick(round0(bo.initialStop), stock)), // proposed initial stop for when it fills
-          priceTarget: deRound(toTick(round0(bo.firstTarget), stock)), // proposed first target
+          stopLoss: deRound(toTick(round0(bo.initialStop), stock)),
+          priceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
           smartStopLoss: deRound(toTick(round0(bo.initialStop), stock)),
           smartPriceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
           trigger: deRound(toTick(round0(bo.entryTrigger), stock)),
@@ -222,12 +220,12 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
               condition: "Order executes (prefer volume surge, strong close)",
               stopLoss: deRound(toTick(round0(bo.initialStop), stock)),
               priceTarget: deRound(toTick(round0(bo.firstTarget), stock)),
-              note: "Initial plan applied; if weak volume/close, consider cancel/retry",
+              note: "Initial plan applied; if weak follow-through, consider reduce",
             },
             {
               when: "D+1 ~ D+3",
               condition: "Holds (closes) above breakout zone midpoint",
-              note: "Follow-through check: if not holding, reduce/exit",
+              note: "Follow-through check; if not, reduce/exit",
             },
           ],
           suggestedOrder: {
@@ -275,8 +273,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
     const resList = findResistancesAbove(data, pxNow, stock);
     let provisionalTarget = resList[0]
-      ? Math.max(resList[0], pxNow + 2.3 * atr)
-      : pxNow + 2.6 * atr;
+      ? Math.max(resList[0], pxNow + 2.2 * atr) // softened fallback
+      : pxNow + 2.4 * atr;
 
     const rr0 = analyzeRR(
       pxNow,
@@ -308,7 +306,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
     return {
       buyNow: false,
-      reason, // why it's not an entry *now*
+      reason,
       stopLoss: deRound(toTick(round0(rr0.stop), stock)),
       priceTarget: deRound(toTick(round0(rr0.target), stock)),
       smartStopLoss: deRound(toTick(round0(rr0.stop), stock)),
@@ -318,7 +316,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // === Positive path: only DIP ===
+  // === Positive path: DIP ===
   const best = candidates[0];
   const debug = opts.debug
     ? {
@@ -352,20 +350,20 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   };
 } // ← CLOSES analyzeSwingTradeEntry
 
-/* ============================ Config (DIP-only) ============================ */
+/* ============================ Config ============================ */
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // --- existing DIP config (some patched) ---
+    // --- DIP config (softened a touch) ---
     perfectMode: false,
     requireStackedMAs: false,
     requireUptrend: true,
     allowSmallRed: true,
-    redDayMaxDownPct: -0.6, // PATCH: was -2.0 (tighten red day gate)
+    redDayMaxDownPct: -0.6,
     maxATRfromMA25: 3.0,
     maxConsecUp: 9,
     nearResVetoATR: 0.3,
-    nearResVetoPct: 0.8, // PATCH: new % headroom check
+    nearResVetoPct: 0.8,
     hardRSI: 78,
     softRSI: 72,
     minRRbase: 1.25,
@@ -380,21 +378,23 @@ function getConfig(opts = {}) {
     dipStructTolPct: 2.5,
     dipMinBounceStrengthATR: 0.6,
     dipMaxRecoveryPct: 85,
-    fibTolerancePct: 8, // PATCH: was 40 → tighten golden pocket
+    fibTolerancePct: 8,
     pullbackDryFactor: 1.3,
-    bounceHotFactor: 1.35, // PATCH: was 1.0 → require hot bounce
+    bounceHotFactor: 1.28, // ↓ from 1.35
 
-    // --- Pre-breakout setup parameters (patched) ---
-    boLookbackBars: 40,
-    boNearResATR: 1.0,
-    boNearResPct: 1.2,
-    boTightenFactor: 0.65, // PATCH: was 0.75 → tighter coil
-    boHigherLowsMin: 2,
-    boMinDryPullback: 1.2,
-    boMinRR: 1.5,
-    boSlipTicks: 0.002,
-    boStopUnderLowsATR: 0.7,
-    boTargetATR: 2.4,
+    // --- Pre-breakout setup (looser, but guarded) ---
+    boLookbackBars: 55, // ↑ a bit to find structure
+    boNearResATR: 1.4, // ↑ allow slightly farther coil
+    boNearResPct: 1.8, // ↑ percent window
+    boTightenFactor: 0.8, // ↓ less strict tightening
+    boHigherLowsMin: 1, // ↓ allow 1 clear HL
+    boMinDryPullback: 1.05, // ↓ tolerate a bit heavier pullback
+    boMinRR: 1.35, // ↓ from 1.50
+    boSlipTicks: 0.004, // ↑ small extra slip to avoid misses
+    boStopUnderLowsATR: 0.6, // ↓ closer stop
+    boTargetATR: 2.2, // ↓ slightly easier first target
+    boAltTriggerBars: 3, // new: 3-bar high alternative trigger
+    boAllowInsideBreak: true, // new: inside-day break qualifies if near res & tight
     debug,
   };
 }
@@ -402,8 +402,6 @@ function getConfig(opts = {}) {
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
   const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
-
-  // MA fallbacks from data if missing on stock
   const ma5 = num(stock.movingAverage5d) || sma(data, 5);
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   const ma50 = num(stock.movingAverage50d) || sma(data, 50);
@@ -445,17 +443,14 @@ function getMarketStructure(stock, data) {
 }
 
 /* ===================== DIP + BOUNCE DETECTOR ===================== */
-// Pullback, Fib window, support, fresh bounce, stricter bounce & volume rules.
 function detectDipBounce(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
-  // MAs (fallbacks)
   const ma5 = num(stock.movingAverage5d) || sma(data, 5);
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   const ma50 = num(stock.movingAverage50d) || sma(data, 50);
 
-  // 1) Must have a meaningful pullback (lookback 10 bars: high from older 5 vs. low from last 5)
   const recentBars = data.slice(-10);
   const recentHigh = Math.max(
     ...recentBars.slice(0, 5).map((d) => num(d.high))
@@ -477,7 +472,6 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // PATCH: enforce minimum depth vs ATR to avoid paper-cuts
   const depthOK = recentHigh - dipLow >= Math.max(0.9 * atr, px * 0.004);
   if (!depthOK) {
     return {
@@ -487,7 +481,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 1b) Fib retracement 50–61.8% (± tighter tolerance)
+  // Fib window
   function lastSwingLowBeforeHigh(arr) {
     const win = arr.slice(-25, -5);
     let low = Infinity;
@@ -503,17 +497,16 @@ function detectDipBounce(stock, data, cfg) {
   }
   const swingLow = lastSwingLowBeforeHigh(data);
   const swingRangeRaw = recentHigh - swingLow;
-  // PATCH: avoid blow-ups when swing is tiny
   const swingMin = Math.max(0.8 * atr, px * 0.004);
   const swingRange = Math.max(1e-9, Math.max(swingRangeRaw, swingMin));
   const retracePct = ((recentHigh - dipLow) / swingRange) * 100;
-  const fibLow = 50 - cfg.fibTolerancePct; // e.g., 42
-  const fibHigh = 61.8 + cfg.fibTolerancePct; // e.g., 69.8
+  const fibLow = 50 - cfg.fibTolerancePct;
+  const fibHigh = 61.8 + cfg.fibTolerancePct;
   const fibOK = retracePct >= fibLow && retracePct <= fibHigh;
 
-  // 2) Bounce must be fresh — where did the low occur?
-  let lowBarIndex = -1; // 0=last bar, 1=prev bar, ...
-  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length); // respect config
+  // Bounce freshness
+  let lowBarIndex = -1;
+  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length);
   for (let i = 0; i < ageWin; i++) {
     const lowVal = num(recentBars.at(-(i + 1)).low);
     if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {
@@ -529,7 +522,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 3) Support must be meaningful: MA25/50 band OR tested structure
+  // Support
   const nearMA25 =
     ma25 > 0 &&
     dipLow <= ma25 * (1 + cfg.dipMaSupportPctBand / 100) &&
@@ -539,9 +532,8 @@ function detectDipBounce(stock, data, cfg) {
     dipLow <= ma50 * (1 + cfg.dipMaSupportPctBand / 100) &&
     dipLow >= ma50 * (1 - cfg.dipMaSupportPctBand / 100);
 
-  // PATCH: stricter structure support (pivot lows only + spacing)
   const structureSupport = (() => {
-    const lookback = data.slice(-80, -10); // avoid ultra-recent noise
+    const lookback = data.slice(-80, -10);
     const tolAbs = Math.max(
       cfg.dipStructTolATR * atr,
       dipLow * (cfg.dipStructTolPct / 100)
@@ -574,7 +566,7 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 3b) Volume regime: dry pullback + bounce heat
+  // Volume regime
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const pullbackBars = recentBars.filter(
     (b) => num(b.high) <= recentHigh && num(b.low) >= dipLow
@@ -586,7 +578,7 @@ function detectDipBounce(stock, data, cfg) {
     d1 = data.at(-2);
   const bounceVolHot = num(d0.volume) >= avgVol20 * cfg.bounceHotFactor;
 
-  // 4) Bounce confirmation + minimum strength
+  // Bounce confirmation
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
   const minStr = Math.max(cfg.dipMinBounceStrengthATR, 0.6);
 
@@ -620,7 +612,6 @@ function detectDipBounce(stock, data, cfg) {
     num(d0.close) > num(d0.open) &&
     bounceStrengthATR >= Math.max(0.8, cfg.dipMinBounceStrengthATR);
 
-  // Stricter: basic green+up only if volume hot and strength ≥ 0.8 ATR
   const basicCloseUp =
     num(d0.close) > num(d0.open) &&
     num(d0.close) > num(d1.close) &&
@@ -647,12 +638,11 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 5) Don't enter if most of the move is already gone (PATCH: denominator floor)
+  // Recovery cap
   const spanRaw = recentHigh - dipLow;
   const span = Math.max(spanRaw, Math.max(0.8 * atr, px * 0.004));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
   const recoveryPctCapped = Math.min(recoveryPct, 120);
-
   if (recoveryPctCapped > cfg.dipMaxRecoveryPct) {
     return {
       trigger: false,
@@ -661,11 +651,10 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // 6) Higher-low confirmation (tiny undercuts allowed)
+  // Higher low
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
   const higherLow = dipLow >= prevLow * 0.995 || dipLow >= prevLow - 0.25 * atr;
 
-  // Stricter volume regime: dry pullback AND (hot bounce OR strong + clears Y-high)
   const volumeRegimeOK =
     dryPullback &&
     (bounceVolHot || (bounceStrengthATR >= 0.8 && closeAboveYHigh));
@@ -698,18 +687,21 @@ function detectDipBounce(stock, data, cfg) {
     };
   }
 
-  // Targets & stops
+  // Targets & stops (SOFTENED)
   const resList = findResistancesAbove(data, px, stock);
-  let target = Math.max(
-    px + Math.max(2.4 * atr, px * 0.022),
-    Math.max(...data.slice(-20).map((d) => num(d.high)))
-  );
-  if (resList.length && resList[0] - px < 0.6 * atr && resList[1]) {
-    target = Math.max(target, resList[1]);
+  const recentHigh20 = Math.max(...data.slice(-20).map((d) => num(d.high)));
+  let target = Math.max(px + Math.max(2.2 * atr, px * 0.02), recentHigh20); // 2.2ATR vs 2.4ATR
+  const nearestRes = resList.length ? resList[0] : null;
+
+  // If very close resistance, bias target to that resistance (easier to get hit)
+  if (nearestRes && nearestRes - px < 0.8 * atr) {
+    target = Math.min(target, nearestRes);
+  } else if (resList.length && resList[0] - px < 0.6 * atr && resList[1]) {
+    // if ultra-close first res, aim for the next one only if it's not too far
+    target = Math.min(Math.max(target, resList[1]), px + 2.6 * atr);
   }
 
   const stop = dipLow - 0.5 * atr;
-  const nearestRes = resList.length ? resList[0] : null;
   const why = `Fresh retrace at support; dry pullback + strong bounce; bounce ${bounceStrengthATR.toFixed(
     1
   )} ATR; recovery ${recoveryPctCapped.toFixed(0)}%.`;
@@ -740,26 +732,23 @@ function detectDipBounce(stock, data, cfg) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const minStopDist = 1.25 * atr; // tighter: avoid flimsy stops
-
-  // Ensure minimum stop distance
+  const minStopDist = 1.25 * atr;
   let adjStop = stop;
   if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
   stop = adjStop;
 
-  // Perfect mode: clamp risk to ~3% of price
   if (cfg.perfectMode) {
     const riskPct = ((entryPx - stop) / Math.max(1e-9, entryPx)) * 100;
     if (riskPct > 3) stop = entryPx * (1 - 0.03);
   }
 
-  // If first resistance is very close, jump further for target
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
       const head0 = resList[0] - entryPx;
-      if (head0 < 0.6 * atr && resList[1])
+      if (head0 < 0.6 * atr && resList[1]) {
         target = Math.max(target, resList[1]);
+      }
     }
   }
 
@@ -770,7 +759,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   let need = cfg.minRRbase;
   if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp);
   if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp);
-
   if (cfg.perfectMode) need = Math.max(need, 3.0);
 
   return {
@@ -786,16 +774,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 }
 
 /* ============================ Guards ============================ */
-function guardVeto(
-  stock,
-  data,
-  px,
-  rr,
-  ms,
-  cfg,
-  nearestRes,
-  _kind /* always "DIP" here */
-) {
+function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   const details = {};
   const atr = Math.max(num(stock.atr14), px * 0.005);
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
@@ -809,13 +788,12 @@ function guardVeto(
       details,
     };
 
-  // Dynamic near-resistance veto — slightly easier if trend up & RSI < 60
   let nearResMin = cfg.nearResVetoATR;
   if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.25);
 
   if (nearestRes) {
     const headroom = (nearestRes - px) / atr;
-    const headroomPct = ((nearestRes - px) / Math.max(px, 1e-9)) * 100; // PATCH: percent headroom
+    const headroomPct = ((nearestRes - px) / Math.max(px, 1e-9)) * 100;
     details.nearestRes = nearestRes;
     details.headroomATR = headroom;
     details.headroomPct = headroomPct;
@@ -835,25 +813,13 @@ function guardVeto(
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    const maxDist = cfg.maxATRfromMA25 + 0.3; // small allowance for DIP
+    const maxDist = cfg.maxATRfromMA25 + 0.3;
     if (distMA25 > maxDist)
       return {
         veto: true,
         reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${maxDist})`,
         details,
       };
-  }
-
-  if (
-    cfg.perfectMode &&
-    details.distFromMA25_ATR != null &&
-    details.distFromMA25_ATR > 2.0
-  ) {
-    return {
-      veto: true,
-      reason: `Extended > 2 ATR above MA25 (Perfect gate)`,
-      details,
-    };
   }
 
   const ups = countConsecutiveUpDays(data);
@@ -952,8 +918,8 @@ function provisionalPlan(stock, data, ms, pxNow, cfg) {
     ? findResistancesAbove(data, px, stock)
     : [];
   let target = Number.isFinite(resList?.[0])
-    ? Math.max(resList[0], px + 2.3 * atr)
-    : px + 2.6 * atr;
+    ? Math.max(resList[0], px + 2.2 * atr)
+    : px + 2.4 * atr;
 
   const rr = analyzeRR(
     px,
@@ -965,6 +931,146 @@ function provisionalPlan(stock, data, ms, pxNow, cfg) {
     { kind: "FALLBACK", data }
   );
   return { stop: rr.stop, target: rr.target, rr };
+}
+
+/* =========================== Breakout detector =========================== */
+function detectPreBreakoutSetup(stock, data, cfg) {
+  if (!Array.isArray(data) || data.length < 25) {
+    return { ready: false, waitReason: "insufficient data" };
+  }
+  const px = num(stock.currentPrice) || num(data.at(-1).close);
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
+
+  // 1) Resistance: real pivot OR synthetic (recent swing high)
+  const look = data.slice(-cfg.boLookbackBars);
+  let resList = findResistancesAbove(look, px, stock);
+  let resistance = resList[0];
+  if (!Number.isFinite(resistance)) {
+    const synthHigh = Math.max(...look.map((b) => num(b.high)));
+    if (synthHigh > px) {
+      resistance = synthHigh;
+      resList = [synthHigh];
+    }
+  }
+  if (!Number.isFinite(resistance)) {
+    return {
+      ready: false,
+      waitReason: "no clear/synthetic resistance overhead",
+    };
+  }
+
+  // 2) Must be "near" resistance but not through it yet
+  const dist = resistance - px;
+  const nearByATR = dist / atr <= cfg.boNearResATR;
+  const nearByPct =
+    (dist / Math.max(resistance, 1e-9)) * 100 <= cfg.boNearResPct;
+  if (!(nearByATR || nearByPct) || dist <= 0) {
+    return { ready: false, waitReason: "not coiled near resistance" };
+  }
+
+  // 3) Tightening volatility (use median as fallback for robustness)
+  const tr = (b) =>
+    Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
+  const last20 = data.slice(-20);
+  const recentTR = avg(data.slice(-6).map(tr));
+  const avgTR = avg(last20.map(tr)) || 1e-9;
+  const medTR = last20.length
+    ? last20.map(tr).sort((a, b) => a - b)[Math.floor(last20.length / 2)]
+    : avgTR;
+  const baseTR = Math.max(avgTR, medTR);
+  const tightening = recentTR <= cfg.boTightenFactor * baseTR;
+
+  // 4) Structure: allow either ≥1 higher-low OR a flat mini-base
+  const lows = data.slice(-12).map((b) => num(b.low));
+  let higherLows = 0;
+  for (let i = 2; i < lows.length; i++) {
+    if (lows[i] > lows[i - 1] && lows[i - 1] > lows[i - 2]) higherLows++;
+  }
+  const baseWin = data.slice(-10);
+  const baseRange =
+    (Math.max(...baseWin.map((b) => num(b.high))) -
+      Math.min(...baseWin.map((b) => num(b.low)))) /
+    Math.max(atr, 1e-9);
+  const flatBaseOK = baseWin.length >= 6 && baseRange <= 1.2; // ≤1.2 ATR tight base
+  const structureOK = higherLows >= cfg.boHigherLowsMin || flatBaseOK;
+
+  // 5) Volume regime: prefer dry pullback, but allow neutral if very tight
+  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  const pullbackBars = data
+    .slice(-10)
+    .filter((b) => num(b.close) < num(b.open));
+  const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
+  const dryPullback =
+    pullbackVol <= avgVol20 * cfg.boMinDryPullback ||
+    !avgVol20 ||
+    (tightening && baseRange <= 1.0);
+
+  // 6) Build plan and RR
+  const baseLow = Math.min(...data.slice(-10).map((b) => num(b.low)));
+  const initialStop = baseLow - cfg.boStopUnderLowsATR * atr;
+
+  let firstTarget = resList[1];
+  if (!Number.isFinite(firstTarget)) firstTarget = px + cfg.boTargetATR * atr;
+
+  // Primary trigger: a hair through resistance
+  const trigger = resistance + Math.max(0.02, 0.12 * atr);
+  const limit = trigger * (1 + cfg.boSlipTicks);
+
+  // Alternative trigger: 3-bar high / inside-day break when super tight & near res
+  let altTrigger = null;
+  if (cfg.boAllowInsideBreak && (tightening || baseRange <= 1.0)) {
+    const recentHighN = Math.max(
+      ...data.slice(-cfg.boAltTriggerBars).map((b) => num(b.high))
+    );
+    altTrigger = Math.max(trigger, recentHighN + Math.max(0.01, 0.06 * atr));
+  }
+
+  const useTrigger = altTrigger ? Math.min(altTrigger, trigger) : trigger;
+
+  const risk = Math.max(0.01, useTrigger - initialStop);
+  const reward = Math.max(0, firstTarget - useTrigger);
+  const ratio = reward / risk;
+
+  const ready =
+    tightening &&
+    structureOK &&
+    dryPullback &&
+    ratio >= Math.max(cfg.boMinRR, 1.25);
+
+  return {
+    ready,
+    waitReason: ready
+      ? ""
+      : `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
+          2
+        )}`,
+    entryTrigger: useTrigger,
+    entryLimit: useTrigger * (1 + cfg.boSlipTicks),
+    initialStop,
+    firstTarget,
+    nearestRes: resistance,
+    why: ready
+      ? `Coil near ${resistance.toFixed(
+          0
+        )} with tightening ranges, higher lows/flat base; RR ${ratio.toFixed(
+          2
+        )}`
+      : "",
+    diagnostics: {
+      resistance,
+      nearByATR,
+      nearByPct,
+      recentTR,
+      avgTR,
+      medTR,
+      baseTR,
+      baseRange,
+      higherLows,
+      atr,
+      ratio,
+      altTriggerUsed: !!altTrigger,
+    },
+  };
 }
 
 /* =========================== Utilities =========================== */
@@ -980,7 +1086,6 @@ function round0(v) {
   return Math.round(Number(v) || 0);
 }
 
-// PATCH: snap to tick size (and de-round for obvious levels)
 function toTick(v, stock) {
   const tick =
     Number(stock?.tickSize) || inferTickFromPrice(Number(v) || 0) || 0.1;
@@ -988,7 +1093,6 @@ function toTick(v, stock) {
   return Math.round(x / tick) * tick;
 }
 function inferTickFromPrice(p) {
-  // crude inference useful for JP/US stocks; customize if you have exchange metadata
   if (p >= 5000) return 1;
   if (p >= 1000) return 0.5;
   if (p >= 100) return 0.1;
@@ -997,14 +1101,13 @@ function inferTickFromPrice(p) {
 }
 function deRound(v) {
   const s = String(Math.round(v));
-  // nudge away from big obvious round/quarter/half numbers
   if (/(00|50|25|75)$/.test(s)) return v - 3 * (inferTickFromPrice(v) || 0.1);
   return v;
 }
 
 function rsiFromData(data, length = 14) {
   const n = data.length;
-  if (n < length + 1) return 50; // neutral fallback
+  if (n < length + 1) return 50;
   let gains = 0,
     losses = 0;
   for (let i = n - length; i < n; i++) {
@@ -1073,7 +1176,7 @@ function findSupportsBelow(data, px) {
   }
   const uniq = Array.from(new Set(downs.map((v) => +v.toFixed(2)))).sort(
     (a, b) => b - a
-  ); // nearest first
+  );
   return uniq;
 }
 
@@ -1101,7 +1204,7 @@ function summarizeGuardDetails(d) {
   return bits.length ? `(${bits.join(", ")})` : "";
 }
 
-/* ============================ Safe withNo (never null)  ============================ */
+/* ============================ Safe withNo ============================ */
 function withNo(reason, ctx = {}) {
   const stock = ctx.stock || {};
   const data = Array.isArray(ctx.data) ? ctx.data : [];
@@ -1124,108 +1227,5 @@ function withNo(reason, ctx = {}) {
     smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
     timeline: [],
     debug,
-  };
-}
-
-function detectPreBreakoutSetup(stock, data, cfg) {
-  if (!Array.isArray(data) || data.length < 25) {
-    return { ready: false, waitReason: "insufficient data" };
-  }
-  const px = num(stock.currentPrice) || num(data.at(-1).close);
-  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
-
-  // 1) Find nearest resistance above current price
-  const resList = findResistancesAbove(
-    data.slice(-cfg.boLookbackBars),
-    px,
-    stock
-  );
-  const resistance = resList[0];
-  if (!Number.isFinite(resistance)) {
-    return { ready: false, waitReason: "no clear resistance overhead" };
-  }
-
-  // 2) Must be "near" resistance but NOT through it yet
-  const dist = resistance - px;
-  const nearByATR = dist / atr <= cfg.boNearResATR;
-  const nearByPct =
-    (dist / Math.max(resistance, 1e-9)) * 100 <= cfg.boNearResPct;
-  if (!(nearByATR || nearByPct) || dist <= 0) {
-    return { ready: false, waitReason: "not coiled near resistance" };
-  }
-
-  // 3) Tightening volatility: recent true range vs. avg
-  const tr = (b) =>
-    Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
-  const last20 = data.slice(-20);
-  const avgTR = avg(last20.map(tr)) || 1e-9;
-  const recentTR = avg(data.slice(-6).map(tr)); // short window
-  const tightening = recentTR <= cfg.boTightenFactor * avgTR;
-
-  // 4) Higher-lows count into resistance (mini-base)
-  const lows = data.slice(-12).map((b) => num(b.low));
-  let higherLows = 0;
-  for (let i = 2; i < lows.length; i++) {
-    if (lows[i] > lows[i - 1] && lows[i - 1] > lows[i - 2]) higherLows++;
-  }
-  const structureOK = higherLows >= cfg.boHigherLowsMin;
-
-  // 5) Volume regime: pullbacks not heavy
-  const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
-  const pullbackBars = data
-    .slice(-10)
-    .filter((b) => num(b.close) < num(b.open));
-  const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
-  const dryPullback =
-    pullbackVol <= avgVol20 * cfg.boMinDryPullback || !avgVol20;
-
-  // 6) Build a plan (stop and target) and check RR
-  const baseLow = Math.min(...data.slice(-10).map((b) => num(b.low)));
-  const initialStop = baseLow - cfg.boStopUnderLowsATR * atr;
-  let firstTarget = resList[1];
-  if (!Number.isFinite(firstTarget)) firstTarget = px + cfg.boTargetATR * atr;
-
-  const trigger = resistance + Math.max(0.02, 0.1 * atr); // a tiny “through” to avoid head-fake
-  const limit = trigger * (1 + cfg.boSlipTicks); // cap the fill a hair above trigger
-
-  const risk = Math.max(0.01, trigger - initialStop);
-  const reward = Math.max(0, firstTarget - trigger);
-  const ratio = reward / risk;
-
-  const ready =
-    tightening &&
-    structureOK &&
-    dryPullback &&
-    ratio >= Math.max(cfg.boMinRR, 1.2);
-
-  return {
-    ready,
-    waitReason: ready
-      ? ""
-      : `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
-          2
-        )}`,
-    entryTrigger: trigger,
-    entryLimit: limit,
-    initialStop,
-    firstTarget,
-    nearestRes: resistance,
-    why: ready
-      ? `Coil near ${resistance.toFixed(
-          0
-        )} with tightening ranges, higher lows, dry pullback; RR ${ratio.toFixed(
-          2
-        )}`
-      : "",
-    diagnostics: {
-      resistance,
-      nearByATR,
-      nearByPct,
-      recentTR,
-      avgTR,
-      higherLows,
-      atr,
-      ratio,
-    },
   };
 }
