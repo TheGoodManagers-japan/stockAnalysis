@@ -1,16 +1,15 @@
-// /scripts/breakout.js — Pre-breakout setup detector (tighter coil, closer res, bigger through-trigger, farther targets)
+// /scripts/breakout.js — Pre-breakout setup detector (trigger-only tuned)
 export function detectPreBreakoutSetup(stock, data, cfg, U) {
   const { num, avg, findResistancesAbove } = U;
 
   if (!Array.isArray(data) || data.length < 25) {
     return { ready: false, waitReason: "insufficient data" };
   }
-
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
-  // ---------------- 1) Resistance (real or synthetic) ----------------
-  const look = data.slice(-cfg.boLookbackBars);
+  // 1) Resistance (prefer real; allow synthetic)
+  const look = data.slice(-Math.max(40, cfg.boLookbackBars || 55));
   let resList = findResistancesAbove(look, px, stock);
   let resistance = resList[0];
   if (!Number.isFinite(resistance)) {
@@ -21,28 +20,20 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
     }
   }
   if (!Number.isFinite(resistance)) {
-    return {
-      ready: false,
-      waitReason: "no clear/synthetic resistance overhead",
-    };
+    return { ready: false, waitReason: "no clear resistance overhead" };
   }
 
-  // ---------------- 2) Near resistance (tighter) ----------------
-  // Force a stricter coil: <= 1.2 ATR or <= cfg.boNearResATR (whichever is tighter), or <= cfg.boNearResPct%
+  // 2) Must be *near* resistance (tighter than before)
   const dist = resistance - px;
-  const nearATRcap = Math.min(
-    Number.isFinite(cfg.boNearResATR) ? cfg.boNearResATR : 1.6,
-    1.2
-  );
-  const nearByATR = dist / atr <= nearATRcap;
+  const nearByATR = dist / atr <= Math.min(cfg.boNearResATR || 1.2, 1.2);
   const nearByPct =
     (dist / Math.max(resistance, 1e-9)) * 100 <=
-    Math.min(Number.isFinite(cfg.boNearResPct) ? cfg.boNearResPct : 2.0, 2.0);
+    Math.min(cfg.boNearResPct || 1.8, 1.8);
   if (!(nearByATR || nearByPct) || dist <= 0) {
     return { ready: false, waitReason: "not coiled near resistance" };
   }
 
-  // ---------------- 3) Tightening / structure (tighter) ----------------
+  // 3) Contraction / structure
   const tr = (b) =>
     Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
   const last20 = data.slice(-20);
@@ -52,15 +43,10 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
     ? last20.map(tr).sort((a, b) => a - b)[Math.floor(last20.length / 2)]
     : avgTR;
   const baseTR = Math.max(avgTR, medTR);
+  const tightenFactor = Math.min(cfg.boTightenFactor || 0.85, 0.85);
+  const tightening = recentTR <= tightenFactor * baseTR;
 
-  // Require stronger contraction: factor <= 0.75 (and not looser than cfg)
-  const tightenFactorEff = Math.min(
-    Number.isFinite(cfg.boTightenFactor) ? cfg.boTightenFactor : 0.85,
-    0.75
-  );
-  const tightening = recentTR <= tightenFactorEff * baseTR;
-
-  // Structure: at least 2 higher-lows (or flat base)
+  // structure: 1+ higher lows OR tight flat base
   const lows = data.slice(-12).map((b) => num(b.low));
   let higherLows = 0;
   for (let i = 2; i < lows.length; i++) {
@@ -70,121 +56,73 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
   const baseHi = Math.max(...baseWin.map((b) => num(b.high)));
   const baseLo = Math.min(...baseWin.map((b) => num(b.low)));
   const baseRangeATR = (baseHi - baseLo) / Math.max(atr, 1e-9);
-  const flatBaseOK = baseWin.length >= 6 && baseRangeATR <= 1.2;
+  const flatBaseOK = baseWin.length >= 6 && baseRangeATR <= 1.15;
+  const structureOK =
+    higherLows >= Math.max(cfg.boHigherLowsMin || 1, 1) || flatBaseOK;
 
-  const higherLowsMinEff = Math.max(
-    Number.isFinite(cfg.boHigherLowsMin) ? cfg.boHigherLowsMin : 1,
-    2
-  );
-  const structureOK = higherLows >= higherLowsMinEff || flatBaseOK;
-
-  // ---------------- 4) Volume regime (unchanged logic, still allows “tight+neutral”) ----------------
+  // 4) Volume regime (allow neutral if very tight)
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const pullbackBars = data
     .slice(-10)
     .filter((b) => num(b.close) < num(b.open));
   const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
   const dryPullback =
-    pullbackVol <=
-      avgVol20 *
-        (Number.isFinite(cfg.boMinDryPullback) ? cfg.boMinDryPullback : 1.05) ||
+    pullbackVol <= avgVol20 * Math.max(cfg.boMinDryPullback || 1.05, 1.05) ||
     !avgVol20 ||
     (tightening && baseRangeATR <= 1.0);
 
-  // ---------------- 5) Plan (bigger through-trigger, farther target) ----------------
+  // 5) Plan — entry, stop, target
+  const recentSwingLow = Math.min(...data.slice(-6).map((b) => num(b.low)));
   const baseLow = baseLo;
-  const boxHeight = Math.max(atr * 1.2, resistance - baseLow);
-  const initialStop =
-    baseLow -
-    (Number.isFinite(cfg.boStopUnderLowsATR) ? cfg.boStopUnderLowsATR : 0.6) *
-      atr;
+  const boxHeight = Math.max(atr * 1.1, resistance - baseLow);
 
-  // Larger through: ~0.15 ATR (min 0.03) to avoid weak/false breaks
-  const throughATR = Math.max(
-    Number.isFinite(cfg.boCloseThroughATR) ? cfg.boCloseThroughATR : 0.1,
-    0.15
-  );
-  const triggerPrimary = resistance + Math.max(0.03, throughATR * atr);
+  // tighter initial stop boosts R and reduces drift losses
+  const initialStop = Math.min(baseLow, recentSwingLow) - 0.4 * atr;
 
-  // Optional inside/3-bar helper, but never below the stronger primary
-  const altBars = Math.max(
-    Number.isFinite(cfg.boAltTriggerBars) ? cfg.boAltTriggerBars : 3,
-    3
-  );
+  // trigger a bit closer than before
+  const triggerPrimary = resistance + Math.max(0.02, 0.1 * atr);
   const altRecentHigh = Math.max(
-    ...data.slice(-altBars).map((b) => num(b.high))
+    ...data
+      .slice(-Math.max(cfg.boAltTriggerBars || 3, 3))
+      .map((b) => num(b.high))
   );
-  const triggerAlt = cfg.boAllowInsideBreak
-    ? Math.max(triggerPrimary, altRecentHigh + Math.max(0.01, 0.06 * atr))
-    : null;
-
+  const triggerAlt =
+    cfg.boAllowInsideBreak !== false
+      ? Math.max(triggerPrimary, altRecentHigh + Math.max(0.01, 0.06 * atr))
+      : null;
   const entryTrigger = triggerAlt
     ? Math.min(triggerPrimary, triggerAlt)
     : triggerPrimary;
 
-  // Limit slip: prefer smaller slip to keep avg % high (if caller uses stop-limit)
-  const slipEff = Math.min(
-    Number.isFinite(cfg.boSlipTicks) ? cfg.boSlipTicks : 0.006,
-    0.005
-  );
-  const entryLimit = entryTrigger * (1 + slipEff);
+  const entryLimit = entryTrigger * (1 + (cfg.boSlipTicks ?? 0.006));
+  const useStopMarket = cfg.boUseStopMarketOnTrigger !== false;
 
-  // Suggest stop-market setting but it’s enforced by the backtester options
-  const useStopMarket = !!cfg.boUseStopMarketOnTrigger;
-
-  // Thrust checks (for retest logic only; we can’t enforce at setup-time)
+  // thrust check (to pick a closer target if weak)
   const d0 = data.at(-1);
-  const volX = Math.max(
-    Number.isFinite(cfg.boVolThrustX) ? cfg.boVolThrustX : 1.4,
-    1.8
-  ); // stronger volume thrust threshold
-  const closeThroughOK = num(d0.close) >= resistance + throughATR * atr;
-  const volThrustOK = avgVol20 > 0 && num(d0.volume) >= volX * avgVol20;
+  const closeThroughOK =
+    num(d0.close) >= resistance + (cfg.boCloseThroughATR ?? 0.1) * atr;
+  const volThrustOK =
+    avgVol20 > 0 && num(d0.volume) >= (cfg.boVolThrustX ?? 1.6) * avgVol20;
+  const thrustStrong = closeThroughOK || volThrustOK;
 
-  // Farther first target: max(next resistance, resistance + max(boxHeight, 2.6*ATR))
-  const targetATRmin = Math.max(
-    Number.isFinite(cfg.boTargetATR) ? cfg.boTargetATR : 2.2,
-    2.6
-  );
-  let firstTarget = resistance + Math.max(boxHeight, targetATRmin * atr);
+  // first target — closer default to raise hit rate; extend if thrustStrong or next resistance exists
+  let firstTarget = entryTrigger + 2.1 * atr; // closer than old 2.4
   if (resList[1]) firstTarget = Math.max(firstTarget, resList[1]);
+  if (thrustStrong) firstTarget = Math.max(firstTarget, resistance + 2.4 * atr);
 
-  // RR at trigger (stricter min)
+  // RR check at trigger
   const risk = Math.max(0.01, entryTrigger - initialStop);
   const reward = Math.max(0, firstTarget - entryTrigger);
   const ratio = reward / risk;
-  const rrMinEff = Math.max(
-    Number.isFinite(cfg.boMinRR) ? cfg.boMinRR : 1.35,
-    1.5
-  );
+  const minRR = Math.max(cfg.boMinRR || 1.3, 1.3);
 
-  const readyCore =
-    tightening && structureOK && dryPullback && ratio >= rrMinEff;
+  const readyCore = tightening && structureOK && dryPullback && ratio >= minRR;
   if (!readyCore) {
     return {
       ready: false,
       waitReason: `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
         2
-      )} (need ≥${rrMinEff})`,
-    };
-  }
-
-  // Retest plan if no obvious thrust on the setup bar
-  let retest = null;
-  if (cfg.boUseRetestPlan && !(closeThroughOK || volThrustOK)) {
-    const zoneMid = resistance;
-    const buyLo =
-      zoneMid -
-      (Number.isFinite(cfg.boRetestDepthATR) ? cfg.boRetestDepthATR : 0.3) *
-        atr;
-    const buyHi = zoneMid + Math.max(0.05 * atr, 0.01);
-    retest = {
-      retestTrigger: buyLo,
-      retestLimit: buyHi,
-      cancelIfCloseBackInBaseATR: Number.isFinite(cfg.boRetestInvalidATE)
-        ? cfg.boRetestInvalidATE
-        : 0.5,
-      note: "Breakout lacked thrust; buy the retest of the breakout zone.",
+      )}`,
     };
   }
 
@@ -194,35 +132,26 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
     entryTrigger,
     entryLimit,
     useStopMarket,
-    initialStop,
-    firstTarget,
+    initialStop: Math.round(initialStop),
+    firstTarget: Math.round(firstTarget),
     nearestRes: resistance,
-    why: `Coil near ${resistance.toFixed(0)}; contraction ${
-      tightening ? "OK" : "weak"
-    }, structure ${structureOK ? "OK" : "weak"}; RR ${ratio.toFixed(2)}${
-      closeThroughOK || volThrustOK ? " with thrust" : " (plan retest)"
+    why: `Near ${resistance.toFixed(
+      0
+    )}; tight=${tightening}, struct=${structureOK}; RR ${ratio.toFixed(2)}${
+      thrustStrong ? " with thrust" : ""
     }`,
     diagnostics: {
       resistance,
       baseLow,
+      recentSwingLow,
       boxHeight,
       baseRangeATR,
       recentTR,
       avgTR,
       medTR,
       ratio,
-      rrMin: rrMinEff,
-      throughATR,
-      volX,
-      closeThroughOK,
-      volThrustOK,
-      nearATRcap,
-      tightenFactorEff,
-      higherLows,
-      higherLowsMinEff,
+      thrustStrong,
     },
-    // Hint to executor: consider 8–10 bars as max age for pending orders
-    staleAfterBars: 10,
-    retestPlan: retest,
+    retestPlan: null, // not used in current backtest executor
   };
 }
