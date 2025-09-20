@@ -366,8 +366,8 @@ function getConfig(opts = {}) {
     maxConsecUp: 9,
 
     // headroom veto a bit easier
-    nearResVetoATR: 0.25,  // was 0.3
-    nearResVetoPct: 0.6,   // was 0.8
+    nearResVetoATR: 0.5,  // was 0.3
+    nearResVetoPct: 1.2,   // was 0.8
 
     hardRSI: 78,
     softRSI: 72,
@@ -378,16 +378,16 @@ function getConfig(opts = {}) {
     // pullback/bounce looseners
     dipMinPullbackPct: 0.8,
     dipMinPullbackATR: 0.5,
-    dipMaxBounceAgeBars: 9,   // was 6
+    dipMaxBounceAgeBars: 6,   // was 6
     dipMaSupportPctBand: 7.5, // was 5.0
     dipStructMinTouches: 1,   // was 2
     dipStructTolATR: 1.2,
     dipStructTolPct: 3.5,     // was 2.5
-    dipMinBounceStrengthATR: 0.5, // was 0.6
+    dipMinBounceStrengthATR: 0.65, // was 0.6
     dipMaxRecoveryPct: 100,       // was 85
-    fibTolerancePct: 8,
-    pullbackDryFactor: 1.6,       // was 1.3
-    bounceHotFactor: 1.18,        // was 1.28
+    fibTolerancePct: 10,
+    pullbackDryFactor: 1.4,       // was 1.3
+    bounceHotFactor: 1.22,        // was 1.28
 
     // PRE-BREAKOUT (looser + smarter)
     boLookbackBars: 55,
