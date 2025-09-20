@@ -351,8 +351,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     debug,
   };
 }
-
-/* ============================ Config ============================ */
+/* ============================ Config (DIP loosened) ============================ */
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
@@ -365,47 +364,46 @@ function getConfig(opts = {}) {
     maxATRfromMA25: 3.0,
     maxConsecUp: 9,
 
-    // headroom veto a bit easier
-    nearResVetoATR: 0.5,  // was 0.3
-    nearResVetoPct: 1.2,   // was 0.8
+    // headroom veto (looser)
+    nearResVetoATR: 0.35,   // was 0.5 in your version
+    nearResVetoPct: 0.9,    // was 1.2
 
     hardRSI: 78,
     softRSI: 72,
-    minRRbase: 1.25,
-    minRRstrongUp: 1.35,
-    minRRweakUp: 1.45,
+
+    // RR thresholds (slightly easier)
+    minRRbase: 1.20,        // was 1.25
+    minRRstrongUp: 1.30,    // was 1.35
+    minRRweakUp: 1.40,      // was 1.45
 
     // pullback/bounce looseners
     dipMinPullbackPct: 0.8,
-    dipMinPullbackATR: 0.5,
-    dipMaxBounceAgeBars: 6,   // was 6
-    dipMaSupportPctBand: 7.5, // was 5.0
-    dipStructMinTouches: 1,   // was 2
+    dipMinPullbackATR: 0.4,  // was 0.5
+    dipMaxBounceAgeBars: 8,  // was 6
+    dipMaSupportPctBand: 9.0,// was 7.5
+    dipStructMinTouches: 1,  // was 1 (kept)
     dipStructTolATR: 1.2,
-    dipStructTolPct: 3.5,     // was 2.5
-    dipMinBounceStrengthATR: 0.65, // was 0.6
-    dipMaxRecoveryPct: 100,       // was 85
-    fibTolerancePct: 10,
-    pullbackDryFactor: 1.4,       // was 1.3
-    bounceHotFactor: 1.22,        // was 1.28
+    dipStructTolPct: 3.5,
+    dipMinBounceStrengthATR: 0.60, // was 0.65
+    dipMaxRecoveryPct: 115,        // was 100
+    fibTolerancePct: 12,           // was 10
+    pullbackDryFactor: 1.30,       // was 1.4 (slightly easier)
+    bounceHotFactor: 1.18,         // was 1.22
 
-    // PRE-BREAKOUT (looser + smarter)
+    // PRE-BREAKOUT (unchanged here)
     boLookbackBars: 55,
     boNearResATR: 1.6,
     boNearResPct: 2.0,
     boTightenFactor: 0.85,
     boHigherLowsMin: 1,
     boMinDryPullback: 1.05,
-
     boMinRR: 1.35,
     boCloseThroughATR: 0.1,
     boVolThrustX: 1.4,
-
     boSlipTicks: 0.008,
     boUseStopMarketOnTrigger: true,
     boStopUnderLowsATR: 0.6,
     boTargetATR: 2.2,
-
     boUseRetestPlan: true,
     boRetestDepthATR: 0.3,
     boRetestInvalidATE: 0.5,
@@ -415,6 +413,7 @@ function getConfig(opts = {}) {
     debug,
   };
 }
+
 
 
 /* ======================= Market Structure ======================= */
