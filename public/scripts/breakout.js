@@ -1,283 +1,165 @@
-// /scripts/dip.js — DIP detector (pullback + bounce)
-export function detectDipBounce(stock, data, cfg, U) {
-  const { num, avg, near, sma, findResistancesAbove } = U;
+// /scripts/breakout.js — Pre-breakout setup detector (stop-market/limit + optional retest)
+export function detectPreBreakoutSetup(stock, data, cfg, U) {
+  const { num, avg, findResistancesAbove } = U;
 
+  if (!Array.isArray(data) || data.length < 25) {
+    return { ready: false, waitReason: "insufficient data" };
+  }
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
-  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
-  const ma50 = num(stock.movingAverage50d) || sma(data, 50);
-
-  const recentBars = data.slice(-10);
-  const recentHigh = Math.max(
-    ...recentBars.slice(0, 5).map((d) => num(d.high))
-  );
-  const dipLow = Math.min(...recentBars.slice(-5).map((d) => num(d.low)));
-
-  const pullbackPct =
-    recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
-  const pullbackATR = (recentHigh - dipLow) / Math.max(atr, 1e-9);
-  const hadPullback =
-    pullbackPct >= cfg.dipMinPullbackPct ||
-    pullbackATR >= cfg.dipMinPullbackATR;
-  if (!hadPullback) {
-    return {
-      trigger: false,
-      waitReason: `no meaningful pullback (${pullbackPct.toFixed(
-        1
-      )}% / ${pullbackATR.toFixed(1)} ATR)`,
-      diagnostics: { pullbackPct, pullbackATR, recentHigh, dipLow },
-    };
-  }
-
-  const depthOK = recentHigh - dipLow >= Math.max(0.9 * atr, px * 0.004);
-  if (!depthOK) {
-    return {
-      trigger: false,
-      waitReason: "dip too shallow (<0.9 ATR or <0.4%)",
-      diagnostics: { recentHigh, dipLow, atr },
-    };
-  }
-
-  // Fib window
-  function lastSwingLowBeforeHigh(arr) {
-    const win = arr.slice(-25, -5);
-    let low = Infinity;
-    for (let i = 2; i < win.length - 2; i++) {
-      const isPivot =
-        num(win[i].low) < num(win[i - 1].low) &&
-        num(win[i].low) < num(win[i + 1].low);
-      if (isPivot) low = Math.min(low, num(win[i].low));
-    }
-    return Number.isFinite(low)
-      ? low
-      : Math.min(...arr.slice(-25, -5).map((d) => num(d.low)));
-  }
-  const swingLow = lastSwingLowBeforeHigh(data);
-  const swingRangeRaw = recentHigh - swingLow;
-  const swingMin = Math.max(0.8 * atr, px * 0.004);
-  const swingRange = Math.max(1e-9, Math.max(swingRangeRaw, swingMin));
-  const retracePct = ((recentHigh - dipLow) / swingRange) * 100;
-  const fibLow = 50 - cfg.fibTolerancePct;
-  const fibHigh = 61.8 + cfg.fibTolerancePct;
-  const fibOK = retracePct >= fibLow && retracePct <= fibHigh;
-
-  // Bounce freshness
-  let lowBarIndex = -1;
-  const ageWin = Math.min(cfg.dipMaxBounceAgeBars, recentBars.length);
-  for (let i = 0; i < ageWin; i++) {
-    const lowVal = num(recentBars.at(-(i + 1)).low);
-    if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {
-      lowBarIndex = i;
-      break;
+  // 1) Resistance (real or synthetic)
+  const look = data.slice(-cfg.boLookbackBars);
+  let resList = findResistancesAbove(look, px, stock);
+  let resistance = resList[0];
+  if (!Number.isFinite(resistance)) {
+    const synthHigh = Math.max(...look.map((b) => num(b.high)));
+    if (synthHigh > px) {
+      resistance = synthHigh;
+      resList = [synthHigh];
     }
   }
-  if (lowBarIndex < 0 || lowBarIndex > cfg.dipMaxBounceAgeBars - 1) {
+  if (!Number.isFinite(resistance)) {
     return {
-      trigger: false,
-      waitReason: `bounce too old (${lowBarIndex + 1} bars ago)`,
-      diagnostics: { lowBarIndex, dipLow },
+      ready: false,
+      waitReason: "no clear/synthetic resistance overhead",
     };
   }
 
-  // Support
-  const nearMA25 =
-    ma25 > 0 &&
-    dipLow <= ma25 * (1 + cfg.dipMaSupportPctBand / 100) &&
-    dipLow >= ma25 * (1 - cfg.dipMaSupportPctBand / 100);
-  const nearMA50 =
-    ma50 > 0 &&
-    dipLow <= ma50 * (1 + cfg.dipMaSupportPctBand / 100) &&
-    dipLow >= ma50 * (1 - cfg.dipMaSupportPctBand / 100);
-
-  const structureSupport = (() => {
-    const lookback = data.slice(-80, -10);
-    const tolAbs = Math.max(
-      cfg.dipStructTolATR * atr,
-      dipLow * (cfg.dipStructTolPct / 100)
-    );
-    let touches = 0,
-      lastTouchIdx = -999;
-    for (let i = 2; i < lookback.length - 2; i++) {
-      const L = num(lookback[i].low);
-      const isPivotLow =
-        L < num(lookback[i - 1].low) && L < num(lookback[i + 1].low);
-      if (
-        isPivotLow &&
-        Math.abs(L - dipLow) <= tolAbs &&
-        i - lastTouchIdx >= 3
-      ) {
-        touches++;
-        lastTouchIdx = i;
-        if (touches >= cfg.dipStructMinTouches) return true;
-      }
-    }
-    return false;
-  })();
-
-  const nearSupport = nearMA25 || nearMA50 || structureSupport;
-  if (!nearSupport) {
-    return {
-      trigger: false,
-      waitReason: "pullback not at MA25/50 or tested structure",
-      diagnostics: { dipLow, ma25, ma50, nearMA25, nearMA50, structureSupport },
-    };
+  // 2) Near resistance
+  const dist = resistance - px;
+  const nearByATR = dist / atr <= cfg.boNearResATR;
+  const nearByPct =
+    (dist / Math.max(resistance, 1e-9)) * 100 <= cfg.boNearResPct;
+  if (!(nearByATR || nearByPct) || dist <= 0) {
+    return { ready: false, waitReason: "not coiled near resistance" };
   }
 
-  // Volume regime
+  // 3) Tightening / structure
+  const tr = (b) =>
+    Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
+  const last20 = data.slice(-20);
+  const recentTR = avg(data.slice(-6).map(tr));
+  const avgTR = avg(last20.map(tr)) || 1e-9;
+  const medTR = last20.length
+    ? last20.map(tr).sort((a, b) => a - b)[Math.floor(last20.length / 2)]
+    : avgTR;
+  const baseTR = Math.max(avgTR, medTR);
+  const tightening = recentTR <= cfg.boTightenFactor * baseTR;
+
+  const lows = data.slice(-12).map((b) => num(b.low));
+  let higherLows = 0;
+  for (let i = 2; i < lows.length; i++) {
+    if (lows[i] > lows[i - 1] && lows[i - 1] > lows[i - 2]) higherLows++;
+  }
+  const baseWin = data.slice(-10);
+  const baseHi = Math.max(...baseWin.map((b) => num(b.high)));
+  const baseLo = Math.min(...baseWin.map((b) => num(b.low)));
+  const baseRangeATR = (baseHi - baseLo) / Math.max(atr, 1e-9);
+  const flatBaseOK = baseWin.length >= 6 && baseRangeATR <= 1.2;
+  const structureOK = higherLows >= cfg.boHigherLowsMin || flatBaseOK;
+
+  // 4) Volume regime
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
-  const pullbackBars = recentBars.filter(
-    (b) => num(b.high) <= recentHigh && num(b.low) >= dipLow
-  );
+  const pullbackBars = data
+    .slice(-10)
+    .filter((b) => num(b.close) < num(b.open));
   const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
   const dryPullback =
-    pullbackVol > 0 ? pullbackVol <= avgVol20 * cfg.pullbackDryFactor : true;
-  const d0 = data.at(-1),
-    d1 = data.at(-2);
-  const bounceVolHot = num(d0.volume) >= avgVol20 * cfg.bounceHotFactor;
+    pullbackVol <= avgVol20 * cfg.boMinDryPullback ||
+    !avgVol20 ||
+    (tightening && baseRangeATR <= 1.0);
 
-  // Bounce confirmation
-  const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
-  const minStr = Math.max(cfg.dipMinBounceStrengthATR, 0.6);
+  // 5) Plan
+  const baseLow = baseLo;
+  const boxHeight = Math.max(atr * 1.2, resistance - baseLow);
+  const initialStop = baseLow - cfg.boStopUnderLowsATR * atr;
 
-  const closeAboveYHigh =
-    num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
+  const triggerPrimary = resistance + Math.max(0.02, 0.12 * atr);
+  const altRecentHigh = Math.max(
+    ...data.slice(-cfg.boAltTriggerBars).map((b) => num(b.high))
+  );
+  const triggerAlt = cfg.boAllowInsideBreak
+    ? Math.max(triggerPrimary, altRecentHigh + Math.max(0.01, 0.06 * atr))
+    : null;
+  const entryTrigger = triggerAlt
+    ? Math.min(triggerPrimary, triggerAlt)
+    : triggerPrimary;
 
-  const hammer = (() => {
-    const range = num(d0.high) - num(d0.low);
-    const body = Math.abs(num(d0.close) - num(d0.open));
-    const lower = Math.min(num(d0.close), num(d0.open)) - num(d0.low);
-    return (
-      range > 0 &&
-      body < 0.4 * range &&
-      lower > 1.5 * body &&
-      num(d0.close) >= num(d0.open) &&
-      bounceStrengthATR >= minStr
-    );
-  })();
+  const entryLimit = entryTrigger * (1 + cfg.boSlipTicks);
+  const useStopMarket = !!cfg.boUseStopMarketOnTrigger;
 
-  const engulf =
-    num(d1.close) < num(d1.open) &&
-    num(d0.close) > num(d0.open) &&
-    num(d0.open) <= num(d1.close) &&
-    num(d0.close) > num(d1.open) &&
-    num(d0.close) > num(d1.high) &&
-    bounceStrengthATR >= minStr;
+  // Thrust checks
+  const d0 = data.at(-1);
+  const closeThroughOK =
+    num(d0.close) >= resistance + cfg.boCloseThroughATR * atr;
+  const volThrustOK =
+    avgVol20 > 0 && num(d0.volume) >= cfg.boVolThrustX * avgVol20;
 
-  const twoBarRev =
-    num(d0.close) > num(d1.close) &&
-    num(d0.low) > num(d1.low) &&
-    num(d0.close) > num(d0.open) &&
-    bounceStrengthATR >= Math.max(0.8, cfg.dipMinBounceStrengthATR);
+  // First target
+  let firstTarget =
+    resistance + Math.max(boxHeight * 0.8, cfg.boTargetATR * atr);
+  if (resList[1]) firstTarget = Math.max(firstTarget, resList[1]);
 
-  const basicCloseUp =
-    num(d0.close) > num(d0.open) &&
-    num(d0.close) > num(d1.close) &&
-    bounceVolHot &&
-    bounceStrengthATR >= Math.max(0.8, cfg.dipMinBounceStrengthATR);
+  // RR at trigger
+  const risk = Math.max(0.01, entryTrigger - initialStop);
+  const reward = Math.max(0, firstTarget - entryTrigger);
+  const ratio = reward / risk;
 
-  const bounceOK =
-    closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
-  if (!bounceOK) {
-    return {
-      trigger: false,
-      waitReason: `bounce not strong enough (${bounceStrengthATR.toFixed(
-        2
-      )} ATR) / no pattern`,
-      diagnostics: {
-        bounceStrengthATR,
-        closeAboveYHigh,
-        hammer,
-        engulf,
-        twoBarRev,
-        basicCloseUp,
-      },
-    };
-  }
-
-  // Recovery cap
-  const spanRaw = recentHigh - dipLow;
-  const span = Math.max(spanRaw, Math.max(0.8 * atr, px * 0.004));
-  const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
-  const recoveryPctCapped = Math.min(recoveryPct, 120);
-  if (recoveryPctCapped > cfg.dipMaxRecoveryPct) {
-    return {
-      trigger: false,
-      waitReason: `already recovered ${recoveryPctCapped.toFixed(0)}%`,
-      diagnostics: { recoveryPct: recoveryPctCapped, px, dipLow, recentHigh },
-    };
-  }
-
-  // Higher low & volume regime quality
-  const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
-  const higherLow = dipLow >= prevLow * 0.995 || dipLow >= prevLow - 0.25 * atr;
-  const volumeRegimeOK =
+  const readyCore =
+    tightening &&
+    structureOK &&
     dryPullback &&
-    (bounceVolHot || (bounceStrengthATR >= 0.8 && closeAboveYHigh));
-
-  const trigger =
-    hadPullback &&
-    fibOK &&
-    nearSupport &&
-    bounceOK &&
-    higherLow &&
-    volumeRegimeOK &&
-    recoveryPctCapped <= cfg.dipMaxRecoveryPct;
-  if (!trigger) {
+    ratio >= Math.max(cfg.boMinRR, 1.25);
+  if (!readyCore) {
     return {
-      trigger: false,
-      waitReason: "DIP conditions not fully met",
-      diagnostics: {
-        hadPullback,
-        fibOK,
-        nearSupport,
-        bounceOK,
-        higherLow,
-        dryPullback,
-        bounceVolHot,
-        volumeRegimeOK,
-        lowBarIndex,
-        recoveryPct: recoveryPctCapped,
-      },
+      ready: false,
+      waitReason: `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
+        2
+      )}`,
     };
   }
 
-  // Targets & stops (softened)
-  const resList = findResistancesAbove(data, px, stock);
-  const recentHigh20 = Math.max(...data.slice(-20).map((d) => num(d.high)));
-  let target = Math.max(px + Math.max(2.2 * atr, px * 0.02), recentHigh20);
-  const nearestRes = resList.length ? resList[0] : null;
-
-  if (nearestRes && nearestRes - px < 0.8 * atr) {
-    target = Math.min(target, nearestRes);
-  } else if (resList.length && resList[0] - px < 0.6 * atr && resList[1]) {
-    target = Math.min(Math.max(target, resList[1]), px + 2.6 * atr);
+  // Retest plan if weak thrust
+  let retest = null;
+  if (cfg.boUseRetestPlan && !(closeThroughOK || volThrustOK)) {
+    const zoneMid = resistance;
+    const buyLo = zoneMid - cfg.boRetestDepthATR * atr;
+    const buyHi = zoneMid + Math.max(0.05 * atr, 0.01);
+    retest = {
+      retestTrigger: buyLo,
+      retestLimit: buyHi,
+      cancelIfCloseBackInBaseATR: cfg.boRetestInvalidATE,
+      note: "Breakout lacked thrust; buy the retest of the zone.",
+    };
   }
-
-  const stop = dipLow - 0.5 * atr;
-  const why = `Fresh retrace at support; dry pullback + strong bounce; bounce ${bounceStrengthATR.toFixed(
-    1
-  )} ATR; recovery ${recoveryPctCapped.toFixed(0)}%.`;
 
   return {
-    trigger,
-    stop,
-    target,
-    nearestRes,
-    why,
+    ready: true,
     waitReason: "",
+    entryTrigger,
+    entryLimit,
+    useStopMarket,
+    initialStop,
+    firstTarget,
+    nearestRes: resistance,
+    why: `Coil near ${resistance.toFixed(0)}; contraction ${
+      tightening ? "OK" : "weak"
+    }, structure ${structureOK ? "OK" : "weak"}; RR ${ratio.toFixed(2)}${
+      closeThroughOK || volThrustOK ? " with thrust" : " (plan retest)"
+    }`,
     diagnostics: {
-      pullbackPct,
-      pullbackATR,
-      retracePct,
-      lowBarIndex,
-      bounceStrengthATR,
-      recoveryPct: recoveryPctCapped,
-      nearSupport,
-      dryPullback,
-      bounceVolHot,
-      volumeRegimeOK,
-      atr,
+      resistance,
+      baseLow,
+      boxHeight,
+      baseRangeATR,
+      recentTR,
+      avgTR,
+      medTR,
+      ratio,
+      closeThroughOK,
+      volThrustOK,
     },
+    retestPlan: retest,
   };
 }
