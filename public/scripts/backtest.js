@@ -156,7 +156,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               stop: open.stopInit,
               target: open.target,
               result: exit.result,
-              exitType: exit.type, // <-- new
+              exitType: exit.type, // track which exit we hit
               R: Math.round(((exit.price - open.entry) / risk) * 100) / 100,
               returnPct: Math.round(pctRet * 100) / 100,
             };
@@ -180,7 +180,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             ) {
               open = {
                 entryIdx: i,
-                entry: today.close,
+                entry: today.close, // if you want next-day open realism, swap to candles[i+1]?.open with guard
                 stop: Math.round(stop),
                 stopInit: Math.round(stop),
                 target: Math.round(target),
