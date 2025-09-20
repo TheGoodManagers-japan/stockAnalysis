@@ -62,7 +62,7 @@ function shouldAllow(kind, ST, LT) {
     return lt <= 3 && st >= 2 && st <= 5;
   }
   // DIP: allow pullbacks in broader uptrends; tolerate ST softening (to 5)
-  return lt <= 3 && st >= 2 && st <= 5;
+  return lt <= 3 && st >= 2 && st <= 7;
 }
 
 /**
