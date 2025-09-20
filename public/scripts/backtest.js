@@ -1,5 +1,5 @@
-// /scripts/backtest.js — swing-period backtest (browser) with diagnostics & throughput target
-// No trade management; entry on buyNow=true; exit on stop/target/time-limit.
+// /scripts/backtest.js — swing-period backtest (browser) with breakout simulation & strategy comparison
+// No trade management; DIP: enter on buyNow=true; BO: place stop-limit plan and fill on trigger; exit on stop/target/time-limit.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
@@ -54,9 +54,12 @@ async function fetchHistory(ticker, fromISO, toISO) {
  * @param {object} [maybeOpts] if first arg is array
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=10,
- *     appendTickers?: string[],                    // optional extra universe
- *     targetTradesPerDay?: number,                 // throughput goal (e.g., 1.5)
- *     countBlockedSignals?: boolean }              // if true, also count signals when blocked (perf hit)
+ *     appendTickers?: string[],
+ *     targetTradesPerDay?: number,
+ *     countBlockedSignals?: boolean,
+ *     enableBreakouts?: boolean,         // default: false
+ *     boMaxAgeBars?: number,             // default: 10
+ *     boUseLimit?: boolean }             // default: true
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -88,26 +91,41 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       : `${String(c).toUpperCase().replace(/\..*$/, "")}.T`
   );
 
+  // Breakout simulation options
+  const ENABLE_BO = opts.enableBreakouts === true;
+  const BO_MAX_AGE = Number.isFinite(opts.boMaxAgeBars)
+    ? opts.boMaxAgeBars
+    : 10;
+  const BO_USE_LIMIT = opts.boUseLimit !== false; // true by default
+
+  // Diagnostics
   const byTicker = [];
   const globalTrades = [];
-  const tradingDays = new Set(); // exact day count in the tested window
+  const tradingDays = new Set();
 
-  // --- diagnostics (signals & blockers) ---
-  let signalsTotal = 0; // buyNow=true evaluated while eligible (or also when blocked if enabled)
-  let signalsAfterWarmup = 0; // buyNow=true when i>=WARMUP
-  let signalsWhileFlat = 0; // buyNow=true when flat & past cooldown
-  let signalsInvalid = 0; // buyNow=true but stop/target invalid
-  let signalsRiskBad = 0; // buyNow=true but stop >= price
-  let signalsExecuted = 0; // actual entries taken
+  let signalsTotal = 0;
+  let signalsAfterWarmup = 0;
+  let signalsWhileFlat = 0;
+  let signalsInvalid = 0;
+  let signalsRiskBad = 0;
+  let signalsExecuted = 0;
 
-  let blockedInTrade = 0; // bars where we were in a position
-  let blockedCooldown = 0; // bars where cooldown prevented entry
-  let blockedWarmup = 0; // bars before warmup
+  let blockedInTrade = 0;
+  let blockedCooldown = 0;
+  let blockedWarmup = 0;
 
-  const COUNT_BLOCKED = !!opts.countBlockedSignals; // off by default (perf)
+  const COUNT_BLOCKED = !!opts.countBlockedSignals;
+
+  // Breakout diagnostics
+  let boPlanned = 0;
+  let boFilled = 0;
+  let boExpired = 0;
+  let boMissedLimit = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN}`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN} | breakouts=${
+      ENABLE_BO ? "ON" : "OFF"
+    }`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -130,10 +148,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       const trades = [];
       let open = null;
       let cooldownUntil = -1;
+      let pendingBO = null; // { trigger, limit, stop, target, createdIdx, age }
 
       for (let i = 0; i < candles.length; i++) {
         const today = candles[i];
-        tradingDays.add(toISO(today.date)); // exact trading date
+        tradingDays.add(toISO(today.date));
         const hist = candles.slice(0, i + 1);
 
         const stock = {
@@ -149,10 +168,55 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // blocker counters (why we couldn't enter this bar)
+        // blocker counters
         if (open) blockedInTrade++;
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
+
+        // --- Handle pending breakout before seeking new signals
+        if (!open && pendingBO) {
+          pendingBO.age++;
+
+          if (today.high >= pendingBO.trigger) {
+            // fill price: if gap over trigger, fill at open; else at trigger
+            const fill =
+              today.open >= pendingBO.trigger ? today.open : pendingBO.trigger;
+
+            if (
+              BO_USE_LIMIT &&
+              Number.isFinite(pendingBO.limit) &&
+              fill > pendingBO.limit
+            ) {
+              boMissedLimit++;
+              console.log(
+                `[BT][BO] miss  ${code} (open ${fill.toFixed(
+                  2
+                )} > limit ${pendingBO.limit.toFixed(2)})`
+              );
+              pendingBO = null;
+            } else {
+              open = {
+                entryIdx: i,
+                entry: r2(fill),
+                stop: Math.round(pendingBO.stop),
+                stopInit: Math.round(pendingBO.stop),
+                target: Math.round(pendingBO.target),
+                strategy: "BO",
+              };
+              boFilled++;
+              console.log(
+                `[BT][BO] fill  ${code} @${open.entry.toFixed(
+                  2
+                )} (trigger ${pendingBO.trigger.toFixed(2)})`
+              );
+              pendingBO = null;
+            }
+          } else if (pendingBO.age > BO_MAX_AGE) {
+            boExpired++;
+            console.log(`[BT][BO] expire ${code} after ${BO_MAX_AGE} bars`);
+            pendingBO = null;
+          }
+        }
 
         // manage open (stop → target → time exit)
         if (open) {
@@ -176,23 +240,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               ((exit.price - open.entry) / Math.max(1e-9, open.entry)) * 100;
             const risk = Math.max(0.01, open.entry - open.stopInit);
             const trade = {
+              ticker: code,
+              strategy: open.strategy || "DIP",
               entryDate: toISO(candles[open.entryIdx].date),
               exitDate: toISO(today.date),
               holdingDays: daysHeld,
-              entry: Math.round(open.entry * 100) / 100,
-              exit: Math.round(exit.price * 100) / 100,
+              entry: r2(open.entry),
+              exit: r2(exit.price),
               stop: open.stopInit,
               target: open.target,
               result: exit.result,
               exitType: exit.type,
-              R: Math.round(((exit.price - open.entry) / risk) * 100) / 100,
-              returnPct: Math.round(pctRet * 100) / 100,
+              R: r2((exit.price - open.entry) / risk),
+              returnPct: r2(pctRet),
             };
             trades.push(trade);
             globalTrades.push(trade);
             open = null;
-
-            // cooldown
             cooldownUntil = i + COOLDOWN;
           }
         }
@@ -202,7 +266,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         if (eligible) {
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
+
           if (sig?.buyNow) {
+            // DIP — immediate same-day close entry
             signalsTotal++;
             signalsAfterWarmup++;
             signalsWhileFlat++;
@@ -219,23 +285,66 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               continue;
             }
 
-            // EXECUTE: same-day close entry (mirrors your live behavior)
             open = {
               entryIdx: i,
               entry: today.close,
               stop: Math.round(stop),
               stopInit: Math.round(stop),
               target: Math.round(target),
+              strategy: "DIP",
             };
             signalsExecuted++;
+          } else if (ENABLE_BO && !pendingBO) {
+            // PRE-BREAKOUT plan → place pending order
+            const trigger = Number(
+              sig?.trigger ?? sig?.suggestedOrder?.trigger
+            );
+            const limit = Number(sig?.suggestedOrder?.limit);
+            const iStop = Number(
+              sig?.smartStopLoss ??
+                sig?.stopLoss ??
+                sig?.suggestedOrder?.initialStop
+            );
+            const fTarget = Number(
+              sig?.smartPriceTarget ??
+                sig?.priceTarget ??
+                sig?.suggestedOrder?.firstTarget
+            );
+
+            if (
+              Number.isFinite(trigger) &&
+              Number.isFinite(iStop) &&
+              Number.isFinite(fTarget)
+            ) {
+              pendingBO = {
+                trigger,
+                limit:
+                  BO_USE_LIMIT && Number.isFinite(limit) ? limit : Infinity,
+                stop: Math.round(iStop),
+                target: Math.round(fTarget),
+                createdIdx: i,
+                age: 0,
+              };
+              boPlanned++;
+              const limMsg =
+                BO_USE_LIMIT && Number.isFinite(limit)
+                  ? ` lim=${limit.toFixed(2)}`
+                  : "";
+              console.log(
+                `[BT][BO] place ${code} @trigger=${trigger.toFixed(
+                  2
+                )}${limMsg} stop=${pendingBO.stop} tgt=${
+                  pendingBO.target
+                } age=0`
+              );
+            }
           }
         } else if (COUNT_BLOCKED) {
-          // (optional) Count buyNow signals even when blocked (perf hit)
+          // Optional: count buyNow signals even when blocked
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
           if (sig?.buyNow) {
             signalsTotal++;
             if (i >= WARMUP) signalsAfterWarmup++;
-            // we do not increment signalsWhileFlat because we're blocked
           }
         }
       }
@@ -278,7 +387,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     }
   }
 
-  // final summary
+  // ---- final metrics ----
   const all = byTicker.flatMap((t) => t.trades);
   const totalTrades = all.length;
   const wins = all.filter((t) => t.result === "WIN").length;
@@ -290,7 +399,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? pct(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
     : 0;
 
-  // global exit counts
+  // exits
   const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
   const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
@@ -309,6 +418,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ? Number(opts.targetTradesPerDay)
       : null;
 
+  // ---- strategy split (DIP vs BO) ----
+  const trDIP = all.filter((t) => t.strategy === "DIP");
+  const trBO = all.filter((t) => t.strategy === "BO");
+
+  const mAll = computeMetrics(all);
+  const mDIP = computeMetrics(trDIP);
+  const mBO = computeMetrics(trBO);
+
+  // ---- logs ----
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
   );
@@ -327,17 +445,39 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     const diff = tradesPerDay - targetTPD;
     if (diff >= 0) {
       console.log(
-        `[BT] TARGET ✅ You are above target by +${diff.toFixed(3)} trades/day.`
+        `[BT] TARGET ✅ above target by +${diff.toFixed(3)} trades/day.`
       );
     } else {
       const needed = Math.ceil(Math.abs(diff) * days);
       console.log(
-        `[BT] TARGET ⚠️  You are below target by ${(-diff).toFixed(
+        `[BT] TARGET ⚠️ below target by ${(-diff).toFixed(
           3
-        )} trades/day (~${needed} more trades needed over ${days} days).`
+        )} trades/day (~${needed} more trades over ${days} days).`
       );
     }
   }
+
+  console.log(
+    `[BT][BO] SUMMARY | planned=${boPlanned} | filled=${boFilled} | expired=${boExpired} | missedLimit=${boMissedLimit}`
+  );
+
+  // Strategy-level logs
+  logStrategyStats("DIP", mDIP);
+  logStrategyStats("BO ", mBO);
+
+  // Comparison deltas (BO vs DIP)
+  console.log(
+    `[BT] STRATEGY Δ (BO - DIP) | winRate=${delta(
+      mBO.winRate,
+      mDIP.winRate
+    )} pp | avgRet=${delta(mBO.avgReturnPct, mDIP.avgReturnPct)}% | PF=${delta(
+      mBO.profitFactor,
+      mDIP.profitFactor
+    )} | ExpR=${delta(mBO.expR, mDIP.expR)} | avgHold=${delta(
+      mBO.avgHoldingDays,
+      mDIP.avgHoldingDays
+    )} bars`
+  );
 
   return {
     from: FROM,
@@ -346,6 +486,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       holdBars: HOLD_BARS,
       warmupBars: WARMUP,
       cooldownDays: COOLDOWN,
+      enableBreakouts: ENABLE_BO,
+      boMaxAgeBars: BO_MAX_AGE,
+      boUseLimit: BO_USE_LIMIT,
       targetTradesPerDay: targetTPD,
       countBlockedSignals: COUNT_BLOCKED,
     },
@@ -375,15 +518,111 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         warmup: blockedWarmup,
       },
     },
+    breakouts: {
+      planned: boPlanned,
+      filled: boFilled,
+      expired: boExpired,
+      missedLimit: boMissedLimit,
+      maxAgeBars: BO_MAX_AGE,
+      useLimit: BO_USE_LIMIT,
+      enabled: ENABLE_BO,
+    },
+    // strategy metrics in the return payload, too
+    strategy: {
+      all: mAll,
+      dip: mDIP,
+      bo: mBO,
+    },
     byTicker,
   };
 }
 
-// Expose for Bubble
+/* ------------------------ Metrics Helpers & Logs ------------------------ */
+function computeMetrics(trades) {
+  const n = trades.length;
+  const wins = trades.filter((t) => t.result === "WIN");
+  const losses = trades.filter((t) => t.result === "LOSS");
+
+  const winRate = n ? (wins.length / n) * 100 : 0;
+  const avgReturnPct = n ? sum(trades.map((t) => t.returnPct || 0)) / n : 0;
+  const avgHoldingDays = n ? sum(trades.map((t) => t.holdingDays || 0)) / n : 0;
+
+  const avgWinPct = wins.length
+    ? sum(wins.map((t) => t.returnPct || 0)) / wins.length
+    : 0;
+  const avgLossPct = losses.length
+    ? sum(losses.map((t) => t.returnPct || 0)) / losses.length
+    : 0; // negative or small pos if time-exit loss is tiny
+
+  const rWins = wins.map((t) => t.R || 0);
+  const rLosses = losses.map((t) => t.R || 0);
+  const avgRwin = rWins.length ? sum(rWins) / rWins.length : 0;
+  const avgRloss = rLosses.length ? sum(rLosses) / rLosses.length : 0;
+  const p = n ? wins.length / n : 0;
+  const expR = p * avgRwin + (1 - p) * avgRloss;
+
+  const grossWin = sum(wins.map((t) => t.returnPct || 0));
+  const grossLossAbs = Math.abs(sum(losses.map((t) => t.returnPct || 0)));
+  const profitFactor = grossLossAbs
+    ? grossWin / grossLossAbs
+    : wins.length
+    ? Infinity
+    : 0;
+
+  const exits = {
+    target: trades.filter((t) => t.exitType === "TARGET").length,
+    stop: trades.filter((t) => t.exitType === "STOP").length,
+    time: trades.filter((t) => t.exitType === "TIME").length,
+  };
+
+  return {
+    trades: n,
+    winRate: r2(winRate),
+    avgReturnPct: r2(avgReturnPct),
+    avgHoldingDays: r2(avgHoldingDays),
+    avgWinPct: r2(avgWinPct),
+    avgLossPct: r2(avgLossPct),
+    avgRwin: r2(avgRwin),
+    avgRloss: r2(avgRloss),
+    expR: r2(expR),
+    profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : Infinity,
+    exits,
+  };
+}
+
+function logStrategyStats(label, m) {
+  console.log(
+    `[BT][${label}] trades=${m.trades} | winRate=${m.winRate}% | avgRet=${
+      m.avgReturnPct
+    }% | PF=${fmtInf(m.profitFactor)} | ExpR=${m.expR} | avgHold=${
+      m.avgHoldingDays
+    } bars | exits — target:${m.exits.target} stop:${m.exits.stop} time:${
+      m.exits.time
+    }`
+  );
+}
+
+function delta(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b))
+    return ("" + (a - b)).toString();
+  const d = a - b;
+  const isPct = Math.abs(a) <= 100 && Math.abs(b) <= 100;
+  return isPct
+    ? `${d >= 0 ? "+" : ""}${r2(d)}`
+    : `${d >= 0 ? "+" : ""}${r2(d)}`;
+}
+
+function sum(arr) {
+  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
+}
+function fmtInf(x) {
+  return x === Infinity ? "∞" : String(x);
+}
+
+/* --------------------------- Expose for Bubble -------------------------- */
 // Examples:
 //   window.backtest().then(console.log)
-//   window.backtest({ targetTradesPerDay: 1.5 }).then(console.log)
-//   window.backtest({ appendTickers: ["1301","1332"], countBlockedSignals: true }).then(console.log)
+//   window.backtest({ enableBreakouts: true, targetTradesPerDay: 1.5 }).then(console.log)
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
@@ -407,6 +646,20 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         invalid: 0,
         riskStopGtePx: 0,
         blocked: { inTrade: 0, cooldown: 0, warmup: 0 },
+      },
+      breakouts: {
+        planned: 0,
+        filled: 0,
+        expired: 0,
+        missedLimit: 0,
+        maxAgeBars: 10,
+        useLimit: true,
+        enabled: false,
+      },
+      strategy: {
+        all: computeMetrics([]),
+        dip: computeMetrics([]),
+        bo: computeMetrics([]),
       },
       byTicker: [],
       error: String(e?.message || e),
