@@ -59,7 +59,7 @@ function shouldAllow(kind, ST, LT) {
   if (kind === "BO") {
     // Prefer bull LT and neutral/bull ST
     // allow if: LT in [1..3] and ST in [2..4]; or LT=2 and ST=5 only if very close to 4 (we can't see that here, so disallow 5)
-    return lt <= 3 && st >= 2 && st <= 4;
+    return lt <= 3 && st >= 2 && st <= 5;
   }
   // DIP: allow pullbacks in broader uptrends; tolerate ST softening (to 5)
   return lt <= 3 && st >= 2 && st <= 5;
