@@ -1,10 +1,11 @@
 // /scripts/backtest.js — swing-period backtest (browser) with breakout simulation & strategy comparison
 // DIP: enter on buyNow=true; BO: place stop-(market|limit) and fill on trigger; exit on stop/target/time-limit.
-// NOTE: Breakouts are ALWAYS ENABLED in this build.
+// NOTE: Breakouts are ALWAYS ENABLED in this build. ST/LT sentiment gating happens here (no changes to analyzers).
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
 import { allTickers } from "./tickers.js";
+import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
@@ -47,6 +48,21 @@ async function fetchHistory(ticker, fromISO, toISO) {
         (!fromISO || d.date >= new Date(fromISO)) &&
         (!toISO || d.date <= new Date(toISO))
     );
+}
+
+/* ---------------- ST/LT gating policy (1..7 where 1=strong bull) ---------------- */
+function shouldAllow(kind, ST, LT) {
+  // Defaults if missing
+  const st = Number.isFinite(ST) ? ST : 4;
+  const lt = Number.isFinite(LT) ? LT : 4;
+
+  if (kind === "BO") {
+    // Prefer bull LT and neutral/bull ST
+    // allow if: LT in [1..3] and ST in [2..4]; or LT=2 and ST=5 only if very close to 4 (we can't see that here, so disallow 5)
+    return lt <= 3 && st >= 2 && st <= 4;
+  }
+  // DIP: allow pullbacks in broader uptrends; tolerate ST softening (to 5)
+  return lt <= 3 && st >= 2 && st <= 5;
 }
 
 /**
@@ -93,7 +109,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   );
 
   // Breakout execution options (ALWAYS ON)
-  const ENABLE_BO = true; // <— forced ON
+  const ENABLE_BO = true;
   const BO_MAX_AGE = Number.isFinite(opts.boMaxAgeBars)
     ? opts.boMaxAgeBars
     : 15;
@@ -120,6 +136,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let blockedInTrade = 0;
   let blockedCooldown = 0;
   let blockedWarmup = 0;
+  let blockedBySentiment_DIP = 0;
+  let blockedBySentiment_BO = 0;
 
   const COUNT_BLOCKED = !!opts.countBlockedSignals;
 
@@ -193,7 +211,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const fillIfTriggered =
               today.open >= pendingBO.trigger ? today.open : pendingBO.trigger;
 
-            // Gap logic for stop-market mode
             if (!BO_USE_LIMIT) {
               const gapPct =
                 (fillIfTriggered - pendingBO.trigger) /
@@ -205,26 +222,35 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     2
                   )}% > cap ${(BO_GAP_CAP * 100).toFixed(2)}%)`
                 );
-                pendingBO = null; // cancel order; treat as missed
+                pendingBO = null; // cancel order
               } else {
-                open = {
-                  entryIdx: i,
-                  entry: r2(fillIfTriggered),
-                  stop: Math.round(pendingBO.stop),
-                  stopInit: Math.round(pendingBO.stop),
-                  target: Math.round(pendingBO.target),
-                  strategy: "BO",
-                };
-                boFilled++;
-                console.log(
-                  `[BT][BO] fill  ${code} @${open.entry.toFixed(
-                    2
-                  )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-market)`
-                );
-                pendingBO = null;
+                // ST/LT **gate at fill time** as well
+                const senti = getComprehensiveMarketSentiment(stock, hist);
+                const ST = senti?.shortTerm?.score ?? 4;
+                const LT = senti?.longTerm?.score ?? 4;
+                if (!shouldAllow("BO", ST, LT)) {
+                  blockedBySentiment_BO++;
+                  pendingBO = null;
+                } else {
+                  open = {
+                    entryIdx: i,
+                    entry: r2(fillIfTriggered),
+                    stop: Math.round(pendingBO.stop),
+                    stopInit: Math.round(pendingBO.stop),
+                    target: Math.round(pendingBO.target),
+                    strategy: "BO",
+                  };
+                  boFilled++;
+                  console.log(
+                    `[BT][BO] fill  ${code} @${open.entry.toFixed(
+                      2
+                    )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-market)`
+                  );
+                  pendingBO = null;
+                }
               }
             } else {
-              // stop-limit mode (more conservative)
+              // stop-limit mode
               const lim = pendingBO.limit;
               if (Number.isFinite(lim) && fillIfTriggered > lim) {
                 boMissedLimit++;
@@ -235,26 +261,34 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 );
                 pendingBO = null;
               } else {
-                const actualFill =
-                  today.open >= pendingBO.trigger
-                    ? Math.min(today.open, lim)
-                    : pendingBO.trigger;
+                const senti = getComprehensiveMarketSentiment(stock, hist);
+                const ST = senti?.shortTerm?.score ?? 4;
+                const LT = senti?.longTerm?.score ?? 4;
+                if (!shouldAllow("BO", ST, LT)) {
+                  blockedBySentiment_BO++;
+                  pendingBO = null;
+                } else {
+                  const actualFill =
+                    today.open >= pendingBO.trigger
+                      ? Math.min(today.open, lim)
+                      : pendingBO.trigger;
 
-                open = {
-                  entryIdx: i,
-                  entry: r2(actualFill),
-                  stop: Math.round(pendingBO.stop),
-                  stopInit: Math.round(pendingBO.stop),
-                  target: Math.round(pendingBO.target),
-                  strategy: "BO",
-                };
-                boFilled++;
-                console.log(
-                  `[BT][BO] fill  ${code} @${open.entry.toFixed(
-                    2
-                  )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-limit)`
-                );
-                pendingBO = null;
+                  open = {
+                    entryIdx: i,
+                    entry: r2(actualFill),
+                    stop: Math.round(pendingBO.stop),
+                    stopInit: Math.round(pendingBO.stop),
+                    target: Math.round(pendingBO.target),
+                    strategy: "BO",
+                  };
+                  boFilled++;
+                  console.log(
+                    `[BT][BO] fill  ${code} @${open.entry.toFixed(
+                      2
+                    )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-limit)`
+                  );
+                  pendingBO = null;
+                }
               }
             }
           } else if (pendingBO.age > BO_MAX_AGE) {
@@ -314,10 +348,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
 
           if (sig?.buyNow) {
-            // DIP — immediate same-day close entry
+            // DIP — gate by ST/LT before entering
             signalsTotal++;
             signalsAfterWarmup++;
             signalsWhileFlat++;
+
+            const senti = getComprehensiveMarketSentiment(stock, hist);
+            const ST = senti?.shortTerm?.score ?? 4;
+            const LT = senti?.longTerm?.score ?? 4;
+            if (!shouldAllow("DIP", ST, LT)) {
+              blockedBySentiment_DIP++;
+              continue;
+            }
 
             const stop = Number(sig.smartStopLoss ?? sig.stopLoss);
             const target = Number(sig.smartPriceTarget ?? sig.priceTarget);
@@ -341,7 +383,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             };
             signalsExecuted++;
           } else {
-            // PRE-BREAKOUT: place or *replace* pending order with fresher/higher trigger
+            // PRE-BREAKOUT: gate before placing/refreshing the order
+            const senti = getComprehensiveMarketSentiment(stock, hist);
+            const ST = senti?.shortTerm?.score ?? 4;
+            const LT = senti?.longTerm?.score ?? 4;
+            if (!shouldAllow("BO", ST, LT)) {
+              blockedBySentiment_BO++;
+              // do not place/refresh a pendingBO in poor sentiment
+              // (also clear any aging pending order to avoid stale fills later)
+              pendingBO = null;
+              continue;
+            }
+
             const trigger = Number(
               sig?.trigger ?? sig?.suggestedOrder?.trigger
             );
@@ -362,7 +415,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               Number.isFinite(iStop) &&
               Number.isFinite(fTarget)
             ) {
-              // if price already above trigger, skip placing
               if (today.close >= trigger) {
                 // already through; wait for next coil
               } else if (!pendingBO) {
@@ -376,6 +428,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   trigger,
                   limit,
                   stop: Math.round(iStop),
+                  stopInit: Math.round(iStop),
                   target: Math.round(fTarget),
                   createdIdx: i,
                   age: 0,
@@ -390,7 +443,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   } age=0`
                 );
               } else {
-                // consider replacing if new trigger is meaningfully higher (avoid micro-noise)
                 const bump = trigger - pendingBO.trigger;
                 if (bump > Math.max(0.02, pendingBO.trigger * 0.002)) {
                   const newLimit = BO_USE_LIMIT
@@ -403,6 +455,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     trigger,
                     limit: newLimit,
                     stop: Math.round(iStop),
+                    stopInit: Math.round(iStop),
                     target: Math.round(fTarget),
                     createdIdx: i,
                     age: 0,
@@ -515,7 +568,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   );
 
   console.log(
-    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup}`
+    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP} BO=${blockedBySentiment_BO}`
   );
 
   console.log(
@@ -569,7 +622,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       holdBars: HOLD_BARS,
       warmupBars: WARMUP,
       cooldownDays: COOLDOWN,
-      // enableBreakouts removed (always true)
       boMaxAgeBars: BO_MAX_AGE,
       boUseLimit: BO_USE_LIMIT,
       boSlipTicks: BO_SLIP_TICKS,
@@ -601,6 +653,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         inTrade: blockedInTrade,
         cooldown: blockedCooldown,
         warmup: blockedWarmup,
+        stlt: { dip: blockedBySentiment_DIP, bo: blockedBySentiment_BO },
       },
     },
     breakouts: {
@@ -613,7 +666,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       maxAgeBars: BO_MAX_AGE,
       useLimit: BO_USE_LIMIT,
       gapCapPct: BO_GAP_CAP,
-      enabled: true, // <— always true
+      enabled: true,
     },
     strategy: {
       all: mAll,
@@ -729,7 +782,12 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         executed: 0,
         invalid: 0,
         riskStopGtePx: 0,
-        blocked: { inTrade: 0, cooldown: 0, warmup: 0 },
+        blocked: {
+          inTrade: 0,
+          cooldown: 0,
+          warmup: 0,
+          stlt: { dip: 0, bo: 0 },
+        },
       },
       breakouts: {
         planned: 0,
@@ -741,7 +799,7 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         maxAgeBars: 15,
         useLimit: false,
         gapCapPct: 0.01,
-        enabled: true, // always true
+        enabled: true,
       },
       strategy: {
         all: computeMetrics([]),
