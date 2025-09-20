@@ -1,24 +1,16 @@
 // /scripts/backtest.js (ESM, runs in the browser)
-// Requires that /scripts/main.js is also loaded and exports:
-//   - analyzeSwingTradeEntry (from swingTradeEntryTiming.js)
-//   - enrichForTechnicalScore
-//   - getTradeManagementSignal_V3   (optional; only if useMgmt=true)
-
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import {
   enrichForTechnicalScore,
   getTradeManagementSignal_V3,
 } from "./main.js";
+import { allTickers } from "./tickers.js"; // ← use same universe as main
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
 
-function toISO(d) {
-  return new Date(d).toISOString().slice(0, 10);
-}
-function round2(v) {
-  return Math.round((Number(v) || 0) * 100) / 100;
-}
+const toISO = (d) => new Date(d).toISOString().slice(0, 10);
+const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
@@ -26,9 +18,15 @@ function normalizeCode(t) {
   return s;
 }
 
+function defaultTickerCodes(limit = 0) {
+  const arr = allTickers.map((t) => t.code);
+  return limit > 0 ? arr.slice(0, limit) : arr;
+}
+
 async function fetchHistory(ticker, fromISO, toISO) {
-  const url = `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`;
-  const r = await fetch(url);
+  const r = await fetch(
+    `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`
+  );
   const text = await r.text();
   if (!r.ok)
     throw new Error(
@@ -55,15 +53,17 @@ async function fetchHistory(ticker, fromISO, toISO) {
 
 /**
  * Backtest in the browser.
- * @param {string[]} tickers e.g. ["8058","6981","9432","9984"] (no .T needed)
- * @param {object} opts
- * @param {number} [opts.months=6] window length; ignored if from/to provided
- * @param {string} [opts.from] "YYYY-MM-DD"
- * @param {string} [opts.to]   "YYYY-MM-DD"
- * @param {boolean} [opts.useMgmt=false] use trailing/scale logic from V3
- * @returns {Promise<{winRate:number, avgR:number, totalTrades:number, byTicker:Array}>}
+ * @param {string[]|object} tickersOrOpts   [] or options-only
+ * @param {object} [maybeOpts]              only if first arg is array
+ *  opts: { months=6, from, to, useMgmt=false, limit=0 }
  */
-async function runBacktest(tickers = [], opts = {}) {
+async function runBacktest(tickersOrOpts, maybeOpts) {
+  let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
+  const opts = Array.isArray(tickersOrOpts)
+    ? maybeOpts || {}
+    : tickersOrOpts || {};
+
+  // defaults
   const months = Number.isFinite(opts.months) ? Number(opts.months) : 6;
   const to = opts.to ? new Date(opts.to) : new Date();
   const from = opts.from
@@ -72,12 +72,18 @@ async function runBacktest(tickers = [], opts = {}) {
   const FROM = toISO(from);
   const TO = toISO(to);
   const useMgmt = !!opts.useMgmt;
+  const limit = Number(opts.limit) || 0;
+
+  // if no tickers provided → use the same universe as main
+  if (!tickers.length) {
+    tickers = defaultTickerCodes(limit);
+  }
+  const codes = tickers.map(normalizeCode);
 
   // params
   const WARMUP_BARS = 60;
   const COOLDOWN_DAYS = 10;
 
-  const codes = (Array.isArray(tickers) ? tickers : []).map(normalizeCode);
   const byTicker = [];
 
   for (const code of codes) {
@@ -96,7 +102,6 @@ async function runBacktest(tickers = [], opts = {}) {
         const today = candles[i];
         const hist = candles.slice(0, i + 1);
 
-        // enrich a lightweight stock snapshot
         const stock = {
           ticker: code,
           currentPrice: today.close,
@@ -108,11 +113,10 @@ async function runBacktest(tickers = [], opts = {}) {
           fiftyTwoWeekLow: Math.min(...hist.map((c) => c.low)),
           historicalData: hist,
         };
-        enrichForTechnicalScore(stock); // sets MA/ATR/BB/RSI/Stoch/MACD if absent
+        enrichForTechnicalScore(stock);
 
-        // manage open trade first
+        // manage open trade
         if (open) {
-          // stop has priority, then target
           let exit = null;
           if (today.low <= open.stop) {
             exit = { price: open.stop, reason: "Stop hit" };
@@ -161,10 +165,9 @@ async function runBacktest(tickers = [], opts = {}) {
             const risk = Math.max(0.01, open.entry - open.initialStop);
             let pnl;
             if (open.scaled && Number.isFinite(open.scalePrice)) {
-              const half = 0.5;
               pnl =
-                (open.scalePrice - open.entry) * half +
-                (exit.price - open.entry) * half;
+                (open.scalePrice - open.entry) * 0.5 +
+                (exit.price - open.entry) * 0.5;
             } else {
               pnl = exit.price - open.entry;
             }
@@ -222,7 +225,7 @@ async function runBacktest(tickers = [], opts = {}) {
     }
   }
 
-  // aggregate stats
+  // aggregate
   const all = byTicker.flatMap((t) => t.trades);
   const total = all.length;
   const wins = all.filter((t) => t.pnl > 0).length;
@@ -231,13 +234,16 @@ async function runBacktest(tickers = [], opts = {}) {
     ? round2(all.reduce((a, b) => a + (b.R || 0), 0) / total)
     : 0;
 
-  return { winRate, avgR, totalTrades: total, byTicker };
+  return { winRate, avgR, totalTrades: total, byTicker, from: FROM, to: TO };
 }
 
-// expose to the page/Bubble
-window.backtest = async (tickers, opts = {}) => {
+// Expose to Bubble. Call patterns:
+//   await window.backtest()
+//   await window.backtest(["8058","6981"])
+//   await window.backtest({ months: 3, useMgmt: true, limit: 200 })
+window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
-    return await runBacktest(tickers, opts); // Promise<{winRate, avgR, totalTrades, byTicker}>
+    return await runBacktest(tickersOrOpts, maybeOpts);
   } catch (e) {
     console.error("[backtest] error:", e);
     return {
