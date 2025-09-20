@@ -297,7 +297,7 @@ function clampStopLoss(px, atr, proposed, floorStop = 0) {
  *  6) PROTECT — bearish engulfing near resistance (tighten)
  *  7) HOLD/PROTECT — default structure-first (≥MA25 = HOLD; <MA25 = PROTECT)
  */
-function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = {}) {
+export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = {}) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // local helper so function is self-contained
@@ -497,6 +497,8 @@ function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = {}) {
     };
   }
 }
+
+
 
 
 
