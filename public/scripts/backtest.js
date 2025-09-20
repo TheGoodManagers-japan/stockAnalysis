@@ -1,5 +1,6 @@
 // /scripts/backtest.js — swing-period backtest (browser) with breakout simulation & strategy comparison
-// No trade management; DIP: enter on buyNow=true; BO: place stop-limit plan and fill on trigger; exit on stop/target/time-limit.
+// DIP: enter on buyNow=true; BO: place stop-(market|limit) and fill on trigger; exit on stop/target/time-limit.
+// NOTE: Breakouts are ALWAYS ENABLED in this build.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
@@ -50,16 +51,16 @@ async function fetchHistory(ticker, fromISO, toISO) {
 
 /**
  * Backtest (swing period).
- * @param {string[]|object} tickersOrOpts [] or options-only
- * @param {object} [maybeOpts] if first arg is array
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=10,
  *     appendTickers?: string[],
  *     targetTradesPerDay?: number,
  *     countBlockedSignals?: boolean,
- *     enableBreakouts?: boolean,         // default: false
- *     boMaxAgeBars?: number,             // default: 10
- *     boUseLimit?: boolean }             // default: true
+ *     // Breakouts are ALWAYS enabled in this build:
+ *     boMaxAgeBars?: number,             // default: 15
+ *     boUseLimit?: boolean,              // default: false (stop-market)
+ *     boSlipTicks?: number,              // default: 0.006 (limit mode only)
+ *     boGapCapPct?: number }             // default: 0.010 = 1% max gap for market fills
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -91,12 +92,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       : `${String(c).toUpperCase().replace(/\..*$/, "")}.T`
   );
 
-  // Breakout simulation options
-  const ENABLE_BO = opts.enableBreakouts === true;
+  // Breakout execution options (ALWAYS ON)
+  const ENABLE_BO = true; // <— forced ON
   const BO_MAX_AGE = Number.isFinite(opts.boMaxAgeBars)
     ? opts.boMaxAgeBars
-    : 10;
-  const BO_USE_LIMIT = opts.boUseLimit !== false; // true by default
+    : 15;
+  const BO_USE_LIMIT = !!opts.boUseLimit; // default false (use stop-market)
+  const BO_SLIP_TICKS = Number.isFinite(opts.boSlipTicks)
+    ? opts.boSlipTicks
+    : 0.006; // only used if limit enabled
+  const BO_GAP_CAP = Number.isFinite(opts.boGapCapPct)
+    ? opts.boGapCapPct
+    : 0.01; // 1% max allowable gap for market fills
 
   // Diagnostics
   const byTicker = [];
@@ -121,11 +128,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let boFilled = 0;
   let boExpired = 0;
   let boMissedLimit = 0;
+  let boReplaced = 0;
+  let boGapTooWide = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN} | breakouts=${
-      ENABLE_BO ? "ON" : "OFF"
-    }`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN} | breakouts=ON (${
+      BO_USE_LIMIT ? "stop-limit" : "stop-market"
+    })`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -148,7 +157,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       const trades = [];
       let open = null;
       let cooldownUntil = -1;
-      let pendingBO = null; // { trigger, limit, stop, target, createdIdx, age }
+
+      /** @type {{trigger:number, limit:number, stop:number, target:number, createdIdx:number, age:number} | null} */
+      let pendingBO = null;
 
       for (let i = 0; i < candles.length; i++) {
         const today = candles[i];
@@ -177,39 +188,74 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         if (!open && pendingBO) {
           pendingBO.age++;
 
+          // TRIGGERED?
           if (today.high >= pendingBO.trigger) {
-            // fill price: if gap over trigger, fill at open; else at trigger
-            const fill =
+            const fillIfTriggered =
               today.open >= pendingBO.trigger ? today.open : pendingBO.trigger;
 
-            if (
-              BO_USE_LIMIT &&
-              Number.isFinite(pendingBO.limit) &&
-              fill > pendingBO.limit
-            ) {
-              boMissedLimit++;
-              console.log(
-                `[BT][BO] miss  ${code} (open ${fill.toFixed(
-                  2
-                )} > limit ${pendingBO.limit.toFixed(2)})`
-              );
-              pendingBO = null;
+            // Gap logic for stop-market mode
+            if (!BO_USE_LIMIT) {
+              const gapPct =
+                (fillIfTriggered - pendingBO.trigger) /
+                Math.max(1e-9, pendingBO.trigger);
+              if (gapPct > BO_GAP_CAP) {
+                boGapTooWide++;
+                console.log(
+                  `[BT][BO] gap too wide ${code} (gap ${(gapPct * 100).toFixed(
+                    2
+                  )}% > cap ${(BO_GAP_CAP * 100).toFixed(2)}%)`
+                );
+                pendingBO = null; // cancel order; treat as missed
+              } else {
+                open = {
+                  entryIdx: i,
+                  entry: r2(fillIfTriggered),
+                  stop: Math.round(pendingBO.stop),
+                  stopInit: Math.round(pendingBO.stop),
+                  target: Math.round(pendingBO.target),
+                  strategy: "BO",
+                };
+                boFilled++;
+                console.log(
+                  `[BT][BO] fill  ${code} @${open.entry.toFixed(
+                    2
+                  )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-market)`
+                );
+                pendingBO = null;
+              }
             } else {
-              open = {
-                entryIdx: i,
-                entry: r2(fill),
-                stop: Math.round(pendingBO.stop),
-                stopInit: Math.round(pendingBO.stop),
-                target: Math.round(pendingBO.target),
-                strategy: "BO",
-              };
-              boFilled++;
-              console.log(
-                `[BT][BO] fill  ${code} @${open.entry.toFixed(
-                  2
-                )} (trigger ${pendingBO.trigger.toFixed(2)})`
-              );
-              pendingBO = null;
+              // stop-limit mode (more conservative)
+              const lim = pendingBO.limit;
+              if (Number.isFinite(lim) && fillIfTriggered > lim) {
+                boMissedLimit++;
+                console.log(
+                  `[BT][BO] miss  ${code} (open ${fillIfTriggered.toFixed(
+                    2
+                  )} > limit ${lim.toFixed(2)})`
+                );
+                pendingBO = null;
+              } else {
+                const actualFill =
+                  today.open >= pendingBO.trigger
+                    ? Math.min(today.open, lim)
+                    : pendingBO.trigger;
+
+                open = {
+                  entryIdx: i,
+                  entry: r2(actualFill),
+                  stop: Math.round(pendingBO.stop),
+                  stopInit: Math.round(pendingBO.stop),
+                  target: Math.round(pendingBO.target),
+                  strategy: "BO",
+                };
+                boFilled++;
+                console.log(
+                  `[BT][BO] fill  ${code} @${open.entry.toFixed(
+                    2
+                  )} (trigger ${pendingBO.trigger.toFixed(2)} | stop-limit)`
+                );
+                pendingBO = null;
+              }
             }
           } else if (pendingBO.age > BO_MAX_AGE) {
             boExpired++;
@@ -294,12 +340,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               strategy: "DIP",
             };
             signalsExecuted++;
-          } else if (ENABLE_BO && !pendingBO) {
-            // PRE-BREAKOUT plan → place pending order
+          } else {
+            // PRE-BREAKOUT: place or *replace* pending order with fresher/higher trigger
             const trigger = Number(
               sig?.trigger ?? sig?.suggestedOrder?.trigger
             );
-            const limit = Number(sig?.suggestedOrder?.limit);
+            const baseLimit = Number(sig?.suggestedOrder?.limit);
             const iStop = Number(
               sig?.smartStopLoss ??
                 sig?.stopLoss ??
@@ -316,27 +362,64 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               Number.isFinite(iStop) &&
               Number.isFinite(fTarget)
             ) {
-              pendingBO = {
-                trigger,
-                limit:
-                  BO_USE_LIMIT && Number.isFinite(limit) ? limit : Infinity,
-                stop: Math.round(iStop),
-                target: Math.round(fTarget),
-                createdIdx: i,
-                age: 0,
-              };
-              boPlanned++;
-              const limMsg =
-                BO_USE_LIMIT && Number.isFinite(limit)
-                  ? ` lim=${limit.toFixed(2)}`
-                  : "";
-              console.log(
-                `[BT][BO] place ${code} @trigger=${trigger.toFixed(
-                  2
-                )}${limMsg} stop=${pendingBO.stop} tgt=${
-                  pendingBO.target
-                } age=0`
-              );
+              // if price already above trigger, skip placing
+              if (today.close >= trigger) {
+                // already through; wait for next coil
+              } else if (!pendingBO) {
+                const limit = BO_USE_LIMIT
+                  ? Number.isFinite(baseLimit)
+                    ? baseLimit
+                    : trigger * (1 + BO_SLIP_TICKS)
+                  : Infinity;
+
+                pendingBO = {
+                  trigger,
+                  limit,
+                  stop: Math.round(iStop),
+                  target: Math.round(fTarget),
+                  createdIdx: i,
+                  age: 0,
+                };
+                boPlanned++;
+                const limMsg = BO_USE_LIMIT ? ` lim=${limit.toFixed(2)}` : "";
+                console.log(
+                  `[BT][BO] place ${code} @trigger=${trigger.toFixed(
+                    2
+                  )}${limMsg} stop=${pendingBO.stop} tgt=${
+                    pendingBO.target
+                  } age=0`
+                );
+              } else {
+                // consider replacing if new trigger is meaningfully higher (avoid micro-noise)
+                const bump = trigger - pendingBO.trigger;
+                if (bump > Math.max(0.02, pendingBO.trigger * 0.002)) {
+                  const newLimit = BO_USE_LIMIT
+                    ? Number.isFinite(baseLimit)
+                      ? baseLimit
+                      : trigger * (1 + BO_SLIP_TICKS)
+                    : Infinity;
+
+                  pendingBO = {
+                    trigger,
+                    limit: newLimit,
+                    stop: Math.round(iStop),
+                    target: Math.round(fTarget),
+                    createdIdx: i,
+                    age: 0,
+                  };
+                  boReplaced++;
+                  const limMsg = BO_USE_LIMIT
+                    ? ` lim=${newLimit.toFixed(2)}`
+                    : "";
+                  console.log(
+                    `[BT][BO] repl. ${code} @trigger=${trigger.toFixed(
+                      2
+                    )}${limMsg} stop=${pendingBO.stop} tgt=${
+                      pendingBO.target
+                    } age=0`
+                  );
+                }
+              }
             }
           }
         } else if (COUNT_BLOCKED) {
@@ -458,7 +541,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   }
 
   console.log(
-    `[BT][BO] SUMMARY | planned=${boPlanned} | filled=${boFilled} | expired=${boExpired} | missedLimit=${boMissedLimit}`
+    `[BT][BO] SUMMARY | planned=${boPlanned} | filled=${boFilled} | expired=${boExpired} | missedLimit=${boMissedLimit} | replaced=${boReplaced} | gapTooWide=${boGapTooWide}`
   );
 
   // Strategy-level logs
@@ -486,9 +569,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       holdBars: HOLD_BARS,
       warmupBars: WARMUP,
       cooldownDays: COOLDOWN,
-      enableBreakouts: ENABLE_BO,
+      // enableBreakouts removed (always true)
       boMaxAgeBars: BO_MAX_AGE,
       boUseLimit: BO_USE_LIMIT,
+      boSlipTicks: BO_SLIP_TICKS,
+      boGapCapPct: BO_GAP_CAP,
       targetTradesPerDay: targetTPD,
       countBlockedSignals: COUNT_BLOCKED,
     },
@@ -523,11 +608,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       filled: boFilled,
       expired: boExpired,
       missedLimit: boMissedLimit,
+      replaced: boReplaced,
+      gapTooWide: boGapTooWide,
       maxAgeBars: BO_MAX_AGE,
       useLimit: BO_USE_LIMIT,
-      enabled: ENABLE_BO,
+      gapCapPct: BO_GAP_CAP,
+      enabled: true, // <— always true
     },
-    // strategy metrics in the return payload, too
     strategy: {
       all: mAll,
       dip: mDIP,
@@ -552,7 +639,7 @@ function computeMetrics(trades) {
     : 0;
   const avgLossPct = losses.length
     ? sum(losses.map((t) => t.returnPct || 0)) / losses.length
-    : 0; // negative or small pos if time-exit loss is tiny
+    : 0;
 
   const rWins = wins.map((t) => t.R || 0);
   const rLosses = losses.map((t) => t.R || 0);
@@ -606,10 +693,7 @@ function delta(a, b) {
   if (!Number.isFinite(a) || !Number.isFinite(b))
     return ("" + (a - b)).toString();
   const d = a - b;
-  const isPct = Math.abs(a) <= 100 && Math.abs(b) <= 100;
-  return isPct
-    ? `${d >= 0 ? "+" : ""}${r2(d)}`
-    : `${d >= 0 ? "+" : ""}${r2(d)}`;
+  return `${d >= 0 ? "+" : ""}${r2(d)}`;
 }
 
 function sum(arr) {
@@ -622,7 +706,7 @@ function fmtInf(x) {
 /* --------------------------- Expose for Bubble -------------------------- */
 // Examples:
 //   window.backtest().then(console.log)
-//   window.backtest({ enableBreakouts: true, targetTradesPerDay: 1.5 }).then(console.log)
+//   window.backtest({ boUseLimit: true, boGapCapPct: 0.015 })
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
@@ -652,9 +736,12 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         filled: 0,
         expired: 0,
         missedLimit: 0,
-        maxAgeBars: 10,
-        useLimit: true,
-        enabled: false,
+        replaced: 0,
+        gapTooWide: 0,
+        maxAgeBars: 15,
+        useLimit: false,
+        gapCapPct: 0.01,
+        enabled: true, // always true
       },
       strategy: {
         all: computeMetrics([]),

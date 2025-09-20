@@ -354,7 +354,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // --- DIP config (softened a touch) ---
+    // DIP (unchanged from your latest except tiny heat ease kept)
     perfectMode: false,
     requireStackedMAs: false,
     requireUptrend: true,
@@ -380,24 +380,38 @@ function getConfig(opts = {}) {
     dipMaxRecoveryPct: 85,
     fibTolerancePct: 8,
     pullbackDryFactor: 1.3,
-    bounceHotFactor: 1.28, // ↓ from 1.35
+    bounceHotFactor: 1.28,
 
-    // --- Pre-breakout setup (looser, but guarded) ---
-    boLookbackBars: 55, // ↑ a bit to find structure
-    boNearResATR: 1.4, // ↑ allow slightly farther coil
-    boNearResPct: 1.8, // ↑ percent window
-    boTightenFactor: 0.8, // ↓ less strict tightening
-    boHigherLowsMin: 1, // ↓ allow 1 clear HL
-    boMinDryPullback: 1.05, // ↓ tolerate a bit heavier pullback
-    boMinRR: 1.35, // ↓ from 1.50
-    boSlipTicks: 0.004, // ↑ small extra slip to avoid misses
-    boStopUnderLowsATR: 0.6, // ↓ closer stop
-    boTargetATR: 2.2, // ↓ slightly easier first target
-    boAltTriggerBars: 3, // new: 3-bar high alternative trigger
-    boAllowInsideBreak: true, // new: inside-day break qualifies if near res & tight
+    // PRE-BREAKOUT (looser *and* smarter)
+    boLookbackBars: 55,
+    boNearResATR: 1.6, // a bit wider window
+    boNearResPct: 2.0,
+    boTightenFactor: 0.85, // still requires contraction
+    boHigherLowsMin: 1, // allow 1 HL or flat base
+    boMinDryPullback: 1.05,
+
+    // Quality/triggering
+    boMinRR: 1.35,
+    boCloseThroughATR: 0.1, // if close isn’t ≥ res + 0.10*ATR, prefer retest
+    boVolThrustX: 1.4, // or volume >= 1.4x 20d average
+
+    // Orders & execution
+    boSlipTicks: 0.008, // wider slip to reduce missed limits
+    boUseStopMarketOnTrigger: true, // stop-market on breakout
+    boStopUnderLowsATR: 0.6,
+    boTargetATR: 2.2,
+
+    // Alternative path: Retest plan
+    boUseRetestPlan: true,
+    boRetestDepthATR: 0.3, // buy pullback to res ± 0.3 ATR
+    boRetestInvalidATE: 0.5, // cancel if close falls >0.5 ATR back into base
+    boAltTriggerBars: 3,
+    boAllowInsideBreak: true,
+
     debug,
   };
 }
+
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
@@ -941,7 +955,7 @@ function detectPreBreakoutSetup(stock, data, cfg) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
-  // 1) Resistance: real pivot OR synthetic (recent swing high)
+  // 1) Resistance (real or synthetic)
   const look = data.slice(-cfg.boLookbackBars);
   let resList = findResistancesAbove(look, px, stock);
   let resistance = resList[0];
@@ -959,7 +973,7 @@ function detectPreBreakoutSetup(stock, data, cfg) {
     };
   }
 
-  // 2) Must be "near" resistance but not through it yet
+  // 2) Near resistance
   const dist = resistance - px;
   const nearByATR = dist / atr <= cfg.boNearResATR;
   const nearByPct =
@@ -968,7 +982,7 @@ function detectPreBreakoutSetup(stock, data, cfg) {
     return { ready: false, waitReason: "not coiled near resistance" };
   }
 
-  // 3) Tightening volatility (use median as fallback for robustness)
+  // 3) Tightening / structure
   const tr = (b) =>
     Math.max(num(b.high) - num(b.low), Math.abs(num(b.close) - num(b.open)));
   const last20 = data.slice(-20);
@@ -980,21 +994,19 @@ function detectPreBreakoutSetup(stock, data, cfg) {
   const baseTR = Math.max(avgTR, medTR);
   const tightening = recentTR <= cfg.boTightenFactor * baseTR;
 
-  // 4) Structure: allow either ≥1 higher-low OR a flat mini-base
   const lows = data.slice(-12).map((b) => num(b.low));
   let higherLows = 0;
   for (let i = 2; i < lows.length; i++) {
     if (lows[i] > lows[i - 1] && lows[i - 1] > lows[i - 2]) higherLows++;
   }
   const baseWin = data.slice(-10);
-  const baseRange =
-    (Math.max(...baseWin.map((b) => num(b.high))) -
-      Math.min(...baseWin.map((b) => num(b.low)))) /
-    Math.max(atr, 1e-9);
-  const flatBaseOK = baseWin.length >= 6 && baseRange <= 1.2; // ≤1.2 ATR tight base
+  const baseHi = Math.max(...baseWin.map((b) => num(b.high)));
+  const baseLo = Math.min(...baseWin.map((b) => num(b.low)));
+  const baseRangeATR = (baseHi - baseLo) / Math.max(atr, 1e-9);
+  const flatBaseOK = baseWin.length >= 6 && baseRangeATR <= 1.2;
   const structureOK = higherLows >= cfg.boHigherLowsMin || flatBaseOK;
 
-  // 5) Volume regime: prefer dry pullback, but allow neutral if very tight
+  // 4) Volume regime (allow neutral if super tight)
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
   const pullbackBars = data
     .slice(-10)
@@ -1003,75 +1015,106 @@ function detectPreBreakoutSetup(stock, data, cfg) {
   const dryPullback =
     pullbackVol <= avgVol20 * cfg.boMinDryPullback ||
     !avgVol20 ||
-    (tightening && baseRange <= 1.0);
+    (tightening && baseRangeATR <= 1.0);
 
-  // 6) Build plan and RR
-  const baseLow = Math.min(...data.slice(-10).map((b) => num(b.low)));
+  // 5) Build plan
+  const baseLow = baseLo;
+  const boxHeight = Math.max(atr * 1.2, resistance - baseLow); // measured move
   const initialStop = baseLow - cfg.boStopUnderLowsATR * atr;
 
-  let firstTarget = resList[1];
-  if (!Number.isFinite(firstTarget)) firstTarget = px + cfg.boTargetATR * atr;
+  // Primary trigger (hair through), optional inside/3-bar
+  const triggerPrimary = resistance + Math.max(0.02, 0.12 * atr);
+  const altRecentHigh = Math.max(
+    ...data.slice(-cfg.boAltTriggerBars).map((b) => num(b.high))
+  );
+  const triggerAlt = cfg.boAllowInsideBreak
+    ? Math.max(triggerPrimary, altRecentHigh + Math.max(0.01, 0.06 * atr))
+    : null;
+  const entryTrigger = triggerAlt
+    ? Math.min(triggerPrimary, triggerAlt)
+    : triggerPrimary;
 
-  // Primary trigger: a hair through resistance
-  const trigger = resistance + Math.max(0.02, 0.12 * atr);
-  const limit = trigger * (1 + cfg.boSlipTicks);
+  // Execution mode
+  const entryLimit = entryTrigger * (1 + cfg.boSlipTicks);
+  const useStopMkt = !!cfg.boUseStopMarketOnTrigger;
 
-  // Alternative trigger: 3-bar high / inside-day break when super tight & near res
-  let altTrigger = null;
-  if (cfg.boAllowInsideBreak && (tightening || baseRange <= 1.0)) {
-    const recentHighN = Math.max(
-      ...data.slice(-cfg.boAltTriggerBars).map((b) => num(b.high))
-    );
-    altTrigger = Math.max(trigger, recentHighN + Math.max(0.01, 0.06 * atr));
-  }
+  // Quality gate at trigger-time: thrust close OR strong volume
+  const d0 = data.at(-1),
+    d1 = data.at(-2);
+  const closeThroughOK =
+    num(d0.close) >= resistance + cfg.boCloseThroughATR * atr;
+  const volThrustOK =
+    avgVol20 > 0 && num(d0.volume) >= cfg.boVolThrustX * avgVol20;
 
-  const useTrigger = altTrigger ? Math.min(altTrigger, trigger) : trigger;
+  // First target: measured move, fall back to ATR or next resistance
+  let firstTarget =
+    resistance + Math.max(boxHeight * 0.8, cfg.boTargetATR * atr);
+  if (resList[1]) firstTarget = Math.max(firstTarget, resList[1]);
 
-  const risk = Math.max(0.01, useTrigger - initialStop);
-  const reward = Math.max(0, firstTarget - useTrigger);
+  // RR check at trigger price
+  const risk = Math.max(0.01, entryTrigger - initialStop);
+  const reward = Math.max(0, firstTarget - entryTrigger);
   const ratio = reward / risk;
 
-  const ready =
+  const readyCore =
     tightening &&
     structureOK &&
     dryPullback &&
     ratio >= Math.max(cfg.boMinRR, 1.25);
 
+  if (!readyCore) {
+    return {
+      ready: false,
+      waitReason: `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
+        2
+      )}`,
+    };
+  }
+
+  // Retest plan (if thrust is weak)
+  let retest = null;
+  if (cfg.boUseRetestPlan && !(closeThroughOK || volThrustOK)) {
+    const zoneMid = resistance;
+    const buyLo = zoneMid - cfg.boRetestDepthATR * atr;
+    const buyHi = zoneMid + Math.max(0.05 * atr, 0.01);
+    retest = {
+      retestTrigger: buyLo, // stop-limit or limit on pullback
+      retestLimit: buyHi,
+      cancelIfCloseBackInBaseATR: cfg.boRetestInvalidATE,
+      note: "Breakout lacked thrust; buy the retest of breakout zone.",
+    };
+  }
+
   return {
-    ready,
-    waitReason: ready
-      ? ""
-      : `tight=${tightening}, struct=${structureOK}, dry=${dryPullback}, RR=${ratio.toFixed(
-          2
-        )}`,
-    entryTrigger: useTrigger,
-    entryLimit: useTrigger * (1 + cfg.boSlipTicks),
+    ready: true,
+    waitReason: "",
+    entryTrigger,
+    entryLimit,
+    useStopMarket: useStopMkt,
     initialStop,
     firstTarget,
     nearestRes: resistance,
-    why: ready
-      ? `Coil near ${resistance.toFixed(
-          0
-        )} with tightening ranges, higher lows/flat base; RR ${ratio.toFixed(
-          2
-        )}`
-      : "",
+    why: `Coil near ${resistance.toFixed(0)}; contraction ${
+      tightening ? "OK" : "weak"
+    }, structure ${structureOK ? "OK" : "weak"}; RR ${ratio.toFixed(2)}${
+      closeThroughOK || volThrustOK ? " with thrust" : " (plan retest)"
+    }`,
     diagnostics: {
       resistance,
-      nearByATR,
-      nearByPct,
+      baseLow,
+      boxHeight,
+      baseRangeATR,
       recentTR,
       avgTR,
       medTR,
-      baseTR,
-      baseRange,
-      higherLows,
-      atr,
       ratio,
-      altTriggerUsed: !!altTrigger,
+      closeThroughOK,
+      volThrustOK,
     },
+    retestPlan: retest,
   };
 }
+
 
 /* =========================== Utilities =========================== */
 function sma(data, n, field = "close") {
