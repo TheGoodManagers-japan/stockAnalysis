@@ -1,4 +1,4 @@
-// /scripts/backtest.js — swing-period backtest (browser)
+// /scripts/backtest.js — swing-period backtest (browser) with diagnostics & throughput target
 // No trade management; entry on buyNow=true; exit on stop/target/time-limit.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -52,7 +52,11 @@ async function fetchHistory(ticker, fromISO, toISO) {
  * Backtest (swing period).
  * @param {string[]|object} tickersOrOpts [] or options-only
  * @param {object} [maybeOpts] if first arg is array
- * opts: { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=10 }
+ * opts:
+ *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=10,
+ *     appendTickers?: string[],                    // optional extra universe
+ *     targetTradesPerDay?: number,                 // throughput goal (e.g., 1.5)
+ *     countBlockedSignals?: boolean }              // if true, also count signals when blocked (perf hit)
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -73,8 +77,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10;
   const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 10;
 
-  if (!tickers.length)
-    tickers = allTickers.map((t) => t.code).slice(0, limit || undefined);
+  const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
+  if (!tickers.length) tickers = allTickers.map((t) => t.code);
+  tickers = [...new Set([...tickers, ...append])];
+  if (limit > 0) tickers = tickers.slice(0, limit);
+
   const codes = tickers.map((c) =>
     c.endsWith(".T")
       ? c.toUpperCase()
@@ -83,6 +90,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const byTicker = [];
   const globalTrades = [];
+  const tradingDays = new Set(); // exact day count in the tested window
+
+  // --- diagnostics (signals & blockers) ---
+  let signalsTotal = 0; // buyNow=true evaluated while eligible (or also when blocked if enabled)
+  let signalsAfterWarmup = 0; // buyNow=true when i>=WARMUP
+  let signalsWhileFlat = 0; // buyNow=true when flat & past cooldown
+  let signalsInvalid = 0; // buyNow=true but stop/target invalid
+  let signalsRiskBad = 0; // buyNow=true but stop >= price
+  let signalsExecuted = 0; // actual entries taken
+
+  let blockedInTrade = 0; // bars where we were in a position
+  let blockedCooldown = 0; // bars where cooldown prevented entry
+  let blockedWarmup = 0; // bars before warmup
+
+  const COUNT_BLOCKED = !!opts.countBlockedSignals; // off by default (perf)
 
   console.log(
     `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN}`
@@ -111,6 +133,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       for (let i = 0; i < candles.length; i++) {
         const today = candles[i];
+        tradingDays.add(toISO(today.date)); // exact trading date
         const hist = candles.slice(0, i + 1);
 
         const stock = {
@@ -125,6 +148,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           historicalData: hist,
         };
         enrichForTechnicalScore(stock);
+
+        // blocker counters (why we couldn't enter this bar)
+        if (open) blockedInTrade++;
+        else if (i <= cooldownUntil) blockedCooldown++;
+        else if (i < WARMUP) blockedWarmup++;
 
         // manage open (stop → target → time exit)
         if (open) {
@@ -148,44 +176,66 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               ((exit.price - open.entry) / Math.max(1e-9, open.entry)) * 100;
             const risk = Math.max(0.01, open.entry - open.stopInit);
             const trade = {
-              entryDate: candles[open.entryIdx].date.toISOString().slice(0, 10),
-              exitDate: today.date.toISOString().slice(0, 10),
+              entryDate: toISO(candles[open.entryIdx].date),
+              exitDate: toISO(today.date),
               holdingDays: daysHeld,
               entry: Math.round(open.entry * 100) / 100,
               exit: Math.round(exit.price * 100) / 100,
               stop: open.stopInit,
               target: open.target,
               result: exit.result,
-              exitType: exit.type, // track which exit we hit
+              exitType: exit.type,
               R: Math.round(((exit.price - open.entry) / risk) * 100) / 100,
               returnPct: Math.round(pctRet * 100) / 100,
             };
             trades.push(trade);
             globalTrades.push(trade);
             open = null;
+
+            // cooldown
             cooldownUntil = i + COOLDOWN;
           }
         }
 
-        // look for entry
-        if (!open && i >= WARMUP && i > cooldownUntil) {
+        // look for entry (eligible state)
+        const eligible = !open && i >= WARMUP && i > cooldownUntil;
+
+        if (eligible) {
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
           if (sig?.buyNow) {
+            signalsTotal++;
+            signalsAfterWarmup++;
+            signalsWhileFlat++;
+
             const stop = Number(sig.smartStopLoss ?? sig.stopLoss);
             const target = Number(sig.smartPriceTarget ?? sig.priceTarget);
-            if (
-              Number.isFinite(stop) &&
-              Number.isFinite(target) &&
-              stop < today.close
-            ) {
-              open = {
-                entryIdx: i,
-                entry: today.close, // if you want next-day open realism, swap to candles[i+1]?.open with guard
-                stop: Math.round(stop),
-                stopInit: Math.round(stop),
-                target: Math.round(target),
-              };
+
+            if (!Number.isFinite(stop) || !Number.isFinite(target)) {
+              signalsInvalid++;
+              continue;
             }
+            if (stop >= today.close) {
+              signalsRiskBad++;
+              continue;
+            }
+
+            // EXECUTE: same-day close entry (mirrors your live behavior)
+            open = {
+              entryIdx: i,
+              entry: today.close,
+              stop: Math.round(stop),
+              stopInit: Math.round(stop),
+              target: Math.round(target),
+            };
+            signalsExecuted++;
+          }
+        } else if (COUNT_BLOCKED) {
+          // (optional) Count buyNow signals even when blocked (perf hit)
+          const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
+          if (sig?.buyNow) {
+            signalsTotal++;
+            if (i >= WARMUP) signalsAfterWarmup++;
+            // we do not increment signalsWhileFlat because we're blocked
           }
         }
       }
@@ -251,18 +301,60 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     (t) => t.exitType === "TIME" && t.result === "LOSS"
   ).length;
 
+  // throughput
+  const days = tradingDays.size;
+  const tradesPerDay = days ? totalTrades / days : 0;
+  const targetTPD =
+    Number.isFinite(opts.targetTradesPerDay) && opts.targetTradesPerDay > 0
+      ? Number(opts.targetTradesPerDay)
+      : null;
+
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
   );
 
+  console.log(
+    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup}`
+  );
+
+  console.log(
+    `[BT] DAILY AVG | tradingDays=${days} | trades/day=${tradesPerDay.toFixed(
+      3
+    )}` + (targetTPD ? ` | target=${targetTPD}` : "")
+  );
+
+  if (targetTPD) {
+    const diff = tradesPerDay - targetTPD;
+    if (diff >= 0) {
+      console.log(
+        `[BT] TARGET ✅ You are above target by +${diff.toFixed(3)} trades/day.`
+      );
+    } else {
+      const needed = Math.ceil(Math.abs(diff) * days);
+      console.log(
+        `[BT] TARGET ⚠️  You are below target by ${(-diff).toFixed(
+          3
+        )} trades/day (~${needed} more trades needed over ${days} days).`
+      );
+    }
+  }
+
   return {
     from: FROM,
     to: TO,
-    params: { holdBars: HOLD_BARS, warmupBars: WARMUP, cooldownDays: COOLDOWN },
+    params: {
+      holdBars: HOLD_BARS,
+      warmupBars: WARMUP,
+      cooldownDays: COOLDOWN,
+      targetTradesPerDay: targetTPD,
+      countBlockedSignals: COUNT_BLOCKED,
+    },
     totalTrades,
     winRate,
     avgReturnPct,
     avgHoldingDays,
+    tradesPerDay,
+    tradingDays: days,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
@@ -270,15 +362,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       timeWins: timeExitWins,
       timeLosses: timeExitLosses,
     },
+    signals: {
+      total: signalsTotal,
+      afterWarmup: signalsAfterWarmup,
+      whileFlat: signalsWhileFlat,
+      executed: signalsExecuted,
+      invalid: signalsInvalid,
+      riskStopGtePx: signalsRiskBad,
+      blocked: {
+        inTrade: blockedInTrade,
+        cooldown: blockedCooldown,
+        warmup: blockedWarmup,
+      },
+    },
     byTicker,
   };
 }
 
 // Expose for Bubble
-// Usage:
-//   window.backtest().then(...)
-//   window.backtest({ holdBars: 8, months: 3 }).then(...)
-//   window.backtest(["8058","6981"]).then(...)
+// Examples:
+//   window.backtest().then(console.log)
+//   window.backtest({ targetTradesPerDay: 1.5 }).then(console.log)
+//   window.backtest({ appendTickers: ["1301","1332"], countBlockedSignals: true }).then(console.log)
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
@@ -291,7 +396,18 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       winRate: 0,
       avgReturnPct: 0,
       avgHoldingDays: 0,
+      tradesPerDay: 0,
+      tradingDays: 0,
       exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      signals: {
+        total: 0,
+        afterWarmup: 0,
+        whileFlat: 0,
+        executed: 0,
+        invalid: 0,
+        riskStopGtePx: 0,
+        blocked: { inTrade: 0, cooldown: 0, warmup: 0 },
+      },
       byTicker: [],
       error: String(e?.message || e),
     };
