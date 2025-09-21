@@ -172,13 +172,8 @@ function cfFinalizeAgg(agg) {
 /* ----------- NORMALIZER: collapse verbose reasons into buckets ----------- */
 function normalizeRejectedReason(reasonRaw) {
   if (!reasonRaw) return "unspecified";
-
   let r = String(reasonRaw).trim();
-
-  // Strip analyzer prefix if present
   r = r.replace(/^DIP not ready:\s*/i, "");
-
-  // Collapse common verbose families
   if (/^bounce weak/i.test(r)) return "bounce weak / no quality pattern";
   if (/^no meaningful pullback/i.test(r)) return "no meaningful pullback";
   if (/^already recovered/i.test(r)) return "already recovered > cap";
@@ -190,17 +185,41 @@ function normalizeRejectedReason(reasonRaw) {
     return "no MA/structure support";
   if (/^DIP conditions not fully met/i.test(r))
     return "conditions not fully met";
-
-  // Gates / RR catch-alls
   if (/^Structure gate/i.test(r)) return "structure gate";
   if (/^DIP blocked \(Perfect gate\)/i.test(r)) return "perfect-mode gate";
   if (/^DIP guard veto:/i.test(reasonRaw)) return "guard veto";
   if (/^DIP RR too low:/i.test(reasonRaw)) return "RR too low";
-
-  // Generic: strip any parenthesized details & numbers to avoid key explosion
   r = r.replace(/\([^)]*\)/g, "");
   r = r.replace(/\s{2,}/g, " ").trim();
   return r.toLowerCase();
+}
+
+/* ---------------- Sentiment combo aggregation ---------------- */
+function sentiKey(ST, LT) {
+  const st = Number.isFinite(ST) ? ST : 4;
+  const lt = Number.isFinite(LT) ? LT : 4;
+  return `LT${lt}-ST${st}`;
+}
+function sentiInit() {
+  return { total: 0, wins: 0, sumRetPct: 0, sumR: 0 };
+}
+function sentiUpdate(agg, outcome) {
+  agg.total++;
+  if (outcome.result === "WIN") agg.wins++;
+  agg.sumRetPct += outcome.returnPct || 0;
+  agg.sumR += outcome.R || 0;
+}
+function sentiFinalize(agg) {
+  const wr = agg.total ? (agg.wins / agg.total) * 100 : 0;
+  const avgRet = agg.total ? agg.sumRetPct / agg.total : 0;
+  const expR = agg.total ? agg.sumR / agg.total : 0;
+  return {
+    count: agg.total,
+    wins: agg.wins,
+    winRate: +wr.toFixed(2),
+    avgReturnPct: +avgRet.toFixed(2),
+    expR: +expR.toFixed(2),
+  };
 }
 
 /**
@@ -300,11 +319,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     rejectedBuys: {
       totalSimulated: 0,
       winners: 0,
-      byReasonRaw: Object.create(null), // normalizedReason -> raw agg
-      examples: Object.create(null), // normalizedReason -> [{...}]
+      byReasonRaw: Object.create(null),
+      examples: Object.create(null),
       summary: { total: 0, winners: 0, winRate: 0 },
       topK: TOP_K,
     },
+  };
+
+  // -------- Sentiment combo aggregation --------
+  const sentiment = {
+    actual: Object.create(null), // key: LT*-ST*
+    rejected: Object.create(null), // key: LT*-ST*
+    bestByWinRate: { actual: [], rejected: [] },
   };
 
   console.log(
@@ -392,9 +418,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               exitType: exit.type,
               R: r2((exit.price - open.entry) / risk),
               returnPct: r2(pctRet),
+              ST: open.ST, // sentiment at entry
+              LT: open.LT,
             };
             trades.push(trade);
             globalTrades.push(trade);
+
+            // sentiment aggregation (actual lane)
+            const k = sentiKey(open.ST, open.LT);
+            if (!sentiment.actual[k]) sentiment.actual[k] = sentiInit();
+            sentiUpdate(sentiment.actual[k], {
+              result: trade.result,
+              returnPct: trade.returnPct,
+              R: trade.R,
+            });
+
             open = null;
             cooldownUntil = i + COOLDOWN;
           }
@@ -409,6 +447,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             debugLevel: "verbose",
           });
 
+          // compute sentiment once here so both lanes use the same snapshot
+          const senti = getComprehensiveMarketSentiment(stock, hist);
+          const ST = senti?.shortTerm?.score ?? 4;
+          const LT = senti?.longTerm?.score ?? 4;
+
           // --- Telemetry: trend observed
           const trend = sig?.debug?.ms?.trend;
           if (trend && telemetry.trends.hasOwnProperty(trend))
@@ -420,9 +463,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             signalsAfterWarmup++;
             signalsWhileFlat++;
 
-            const senti = getComprehensiveMarketSentiment(stock, hist);
-            const ST = senti?.shortTerm?.score ?? 4;
-            const LT = senti?.longTerm?.score ?? 4;
             if (!shouldAllowDIP(ST, LT)) {
               blockedBySentiment_DIP++;
               continue;
@@ -458,6 +498,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               stop: Math.round(stop),
               stopInit: Math.round(stop),
               target: Math.round(target),
+              ST,
+              LT,
             };
             signalsExecuted++;
           } else {
@@ -527,6 +569,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   HOLD_BARS
                 );
 
+                // sentiment aggregation (rejected lane)
+                const k = sentiKey(ST, LT);
+                if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
+                sentiUpdate(sentiment.rejected[k], outcome);
+
                 parallel.rejectedBuys.totalSimulated++;
                 if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
 
@@ -554,6 +601,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                         exitType: outcome.exitType,
                         R: +(outcome.R || 0).toFixed(2),
                         returnPct: +(outcome.returnPct || 0).toFixed(2),
+                        ST,
+                        LT,
                       });
                     }
                   }
@@ -662,11 +711,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const top = rows.slice(0, parallel.rejectedBuys.topK);
   const rest = rows.slice(parallel.rejectedBuys.topK);
 
-  // Build trimmed object
   const byReason = {};
   for (const r of top) byReason[r.reason] = r.fin;
 
-  // Merge the rest into OTHER
   if (rest.length) {
     const otherAgg = cfInitAgg();
     for (const r of rest) {
@@ -674,12 +721,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       otherAgg.winners += r.agg.winners;
       otherAgg.rPos += r.agg.rPos;
       otherAgg.rNeg += r.agg.rNeg;
-      // Do not append arrays to keep memory small
     }
     byReason.OTHER = cfFinalizeAgg(otherAgg);
   }
 
-  // Keep examples only for top reasons
   const examples = {};
   for (const r of top) {
     examples[r.reason] = (parallel.rejectedBuys.examples[r.reason] || []).slice(
@@ -696,15 +741,33 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     winRate: cfTotal ? +((cfWins / cfTotal) * 100).toFixed(2) : 0,
   };
 
-  // Replace raw with trimmed
   parallel.rejectedBuys = {
     totalSimulated: cfTotal,
     winners: cfWins,
     summary,
     topK: TOP_K,
-    byReason, // compact: top-K + OTHER
-    examples, // only for top reasons, capped
+    byReason,
+    examples,
   };
+
+  // ---- finalize sentiment tables ----
+  function finalizeSentiTable(obj) {
+    const out = {};
+    for (const k of Object.keys(obj)) out[k] = sentiFinalize(obj[k]);
+
+    // ranking list
+    const ranked = Object.entries(out)
+      .map(([k, v]) => ({ key: k, ...v }))
+      .sort((a, b) =>
+        b.winRate !== a.winRate ? b.winRate - a.winRate : b.count - a.count
+      );
+    return { combos: out, bestByWinRate: ranked.slice(0, 15) };
+  }
+
+  const sentiActual = finalizeSentiTable(sentiment.actual);
+  const sentiRejected = finalizeSentiTable(sentiment.rejected);
+  sentiment.bestByWinRate.actual = sentiActual.bestByWinRate;
+  sentiment.bestByWinRate.rejected = sentiRejected.bestByWinRate;
 
   // ---- logs ----
   console.log(
@@ -781,7 +844,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       dip: computeMetrics(all),
     },
     telemetry,
-    parallel, // summarized parallel lane
+    parallel, // summarized parallel lane (rejected buys)
+    sentiment: {
+      // NEW: sentiment combo analysis
+      actual: sentiActual.combos,
+      rejected: sentiRejected.combos,
+      bestByWinRate: sentiment.bestByWinRate,
+    },
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
 
@@ -849,6 +918,7 @@ function sum(arr) {
 // Examples:
 //   window.backtest().then(console.log)
 //   window.backtest({ warmupBars: 40, cooldownDays: 2 })
+//   window.backtest({ topRejectedReasons: 8, examplesCap: 3 })
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
@@ -902,6 +972,11 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
           byReason: {},
           examples: {},
         },
+      },
+      sentiment: {
+        actual: {},
+        rejected: {},
+        bestByWinRate: { actual: [], rejected: [] },
       },
       ...(!!(
         maybeOpts?.includeByTicker ||
