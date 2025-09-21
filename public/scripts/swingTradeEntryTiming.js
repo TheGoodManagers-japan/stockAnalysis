@@ -1,10 +1,67 @@
 // /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only)
 import { detectDipBounce } from "./dip.js";
 
+/* ============================ Telemetry ============================ */
+function teleInit() {
+  return {
+    context: {},
+    gates: {
+      priceAction: { pass: false, why: "" },
+      structure: { pass: false, why: "" },
+      stacked: { pass: false, why: "" },
+    },
+    dip: { trigger: false, waitReason: "", why: "", diagnostics: {} },
+    rr: {
+      checked: false,
+      acceptable: false,
+      ratio: NaN,
+      need: NaN,
+      risk: NaN,
+      reward: NaN,
+      stop: NaN,
+      target: NaN,
+    },
+    guard: { checked: false, veto: false, reason: "", details: {} },
+    outcome: { buyNow: false, reason: "" },
+    reasons: [],
+    trace: [], // copies tracer logs when debug is on
+  };
+}
+
+/* ============================ Tracing Utils ============================ */
+function mkTracer(opts = {}) {
+  const level = opts.debugLevel || "normal"; // "off" | "normal" | "verbose"
+  const logs = [];
+  const emit = (e) => {
+    logs.push(e);
+    try {
+      if (typeof opts.onTrace === "function") opts.onTrace(e);
+    } catch {}
+  };
+  const should = (lvl) =>
+    level !== "off" && (level === "verbose" || lvl !== "debug");
+
+  const T = (module, step, ok, msg, ctx = {}, lvl = "info") => {
+    if (!should(lvl)) return;
+    emit({
+      ts: Date.now(),
+      module,
+      step,
+      ok: !!ok,
+      msg: String(msg || ""),
+      ctx,
+    });
+  };
+  T.logs = logs;
+  return T;
+}
+
 // Public API
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
   const reasons = [];
+  const tele = teleInit();
+  const T = mkTracer(opts);
 
   // ---- Validate & prep ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
@@ -18,7 +75,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
     const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
-    return withNo(r, {
+    const out = withNo(r, {
       reasons: [r],
       pxNow,
       ms: ms0,
@@ -26,6 +83,18 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       stock,
       data,
     });
+    out.telemetry = {
+      ...tele,
+      context: {
+        ticker: stock?.ticker,
+        bars: Array.isArray(historicalData) ? historicalData.length : 0,
+      },
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    if (out.debug) out.debug.trace = T.logs;
+    return out;
   }
 
   const data = [...historicalData].sort(
@@ -47,7 +116,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
     const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
-    return withNo(r, {
+    const out = withNo(r, {
       reasons: [r],
       pxNow,
       ms: ms0,
@@ -55,6 +124,15 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       stock,
       data,
     });
+    out.telemetry = {
+      ...tele,
+      context: { ticker: stock?.ticker, bars: data.length },
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    if (out.debug) out.debug.trace = T.logs;
+    return out;
   }
 
   // Robust context
@@ -64,6 +142,23 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
   const ms = getMarketStructure(stock, data);
+
+  tele.context = {
+    ticker: stock?.ticker,
+    px,
+    openPx,
+    prevClose,
+    dayPct,
+    trend: ms.trend,
+    ma: {
+      ma5: ms.ma5,
+      ma25: ms.ma25,
+      ma50: ms.ma50,
+      ma75: ms.ma75,
+      ma200: ms.ma200,
+    },
+    perfectMode: cfg.perfectMode,
+  };
 
   // Regime presets
   const presets = {
@@ -94,12 +189,12 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
 
   const gateWhy = !priceActionGate
-    ? `Price action gate failed: px ${fmt(px)} <= max(open ${fmt(
-        openPx
-      )}, prevClose ${fmt(prevClose)}) and dayPct ${dayPct.toFixed(2)}% < ${
-        cfg.redDayMaxDownPct
-      }% threshold.`
+    ? `px ${fmt(px)} ≤ max(open ${fmt(openPx)}, prevClose ${fmt(
+        prevClose
+      )}) & dayPct ${dayPct.toFixed(2)}% < ${cfg.redDayMaxDownPct}%`
     : "";
+
+  tele.gates.priceAction = { pass: !!priceActionGate, why: gateWhy };
 
   const structureGateOk =
     !cfg.requireUptrend ||
@@ -108,8 +203,18 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ms.trend === "WEAK_UP") &&
       px >= (ms.ma5 || 0) * 0.998);
 
+  tele.gates.structure = {
+    pass: !!structureGateOk,
+    why: structureGateOk ? "" : "trend not up or price < MA5",
+  };
+
   const stackedOk =
     !cfg.perfectMode || !cfg.requireStackedMAs || !!ms.stackedBull;
+
+  tele.gates.stacked = {
+    pass: !!stackedOk,
+    why: stackedOk ? "" : "MAs not stacked bullishly",
+  };
 
   const candidates = [];
   const checks = {};
@@ -123,16 +228,26 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     findResistancesAbove,
     findSupportsBelow,
     inferTickFromPrice,
+    tracer: T, // allow dip.js to breadcrumb if desired
   };
 
   // ======================= DIP =======================
   if (!stackedOk) {
-    reasons.push("DIP blocked (Perfect gate): MAs not stacked bullishly.");
+    const msg = "DIP blocked (Perfect gate): MAs not stacked bullishly.";
+    reasons.push(msg);
   } else if (!structureGateOk) {
-    reasons.push("Structure gate: trend not up or price < MA5.");
+    const msg = "Structure gate: trend not up or price < MA5.";
+    reasons.push(msg);
   } else {
     const dip = detectDipBounce(stock, data, cfg, U);
     checks.dip = dip;
+    tele.dip = {
+      trigger: !!dip.trigger,
+      waitReason: dip.waitReason || "",
+      why: dip.why || "",
+      diagnostics: dip.diagnostics || {},
+    };
+
     if (!dip.trigger) {
       reasons.push(`DIP not ready: ${dip.waitReason}`);
     } else if (!priceActionGate) {
@@ -142,6 +257,17 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         kind: "DIP",
         data,
       });
+      tele.rr = {
+        checked: true,
+        acceptable: !!rr.acceptable,
+        ratio: rr.ratio,
+        need: rr.need,
+        risk: rr.risk,
+        reward: rr.reward,
+        stop: rr.stop,
+        target: rr.target,
+      };
+
       if (!rr.acceptable) {
         reasons.push(
           `DIP RR too low: ratio ${rr.ratio.toFixed(
@@ -161,6 +287,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           dip.nearestRes,
           "DIP"
         );
+        tele.guard = {
+          checked: true,
+          veto: !!gv.veto,
+          reason: gv.reason || "",
+          details: gv.details || {},
+        };
+
         if (gv.veto) {
           reasons.push(
             `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
@@ -191,6 +324,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       top.push("Trend is DOWN (signals allowed, but RR/guards may reject).");
 
     const reason = buildNoReason(top, reasons);
+    tele.outcome = { buyNow: false, reason };
+    tele.reasons = reasons.slice();
 
     // Provisional plan even when not buyable
     const atr = Math.max(
@@ -236,6 +371,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           prevClose,
           cfg,
           provisional: { atr, supports, resList, rr0 },
+          trace: T.logs,
         }
       : undefined;
 
@@ -248,6 +384,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       smartPriceTarget: deRound(toTick(round0(rr0.target), stock)),
       timeline: [],
       debug,
+      telemetry: { ...tele, trace: T.logs },
     };
   }
 
@@ -266,10 +403,19 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         openPx,
         prevClose,
         cfg,
+        trace: T.logs,
       }
     : undefined;
 
   const swingTimeline = buildSwingTimeline(px, best, best.rr, ms);
+
+  tele.outcome = {
+    buyNow: true,
+    reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
+      best.why
+    }`,
+  };
+  tele.reasons = reasons.slice();
 
   return {
     buyNow: true,
@@ -282,6 +428,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     smartPriceTarget: deRound(toTick(round0(best.target), stock)),
     timeline: swingTimeline,
     debug,
+    telemetry: { ...tele, trace: T.logs },
   };
 }
 
@@ -406,7 +553,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp);
   if (cfg.perfectMode) need = Math.max(need, 3.0);
 
-  // …and **volatility-aware** tweak (ATR% of price)
+  // …and volatility-aware tweak (ATR% of price)
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.1); // tight regime → slightly easier
   if (atrPct >= 3.0) need = Math.max(need, 1.5); // noisy regime → stricter

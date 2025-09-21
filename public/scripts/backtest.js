@@ -12,6 +12,27 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+/* ---------------- Small helpers for telemetry aggregation ---------------- */
+const add = (obj, key, inc = 1) => {
+  if (!key && key !== 0) return;
+  const k = String(key);
+  obj[k] = (obj[k] || 0) + inc;
+};
+const pushIf = (arr, v) => {
+  if (v !== undefined) arr.push(v);
+};
+const mean = (arr) =>
+  arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+const pct = (n) => Math.round(n * 100) / 100;
+const bucket = (x, edges) => {
+  // returns a label like "<=1.0", "(1.0,2.0]", ">5.0"
+  if (!Number.isFinite(x)) return "NaN";
+  for (let i = 0; i < edges.length; i++) {
+    if (x <= edges[i]) return `<=${edges[i]}`;
+  }
+  return `>${edges[edges.length - 1]}`;
+};
+
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
   if (!/\.T$/.test(s)) s = s.replace(/\..*$/, "") + ".T";
@@ -52,17 +73,166 @@ async function fetchHistory(ticker, fromISO, toISO) {
 
 /* ---------------- ST/LT gating policy (1..7 where 1=strong bull) ---------------- */
 function shouldAllow(kind, ST, LT) {
-  // Defaults if missing
   const st = Number.isFinite(ST) ? ST : 4;
   const lt = Number.isFinite(LT) ? LT : 4;
 
   if (kind === "BO") {
-    // Prefer bull LT and neutral/bull ST
-    // allow if: LT in [1..3] and ST in [2..4]; or LT=2 and ST=5 only if very close to 4 (we can't see that here, so disallow 5)
     return lt <= 7 && st >= 1 && st <= 7;
   }
-  // DIP: allow pullbacks in broader uptrends; tolerate ST softening (to 5)
   return lt <= 7 && st >= 1 && st <= 7;
+}
+
+/* ============================ Telemetry containers ============================ */
+function makeAgg() {
+  return {
+    signalsSeen: 0, // total calls to analyzer in eligible states
+    signalsBuyNow: 0, // how many returned buyNow=true (before st/lt gate)
+    reasons: {}, // text reasons histogram (from analyze outcome list)
+    gates: {
+      // pass/fail tallies
+      priceAction: { pass: 0, fail: 0 },
+      structure: { pass: 0, fail: 0 },
+      stacked: { pass: 0, fail: 0 },
+    },
+    dip: {
+      triggered: 0,
+      notReady: 0,
+      waitReasons: {}, // DIP-specific waitReason histogram
+      checks: {}, // optional stage flags if dip.js exposes diagnostics.checks
+    },
+    rr: {
+      checked: 0,
+      acceptable: 0,
+      rejected: 0,
+      ratioDist: {}, // buckets of rr.ratio
+      needDist: {}, // buckets of rr.need
+      riskDist: {}, // buckets of rr.risk (absolute)
+      rewardDist: {}, // buckets of rr.reward (absolute)
+      ratios: [], // raw numbers (for mean)
+      needs: [],
+    },
+    guard: {
+      checked: 0,
+      veto: 0,
+      ok: 0,
+      reasons: {}, // veto reason histogram
+      rsiOnVeto: [], // sample RSI when vetoed
+      headroomATR_onVeto: [], // sample headroom when vetoed
+      distMA25_onVeto: [], // sample distFromMA25_ATR when vetoed
+    },
+    // optional per-signal log for debugging (kept small)
+    signals: [], // populated only if keepSignals=true
+  };
+}
+function tallyTelemetry(agg, ticker, isoDate, tele, keepSignals = false) {
+  if (!tele || typeof tele !== "object") return;
+
+  agg.signalsSeen++;
+
+  // Gates
+  const g = tele.gates || {};
+  const bump = (gate, pass) => {
+    if (!gate || !agg.gates[gate]) return;
+    if (pass) agg.gates[gate].pass++;
+    else agg.gates[gate].fail++;
+  };
+  bump("priceAction", !!g.priceAction?.pass);
+  bump("structure", !!g.structure?.pass);
+  bump("stacked", !!g.stacked?.pass);
+
+  // DIP
+  if (tele.dip) {
+    if (tele.dip.trigger) agg.dip.triggered++;
+    else {
+      agg.dip.notReady++;
+      add(agg.dip.waitReasons, tele.dip.waitReason || "unknown");
+    }
+    // optional stage flags from dip.diagnostics.checks (if you added them)
+    const checks = tele.dip.diagnostics?.checks || {};
+    for (const [k, v] of Object.entries(checks)) {
+      const kk = `check:${k}:${v ? "pass" : "fail"}`;
+      add(agg.dip.checks, kk);
+    }
+  }
+
+  // RR
+  if (tele.rr?.checked) {
+    agg.rr.checked++;
+    if (tele.rr.acceptable) {
+      agg.rr.acceptable++;
+    } else {
+      agg.rr.rejected++;
+    }
+    const ratio = Number(tele.rr.ratio);
+    const need = Number(tele.rr.need);
+    const risk = Number(tele.rr.risk);
+    const reward = Number(tele.rr.reward);
+    add(agg.rr.ratioDist, bucket(ratio, [1.0, 1.2, 1.4, 1.6, 2.0, 3.0]));
+    add(agg.rr.needDist, bucket(need, [1.1, 1.2, 1.3, 1.5, 2.0, 3.0]));
+    add(agg.rr.riskDist, bucket(risk, [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]));
+    add(agg.rr.rewardDist, bucket(reward, [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]));
+    pushIf(agg.rr.ratios, Number.isFinite(ratio) ? ratio : undefined);
+    pushIf(agg.rr.needs, Number.isFinite(need) ? need : undefined);
+  }
+
+  // Guard veto
+  if (tele.guard?.checked) {
+    agg.guard.checked++;
+    if (tele.guard.veto) {
+      agg.guard.veto++;
+      add(agg.guard.reasons, tele.guard.reason || "unknown");
+      const d = tele.guard.details || {};
+      pushIf(agg.guard.rsiOnVeto, Number.isFinite(d.rsi) ? d.rsi : undefined);
+      pushIf(
+        agg.guard.headroomATR_onVeto,
+        Number.isFinite(d.headroomATR) ? d.headroomATR : undefined
+      );
+      pushIf(
+        agg.guard.distMA25_onVeto,
+        Number.isFinite(d.distFromMA25_ATR) ? d.distFromMA25_ATR : undefined
+      );
+    } else {
+      agg.guard.ok++;
+    }
+  }
+
+  // Outcome reasons (human-readable)
+  if (Array.isArray(tele.reasons)) {
+    tele.reasons.forEach((r) => add(agg.reasons, r));
+  }
+
+  // Lightweight per-signal log (optional)
+  if (keepSignals) {
+    agg.signals.push({
+      ticker,
+      date: isoDate,
+      buyNow: !!tele.outcome?.buyNow,
+      reason: tele.outcome?.reason || "",
+      gates: {
+        priceAction: !!g.priceAction?.pass,
+        structure: !!g.structure?.pass,
+        stacked: !!g.stacked?.pass,
+      },
+      dip: {
+        trigger: !!tele.dip?.trigger,
+        waitReason: tele.dip?.waitReason || "",
+      },
+      rr: tele.rr?.checked
+        ? {
+            acceptable: !!tele.rr.acceptable,
+            ratio: tele.rr.ratio,
+            need: tele.rr.need,
+            risk: tele.rr.risk,
+            reward: tele.rr.reward,
+          }
+        : null,
+      guard: tele.guard?.checked
+        ? { veto: !!tele.guard.veto, reason: tele.guard.reason || "" }
+        : null,
+    });
+  }
+
+  if (tele.outcome?.buyNow) agg.signalsBuyNow++;
 }
 
 /**
@@ -72,13 +242,13 @@ function shouldAllow(kind, ST, LT) {
  *     appendTickers?: string[],
  *     targetTradesPerDay?: number,
  *     countBlockedSignals?: boolean,
+ *     keepSignals?: boolean,           // NEW: keep per-signal rows in the result
  *     // Breakouts are ALWAYS enabled in this build:
- *     boMaxAgeBars?: number,             // default: 15
- *     boUseLimit?: boolean,              // default: false (stop-market)
- *     boSlipTicks?: number,              // default: 0.006 (limit mode only)
- *     boGapCapPct?: number }             // default: 0.010 = 1% max gap for market fills
+ *     boMaxAgeBars?: number,           // default: 15
+ *     boUseLimit?: boolean,            // default: false (stop-market)
+ *     boSlipTicks?: number,            // default: 0.006 (limit mode only)
+ *     boGapCapPct?: number }           // default: 0.010 = 1% max gap for market fills
  */
-
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
   const opts = Array.isArray(tickersOrOpts)
@@ -127,6 +297,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const globalTrades = [];
   const tradingDays = new Set();
 
+  // NEW telemetry aggregates (global + per-ticker)
+  const aggGlobal = makeAgg();
+
   let signalsTotal = 0;
   let signalsAfterWarmup = 0;
   let signalsWhileFlat = 0;
@@ -141,6 +314,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let blockedBySentiment_BO = 0;
 
   const COUNT_BLOCKED = !!opts.countBlockedSignals;
+  const KEEP_SIGNALS = !!opts.keepSignals;
 
   // Breakout diagnostics
   let boPlanned = 0;
@@ -157,16 +331,22 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
-  const pct = (n) => Math.round(n * 100) / 100;
-
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
 
+    // per-ticker telemetry
+    const aggTicker = makeAgg();
+
     try {
       const candles = await fetchHistory(code, FROM, TO);
       if (candles.length < WARMUP + 2) {
-        byTicker.push({ ticker: code, trades: [], error: "not enough data" });
+        byTicker.push({
+          ticker: code,
+          trades: [],
+          error: "not enough data",
+          telemetry: aggTicker,
+        });
         console.log(
           `[BT] finished ${ti + 1}/${codes.length}: ${code} (not enough data)`
         );
@@ -203,11 +383,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // --- Handle pending breakout before seeking new signals
+        // --- Handle pending breakout before seeking new signals (unchanged)
         if (!open && pendingBO) {
           pendingBO.age++;
 
-          // TRIGGERED?
           if (today.high >= pendingBO.trigger) {
             const fillIfTriggered =
               today.open >= pendingBO.trigger ? today.open : pendingBO.trigger;
@@ -223,9 +402,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     2
                   )}% > cap ${(BO_GAP_CAP * 100).toFixed(2)}%)`
                 );
-                pendingBO = null; // cancel order
+                pendingBO = null;
               } else {
-                // ST/LT **gate at fill time** as well
                 const senti = getComprehensiveMarketSentiment(stock, hist);
                 const ST = senti?.shortTerm?.score ?? 4;
                 const LT = senti?.longTerm?.score ?? 4;
@@ -251,7 +429,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 }
               }
             } else {
-              // stop-limit mode
               const lim = pendingBO.limit;
               if (Number.isFinite(lim) && fillIfTriggered > lim) {
                 boMissedLimit++;
@@ -346,7 +523,25 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
+          // NOTE: analyzer now always includes a `telemetry` block
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
+          const tele = sig?.telemetry || null;
+
+          // tally telemetry (global + per-ticker), regardless of buyNow
+          tallyTelemetry(
+            aggGlobal,
+            code,
+            toISO(today.date),
+            tele,
+            KEEP_SIGNALS
+          );
+          tallyTelemetry(
+            aggTicker,
+            code,
+            toISO(today.date),
+            tele,
+            KEEP_SIGNALS
+          );
 
           if (sig?.buyNow) {
             // DIP — gate by ST/LT before entering
@@ -384,7 +579,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             };
             signalsExecuted++;
           } else {
-            // -------- PRE-BREAKOUT (CREATE/REPLACE ONLY) ----------
+            // -------- PRE-BREAKOUT (CREATE/REPLACE ONLY) ---------- (unchanged)
             const trigger = Number(
               sig?.trigger ?? sig?.suggestedOrder?.trigger
             );
@@ -408,13 +603,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               if (today.close >= trigger) {
                 // already through; wait for next coil
               } else if (!pendingBO) {
-                // Gate ONLY on creation
                 const senti = getComprehensiveMarketSentiment(stock, hist);
                 const ST = senti?.shortTerm?.score ?? 4;
                 const LT = senti?.longTerm?.score ?? 4;
                 if (!shouldAllow("BO", ST, LT)) {
-                  blockedBySentiment_BO++; // count once for creation attempt
-                  // keep pendingBO as null; no further action
+                  blockedBySentiment_BO++;
                 } else {
                   const limit = BO_USE_LIMIT
                     ? Number.isFinite(baseLimit)
@@ -442,7 +635,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   );
                 }
               } else {
-                // Consider REPLACING; gate ONLY if we actually replace
                 const bump = trigger - pendingBO.trigger;
                 if (bump > Math.max(0.02, pendingBO.trigger * 0.002)) {
                   const senti = getComprehensiveMarketSentiment(stock, hist);
@@ -450,8 +642,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   const LT = senti?.longTerm?.score ?? 4;
 
                   if (!shouldAllow("BO", ST, LT)) {
-                    blockedBySentiment_BO++; // count once for replacement attempt
-                    // keep existing pending order; do not cancel for temporary dips
+                    blockedBySentiment_BO++;
                   } else {
                     const newLimit = BO_USE_LIMIT
                       ? Number.isFinite(baseLimit)
@@ -485,8 +676,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
           }
         } else if (COUNT_BLOCKED) {
-          // Optional: count buyNow signals even when blocked
+          // Count buyNow signals even when we can't act,
+          // and also collect telemetry to understand *why* they fired while blocked.
           const sig = analyzeSwingTradeEntry(stock, hist, { debug: false });
+          const tele = sig?.telemetry || null;
+          tallyTelemetry(aggGlobal, code, toISO(today.date), tele, false);
+          tallyTelemetry(aggTicker, code, toISO(today.date), tele, false);
+
           if (sig?.buyNow) {
             signalsTotal++;
             if (i >= WARMUP) signalsAfterWarmup++;
@@ -503,6 +699,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         ticker: code,
         trades,
         counts: { target: tTargets, stop: tStops, time: tTimes },
+        telemetry: aggTicker, // NEW: per-ticker telemetry summary
       });
 
       // running averages after finishing this ticker
@@ -523,6 +720,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         ticker: code,
         trades: [],
         error: String(e?.message || e),
+        telemetry: aggTicker,
       });
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | error: ${String(
@@ -624,6 +822,53 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     )} bars`
   );
 
+  // ---- build the final diagnostic summary from telemetry ----
+  const diag = {
+    // high-level
+    signalsSeen: aggGlobal.signalsSeen,
+    signalsBuyNow: aggGlobal.signalsBuyNow,
+    gates: aggGlobal.gates,
+    reasonsTop: Object.entries(aggGlobal.reasons)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([reason, count]) => ({ reason, count })),
+    dip: {
+      triggered: aggGlobal.dip.triggered,
+      notReady: aggGlobal.dip.notReady,
+      topWaitReasons: Object.entries(aggGlobal.dip.waitReasons)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([why, count]) => ({ why, count })),
+      checks: aggGlobal.dip.checks,
+    },
+    rr: {
+      checked: aggGlobal.rr.checked,
+      acceptable: aggGlobal.rr.acceptable,
+      rejected: aggGlobal.rr.rejected,
+      ratioDist: aggGlobal.rr.ratioDist,
+      needDist: aggGlobal.rr.needDist,
+      riskDist: aggGlobal.rr.riskDist,
+      rewardDist: aggGlobal.rr.rewardDist,
+      meanRatio: pct(mean(aggGlobal.rr.ratios)),
+      meanNeed: pct(mean(aggGlobal.rr.needs)),
+    },
+    guard: {
+      checked: aggGlobal.guard.checked,
+      veto: aggGlobal.guard.veto,
+      ok: aggGlobal.guard.ok,
+      topReasons: Object.entries(aggGlobal.guard.reasons)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([why, count]) => ({ why, count })),
+      avgRSI_onVeto: pct(mean(aggGlobal.guard.rsiOnVeto)),
+      avgHeadroomATR_onVeto: pct(mean(aggGlobal.guard.headroomATR_onVeto)),
+      avgDistMA25ATR_onVeto: pct(mean(aggGlobal.guard.distMA25_onVeto)),
+    },
+    // optional full per-signal rows (disabled by default)
+    signals:
+      KEEP_SIGNALS && Array.isArray(aggGlobal.signals) ? aggGlobal.signals : [],
+  };
+
   return {
     from: FROM,
     to: TO,
@@ -637,6 +882,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       boGapCapPct: BO_GAP_CAP,
       targetTradesPerDay: targetTPD,
       countBlockedSignals: COUNT_BLOCKED,
+      keepSignals: KEEP_SIGNALS,
     },
     totalTrades,
     winRate,
@@ -682,11 +928,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       dip: mDIP,
       bo: mBO,
     },
-    byTicker,
+    diagnostics: diag, // NEW: global telemetry summary
+    byTicker, // includes per-ticker telemetry at byTicker[i].telemetry
   };
 }
-  
-
 
 /* ------------------------ Metrics Helpers & Logs ------------------------ */
 function computeMetrics(trades) {
@@ -817,6 +1062,7 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         dip: computeMetrics([]),
         bo: computeMetrics([]),
       },
+      diagnostics: makeAgg(), // empty telemetry structure for consistency
       byTicker: [],
       error: String(e?.message || e),
     };
