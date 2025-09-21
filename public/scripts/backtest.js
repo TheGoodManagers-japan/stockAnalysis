@@ -54,7 +54,6 @@ async function fetchHistory(ticker, fromISO, toISO) {
 function shouldAllowDIP(ST, LT) {
   const st = Number.isFinite(ST) ? ST : 4;
   const lt = Number.isFinite(LT) ? LT : 4;
-  // Keep simple permissive policy; customize if you want to gate harder.
   return lt <= 7 && st >= 1 && st <= 7;
 }
 
@@ -71,7 +70,6 @@ function bucketize(x, edges = [1.2, 1.4, 1.6, 2.0, 3.0, 5.0]) {
   return `≥${edges[edges.length - 1]}`;
 }
 function extractGuardReason(s) {
-  // e.g. "DIP guard veto: Too far above MA25 (2.45 ATR > 3.3) (RSI=..., ...)."
   if (!s) return "";
   const m = String(s).match(/^DIP guard veto:\s*([^()]+?)(?:\s*\(|$)/i);
   return m ? m[1].trim() : s;
@@ -85,7 +83,6 @@ function afterColon(s, head) {
 }
 
 /* ---------------- Counterfactual helpers (parallel lane) ---------------- */
-// Simulate the same exits as live trades: STOP -> TARGET -> TIME (holdBars)
 function simulateTradeForward(
   candles,
   startIdx,
@@ -129,14 +126,12 @@ function simulateTradeForward(
       };
     }
   }
-  // If we fall off the end of the dataset, treat as time exit at last close.
   const last = candles[candles.length - 1];
-  const res = last.close > entry ? "WIN" : "LOSS";
   return {
     exitType: "TIME",
     exitPrice: last.close,
     holdingDays: candles.length - 1 - startIdx,
-    result: res,
+    result: last.close > entry ? "WIN" : "LOSS",
     R: (last.close - entry) / Math.max(0.01, entry - stop),
     returnPct: ((last.close - entry) / entry) * 100,
   };
@@ -173,11 +168,39 @@ function cfFinalizeAgg(agg) {
     profitFactor: Number.isFinite(pf) ? +pf.toFixed(2) : Infinity,
   };
 }
-function topReasons(sig) {
-  if (Array.isArray(sig?.debug?.reasons) && sig.debug.reasons.length) {
-    return sig.debug.reasons.slice(0, 2); // keep it focused
-  }
-  return [sig?.reason || "unspecified"];
+
+/* ----------- NORMALIZER: collapse verbose reasons into buckets ----------- */
+function normalizeRejectedReason(reasonRaw) {
+  if (!reasonRaw) return "unspecified";
+
+  let r = String(reasonRaw).trim();
+
+  // Strip analyzer prefix if present
+  r = r.replace(/^DIP not ready:\s*/i, "");
+
+  // Collapse common verbose families
+  if (/^bounce weak/i.test(r)) return "bounce weak / no quality pattern";
+  if (/^no meaningful pullback/i.test(r)) return "no meaningful pullback";
+  if (/^already recovered/i.test(r)) return "already recovered > cap";
+  if (/^Headroom too small/i.test(r)) return "headroom too small pre-entry";
+  if (/^bearish RSI divergence/i.test(r)) return "bearish RSI divergence";
+  if (/^MA20 & MA25 both rolling down/i.test(r))
+    return "MA20 & MA25 rolling down (px < MA20)";
+  if (/^not at MA20\/25\/50 or tested structure/i.test(r))
+    return "no MA/structure support";
+  if (/^DIP conditions not fully met/i.test(r))
+    return "conditions not fully met";
+
+  // Gates / RR catch-alls
+  if (/^Structure gate/i.test(r)) return "structure gate";
+  if (/^DIP blocked \(Perfect gate\)/i.test(r)) return "perfect-mode gate";
+  if (/^DIP guard veto:/i.test(reasonRaw)) return "guard veto";
+  if (/^DIP RR too low:/i.test(reasonRaw)) return "RR too low";
+
+  // Generic: strip any parenthesized details & numbers to avoid key explosion
+  r = r.replace(/\([^)]*\)/g, "");
+  r = r.replace(/\s{2,}/g, " ").trim();
+  return r.toLowerCase();
 }
 
 /**
@@ -187,8 +210,10 @@ function topReasons(sig) {
  *     appendTickers?: string[],
  *     targetTradesPerDay?: number,
  *     countBlockedSignals?: boolean,
- *     includeByTicker?: boolean,        // default false
- *     simulateRejectedBuys?: boolean    // default true (parallel lane)
+ *     includeByTicker?: boolean,
+ *     simulateRejectedBuys?: boolean,     // default true
+ *     topRejectedReasons?: number,        // default 12
+ *     examplesCap?: number                // default 5
  *   }
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
@@ -198,7 +223,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     : tickersOrOpts || {};
 
   const INCLUDE_BY_TICKER = !!opts.includeByTicker;
-  const SIM_REJECTED = opts.simulateRejectedBuys ?? true; // <-- parallel lane toggle
+  const SIM_REJECTED = opts.simulateRejectedBuys ?? true;
+  const TOP_K = Number.isFinite(opts.topRejectedReasons)
+    ? Math.max(1, opts.topRejectedReasons)
+    : 12;
+  const EX_CAP = Number.isFinite(opts.examplesCap) ? opts.examplesCap : 5;
 
   const months = Number.isFinite(opts.months) ? Number(opts.months) : 6;
   const to = opts.to ? new Date(opts.to) : new Date();
@@ -225,7 +254,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   );
 
   // Diagnostics
-  const byTicker = []; // returned only if INCLUDE_BY_TICKER
+  const byTicker = [];
   const globalTrades = [];
   const tradingDays = new Set();
 
@@ -252,16 +281,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       stackedGateFailed: 0,
     },
     dip: {
-      notReadyReasons: {}, // reason -> count
-      guardVetoReasons: {}, // reason -> count
+      notReadyReasons: {},
+      guardVetoReasons: {},
     },
     rr: {
-      rejected: {}, // needBucket -> count
-      accepted: {}, // ratioBucket -> count
+      rejected: {},
+      accepted: {},
     },
     examples: {
-      buyNow: [], // small sample
-      rejected: [], // small sample
+      buyNow: [],
+      rejected: [],
     },
   };
   const EXAMPLE_MAX = 5;
@@ -271,10 +300,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     rejectedBuys: {
       totalSimulated: 0,
       winners: 0,
-      byReason: Object.create(null), // reason -> agg
-      examples: Object.create(null), // reason -> [{...}]
-      exampleCap: 5,
+      byReasonRaw: Object.create(null), // normalizedReason -> raw agg
+      examples: Object.create(null), // normalizedReason -> [{...}]
       summary: { total: 0, winners: 0, winRate: 0 },
+      topK: TOP_K,
     },
   };
 
@@ -411,11 +440,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               continue;
             }
 
-            // Telemetry: accepted RR bucket
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
 
-            // Example (small sample)
             if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
               telemetry.examples.buyNow.push({
                 ticker: code,
@@ -441,7 +468,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
             if (Array.isArray(dbg.reasons)) {
               for (const r of dbg.reasons) {
-                // DIP not ready
                 if (typeof r === "string" && r.startsWith("DIP not ready:")) {
                   const why = afterColon(r, "DIP not ready:").replace(
                     /^[:\s]+/,
@@ -449,7 +475,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   );
                   inc(telemetry.dip.notReadyReasons, why || "unspecified");
                 }
-                // Structure/stacked gates
                 if (r === "Structure gate: trend not up or price < MA5.") {
                   telemetry.gates.structureGateFailed++;
                 }
@@ -458,14 +483,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 ) {
                   telemetry.gates.stackedGateFailed++;
                 }
-                // Guard veto
                 if (r.startsWith("DIP guard veto:")) {
                   const reason = extractGuardReason(r);
                   inc(telemetry.dip.guardVetoReasons, reason || "guard");
                 }
-                // RR too low
                 if (r.startsWith("DIP RR too low:")) {
-                  // e.g. "... need 1.40 ..."
                   const m = r.match(/need\s+([0-9.]+)/i);
                   const need = m ? parseFloat(m[1]) : NaN;
                   inc(telemetry.rr.rejected, bucketize(need));
@@ -473,7 +495,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // Example rejected (small sample)
             if (telemetry.examples.rejected.length < EXAMPLE_MAX) {
               telemetry.examples.rejected.push({
                 ticker: code,
@@ -506,27 +527,25 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   HOLD_BARS
                 );
 
-                // Aggregate totals
                 parallel.rejectedBuys.totalSimulated++;
                 if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
 
-                // Attribute to top reasons
-                const reasons = topReasons(sig);
-                for (const reason of reasons) {
-                  if (!parallel.rejectedBuys.byReason[reason]) {
-                    parallel.rejectedBuys.byReason[reason] = cfInitAgg();
-                  }
-                  cfUpdateAgg(parallel.rejectedBuys.byReason[reason], outcome);
+                const reasonsRaw = Array.isArray(sig?.debug?.reasons)
+                  ? sig.debug.reasons.slice(0, 2)
+                  : [sig?.reason || "unspecified"];
 
-                  // Save small sample of winning examples per reason
+                for (const rr of reasonsRaw) {
+                  const key = normalizeRejectedReason(rr);
+                  if (!parallel.rejectedBuys.byReasonRaw[key]) {
+                    parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
+                  }
+                  cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
+
                   if (outcome.result === "WIN") {
-                    if (!parallel.rejectedBuys.examples[reason])
-                      parallel.rejectedBuys.examples[reason] = [];
-                    if (
-                      parallel.rejectedBuys.examples[reason].length <
-                      parallel.rejectedBuys.exampleCap
-                    ) {
-                      parallel.rejectedBuys.examples[reason].push({
+                    if (!parallel.rejectedBuys.examples[key])
+                      parallel.rejectedBuys.examples[key] = [];
+                    if (parallel.rejectedBuys.examples[key].length < EX_CAP) {
+                      parallel.rejectedBuys.examples[key].push({
                         ticker: code,
                         date: toISO(today.date),
                         entry: r2(entry),
@@ -535,7 +554,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                         exitType: outcome.exitType,
                         R: +(outcome.R || 0).toFixed(2),
                         returnPct: +(outcome.returnPct || 0).toFixed(2),
-                        topReasons: reasons,
                       });
                     }
                   }
@@ -544,7 +562,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
           }
         } else if (COUNT_BLOCKED) {
-          // Optional: count buyNow signals even when blocked
           const sig = analyzeSwingTradeEntry(stock, hist, {
             debug: true,
             debugLevel: "verbose",
@@ -569,7 +586,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         });
       }
 
-      // running averages after finishing this ticker
       const total = globalTrades.length;
       const winsSoFar = globalTrades.filter((x) => x.result === "WIN").length;
       const winRateSoFar = total ? pct((winsSoFar / total) * 100) : 0;
@@ -631,30 +647,72 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ? Number(opts.targetTradesPerDay)
       : null;
 
-  // ---- finalize parallel aggregates ----
-  const reasonKeys = Object.keys(parallel.rejectedBuys.byReason);
-  for (const k of reasonKeys) {
-    parallel.rejectedBuys.byReason[k] = cfFinalizeAgg(
-      parallel.rejectedBuys.byReason[k]
+  // ---- finalize & TRIM parallel aggregates ----
+  const raw = parallel.rejectedBuys.byReasonRaw;
+  const rows = Object.keys(raw).map((k) => ({
+    reason: k,
+    agg: raw[k],
+    fin: cfFinalizeAgg(raw[k]),
+  }));
+  rows.sort((a, b) => {
+    if (b.fin.winners !== a.fin.winners) return b.fin.winners - a.fin.winners;
+    return b.fin.total - a.fin.total;
+  });
+
+  const top = rows.slice(0, parallel.rejectedBuys.topK);
+  const rest = rows.slice(parallel.rejectedBuys.topK);
+
+  // Build trimmed object
+  const byReason = {};
+  for (const r of top) byReason[r.reason] = r.fin;
+
+  // Merge the rest into OTHER
+  if (rest.length) {
+    const otherAgg = cfInitAgg();
+    for (const r of rest) {
+      otherAgg.total += r.agg.total;
+      otherAgg.winners += r.agg.winners;
+      otherAgg.rPos += r.agg.rPos;
+      otherAgg.rNeg += r.agg.rNeg;
+      // Do not append arrays to keep memory small
+    }
+    byReason.OTHER = cfFinalizeAgg(otherAgg);
+  }
+
+  // Keep examples only for top reasons
+  const examples = {};
+  for (const r of top) {
+    examples[r.reason] = (parallel.rejectedBuys.examples[r.reason] || []).slice(
+      0,
+      EX_CAP
     );
   }
+
   const cfTotal = parallel.rejectedBuys.totalSimulated || 0;
   const cfWins = parallel.rejectedBuys.winners || 0;
-  parallel.rejectedBuys.summary = {
+  const summary = {
     total: cfTotal,
     winners: cfWins,
     winRate: cfTotal ? +((cfWins / cfTotal) * 100).toFixed(2) : 0,
   };
 
-  // ---- metrics log ----
+  // Replace raw with trimmed
+  parallel.rejectedBuys = {
+    totalSimulated: cfTotal,
+    winners: cfWins,
+    summary,
+    topK: TOP_K,
+    byReason, // compact: top-K + OTHER
+    examples, // only for top reasons, capped
+  };
+
+  // ---- logs ----
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
   );
-
   console.log(
     `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
   );
-
   console.log(
     `[BT] DAILY AVG | tradingDays=${days} | trades/day=${tradesPerDay.toFixed(
       3
@@ -688,6 +746,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       countBlockedSignals: COUNT_BLOCKED,
       includeByTicker: INCLUDE_BY_TICKER,
       simulateRejectedBuys: SIM_REJECTED,
+      topRejectedReasons: TOP_K,
+      examplesCap: EX_CAP,
     },
     totalTrades,
     winRate,
@@ -718,10 +778,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
     strategy: {
       all: computeMetrics(all),
-      dip: computeMetrics(all), // identical (DIP-only)
+      dip: computeMetrics(all),
     },
-    telemetry, // compact, high-signal debug summary
-    parallel, // <-- NEW: separate results for buyNow=false that would have won
+    telemetry,
+    parallel, // summarized parallel lane
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
 
@@ -837,10 +897,10 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         rejectedBuys: {
           totalSimulated: 0,
           winners: 0,
+          summary: { total: 0, winners: 0, winRate: 0 },
+          topK: 12,
           byReason: {},
           examples: {},
-          exampleCap: 5,
-          summary: { total: 0, winners: 0, winRate: 0 },
         },
       },
       ...(!!(
