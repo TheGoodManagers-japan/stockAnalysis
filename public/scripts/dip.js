@@ -32,19 +32,10 @@ export function detectDipBounce(stock, data, cfg, U) {
     reasonTrace.push("MA25 not rising and price below MA25 (weak base)");
   }
 
-  // Gentle slope veto only when *both* MA20 & MA25 roll down and price is under MA20
+  // Gentle slope flags (we'll allow a strong-bounce override later)
   const slopeDown20 = ma20Prev > 0 && ma20 < ma20Prev * 0.998;
   const slopeDown25 = ma25Prev > 0 && ma25 < ma25Prev * 0.998;
-  if (slopeDown20 && slopeDown25 && px < ma20) {
-    const why = "MA20 & MA25 both rolling down with price below MA20";
-    reasonTrace.push(why);
-    return {
-      trigger: false,
-      waitReason: why,
-      diagnostics: { ma20, ma25 },
-      reasonTrace,
-    };
-  }
+  const slopeComboFlag = slopeDown20 && slopeDown25 && px < ma20;
 
   // --- Pullback depth (slightly looser) ---
   const recentBars = data.slice(-10);
@@ -73,9 +64,9 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  const depthOK = recentHigh - dipLow >= Math.max(0.6 * atr, px * 0.003);
+  const depthOK = recentHigh - dipLow >= Math.max(0.5 * atr, px * 0.0025); // was 0.6 ATR / 0.3%
   if (!depthOK) {
-    const why = "dip too shallow (<0.6 ATR or <0.3%)";
+    const why = "dip too shallow (<0.5 ATR or <0.25%)";
     reasonTrace.push(why);
     return {
       trigger: false,
@@ -215,7 +206,8 @@ export function detectDipBounce(stock, data, cfg, U) {
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
 
   // 0.00-ATR bounce fix: treat as "immature" (wait a bar), not "weak"
-  if (bounceStrengthATR <= 0.05) {
+  if (bounceStrengthATR <= 0.03) {
+    // was 0.05
     const why = `bounce immature (${bounceStrengthATR.toFixed(2)} ATR)`;
     reasonTrace.push(why);
     return {
@@ -261,19 +253,19 @@ export function detectDipBounce(stock, data, cfg, U) {
   const basicCloseUp =
     (num(d0.close) > num(d0.open) &&
       num(d0.close) >= ma5 &&
-      bounceStrengthATR >= Math.max(0.65, minStr)) ||
-    (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.85);
+      bounceStrengthATR >= Math.max(0.62, minStr)) || // was 0.65
+    (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.8); // was 0.85
 
   // Bar/volume quality gate (RELAXED a touch)
   const barRange = num(d0.high) - num(d0.low);
   const body = Math.abs(num(d0.close) - num(d0.open));
   const midPrev = (num(d1.high) + num(d1.low)) / 2;
 
-  const rangeQuality = barRange >= 0.6 * atr; // was 0.8
-  const bodyQuality = body >= 0.3 * barRange; // was 0.35
+  const rangeQuality = barRange >= 0.55 * atr; // was 0.6 * ATR
+  const bodyQuality = body >= 0.28 * barRange; // was 0.30 * range
   const closeQuality =
     num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
-  const v20ok = avgVol20 > 0 ? num(d0.volume) >= 1.0 * avgVol20 : true; // was 1.1
+  const v20ok = avgVol20 > 0 ? num(d0.volume) >= 0.95 * avgVol20 : true; // was 1.0
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
@@ -310,9 +302,11 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // If Fib not OK, allow alt path: strong bounce or very dry pullback + clear Y-high
   const fibAltOK =
-    !fibOK && (bounceStrengthATR >= 0.9 || (dryPullback && closeAboveYHigh));
+    !fibOK &&
+    (bounceStrengthATR >= 0.9 ||
+      (dryPullback && (closeAboveYHigh || bounceStrengthATR >= 0.85)));
 
-  // --- Optional: very light RSI divergence veto (self-contained RSI) ---
+  // --- Optional: very light RSI divergence veto (now soft, with override) ---
   function rsiFromDataLocal(arr, length = 14) {
     const n = arr.length;
     if (n < length + 1) return 50;
@@ -349,13 +343,14 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
   const hi1 = recentHighIdx(data.slice(0, -2));
   const hi2 = recentHighIdx(data.slice(0, -10));
+  let bearishDiv = false;
   if (hi1 > 0 && hi2 > 0 && rsiSeries.length >= 8) {
     const p1 = num(data[hi1].high),
       p2 = num(data[hi2].high);
     const r1 = rsiSeries[rsiSeries.length - 1],
       r2 = rsiSeries[Math.max(0, rsiSeries.length - 8)];
-    const bearishDiv = p1 <= p2 * 1.01 && r1 < r2 - 3;
-    if (bearishDiv) {
+    bearishDiv = p1 <= p2 * 1.01 && r1 < r2 - 3;
+    if (bearishDiv && !(closeAboveYHigh || bounceStrengthATR >= 1.05)) {
       const why = "bearish RSI divergence into resistance";
       reasonTrace.push(why);
       return {
@@ -365,25 +360,31 @@ export function detectDipBounce(stock, data, cfg, U) {
         reasonTrace,
       };
     }
+    // soft-pass note (no veto) when reclaimed
+    if (bearishDiv && (closeAboveYHigh || bounceStrengthATR >= 1.05)) {
+      reasonTrace.push(
+        "bearish RSI divergence (soft-pass via reclaim/strength)"
+      );
+    }
   }
 
-  // --- Recovery cap (regime-aware) ---
+  // --- Recovery cap (regime-aware, a touch wider) ---
   const spanRaw = recentHigh - dipLow;
   const span = Math.max(spanRaw, Math.max(0.7 * atr, px * 0.003));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
 
-  const recoveryPctCapped = Math.min(recoveryPct, 180); // allow wide cap for telemetry
+  const recoveryPctCapped = Math.min(recoveryPct, 200); // telemetry cap
 
   // Infer simple regime from MAs (no ms needed)
   const strongUpLike =
     (ma25 > ma50 && ma50 > ma200) || (ma20 > ma25 && ma25 > ma50);
   const upLike = (ma25 >= ma50 && ma50 >= 0) || ma20 >= ma25;
 
-  let maxRec = cfg.dipMaxRecoveryPct; // baseline (135 in orchestrator config)
+  let maxRec = cfg.dipMaxRecoveryPct; // baseline 135
   if (strongUpLike)
-    maxRec = Math.max(maxRec, cfg.dipMaxRecoveryStrongUp || 165);
-  else if (upLike) maxRec = Math.max(maxRec, 155);
-  else maxRec = Math.max(maxRec, 130);
+    maxRec = Math.max(maxRec, cfg.dipMaxRecoveryStrongUp || 175); // was 165
+  else if (upLike) maxRec = Math.max(maxRec, 160); // was 155
+  else maxRec = Math.max(maxRec, 140); // was 130
 
   if (recoveryPctCapped > maxRec) {
     const why = `already recovered ${recoveryPctCapped.toFixed(
@@ -403,7 +404,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const higherLow = dipLow >= prevLow * 0.992 || dipLow >= prevLow - 0.35 * atr;
 
   const volumeRegimeOK =
-    dryPullback || bounceVolHot || bounceStrengthATR >= 0.85;
+    dryPullback || bounceVolHot || closeAboveYHigh || bounceStrengthATR >= 0.85; // allow reclaim as volume substitute
   if (!volumeRegimeOK) {
     const why = "volume regime weak (need dry pullback or hot/strong bounce)";
     reasonTrace.push(why);
@@ -445,6 +446,21 @@ export function detectDipBounce(stock, data, cfg, U) {
     headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
     headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
     // no veto here — guardVeto() decides
+  }
+
+  // ---- Slope combo veto (now *after* bounce/volume with override) ----
+  if (
+    slopeComboFlag &&
+    !(closeAboveYHigh || (bounceStrengthATR >= 1.05 && v20ok))
+  ) {
+    const why = "MA20 & MA25 both rolling down with price below MA20";
+    reasonTrace.push(why);
+    return {
+      trigger: false,
+      waitReason: why,
+      diagnostics: { ma20, ma25 },
+      reasonTrace,
+    };
   }
 
   // --- Final trigger (allow fib OR fibAlt) ---
