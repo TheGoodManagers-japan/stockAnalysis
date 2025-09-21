@@ -38,19 +38,18 @@ export function detectDipBounce(stock, data, cfg, U) {
   const slopeComboFlag = slopeDown20 && slopeDown25 && px < ma20;
 
   // --- Pullback depth (slightly looser) ---
-  // --- Pullback depth (wider window for stability) ---
-  const recentBars = data.slice(-12); // was -10
+  const recentBars = data.slice(-10);
   const recentHigh = Math.max(
-    ...recentBars.slice(0, 6).map((d) => num(d.high))
-  ); // was first 5
-  const dipLow = Math.min(...recentBars.slice(-6).map((d) => num(d.low))); // was last 5
+    ...recentBars.slice(0, 5).map((d) => num(d.high))
+  );
+  const dipLow = Math.min(...recentBars.slice(-5).map((d) => num(d.low)));
 
   const pullbackPct =
     recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
   const pullbackATR = (recentHigh - dipLow) / Math.max(atr, 1e-9);
   const hadPullback =
-    pullbackPct >= Math.min(cfg.dipMinPullbackPct, 0.9) ||
-    pullbackATR >= Math.max(cfg.dipMinPullbackATR, 0.35);
+    pullbackPct >= Math.min(cfg.dipMinPullbackPct, 1.0) ||
+    pullbackATR >= Math.max(cfg.dipMinPullbackATR, 0.4);
 
   if (!hadPullback) {
     const why = `no meaningful pullback (${pullbackPct.toFixed(
@@ -205,6 +204,7 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Bounce confirmation (quality, slightly relaxed) ---
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
+
 
   // "Immature" bounce handling: allow green seed bars to continue to quality checks.
   // This reduces false negatives when the low forms today and the close ≈ low.
