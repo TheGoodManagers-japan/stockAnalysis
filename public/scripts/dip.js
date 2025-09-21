@@ -21,7 +21,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const ma20 = sma(data, 20);
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   const ma50 = num(stock.movingAverage50d) || sma(data, 50);
-  const ma200 = num(stock.movingAverage200d) || sma(data, 200); // <-- ADD THIS
+  const ma200 = num(stock.movingAverage200d) || sma(data, 200);
 
   const ma20Prev = sma(data.slice(0, -1), 20);
   const ma25Prev = sma(data.slice(0, -1), 25);
@@ -213,6 +213,19 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Bounce confirmation (quality, slightly relaxed) ---
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
+
+  // 0.00-ATR bounce fix: treat as "immature" (wait a bar), not "weak"
+  if (bounceStrengthATR <= 0.05) {
+    const why = `bounce immature (${bounceStrengthATR.toFixed(2)} ATR)`;
+    reasonTrace.push(why);
+    return {
+      trigger: false,
+      waitReason: why,
+      diagnostics: { bounceStrengthATR },
+      reasonTrace,
+    };
+  }
+
   const minStr = Math.min(Math.max(cfg.dipMinBounceStrengthATR, 0.6), 0.65);
 
   const closeAboveYHigh =
@@ -359,16 +372,17 @@ export function detectDipBounce(stock, data, cfg, U) {
   const span = Math.max(spanRaw, Math.max(0.7 * atr, px * 0.003));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
 
-  const recoveryPctCapped = Math.min(recoveryPct, 180); // was 140
+  const recoveryPctCapped = Math.min(recoveryPct, 180); // allow wide cap for telemetry
 
   // Infer simple regime from MAs (no ms needed)
   const strongUpLike =
     (ma25 > ma50 && ma50 > ma200) || (ma20 > ma25 && ma25 > ma50);
   const upLike = (ma25 >= ma50 && ma50 >= 0) || ma20 >= ma25;
 
-  let maxRec = cfg.dipMaxRecoveryPct; // baseline (135 in your config)
-  if (strongUpLike) maxRec = Math.max(maxRec, 160);
-  else if (upLike) maxRec = Math.max(maxRec, 150);
+  let maxRec = cfg.dipMaxRecoveryPct; // baseline (135 in orchestrator config)
+  if (strongUpLike)
+    maxRec = Math.max(maxRec, cfg.dipMaxRecoveryStrongUp || 165);
+  else if (upLike) maxRec = Math.max(maxRec, 155);
   else maxRec = Math.max(maxRec, 130);
 
   if (recoveryPctCapped > maxRec) {
@@ -421,28 +435,16 @@ export function detectDipBounce(stock, data, cfg, U) {
     return out;
   }
 
-  // --- Pre-entry headroom veto (with clustering) — RESPECT CONFIG (no re-tighten) ---
+  // --- Pre-entry headroom check (DIAGNOSTIC ONLY; veto is handled in guard) ---
   const rawResEarly = findResistancesAbove(data, px, stock);
   const resListEarly = clusterLevels(rawResEarly, atr, 0.3);
   const nearestResEarly = resListEarly.length ? resListEarly[0] : null;
+  let headroomATR = null,
+    headroomPct = null;
   if (nearestResEarly) {
-    const headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
-    const headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
-
-    // Only set minimal floors to avoid 0/NaN; do NOT re-tighten beyond cfg.
-    const minATR = Math.max(cfg.nearResVetoATR, 0.15);
-    const minPct = Math.max(cfg.nearResVetoPct, 0.4);
-
-    if (headroomATR < minATR || headroomPct < minPct) {
-      const why = "Headroom too small pre-entry";
-      reasonTrace.push(why);
-      return {
-        trigger: false,
-        waitReason: why,
-        diagnostics: { headroomATR, headroomPct, nearestResEarly },
-        reasonTrace,
-      };
-    }
+    headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
+    headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
+    // no veto here — guardVeto() decides
   }
 
   // --- Final trigger (allow fib OR fibAlt) ---
@@ -526,6 +528,9 @@ export function detectDipBounce(stock, data, cfg, U) {
       bounceVolHot,
       atr,
       closeAboveYHigh,
+      headroomATR,
+      headroomPct,
+      nearestResEarly,
     },
     reasonTrace,
   };
