@@ -436,44 +436,50 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // DIP settings (looser)
+    // general
     perfectMode: false,
     requireStackedMAs: false,
     requireUptrend: true,
     allowSmallRed: true,
     redDayMaxDownPct: -0.6,
-    maxATRfromMA25: 3.0,
-    maxConsecUp: 9,
 
-    // headroom veto (looser)
-    nearResVetoATR: 0.35,
-    nearResVetoPct: 0.9,
+    // loosen distance/overbought and streak checks
+    maxATRfromMA25: 3.5, // was 3.0
+    maxConsecUp: 12, // was 9
+    hardRSI: 80, // was 78
+    softRSI: 74, // was 72
 
-    hardRSI: 78,
-    softRSI: 72,
+    // headroom veto (easier)
+    nearResVetoATR: 0.25, // was 0.35
+    nearResVetoPct: 0.7, // was 0.9
 
-    // RR thresholds (slightly easier)
-    minRRbase: 1.2,
-    minRRstrongUp: 1.3,
-    minRRweakUp: 1.4,
+    // RR thresholds (easier)
+    minRRbase: 1.1, // was 1.2
+    minRRstrongUp: 1.2, // was 1.3
+    minRRweakUp: 1.3, // was 1.4
 
-    // pullback/bounce looseners
-    dipMinPullbackPct: 0.8,
-    dipMinPullbackATR: 0.4,
+    // pullback / bounce (easier)
+    dipMinPullbackPct: 0.7, // was 0.8
+    dipMinPullbackATR: 0.35, // was 0.4
     dipMaxBounceAgeBars: 8,
-    dipMaSupportPctBand: 9.0,
+    dipMaSupportPctBand: 12, // was 9.0 → easier “near MA”
     dipStructMinTouches: 1,
-    dipStructTolATR: 1.2,
-    dipStructTolPct: 3.5,
-    dipMinBounceStrengthATR: 0.6,
-    dipMaxRecoveryPct: 115,
-    fibTolerancePct: 12,
-    pullbackDryFactor: 1.3,
-    bounceHotFactor: 1.18,
+    dipStructTolATR: 1.4, // was 1.2
+    dipStructTolPct: 4.0, // was 3.5
+    dipMinBounceStrengthATR: 0.5, // was 0.6
+
+    // recovery & fib tolerance (easier)
+    dipMaxRecoveryPct: 135, // was 115
+    fibTolerancePct: 15, // was 12
+
+    // volume regime (easier)
+    pullbackDryFactor: 1.5, // was 1.3 → more often “dry”
+    bounceHotFactor: 1.0, // was 1.18 → less demand for hot vol
 
     debug,
   };
 }
+
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
