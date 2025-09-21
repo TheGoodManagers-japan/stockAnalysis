@@ -21,6 +21,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const ma20 = sma(data, 20);
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   const ma50 = num(stock.movingAverage50d) || sma(data, 50);
+  const ma200 = num(stock.movingAverage200d) || sma(data, 200); // <-- ADD THIS
 
   const ma20Prev = sma(data.slice(0, -1), 20);
   const ma25Prev = sma(data.slice(0, -1), 25);
