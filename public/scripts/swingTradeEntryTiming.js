@@ -483,46 +483,48 @@ function getConfig(opts = {}) {
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
   const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
-  const ma5 = num(stock.movingAverage5d) || sma(data, 5);
-  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
-  const ma50 = num(stock.movingAverage50d) || sma(data, 50);
-  const ma75 = num(stock.movingAverage75d) || sma(data, 75);
-  const ma200 = num(stock.movingAverage200d) || sma(data, 200);
+
+  // compute MAs into a single object to avoid free identifiers
+  const m = {
+    ma5:   num(stock.movingAverage5d)    || sma(data, 5),
+    ma25:  num(stock.movingAverage25d)   || sma(data, 25),
+    ma50:  num(stock.movingAverage50d)   || sma(data, 50),
+    ma75:  num(stock.movingAverage75d)   || sma(data, 75),
+    ma200: num(stock.movingAverage200d)  || sma(data, 200),
+  };
 
   let score = 0;
-  if (px > ma25 && ma25 > 0) score++;
-  if (px > ma50 && ma50 > 0) score++;
-  if (ma25 > ma50 && ma50 > 0) score++;
-  if (ma50 > ma200 && ma200 > 0) score++;
+  if (px > m.ma25 && m.ma25 > 0) score++;
+  if (px > m.ma50 && m.ma50 > 0) score++;
+  if (m.ma25 > m.ma50 && m.ma50 > 0) score++;
+  if (m.ma50 > m.ma200 && m.ma200 > 0) score++;
 
   const trend =
-    score >= 3
-      ? "STRONG_UP"
-      : score === 2
-      ? "UP"
-      : score === 1
-      ? "WEAK_UP"
-      : "DOWN";
+    score >= 3 ? "STRONG_UP" :
+    score === 2 ? "UP" :
+    score === 1 ? "WEAK_UP" : "DOWN";
 
   const stackedBull =
-    (px > ma5 && ma5 > ma25 && ma25 > ma50 && ma50 > ma75 && ma75 > ma200) ||
-    (px > ma25 && ma25 > ma50 && ma50 > ma75 && ma75 > ma200);
+    (px > m.ma5 && m.ma5 > m.ma25 && m.ma25 > m.ma50 && m.ma50 > m.ma75 && m.ma75 > m.ma200) ||
+    (px > m.ma25 && m.ma25 > m.ma50 && m.ma50 > m.ma75 && m.ma75 > m.ma200);
 
   const w = data.slice(-20);
   const recentHigh = Math.max(...w.map((d) => d.high ?? -Infinity));
-  const recentLow = Math.min(...w.map((d) => d.low ?? Infinity));
+  const recentLow  = Math.min(...w.map((d) => d.low  ??  Infinity));
+
   return {
     trend,
     recentHigh,
     recentLow,
-    ma5,
-    ma25,
-    ma50,
-    ma75,
-    ma200,
+    ma5: m.ma5,
+    ma25: m.ma25,
+    ma50: m.ma50,
+    ma75: m.ma75,
+    ma200: m.ma200,   // callers use ms.ma200
     stackedBull,
   };
 }
+
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
