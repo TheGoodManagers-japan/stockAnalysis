@@ -1,4 +1,4 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only)
+// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
 
 /* ============================ Telemetry ============================ */
@@ -160,10 +160,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     perfectMode: cfg.perfectMode,
   };
 
-  // Regime presets
+  // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
   const presets = {
     STRONG_UP: {
-      minRRbase: 1.35,
+      minRRbase: Math.max(cfg.minRRbase, 1.2),
       bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.3),
       nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.25),
     },
@@ -449,9 +449,9 @@ function getConfig(opts = {}) {
     hardRSI: 80, // was 78
     softRSI: 74, // was 72
 
-    // headroom veto (easier)
-    nearResVetoATR: 0.25, // was 0.35
-    nearResVetoPct: 0.7, // was 0.9
+    // headroom veto (easier; dip.js uses floors 0.15 ATR / 0.40%)
+    nearResVetoATR: 0.25, // orchestrator baseline; dip.js won't tighten beyond cfg
+    nearResVetoPct: 0.7,
 
     // RR thresholds (easier)
     minRRbase: 1.1, // was 1.2
@@ -468,8 +468,8 @@ function getConfig(opts = {}) {
     dipStructTolPct: 4.0, // was 3.5
     dipMinBounceStrengthATR: 0.5, // was 0.6
 
-    // recovery & fib tolerance (easier)
-    dipMaxRecoveryPct: 135, // was 115
+    // recovery & fib tolerance (easier; dip.js may lift cap in strong regimes)
+    dipMaxRecoveryPct: 135, // orchestrator baseline
     fibTolerancePct: 15, // was 12
 
     // volume regime (easier)
@@ -479,7 +479,6 @@ function getConfig(opts = {}) {
     debug,
   };
 }
-
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {

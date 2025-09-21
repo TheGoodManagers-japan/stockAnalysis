@@ -1,4 +1,4 @@
-// /scripts/dip.js — DIP detector (pullback + bounce) — Quality-upgraded
+// /scripts/dip.js — DIP detector (pullback + bounce) — tuned for better fill rate on TSE
 export function detectDipBounce(stock, data, cfg, U) {
   const { num, avg, near, sma, findResistancesAbove } = U;
   const reasonTrace = [];
@@ -31,7 +31,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     reasonTrace.push("MA25 not rising and price below MA25 (weak base)");
   }
 
-  // NEW: gentle slope veto only when *both* MA20 & MA25 roll down and price is under MA20
+  // Gentle slope veto only when *both* MA20 & MA25 roll down and price is under MA20
   const slopeDown20 = ma20Prev > 0 && ma20 < ma20Prev * 0.998;
   const slopeDown25 = ma25Prev > 0 && ma25 < ma25Prev * 0.998;
   if (slopeDown20 && slopeDown25 && px < ma20) {
@@ -210,7 +210,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const bounceVolHot =
     avgVol20 > 0 ? num(d0.volume) >= avgVol20 * bounceHotX : true;
 
-  // --- Bounce confirmation (tightened quality) ---
+  // --- Bounce confirmation (quality, slightly relaxed) ---
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
   const minStr = Math.min(Math.max(cfg.dipMinBounceStrengthATR, 0.6), 0.65);
 
@@ -250,15 +250,16 @@ export function detectDipBounce(stock, data, cfg, U) {
       bounceStrengthATR >= Math.max(0.65, minStr)) ||
     (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.85);
 
-  // NEW: bar/volume quality hard-gate around the pattern
+  // Bar/volume quality gate (RELAXED a touch)
   const barRange = num(d0.high) - num(d0.low);
   const body = Math.abs(num(d0.close) - num(d0.open));
   const midPrev = (num(d1.high) + num(d1.low)) / 2;
-  const rangeQuality = barRange >= 0.8 * atr;
-  const bodyQuality = body >= 0.35 * barRange;
+
+  const rangeQuality = barRange >= 0.6 * atr; // was 0.8
+  const bodyQuality = body >= 0.3 * barRange; // was 0.35
   const closeQuality =
     num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
-  const v20ok = avgVol20 > 0 ? num(d0.volume) >= 1.1 * avgVol20 : true;
+  const v20ok = avgVol20 > 0 ? num(d0.volume) >= 1.0 * avgVol20 : true; // was 1.1
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
@@ -297,7 +298,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const fibAltOK =
     !fibOK && (bounceStrengthATR >= 0.9 || (dryPullback && closeAboveYHigh));
 
-  // --- Optional: very light RSI divergence veto (self-contained RSI)
+  // --- Optional: very light RSI divergence veto (self-contained RSI) ---
   function rsiFromDataLocal(arr, length = 14) {
     const n = arr.length;
     if (n < length + 1) return 50;
@@ -352,12 +353,23 @@ export function detectDipBounce(stock, data, cfg, U) {
     }
   }
 
-  // --- Recovery cap (looser) ---
+  // --- Recovery cap (regime-aware) ---
   const spanRaw = recentHigh - dipLow;
   const span = Math.max(spanRaw, Math.max(0.7 * atr, px * 0.003));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
-  const recoveryPctCapped = Math.min(recoveryPct, 140);
-  const maxRec = Math.max(cfg.dipMaxRecoveryPct, 115);
+
+  const recoveryPctCapped = Math.min(recoveryPct, 180); // was 140
+
+  // Infer simple regime from MAs (no ms needed)
+  const strongUpLike =
+    (ma25 > ma50 && ma50 > ma200) || (ma20 > ma25 && ma25 > ma50);
+  const upLike = (ma25 >= ma50 && ma50 >= 0) || ma20 >= ma25;
+
+  let maxRec = cfg.dipMaxRecoveryPct; // baseline (135 in your config)
+  if (strongUpLike) maxRec = Math.max(maxRec, 160);
+  else if (upLike) maxRec = Math.max(maxRec, 150);
+  else maxRec = Math.max(maxRec, 130);
+
   if (recoveryPctCapped > maxRec) {
     const why = `already recovered ${recoveryPctCapped.toFixed(
       0
@@ -408,15 +420,18 @@ export function detectDipBounce(stock, data, cfg, U) {
     return out;
   }
 
-  // --- Pre-entry headroom veto (with clustering) ---
+  // --- Pre-entry headroom veto (with clustering) — RESPECT CONFIG (no re-tighten) ---
   const rawResEarly = findResistancesAbove(data, px, stock);
   const resListEarly = clusterLevels(rawResEarly, atr, 0.3);
   const nearestResEarly = resListEarly.length ? resListEarly[0] : null;
   if (nearestResEarly) {
     const headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
     const headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
-    const minATR = Math.min(Math.max(cfg.nearResVetoATR, 0.35), 0.5);
-    const minPct = Math.min(Math.max(cfg.nearResVetoPct, 0.9), 1.2);
+
+    // Only set minimal floors to avoid 0/NaN; do NOT re-tighten beyond cfg.
+    const minATR = Math.max(cfg.nearResVetoATR, 0.15);
+    const minPct = Math.max(cfg.nearResVetoPct, 0.4);
+
     if (headroomATR < minATR || headroomPct < minPct) {
       const why = "Headroom too small pre-entry";
       reasonTrace.push(why);
@@ -509,6 +524,7 @@ export function detectDipBounce(stock, data, cfg, U) {
       dryPullback,
       bounceVolHot,
       atr,
+      closeAboveYHigh,
     },
     reasonTrace,
   };
