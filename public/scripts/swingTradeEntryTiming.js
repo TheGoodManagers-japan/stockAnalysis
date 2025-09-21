@@ -164,17 +164,19 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
   const presets = {
     STRONG_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.2),
-      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.3),
-      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.25),
+      minRRbase: Math.max(cfg.minRRbase, 1.15),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.18),
+      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.2),
+      dipMaxRecoveryPct: 150,
     },
     UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.4),
-      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.32),
+      minRRbase: Math.max(cfg.minRRbase, 1.25),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.2),
+      dipMaxRecoveryPct: 145,
     },
     WEAK_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.45),
-      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.35),
+      minRRbase: Math.max(cfg.minRRbase, 1.3),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.22),
       nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.3),
     },
     DOWN: {
@@ -197,12 +199,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   tele.gates.priceAction = { pass: !!priceActionGate, why: gateWhy };
 
+  // Structure: MA5 OR soft-pass via MA25 in non-DOWN regimes
   let structureGateOk =
     !cfg.requireUptrend ||
     ((ms.trend === "UP" ||
       ms.trend === "STRONG_UP" ||
       ms.trend === "WEAK_UP") &&
-      px >= (ms.ma5 || 0) * 0.998);
+      (px >= (ms.ma5 || 0) * 0.998 || px >= (ms.ma25 || 0) * 0.995));
 
   tele.gates.structure = {
     pass: !!structureGateOk,
@@ -251,83 +254,98 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       if (!structureGateOk)
         reasons.push("Structure gate: trend not up or price < MA5.");
       reasons.push(`DIP not ready: ${dip.waitReason}`);
-    } else if (!priceActionGate) {
-      reasons.push(`DIP blocked by gate: ${gateWhy}`);
     } else {
-      // Soft-pass structure if the DIP confirmed near MA/structure support
-      if (!structureGateOk && dip?.diagnostics?.nearSupport) {
-        structureGateOk = true;
-        tele.gates.structure = { pass: true, why: "soft-pass via DIP@support" };
-      }
-
-      if (!structureGateOk) {
-        reasons.push("Structure gate: trend not up or price < MA5.");
-      } else {
-        const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
-          kind: "DIP",
-          data,
-        });
-        tele.rr = {
-          checked: true,
-          acceptable: !!rr.acceptable,
-          ratio: rr.ratio,
-          need: rr.need,
-          risk: rr.risk,
-          reward: rr.reward,
-          stop: rr.stop,
-          target: rr.target,
-          probation: !!rr.probation,
+      // Soft-price-action override for mild red if DIP confirmed
+      let priceGateOk = priceActionGate;
+      if (!priceGateOk && dayPct >= -1.0 && px >= prevClose * 0.995) {
+        priceGateOk = true;
+        tele.gates.priceAction = {
+          pass: true,
+          why: "soft-pass: mild red & ≥ prevClose·0.995",
         };
+      }
+      if (!priceGateOk) {
+        reasons.push(`DIP blocked by gate: ${gateWhy}`);
+      } else {
+        // Soft-pass structure if the DIP confirmed near MA/structure support
+        if (!structureGateOk && dip?.diagnostics?.nearSupport) {
+          structureGateOk = true;
+          tele.gates.structure = {
+            pass: true,
+            why: "soft-pass via DIP@support",
+          };
+        }
 
-        if (!rr.acceptable) {
-          reasons.push(
-            `DIP RR too low: ratio ${rr.ratio.toFixed(
-              2
-            )} < need ${rr.need.toFixed(2)} (risk ${fmt(rr.risk)}, reward ${fmt(
-              rr.reward
-            )}).`
-          );
+        if (!structureGateOk) {
+          reasons.push("Structure gate: trend not up or price < MA5.");
         } else {
-          if (rr.probation) {
-            reasons.push(
-              `RR probation pass: ${rr.ratio.toFixed(
-                2
-              )} vs need ${rr.need.toFixed(2)} (up-ish regime & tame RSI).`
-            );
-          }
-
-          const gv = guardVeto(
-            stock,
+          const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
+            kind: "DIP",
             data,
-            px,
-            rr,
-            ms,
-            cfg,
-            dip.nearestRes,
-            "DIP"
-          );
-          tele.guard = {
+            hasSupport: !!dip?.diagnostics?.nearSupport,
+          });
+          tele.rr = {
             checked: true,
-            veto: !!gv.veto,
-            reason: gv.reason || "",
-            details: gv.details || {},
+            acceptable: !!rr.acceptable,
+            ratio: rr.ratio,
+            need: rr.need,
+            risk: rr.risk,
+            reward: rr.reward,
+            stop: rr.stop,
+            target: rr.target,
+            probation: !!rr.probation,
           };
 
-          if (gv.veto) {
+          if (!rr.acceptable) {
             reasons.push(
-              `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(
-                gv.details
-              )}.`
+              `DIP RR too low: ratio ${rr.ratio.toFixed(
+                2
+              )} < need ${rr.need.toFixed(2)} (risk ${fmt(
+                rr.risk
+              )}, reward ${fmt(rr.reward)}).`
             );
           } else {
-            candidates.push({
-              kind: "DIP ENTRY",
-              why: dip.why,
-              stop: rr.stop,
-              target: rr.target,
+            if (rr.probation) {
+              reasons.push(
+                `RR probation pass: ${rr.ratio.toFixed(
+                  2
+                )} vs need ${rr.need.toFixed(2)} (up-ish regime & tame RSI).`
+              );
+            }
+
+            const gv = guardVeto(
+              stock,
+              data,
+              px,
               rr,
-              guard: gv.details,
-            });
+              ms,
+              cfg,
+              dip.nearestRes,
+              "DIP"
+            );
+            tele.guard = {
+              checked: true,
+              veto: !!gv.veto,
+              reason: gv.reason || "",
+              details: gv.details || {},
+            };
+
+            if (gv.veto) {
+              reasons.push(
+                `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(
+                  gv.details
+                )}.`
+              );
+            } else {
+              candidates.push({
+                kind: "DIP ENTRY",
+                why: dip.why,
+                stop: rr.stop,
+                target: rr.target,
+                rr,
+                guard: gv.details,
+              });
+            }
           }
         }
       }
@@ -337,7 +355,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
-    if (!priceActionGate) top.push(gateWhy);
+    if (!tele.gates.priceAction.pass) top.push(gateWhy);
     if (cfg.perfectMode && !ms.stackedBull)
       top.push(
         "Perfect gate: MAs not stacked (5 > 25 > 50 > 75 > 200) with price above."
@@ -472,13 +490,13 @@ function getConfig(opts = {}) {
     softRSI: 74, // was 72
 
     // headroom veto (easier; dip.js uses floors 0.15 ATR / 0.40%)
-    nearResVetoATR: 0.25, // orchestrator baseline; dip.js won't tighten beyond cfg
-    nearResVetoPct: 0.7,
+    nearResVetoATR: 0.18, // was 0.25
+    nearResVetoPct: 0.5, // was 0.7
 
     // RR thresholds (easier)
-    minRRbase: 1.1, // was 1.2
-    minRRstrongUp: 1.2, // was 1.3
-    minRRweakUp: 1.3, // was 1.4
+    minRRbase: 1.05, // was 1.1
+    minRRstrongUp: 1.15, // was 1.2
+    minRRweakUp: 1.25, // was 1.3
 
     // pullback / bounce (easier)
     dipMinPullbackPct: 0.7, // was 0.8
@@ -488,10 +506,10 @@ function getConfig(opts = {}) {
     dipStructMinTouches: 1,
     dipStructTolATR: 1.4, // was 1.2
     dipStructTolPct: 4.0, // was 3.5
-    dipMinBounceStrengthATR: 0.5, // was 0.6
+    dipMinBounceStrengthATR: 0.5, // ensure dip.js mirrors (can ease to 0.4 in dip.js)
 
     // recovery & fib tolerance (easier; dip.js may lift cap in strong regimes)
-    dipMaxRecoveryPct: 135, // orchestrator baseline
+    dipMaxRecoveryPct: 135, // base — presets raise in UP/STRONG_UP
     fibTolerancePct: 15, // was 12
 
     // volume regime (easier)
@@ -558,7 +576,7 @@ function getMarketStructure(stock, data) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const minStopDist = 1.25 * atr;
+  const minStopDist = (ctx?.hasSupport ? 1.05 : 1.2) * atr;
   let adjStop = stop;
   if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
   stop = adjStop;
@@ -592,7 +610,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 
   // …and volatility-aware tweak (ATR% of price)
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
-  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.1); // tight regime → slightly easier
+  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05); // tight regime → slightly easier
   if (atrPct >= 3.0) need = Math.max(need, 1.5); // noisy regime → stricter
 
   const acceptable = ratio >= need;
@@ -601,9 +619,9 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
   const probation =
     !acceptable &&
-    ratio >= need - 0.15 &&
+    ratio >= need - 0.25 &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
-    rsiHere < 62;
+    rsiHere < 60;
 
   return {
     acceptable: acceptable || probation,
@@ -634,15 +652,24 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     };
 
   let nearResMin = cfg.nearResVetoATR;
-  if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.25);
+  if (ms.trend !== "DOWN" && rsi < 60) nearResMin = Math.min(nearResMin, 0.2);
 
-  if (nearestRes) {
-    const headroom = (nearestRes - px) / atr;
-    const headroomPct = ((nearestRes - px) / Math.max(px, 1e-9)) * 100;
-    details.nearestRes = nearestRes;
+  // Consider next resistance if the first is too close
+  const resList = findResistancesAbove(data, px, stock);
+  let effRes = nearestRes ?? resList?.[0] ?? null;
+  if (effRes && (effRes - px) / atr < 0.6 && resList?.[1]) effRes = resList[1];
+
+  if (effRes) {
+    const headroom = (effRes - px) / atr;
+    const headroomPct = ((effRes - px) / Math.max(px, 1e-9)) * 100;
+    details.nearestRes = effRes;
     details.headroomATR = headroom;
     details.headroomPct = headroomPct;
-    if (headroom < nearResMin || headroomPct < cfg.nearResVetoPct)
+    // Only veto tight headroom when RR itself hasn't cleared 'need'
+    if (
+      (headroom < nearResMin || headroomPct < cfg.nearResVetoPct) &&
+      rr.ratio < rr.need
+    )
       return {
         veto: true,
         reason: `Headroom too small (${headroom.toFixed(
