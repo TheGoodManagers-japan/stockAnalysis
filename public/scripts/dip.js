@@ -38,18 +38,19 @@ export function detectDipBounce(stock, data, cfg, U) {
   const slopeComboFlag = slopeDown20 && slopeDown25 && px < ma20;
 
   // --- Pullback depth (slightly looser) ---
-  const recentBars = data.slice(-10);
+  // --- Pullback depth (wider window for stability) ---
+  const recentBars = data.slice(-12); // was -10
   const recentHigh = Math.max(
-    ...recentBars.slice(0, 5).map((d) => num(d.high))
-  );
-  const dipLow = Math.min(...recentBars.slice(-5).map((d) => num(d.low)));
+    ...recentBars.slice(0, 6).map((d) => num(d.high))
+  ); // was first 5
+  const dipLow = Math.min(...recentBars.slice(-6).map((d) => num(d.low))); // was last 5
 
   const pullbackPct =
     recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
   const pullbackATR = (recentHigh - dipLow) / Math.max(atr, 1e-9);
   const hadPullback =
-    pullbackPct >= Math.min(cfg.dipMinPullbackPct, 1.0) ||
-    pullbackATR >= Math.max(cfg.dipMinPullbackATR, 0.4);
+    pullbackPct >= Math.min(cfg.dipMinPullbackPct, 0.9) ||
+    pullbackATR >= Math.max(cfg.dipMinPullbackATR, 0.35);
 
   if (!hadPullback) {
     const why = `no meaningful pullback (${pullbackPct.toFixed(
@@ -205,17 +206,31 @@ export function detectDipBounce(stock, data, cfg, U) {
   // --- Bounce confirmation (quality, slightly relaxed) ---
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
 
-  // 0.00-ATR bounce fix: treat as "immature" (wait a bar), not "weak"
+  // "Immature" bounce handling: allow green seed bars to continue to quality checks.
+  // This reduces false negatives when the low forms today and the close ≈ low.
   if (bounceStrengthATR <= 0.03) {
-    // was 0.05
-    const why = `bounce immature (${bounceStrengthATR.toFixed(2)} ATR)`;
-    reasonTrace.push(why);
-    return {
-      trigger: false,
-      waitReason: why,
-      diagnostics: { bounceStrengthATR },
-      reasonTrace,
-    };
+    // extremely small reclaim off the low
+    const midPrev = (num(d1.high) + num(d1.low)) / 2;
+
+    const greenSeed =
+      num(d0.close) > num(d0.open) &&
+      (num(d0.close) >= ma5 || num(d0.close) >= midPrev);
+
+    if (!greenSeed) {
+      const why = `bounce immature (${bounceStrengthATR.toFixed(2)} ATR)`;
+      reasonTrace.push(why);
+      return {
+        trigger: false,
+        waitReason: why,
+        diagnostics: { bounceStrengthATR },
+        reasonTrace,
+      };
+    }
+
+    // Soft-pass note for trace; still must clear bar/volume quality below.
+    reasonTrace.push(
+      "immature bounce soft-pass (green seed; proceeding to quality gates)"
+    );
   }
 
   const minStr = Math.min(Math.max(cfg.dipMinBounceStrengthATR, 0.6), 0.65);
