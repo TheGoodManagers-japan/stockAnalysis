@@ -164,18 +164,18 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
   const presets = {
     STRONG_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.12), // was ≥1.15
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18), // easier hot-volume cap
-      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.16), // a touch friendlier
+      minRRbase: Math.max(cfg.minRRbase, 1.15),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.3),
+      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.18),
     },
     UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.12),
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18),
+      minRRbase: Math.max(cfg.minRRbase, 1.15),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.32),
     },
     WEAK_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.22),
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.1), 1.18),
-      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.2),
+      minRRbase: Math.max(cfg.minRRbase, 1.25),
+      bounceHotFactor: Math.max(cfg.bounceHotFactor, 1.35),
+      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.18),
     },
     DOWN: {
       minRRbase: Math.max(cfg.minRRbase, 1.6),
@@ -248,25 +248,119 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
 
     if (!dip.trigger) {
-      if (!structureGateOk)
-        reasons.push("Structure gate: trend not up or price < MA5.");
-      reasons.push(`DIP not ready: ${dip.waitReason}`);
+      // ---------- Early-Bounce Probation Lane (immature bounce special case) ----------
+      const isImmature =
+        typeof dip.waitReason === "string" &&
+        dip.waitReason.toLowerCase().startsWith("bounce immature");
+
+      if (isImmature) {
+        const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+        const nearSupport = !!dip?.diagnostics?.nearSupport;
+        const volOK =
+          !!dip?.diagnostics?.dryPullback || !!dip?.diagnostics?.bounceVolHot;
+        let headroomATR = Number(dip?.diagnostics?.headroomATR);
+        if (!isFiniteN(headroomATR)) {
+          const resList = findResistancesAbove(data, px, stock);
+          const nearest = resList?.[0];
+          headroomATR = isFiniteN(nearest)
+            ? (nearest - px) / Math.max(atr, 1e-9)
+            : Infinity;
+        }
+        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+
+        // Build a provisional RR using our standard provisional plan
+        const prov = provisionalPlan(stock, data, ms, px, cfg);
+        const rr0 = analyzeRR(px, prov.stop, prov.target, stock, ms, cfg, {
+          kind: "EARLY_DIP",
+          data,
+        });
+
+        const rrNearNeed = rr0.ratio >= rr0.need - 0.1;
+
+        const earlyOK =
+          priceActionGate &&
+          nearSupport &&
+          volOK &&
+          (headroomATR >= 0.9 || !isFiniteN(headroomATR)) &&
+          rsiHere < 62 &&
+          regimeOK &&
+          rrNearNeed;
+
+        if (earlyOK) {
+          // Guard veto as usual
+          const nearestResDiag = isFiniteN(dip?.diagnostics?.nearestResEarly)
+            ? dip?.diagnostics?.nearestResEarly
+            : undefined;
+          const gv = guardVeto(
+            stock,
+            data,
+            px,
+            rr0,
+            ms,
+            cfg,
+            nearestResDiag,
+            "DIP_EARLY"
+          );
+
+          tele.rr = {
+            checked: true,
+            acceptable: !gv.veto,
+            ratio: rr0.ratio,
+            need: rr0.need,
+            risk: rr0.risk,
+            reward: rr0.reward,
+            stop: rr0.stop,
+            target: rr0.target,
+            probation: true,
+          };
+          tele.guard = {
+            checked: true,
+            veto: !!gv.veto,
+            reason: gv.reason || "",
+            details: gv.details || {},
+          };
+
+          if (!gv.veto) {
+            candidates.push({
+              kind: "DIP (EARLY PROBATION)",
+              why: "Immature bounce at support; benign volume; headroom OK; RR near need.",
+              stop: rr0.stop,
+              target: rr0.target,
+              rr: { ...rr0, probation: true },
+              guard: gv.details,
+            });
+          } else {
+            reasons.push(
+              `Early DIP veto: ${gv.reason} ${summarizeGuardDetails(
+                gv.details
+              )}.`
+            );
+          }
+        } else {
+          // If early probation didn't pass, surface the normal reasons
+          if (!structureGateOk)
+            reasons.push("Structure gate: trend not up or price < MA5.");
+          reasons.push(`DIP not ready: ${dip.waitReason}`);
+        }
+      } else {
+        // --------- Normal not-ready path ----------
+        if (!structureGateOk)
+          reasons.push("Structure gate: trend not up or price < MA5.");
+        reasons.push(`DIP not ready: ${dip.waitReason}`);
+      }
     } else {
-      // Soft red-day / price-action override on quality reclaim or strong bounce
+      // Soft red-day override for strong bounce (up to -1.2%)
       if (!priceActionGate && cfg.allowSmallRed) {
         const bs = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
-        const yHi = !!dip?.diagnostics?.closeAboveYHigh;
         if (
-          (dayPct >= cfg.redDayMaxDownPctExt && (bs >= 1.0 || yHi)) ||
-          yHi || // NEW: clear Y-high reclaim always soft-passes
-          bs >= 1.05 // NEW: strong bounce soft-pass
+          dayPct >= cfg.redDayMaxDownPctExt &&
+          (bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh)
         ) {
           priceActionGate = true;
           tele.gates.priceAction = {
             pass: true,
-            why: yHi
-              ? "soft-pass: reclaimed prior high"
-              : "soft-pass: strong bounce on small/flat red day",
+            why: "soft-pass: strong bounce on small red day",
           };
         }
       }
@@ -280,7 +374,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           const bs = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
           // wider tolerance to MA5 when bounce strong or Y-high reclaim
           const band =
-            bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh ? 0.988 : 0.993; // was 0.99 / 0.994
+            bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh ? 0.985 : 0.994; //  -1.5% vs -0.6%
           if (px >= (ms.ma5 || 0) * band) {
             structureGateOk = true;
             tele.gates.structure = {
@@ -307,7 +401,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           if (!rr.acceptable) {
             const bounceATR = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
             const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-            const withinBand = rr.ratio >= rr.need - 0.25; // keep friendlier band
+            const withinBand = rr.ratio >= rr.need - 0.25;
             const bounceGood =
               bounceATR >= (ms.trend === "STRONG_UP" ? 0.85 : 1.0) ||
               !!dip?.diagnostics?.closeAboveYHigh;
@@ -461,7 +555,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // === Positive path: DIP ===
+  // === Positive path (DIP or Early DIP) ===
   const best = candidates[0];
   const debug = opts.debug
     ? {
@@ -515,36 +609,36 @@ function getConfig(opts = {}) {
     requireUptrend: true,
     allowSmallRed: true,
     redDayMaxDownPct: -0.6,
-    redDayMaxDownPctExt: -1.4, // was -1.2 → help soft-pass good reclaims
+    redDayMaxDownPctExt: -1.2, // extra tolerance for red-day soft-pass (used only with strong bounce)
 
     // loosen distance/overbought and streak checks
-    maxATRfromMA25: 3.5,
-    maxConsecUp: 12,
-    hardRSI: 80,
-    softRSI: 74,
+    maxATRfromMA25: 3.5, // was 3.0
+    maxConsecUp: 12, // was 9
+    hardRSI: 80, // was 78
+    softRSI: 74, // was 72
 
     // headroom veto (friendlier)
-    nearResVetoATR: 0.18,
-    nearResVetoPct: 0.5,
+    nearResVetoATR: 0.18, // was 0.25
+    nearResVetoPct: 0.5, // was 0.7
 
     // RR thresholds (easier)
-    minRRbase: 1.05,
-    minRRstrongUp: 1.15,
-    minRRweakUp: 1.25,
+    minRRbase: 1.05, // was 1.1
+    minRRstrongUp: 1.15, // was 1.2
+    minRRweakUp: 1.25, // was 1.3
 
     // pullback / bounce (slightly easier)
-    dipMinPullbackPct: 0.7,
-    dipMinPullbackATR: 0.3,
+    dipMinPullbackPct: 0.7, // unchanged (from earlier loosen)
+    dipMinPullbackATR: 0.3, // was 0.35
     dipMaxBounceAgeBars: 8,
-    dipMaSupportPctBand: 12,
+    dipMaSupportPctBand: 12, // was 9.0 → easier “near MA”
     dipStructMinTouches: 1,
-    dipStructTolATR: 1.4,
-    dipStructTolPct: 4.0,
-    dipMinBounceStrengthATR: 0.45,
+    dipStructTolATR: 1.4, // was 1.2
+    dipStructTolPct: 4.0, // was 3.5
+    dipMinBounceStrengthATR: 0.45, // was 0.50
 
     // recovery & fib tolerance (orchestrator baseline)
     dipMaxRecoveryPct: 135,
-    fibTolerancePct: 15,
+    fibTolerancePct: 15, // was 12
 
     // volume regime (easier)
     pullbackDryFactor: 1.5,
@@ -610,7 +704,7 @@ function getMarketStructure(stock, data) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const minStopDist = 1.15 * atr; // was 1.25 → slightly tighter stops improve RR acceptance
+  const minStopDist = 1.25 * atr;
   let adjStop = stop;
   if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
   stop = adjStop;
@@ -644,8 +738,8 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 
   // …and volatility-aware tweak (ATR% of price)
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
-  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
-  if (atrPct >= 3.0) need = Math.max(need, 1.5);
+  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05); // tight regime → slightly easier
+  if (atrPct >= 3.0) need = Math.max(need, 1.5); // noisy regime → stricter
 
   const acceptable = ratio >= need;
 
