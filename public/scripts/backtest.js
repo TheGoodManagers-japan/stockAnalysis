@@ -84,6 +84,102 @@ function afterColon(s, head) {
     .trim();
 }
 
+/* ---------------- Counterfactual helpers (parallel lane) ---------------- */
+// Simulate the same exits as live trades: STOP -> TARGET -> TIME (holdBars)
+function simulateTradeForward(
+  candles,
+  startIdx,
+  entry,
+  stop,
+  target,
+  holdBars
+) {
+  const risk = Math.max(0.01, entry - stop);
+  for (let j = startIdx + 1; j < candles.length; j++) {
+    const bar = candles[j];
+    if (bar.low <= stop) {
+      return {
+        exitType: "STOP",
+        exitPrice: stop,
+        holdingDays: j - startIdx,
+        result: "LOSS",
+        R: (stop - entry) / risk,
+        returnPct: ((stop - entry) / entry) * 100,
+      };
+    }
+    if (bar.high >= target) {
+      return {
+        exitType: "TARGET",
+        exitPrice: target,
+        holdingDays: j - startIdx,
+        result: "WIN",
+        R: (target - entry) / risk,
+        returnPct: ((target - entry) / entry) * 100,
+      };
+    }
+    if (j - startIdx >= holdBars) {
+      const exitPx = candles[j].close;
+      return {
+        exitType: "TIME",
+        exitPrice: exitPx,
+        holdingDays: j - startIdx,
+        result: exitPx > entry ? "WIN" : "LOSS",
+        R: (exitPx - entry) / risk,
+        returnPct: ((exitPx - entry) / entry) * 100,
+      };
+    }
+  }
+  // If we fall off the end of the dataset, treat as time exit at last close.
+  const last = candles[candles.length - 1];
+  const res = last.close > entry ? "WIN" : "LOSS";
+  return {
+    exitType: "TIME",
+    exitPrice: last.close,
+    holdingDays: candles.length - 1 - startIdx,
+    result: res,
+    R: (last.close - entry) / Math.max(0.01, entry - stop),
+    returnPct: ((last.close - entry) / entry) * 100,
+  };
+}
+function cfInitAgg() {
+  return { total: 0, winners: 0, rPos: 0, rNeg: 0, winR: [], lossR: [] };
+}
+function cfUpdateAgg(agg, outcome) {
+  agg.total++;
+  if (outcome.result === "WIN") {
+    agg.winners++;
+    agg.rPos += Math.max(0, outcome.R || 0);
+    agg.winR.push(outcome.R || 0);
+  } else {
+    agg.rNeg += Math.abs(Math.min(0, outcome.R || 0));
+    agg.lossR.push(outcome.R || 0);
+  }
+}
+function cfFinalizeAgg(agg) {
+  const p = agg.total ? agg.winners / agg.total : 0;
+  const avgRwin = agg.winR.length
+    ? agg.winR.reduce((a, b) => a + b, 0) / agg.winR.length
+    : 0;
+  const avgRloss = agg.lossR.length
+    ? agg.lossR.reduce((a, b) => a + b, 0) / agg.lossR.length
+    : 0;
+  const expR = p * avgRwin + (1 - p) * avgRloss;
+  const pf = agg.rNeg ? agg.rPos / agg.rNeg : agg.winners ? Infinity : 0;
+  return {
+    total: agg.total,
+    winners: agg.winners,
+    winRate: +(p * 100).toFixed(2),
+    expR: +expR.toFixed(2),
+    profitFactor: Number.isFinite(pf) ? +pf.toFixed(2) : Infinity,
+  };
+}
+function topReasons(sig) {
+  if (Array.isArray(sig?.debug?.reasons) && sig.debug.reasons.length) {
+    return sig.debug.reasons.slice(0, 2); // keep it focused
+  }
+  return [sig?.reason || "unspecified"];
+}
+
 /**
  * Backtest (swing period) — DIP only.
  * opts:
@@ -91,7 +187,8 @@ function afterColon(s, head) {
  *     appendTickers?: string[],
  *     targetTradesPerDay?: number,
  *     countBlockedSignals?: boolean,
- *     includeByTicker?: boolean        // default false
+ *     includeByTicker?: boolean,        // default false
+ *     simulateRejectedBuys?: boolean    // default true (parallel lane)
  *   }
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
@@ -101,6 +198,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     : tickersOrOpts || {};
 
   const INCLUDE_BY_TICKER = !!opts.includeByTicker;
+  const SIM_REJECTED = opts.simulateRejectedBuys ?? true; // <-- parallel lane toggle
 
   const months = Number.isFinite(opts.months) ? Number(opts.months) : 6;
   const to = opts.to ? new Date(opts.to) : new Date();
@@ -167,6 +265,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
   const EXAMPLE_MAX = 5;
+
+  // -------- Parallel results (buyNow=false counterfactuals) --------
+  const parallel = {
+    rejectedBuys: {
+      totalSimulated: 0,
+      winners: 0,
+      byReason: Object.create(null), // reason -> agg
+      examples: Object.create(null), // reason -> [{...}]
+      exampleCap: 5,
+      summary: { total: 0, winners: 0, winRate: 0 },
+    },
+  };
 
   console.log(
     `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
@@ -373,6 +483,65 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   : [sig?.reason || ""],
               });
             }
+
+            // ----- PARALLEL: simulate buyNow === false as if we entered anyway -----
+            if (SIM_REJECTED) {
+              const entry = today.close;
+              const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
+              const simTarget = Number(
+                sig?.smartPriceTarget ?? sig?.priceTarget
+              );
+
+              if (
+                Number.isFinite(simStop) &&
+                Number.isFinite(simTarget) &&
+                simStop < entry
+              ) {
+                const outcome = simulateTradeForward(
+                  candles,
+                  i,
+                  entry,
+                  simStop,
+                  simTarget,
+                  HOLD_BARS
+                );
+
+                // Aggregate totals
+                parallel.rejectedBuys.totalSimulated++;
+                if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+
+                // Attribute to top reasons
+                const reasons = topReasons(sig);
+                for (const reason of reasons) {
+                  if (!parallel.rejectedBuys.byReason[reason]) {
+                    parallel.rejectedBuys.byReason[reason] = cfInitAgg();
+                  }
+                  cfUpdateAgg(parallel.rejectedBuys.byReason[reason], outcome);
+
+                  // Save small sample of winning examples per reason
+                  if (outcome.result === "WIN") {
+                    if (!parallel.rejectedBuys.examples[reason])
+                      parallel.rejectedBuys.examples[reason] = [];
+                    if (
+                      parallel.rejectedBuys.examples[reason].length <
+                      parallel.rejectedBuys.exampleCap
+                    ) {
+                      parallel.rejectedBuys.examples[reason].push({
+                        ticker: code,
+                        date: toISO(today.date),
+                        entry: r2(entry),
+                        stop: r2(simStop),
+                        target: r2(simTarget),
+                        exitType: outcome.exitType,
+                        R: +(outcome.R || 0).toFixed(2),
+                        returnPct: +(outcome.returnPct || 0).toFixed(2),
+                        topReasons: reasons,
+                      });
+                    }
+                  }
+                }
+              }
+            }
           }
         } else if (COUNT_BLOCKED) {
           // Optional: count buyNow signals even when blocked
@@ -402,16 +571,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       // running averages after finishing this ticker
       const total = globalTrades.length;
-      const wins = globalTrades.filter((x) => x.result === "WIN").length;
-      const winRate = total ? pct((wins / total) * 100) : 0;
-      const avgRet = total
+      const winsSoFar = globalTrades.filter((x) => x.result === "WIN").length;
+      const winRateSoFar = total ? pct((winsSoFar / total) * 100) : 0;
+      const avgRetSoFar = total
         ? pct(globalTrades.reduce((a, b) => a + (b.returnPct || 0), 0) / total)
         : 0;
 
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRate}% | current avg return=${avgRet}% | ticker exits — target:${tTargets} stop:${tStops} time:${tTimes}`
+        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | ticker exits — target:${tTargets} stop:${tStops} time:${tTimes}`
       );
     } catch (e) {
       if (INCLUDE_BY_TICKER) {
@@ -462,6 +631,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ? Number(opts.targetTradesPerDay)
       : null;
 
+  // ---- finalize parallel aggregates ----
+  const reasonKeys = Object.keys(parallel.rejectedBuys.byReason);
+  for (const k of reasonKeys) {
+    parallel.rejectedBuys.byReason[k] = cfFinalizeAgg(
+      parallel.rejectedBuys.byReason[k]
+    );
+  }
+  const cfTotal = parallel.rejectedBuys.totalSimulated || 0;
+  const cfWins = parallel.rejectedBuys.winners || 0;
+  parallel.rejectedBuys.summary = {
+    total: cfTotal,
+    winners: cfWins,
+    winRate: cfTotal ? +((cfWins / cfTotal) * 100).toFixed(2) : 0,
+  };
+
   // ---- metrics log ----
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
@@ -503,6 +687,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       targetTradesPerDay: targetTPD,
       countBlockedSignals: COUNT_BLOCKED,
       includeByTicker: INCLUDE_BY_TICKER,
+      simulateRejectedBuys: SIM_REJECTED,
     },
     totalTrades,
     winRate,
@@ -536,6 +721,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       dip: computeMetrics(all), // identical (DIP-only)
     },
     telemetry, // compact, high-signal debug summary
+    parallel, // <-- NEW: separate results for buyNow=false that would have won
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
 
@@ -646,6 +832,16 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         dip: { notReadyReasons: {}, guardVetoReasons: {} },
         rr: { rejected: {}, accepted: {} },
         examples: { buyNow: [], rejected: [] },
+      },
+      parallel: {
+        rejectedBuys: {
+          totalSimulated: 0,
+          winners: 0,
+          byReason: {},
+          examples: {},
+          exampleCap: 5,
+          summary: { total: 0, winners: 0, winRate: 0 },
+        },
       },
       ...(!!(
         maybeOpts?.includeByTicker ||
