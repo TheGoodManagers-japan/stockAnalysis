@@ -96,7 +96,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10;
-  const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 10;
+  const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 5;
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
   if (!tickers.length) tickers = allTickers.map((t) => t.code);

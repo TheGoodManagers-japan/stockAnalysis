@@ -385,6 +385,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     if (riskPct > 3) stop = entryPx * (1 - 0.03);
   }
 
+  // Respect nearby resistances for target extension
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
@@ -399,10 +400,16 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const reward = Math.max(0, target - entryPx);
   const ratio = reward / risk;
 
+  // Base RR requirement by regime…
   let need = cfg.minRRbase;
   if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp);
   if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp);
   if (cfg.perfectMode) need = Math.max(need, 3.0);
+
+  // …and **volatility-aware** tweak (ATR% of price)
+  const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
+  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.1); // tight regime → slightly easier
+  if (atrPct >= 3.0) need = Math.max(need, 1.5); // noisy regime → stricter
 
   return {
     acceptable: ratio >= need,
@@ -646,6 +653,28 @@ function countConsecutiveUpDays(data, k = 8) {
   }
   return c;
 }
+
+// NEW: cluster close-by resistance levels (reduces micro-lids)
+// Used transparently by findResistancesAbove.
+function clusterLevels(levels, atrVal, thMul = 0.3) {
+  const th = thMul * Math.max(atrVal, 1e-9);
+  const uniq = Array.from(
+    new Set(levels.map((v) => +Number(v).toFixed(2)))
+  ).sort((a, b) => a - b);
+  const out = [];
+  let bucket = [];
+  for (let i = 0; i < uniq.length; i++) {
+    if (!bucket.length || Math.abs(uniq[i] - bucket[bucket.length - 1]) <= th)
+      bucket.push(uniq[i]);
+    else {
+      out.push(avg(bucket));
+      bucket = [uniq[i]];
+    }
+  }
+  if (bucket.length) out.push(avg(bucket));
+  return out;
+}
+
 function findResistancesAbove(data, px, stock) {
   const ups = [];
   const win = data.slice(-60);
@@ -656,11 +685,12 @@ function findResistancesAbove(data, px, stock) {
   }
   const yHigh = num(stock.fiftyTwoWeekHigh);
   if (yHigh > px) ups.push(yHigh);
-  const uniq = Array.from(new Set(ups.map((v) => +v.toFixed(2)))).sort(
-    (a, b) => a - b
-  );
-  return uniq;
+
+  // CLUSTER nearby levels using ATR to avoid overcounting tiny shelves
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
+  return clusterLevels(ups, atr, 0.3);
 }
+
 function findSupportsBelow(data, px) {
   const downs = [];
   const win = data.slice(-60);
@@ -674,6 +704,7 @@ function findSupportsBelow(data, px) {
   );
   return uniq;
 }
+
 function buildNoReason(top, list) {
   const head = top.filter(Boolean).join(" | ");
   const uniq = Array.from(new Set(list.filter(Boolean)));
