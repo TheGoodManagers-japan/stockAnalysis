@@ -12,6 +12,36 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+
+// backtest.js (top of file near other consts)
+const REGIME_TICKER = "1306.T";        // TOPIX ETF as market regime proxy
+const USE_REGIME = true;               // master toggle for regime feature
+
+// ... inside runBacktest(), AFTER you compute FROM/TO:
+const benchCandles = USE_REGIME ? await fetchHistory(REGIME_TICKER, FROM, TO) : [];
+// index benchmark by ISO date for fast lookup
+const benchIdx = new Map(benchCandles.map((b, i) => [toISO(b.date), i]));
+
+// helpers for regime
+function isGreen(bar) { return Number(bar.close) > Number(bar.open); }
+
+// true  = “good tape” (easier RR), false = “bad tape” (stricter RR), null = no signal/no change
+function getRegimeFlagForDate(dateISO) {
+  if (!USE_REGIME) return null;
+  const i = benchIdx.get(dateISO);
+  if (i == null || i < 3) return null; // need 3 prior days
+  const d0 = benchCandles[i];     // today (we use its open)
+  const d1 = benchCandles[i-1];
+  const d2 = benchCandles[i-2];
+  const d3 = benchCandles[i-3];
+  if (!d0 || !d1 || !d2 || !d3) return null;
+
+  const threeGreen = isGreen(d1) && isGreen(d2) && isGreen(d3);
+  const openStrong = Number(d0.open) >= Number(d1.close); // can relax if you want
+  return threeGreen && openStrong;
+}
+
+
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
   if (!/\.T$/.test(s)) s = s.replace(/\..*$/, "") + ".T";
@@ -429,10 +459,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
-          const sig = analyzeSwingTradeEntry(stock, hist, {
-            debug: true,
-            debugLevel: "verbose",
-          },true);
+            const todayISO = toISO(today.date);
+  const regimeGood = getRegimeFlagForDate(todayISO); // true/false/null
+          const sig = analyzeSwingTradeEntry(
+            stock,
+            hist,
+            {
+              debug: true,
+              debugLevel: "verbose",
+            },
+            regimeGood
+          );
 
           // compute sentiment once here so both lanes use the same snapshot
           const senti = getComprehensiveMarketSentiment(stock, hist);
