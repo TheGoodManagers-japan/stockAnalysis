@@ -12,35 +12,9 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
-
-// backtest.js (top of file near other consts)
-const REGIME_TICKER = "1306.T";        // TOPIX ETF as market regime proxy
-const USE_REGIME = true;               // master toggle for regime feature
-
-// ... inside runBacktest(), AFTER you compute FROM/TO:
-const benchCandles = USE_REGIME ? await fetchHistory(REGIME_TICKER, FROM, TO) : [];
-// index benchmark by ISO date for fast lookup
-const benchIdx = new Map(benchCandles.map((b, i) => [toISO(b.date), i]));
-
-// helpers for regime
-function isGreen(bar) { return Number(bar.close) > Number(bar.open); }
-
-// true  = “good tape” (easier RR), false = “bad tape” (stricter RR), null = no signal/no change
-function getRegimeFlagForDate(dateISO) {
-  if (!USE_REGIME) return null;
-  const i = benchIdx.get(dateISO);
-  if (i == null || i < 3) return null; // need 3 prior days
-  const d0 = benchCandles[i];     // today (we use its open)
-  const d1 = benchCandles[i-1];
-  const d2 = benchCandles[i-2];
-  const d3 = benchCandles[i-3];
-  if (!d0 || !d1 || !d2 || !d3) return null;
-
-  const threeGreen = isGreen(d1) && isGreen(d2) && isGreen(d3);
-  const openStrong = Number(d0.open) >= Number(d1.close); // can relax if you want
-  return threeGreen && openStrong;
-}
-
+// === Regime controls (top-level flags only; NO fetching here) ===
+const REGIME_TICKER = "1306.T"; // TOPIX ETF as market regime proxy
+const USE_REGIME = true; // master toggle for regime feature
 
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
@@ -113,15 +87,7 @@ function afterColon(s, head) {
 }
 
 /* ---------------- Counterfactual helpers (parallel lane) ---------------- */
-/* NOTE: No time-based exit. If neither stop nor target is hit before the data ends,
- * we return an OPEN outcome (ignored in CF stats). */
-function simulateTradeForward(
-  candles,
-  startIdx,
-  entry,
-  stop,
-  target
-) {
+function simulateTradeForward(candles, startIdx, entry, stop, target) {
   const risk = Math.max(0.01, entry - stop);
   for (let j = startIdx + 1; j < candles.length; j++) {
     const bar = candles[j];
@@ -148,7 +114,7 @@ function simulateTradeForward(
   }
   const last = candles[candles.length - 1];
   return {
-    exitType: "OPEN", // remained open at end of data
+    exitType: "OPEN",
     exitPrice: last.close,
     holdingDays: candles.length - 1 - startIdx,
     result: "OPEN",
@@ -159,7 +125,6 @@ function simulateTradeForward(
 function cfInitAgg() {
   return { total: 0, winners: 0, rPos: 0, rNeg: 0, winR: [], lossR: [] };
 }
-/* Ignore OPEN outcomes in CF aggregates (we only learn from closed trades). */
 function cfUpdateAgg(agg, outcome) {
   if (outcome.result === "OPEN") return;
   agg.total++;
@@ -278,6 +243,31 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
+  // --- Regime benchmark (MUST be inside runBacktest, AFTER FROM/TO) ---
+  let benchCandles = [];
+  let benchIdx = new Map();
+  if (USE_REGIME) {
+    benchCandles = await fetchHistory(REGIME_TICKER, FROM, TO);
+    benchIdx = new Map(benchCandles.map((b, i) => [toISO(b.date), i]));
+  }
+  function isGreen(bar) {
+    return Number(bar.close) > Number(bar.open);
+  }
+  // true = good tape (easier RR); false = bad tape (stricter RR); null = no signal
+  function getRegimeFlagForDate(dateISO) {
+    if (!USE_REGIME) return null;
+    const i = benchIdx.get(dateISO);
+    if (i == null || i < 3) return null; // need 3 prior days
+    const d0 = benchCandles[i];
+    const d1 = benchCandles[i - 1];
+    const d2 = benchCandles[i - 2];
+    const d3 = benchCandles[i - 3];
+    if (!d0 || !d1 || !d2 || !d3) return null;
+    const threeGreen = isGreen(d1) && isGreen(d2) && isGreen(d3);
+    const openStrong = Number(d0.open) >= Number(d1.close);
+    return threeGreen && openStrong;
+  }
+
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // kept for logs/compat
@@ -350,12 +340,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // -------- Sentiment combo aggregation --------
   const sentiment = {
-    actual: Object.create(null), // key: LT*-ST*
-    rejected: Object.create(null), // key: LT*-ST*
+    actual: Object.create(null),
+    rejected: Object.create(null),
     bestByWinRate: { actual: [], rejected: [] },
   };
 
-  let globalOpenPositions = 0; // NEW: count positions that never closed (at end of data)
+  let globalOpenPositions = 0;
 
   console.log(
     `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
@@ -435,7 +425,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               exitType: exit.type,
               R: r2((exit.price - open.entry) / risk),
               returnPct: r2(pctRet),
-              ST: open.ST, // sentiment at entry
+              ST: open.ST,
               LT: open.LT,
             };
             trades.push(trade);
@@ -459,15 +449,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
-            const todayISO = toISO(today.date);
-  const regimeGood = getRegimeFlagForDate(todayISO); // true/false/null
+          const todayISO = toISO(today.date);
+          const regimeGood = getRegimeFlagForDate(todayISO); // true/false/null
+
           const sig = analyzeSwingTradeEntry(
             stock,
             hist,
-            {
-              debug: true,
-              debugLevel: "verbose",
-            },
+            { debug: true, debugLevel: "verbose" },
             regimeGood
           );
 
@@ -639,12 +627,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         }
       } // end bars loop
 
-      // If we still have an open position at the end of this ticker, count it (unrealized).
       if (open) {
         globalOpenPositions++;
       }
 
-      // per-ticker exit counts
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
       const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
       const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0 now
@@ -776,9 +762,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // ---- finalize sentiment tables ----
   function finalizeSentiTable(obj) {
     const out = {};
-    for (const k of Object.keys(obj)) out[k] = sentiFinalize(obj[k]); // fixed
-
-    // ranking list
+    for (const k of Object.keys(obj)) out[k] = sentiFinalize(obj[k]);
     const ranked = Object.entries(out)
       .map(([k, v]) => ({ key: k, ...v }))
       .sort((a, b) =>
@@ -825,7 +809,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     from: FROM,
     to: TO,
     params: {
-      holdBars: HOLD_BARS, // kept for transparency (ignored for exits)
+      holdBars: HOLD_BARS,
       warmupBars: WARMUP,
       cooldownDays: COOLDOWN,
       targetTradesPerDay: targetTPD,
@@ -841,13 +825,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
-    openAtEnd: globalOpenPositions, // NEW
+    openAtEnd: globalOpenPositions,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
-      time: timeExitCount, // 0
-      timeWins: timeExitWins, // 0
-      timeLosses: timeExitLosses, // 0
+      time: timeExitCount,
+      timeWins: timeExitWins,
+      timeLosses: timeExitLosses,
     },
     signals: {
       total: signalsTotal,
@@ -868,9 +852,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       dip: computeMetrics(all),
     },
     telemetry,
-    parallel, // summarized parallel lane (rejected buys)
+    parallel,
     sentiment: {
-      // NEW: sentiment combo analysis
       actual: sentiActual.combos,
       rejected: sentiRejected.combos,
       bestByWinRate: sentiment.bestByWinRate,
@@ -916,11 +899,11 @@ function computeMetrics(trades) {
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
-    time: trades.filter((t) => t.exitType === "TIME").length, // will be 0
+    time: trades.filter((t) => t.exitType === "TIME").length,
   };
 
   return {
-    trades: n,
+    trades: r2(n),
     winRate: r2(winRate),
     avgReturnPct: r2(avgReturnPct),
     avgHoldingDays: r2(avgHoldingDays),
@@ -939,10 +922,6 @@ function sum(arr) {
 }
 
 /* --------------------------- Expose for Bubble -------------------------- */
-// Examples:
-//   window.backtest().then(console.log)
-//   window.backtest({ warmupBars: 40, cooldownDays: 2 })
-//   window.backtest({ topRejectedReasons: 8, examplesCap: 3 })
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
     return await runBacktest(tickersOrOpts, maybeOpts);
