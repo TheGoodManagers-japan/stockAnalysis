@@ -2,7 +2,7 @@
 import { detectDipBounce } from "./dip.js";
 
 // Master toggle: turn off to disable all regime effects without touching callers
-const applyRegime = true;
+const applyRegime = false;
 
 /* ============================ Telemetry ============================ */
 function teleInit() {
