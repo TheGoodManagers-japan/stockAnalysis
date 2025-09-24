@@ -432,7 +432,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const sig = analyzeSwingTradeEntry(stock, hist, {
             debug: true,
             debugLevel: "verbose",
-          });
+          },true);
 
           // compute sentiment once here so both lanes use the same snapshot
           const senti = getComprehensiveMarketSentiment(stock, hist);

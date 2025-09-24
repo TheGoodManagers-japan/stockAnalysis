@@ -1,6 +1,9 @@
 // /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
 
+// Master toggle: turn off to disable all regime effects without touching callers
+const applyRegime = true;
+
 /* ============================ Telemetry ============================ */
 function teleInit() {
   return {
@@ -58,11 +61,23 @@ function mkTracer(opts = {}) {
 }
 
 // Public API
-export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
+// NOTE: 4th positional param `regimeGood` (boolean or undefined)
+//  - true  => easier RR need (by 0.15, floor 1.05)
+//  - false => stricter RR need (by 0.40, cap 2.20)
+//  - undefined => unchanged behavior
+export function analyzeSwingTradeEntry(
+  stock,
+  historicalData,
+  opts = {},
+  regimeGood = undefined
+) {
   const cfg = getConfig(opts);
   const reasons = [];
   const tele = teleInit();
   const T = mkTracer(opts);
+
+  // Normalize regime flag; null means "not provided"
+  const regimeGoodFlag = typeof regimeGood === "boolean" ? regimeGood : null;
 
   // ---- Validate & prep ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
@@ -75,7 +90,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       num(stock.openPrice) ||
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
+    const prov = provisionalPlan(
+      stock || {},
+      data || [],
+      ms0,
+      pxNow,
+      cfg,
+      regimeGoodFlag
+    );
     const out = withNo(r, {
       reasons: [r],
       pxNow,
@@ -89,6 +111,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       context: {
         ticker: stock?.ticker,
         bars: Array.isArray(historicalData) ? historicalData.length : 0,
+        regimeGood: regimeGoodFlag, // optional trace
       },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
@@ -116,7 +139,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       num(stock.openPrice) ||
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
+    const prov = provisionalPlan(
+      stock || {},
+      data || [],
+      ms0,
+      pxNow,
+      cfg,
+      regimeGoodFlag
+    );
     const out = withNo(r, {
       reasons: [r],
       pxNow,
@@ -127,7 +157,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     });
     out.telemetry = {
       ...tele,
-      context: { ticker: stock?.ticker, bars: data.length },
+      context: {
+        ticker: stock?.ticker,
+        bars: data.length,
+        regimeGood: regimeGoodFlag,
+      },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
       trace: T.logs,
@@ -159,6 +193,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ma200: ms.ma200,
     },
     perfectMode: cfg.perfectMode,
+    regimeGood: regimeGoodFlag, // optional trace
   };
 
   // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
@@ -301,6 +336,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
             kind: "DIP",
             data,
+            regimeGood: regimeGoodFlag, // NEW
           });
 
           // --- Bounce/Support probation lane (flow-positive, quality-gated) ---
@@ -311,11 +347,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
             const bounceGood =
               bounceATR >= (ms.trend === "STRONG_UP" ? 0.85 : 1.0) ||
               !!dip?.diagnostics?.closeAboveYHigh;
-            const nearSupport = !!dip?.diagnostics?.nearSupport;
+            const nearSupport2 = !!dip?.diagnostics?.nearSupport;
             const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
             if (
               withinBand &&
-              nearSupport &&
+              nearSupport2 &&
               bounceGood &&
               rsiHere < 62 &&
               regimeOK
@@ -429,7 +465,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       stock,
       ms,
       cfg,
-      { kind: "FALLBACK", data }
+      { kind: "FALLBACK", data, regimeGood: regimeGoodFlag } // NEW
     );
 
     const debug = opts.debug
@@ -647,6 +683,18 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
   if (atrPct >= 3.0) need = Math.max(need, 1.5);
 
+  // === Regime-only tweak to RR need (guarded by master toggle) ===
+  // If ctx.regimeGood is not boolean, nothing changes.
+  if (applyRegime && ctx && typeof ctx.regimeGood === "boolean") {
+    if (ctx.regimeGood === true) {
+      // Good market day: slightly easier RR acceptance
+      need = Math.max(1.05, need - 0.15);
+    } else {
+      // Bad market day: stricter RR acceptance
+      need = Math.min(2.2, need + 0.4);
+    }
+  }
+
   const acceptable = ratio >= need;
 
   // Probation band: let near-miss RR through in friendly regimes with cool RSI
@@ -822,7 +870,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
 }
 
 /* =========================== Provisional plan =========================== */
-function provisionalPlan(stock, data, ms, pxNow, cfg) {
+function provisionalPlan(stock, data, ms, pxNow, cfg, regimeGood = null) {
   const px = num(pxNow) || 1;
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
 
@@ -852,7 +900,7 @@ function provisionalPlan(stock, data, ms, pxNow, cfg) {
     stock,
     ms || { trend: "UP" },
     cfg || getConfig({}),
-    { kind: "FALLBACK", data }
+    { kind: "FALLBACK", data, regimeGood } // NEW
   );
   return { stop: rr.stop, target: rr.target, rr };
 }
