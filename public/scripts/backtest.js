@@ -1,5 +1,5 @@
-// /scripts/backtest.js — swing-period backtest (browser) — DIP-only
-// DIP: enter on buyNow=true; exit on stop/target (NO time-based exits).
+// /scripts/backtest.js — swing-period backtest (browser) — DIP-only (TRAIL after target)
+// DIP: enter on buyNow=true; exit on stop or TRAIL after target (NO time-based exits).
 // ST/LT sentiment gating happens here (no changes to analyzers).
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -43,7 +43,7 @@ async function fetchHistory(ticker, fromISO, toISO) {
       date: new Date(d.date),
       open: Number(d.open ?? d.close ?? 0),
       high: Number(d.high ?? d.close ?? 0),
-      low: Number(d.low ?? d.close ?? 0),
+      low: Number(d.low ?? 0),
       close: Number(d.close ?? 0),
       volume: Number(d.volume ?? 0),
     }))
@@ -86,32 +86,113 @@ function afterColon(s, head) {
     .trim();
 }
 
-/* ---------------- Counterfactual helpers (parallel lane) ---------------- */
-function simulateTradeForward(candles, startIdx, entry, stop, target) {
-  const risk = Math.max(0.01, entry - stop);
-  for (let j = startIdx + 1; j < candles.length; j++) {
-    const bar = candles[j];
-    if (bar.low <= stop) {
-      return {
-        exitType: "STOP",
-        exitPrice: stop,
-        holdingDays: j - startIdx,
-        result: "LOSS",
-        R: (stop - entry) / risk,
-        returnPct: ((stop - entry) / entry) * 100,
-      };
-    }
-    if (bar.high >= target) {
-      return {
-        exitType: "TARGET",
-        exitPrice: target,
-        holdingDays: j - startIdx,
-        result: "WIN",
-        R: (target - entry) / risk,
-        returnPct: ((target - entry) / entry) * 100,
-      };
+/* --------- TRAILING helpers (swing-low + simple ATR/MA for CF sims) --------- */
+function lastSwingLow(candles, endIdx, lookback = 8) {
+  // Return the most recent local pivot low in [endIdx - lookback, endIdx]
+  const a = Math.max(2, endIdx - lookback);
+  const b = endIdx - 1;
+  let pivot = null;
+  for (let i = b; i >= a; i--) {
+    const l = candles[i].low, lPrev = candles[i - 1].low, lNext = candles[i + 1]?.low ?? l;
+    if (l < lPrev && l < lNext) {
+      pivot = l;
+      break;
     }
   }
+  // Fallback to min low over window if no clean pivot
+  if (pivot == null) {
+    let m = Infinity;
+    for (let i = a; i <= b; i++) m = Math.min(m, candles[i].low);
+    pivot = Number.isFinite(m) ? m : candles[endIdx - 1].low;
+  }
+  return pivot;
+}
+function simpleMA(candles, endIdx, n = 25) {
+  if (endIdx + 1 < n) return candles[endIdx].close;
+  let s = 0;
+  for (let i = endIdx - n + 1; i <= endIdx; i++) s += candles[i].close;
+  return s / n;
+}
+function simpleATR14(candles, endIdx, n = 14) {
+  if (endIdx < 1) return Math.max(candles[endIdx].close * 0.005, 1e-6);
+  const start = Math.max(1, endIdx - n + 1);
+  let trSum = 0;
+  for (let i = start; i <= endIdx; i++) {
+    const h = candles[i].high, l = candles[i].low, pc = candles[i - 1].close;
+    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    trSum += tr;
+  }
+  const atr = trSum / (endIdx - start + 1);
+  // tiny floor like elsewhere
+  return Math.max(atr, candles[endIdx].close * 0.005, 1e-6);
+}
+
+/* ---------------- Counterfactual helpers (parallel lane) ---------------- */
+// Updated CF simulator: when target is touched, switch to TRAIL instead of exiting
+function simulateTradeForward(candles, startIdx, entry, stopInit, target) {
+  const risk = Math.max(0.01, entry - stopInit);
+  let trailing = false;
+  let trailStop = stopInit;
+
+  for (let j = startIdx + 1; j < candles.length; j++) {
+    const bar = candles[j];
+
+    // Conservative order: stop first (worst-case for long)
+    if (bar.low <= (trailing ? trailStop : stopInit)) {
+      const px = trailing ? trailStop : stopInit;
+      return {
+        exitType: trailing ? "TRAIL" : "STOP",
+        exitPrice: px,
+        holdingDays: j - startIdx,
+        result: "LOSS",
+        R: (px - entry) / risk,
+        returnPct: ((px - entry) / entry) * 100,
+      };
+    }
+
+    // If not trailing yet and we hit target → enable trailing on this bar
+    if (!trailing && bar.high >= target) {
+      trailing = true;
+      const atr = simpleATR14(candles, j);
+      const ma25 = simpleMA(candles, j, 25);
+      const swing = lastSwingLow(candles, j, 8);
+      const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, stopInit);
+      trailStop = Math.max(trailStop, cand);
+
+      // Same-bar fall through the new trail?
+      if (bar.low <= trailStop) {
+        return {
+          exitType: "TRAIL",
+          exitPrice: trailStop,
+          holdingDays: j - startIdx,
+          result: trailStop >= entry ? "WIN" : "LOSS",
+          R: (trailStop - entry) / risk,
+          returnPct: ((trailStop - entry) / entry) * 100,
+        };
+      }
+    }
+
+    // Already trailing — update trail and check break
+    if (trailing) {
+      const atr = simpleATR14(candles, j);
+      const ma25 = simpleMA(candles, j, 25);
+      const swing = lastSwingLow(candles, j, 8);
+      const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, stopInit);
+      trailStop = Math.max(trailStop, cand);
+
+      if (bar.low <= trailStop) {
+        return {
+          exitType: "TRAIL",
+          exitPrice: trailStop,
+          holdingDays: j - startIdx,
+          result: trailStop >= entry ? "WIN" : "LOSS",
+          R: (trailStop - entry) / risk,
+          returnPct: ((trailStop - entry) / entry) * 100,
+        };
+      }
+    }
+  }
+
   const last = candles[candles.length - 1];
   return {
     exitType: "OPEN",
@@ -210,7 +291,7 @@ function sentiFinalize(agg) {
 }
 
 /**
- * Backtest (swing period) — DIP only.
+ * Backtest (swing period) — DIP only (TRAIL after target).
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=5,
  *     appendTickers?: string[],
@@ -239,7 +320,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const to = opts.to ? new Date(opts.to) : new Date();
   const from = opts.from
     ? new Date(opts.from)
-    : new Date(to.getFullYear(), to.getMonth() - months, to.getDate());
+    : new Date(to.getFullYear(), to.getMonth() - months, to.getDate()));
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
@@ -348,7 +429,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP (TRAIL after target)`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -397,14 +478,41 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // manage open (stop → target ONLY; NO time exit)
+        // ---------------- Manage open position (STOP / TRAIL) ----------------
         if (open) {
           let exit = null;
 
+          // Conservative: hard stop always first
           if (today.low <= open.stop) {
-            exit = { type: "STOP", price: open.stop, result: "LOSS" };
-          } else if (today.high >= open.target) {
-            exit = { type: "TARGET", price: open.target, result: "WIN" };
+            exit = { type: open.trailing ? "TRAIL" : "STOP", price: open.stop, result: "LOSS" };
+          } else {
+            // If not trailing yet and target touched today, enable trailing
+            if (!open.trailing && today.high >= open.target) {
+              open.trailing = true;
+              // initialize trail on this bar using orchestrator-style rule
+              const atr = Number(stock.atr14) || Math.max(today.close * 0.005, 1e-6);
+              const ma25 = Number(stock.movingAverage25d) || simpleMA(candles, i, 25);
+              const swing = lastSwingLow(candles, i, 8);
+              const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, open.stopInit);
+              open.trailStop = Math.max(open.stop, Math.round(cand));
+            }
+
+            // Update trailing stop if trailing
+            if (open.trailing) {
+              const atr = Number(stock.atr14) || Math.max(today.close * 0.005, 1e-6);
+              const ma25 = Number(stock.movingAverage25d) || simpleMA(candles, i, 25);
+              const swing = lastSwingLow(candles, i, 8);
+              const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, open.stopInit);
+              const newTrail = Math.round(Math.max(open.stopInit, cand));
+              open.trailStop = Math.max(open.trailStop || open.stop, newTrail);
+              // The active stop while trailing is the trail
+              open.stop = open.trailStop;
+
+              // Check break of trail in this bar
+              if (today.low <= open.trailStop) {
+                exit = { type: "TRAIL", price: open.trailStop, result: open.trailStop >= open.entry ? "WIN" : "LOSS" };
+              }
+            }
           }
 
           if (exit) {
@@ -422,7 +530,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               stop: open.stopInit,
               target: open.target,
               result: exit.result,
-              exitType: exit.type,
+              exitType: exit.type, // STOP or TRAIL
               R: r2((exit.price - open.entry) / risk),
               returnPct: r2(pctRet),
               ST: open.ST,
@@ -445,7 +553,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // look for entry (eligible state)
+        // ---------------- Look for entry (eligible state) ----------------
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
@@ -512,6 +620,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               target: Math.round(target),
               ST,
               LT,
+              trailing: false,
+              trailStop: null,
             };
             signalsExecuted++;
           } else {
@@ -549,7 +659,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // ----- PARALLEL: simulate buyNow === false as if we entered anyway -----
+            // ----- PARALLEL: simulate buyNow === false as if we entered anyway (TRAIL after target) -----
             if (SIM_REJECTED) {
               const entry = today.close;
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
@@ -632,14 +742,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       }
 
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
-      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0 now
+      const tTrails = trades.filter((x) => x.exitType === "TRAIL").length;
+      const tTargets = trades.filter((x) => x.exitType === "TARGET").length; // should be 0 now
+      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
           ticker: code,
           trades,
-          counts: { target: tTargets, stop: tStops, time: tTimes },
+          counts: { target: tTargets, stop: tStops, trail: tTrails, time: tTimes },
           openAtEnd: !!open,
         });
       }
@@ -654,7 +765,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | ticker exits — target:${tTargets} stop:${tStops} time:${tTimes} | openAtEnd=${!!open}`
+        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | ticker exits — trail:${tTrails} stop:${tStops} target:${tTargets} time:${tTimes} | openAtEnd=${!!open}`
       );
     } catch (e) {
       if (INCLUDE_BY_TICKER) {
@@ -687,8 +798,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     : 0;
 
   // exits
-  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
+  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length; // should be 0 now
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
+  const trailExitCount = all.filter((t) => t.exitType === "TRAIL").length;
   const timeExitCount = all.filter((t) => t.exitType === "TIME").length; // 0
   const timeExitWins = all.filter(
     (t) => t.exitType === "TIME" && t.result === "WIN"
@@ -778,7 +890,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // ---- logs ----
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses}) | openAtEnd=${globalOpenPositions}`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — trail:${trailExitCount} stop:${hitStopCount} target:${hitTargetCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses}) | openAtEnd=${globalOpenPositions}`
   );
   console.log(
     `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
@@ -829,6 +941,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
+      trail: trailExitCount,
       time: timeExitCount,
       timeWins: timeExitWins,
       timeLosses: timeExitLosses,
@@ -899,6 +1012,7 @@ function computeMetrics(trades) {
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
+    trail: trades.filter((t) => t.exitType === "TRAIL").length,
     time: trades.filter((t) => t.exitType === "TIME").length,
   };
 
@@ -937,7 +1051,7 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       tradesPerDay: 0,
       tradingDays: 0,
       openAtEnd: 0,
-      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      exitCounts: { target: 0, stop: 0, trail: 0, time: 0, timeWins: 0, timeLosses: 0 },
       signals: {
         total: 0,
         afterWarmup: 0,
