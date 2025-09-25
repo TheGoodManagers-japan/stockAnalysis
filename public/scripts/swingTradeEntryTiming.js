@@ -454,7 +454,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       stopLoss: deRound(toTick(round0(rr0.stop), stock)),
       priceTarget: deRound(toTick(round0(rr0.target), stock)),
       smartStopLoss: deRound(toTick(round0(rr0.stop), stock)),
-      smartPriceTarget: tightenSmartTarget(pxNow, rr0.target, stock, cfg), // tightened smart target
+      smartPriceTarget: deRound(toTick(round0(rr0.target), stock)),
       timeline: [],
       debug,
       telemetry: { ...tele, trace: T.logs },
@@ -498,7 +498,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     stopLoss: deRound(toTick(round0(best.stop), stock)),
     priceTarget: deRound(toTick(round0(best.target), stock)),
     smartStopLoss: deRound(toTick(round0(best.stop), stock)),
-    smartPriceTarget: tightenSmartTarget(px, best.target, stock, cfg), // tightened smart target
+    smartPriceTarget: deRound(toTick(round0(best.target), stock)),
     timeline: swingTimeline,
     debug,
     telemetry: { ...tele, trace: T.logs },
@@ -549,11 +549,6 @@ function getConfig(opts = {}) {
     // volume regime (easier)
     pullbackDryFactor: 1.5,
     bounceHotFactor: 1.0,
-
-    // === NEW: smart target tightening knobs ===
-    smartTargetTightenATR: 0.3, // reduce smart target by 0.30 * ATR
-    smartTargetMinBufferATR: 0.6, // keep ≥ this many ATR above entry/current
-    smartTargetMinTicks: 3, // and ≥ this many ticks above entry/current
 
     debug,
   };
@@ -1026,30 +1021,10 @@ function withNo(reason, ctx = {}) {
     stopLoss: deRound(toTick(round0(prov.stop), stock)),
     priceTarget: deRound(toTick(round0(prov.target), stock)),
     smartStopLoss: deRound(toTick(round0(prov.stop), stock)),
-    smartPriceTarget: tightenSmartTarget(pxNow, prov.target, stock, cfg), // tightened smart target for withNo path
+    smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
     timeline: [],
     debug,
   };
-}
-
-/* ============= NEW helper: tighten only the smartPriceTarget ============= */
-function tightenSmartTarget(entryPx, target, stock, cfg) {
-  const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const tick = Number(stock?.tickSize) || inferTickFromPrice(target) || 0.1;
-
-  // reduce by configured ATR, but not below a safety buffer
-  const cut = Math.max(cfg.smartTargetTightenATR * atr, 2 * tick);
-  let t2 = target - cut;
-
-  // keep the tightened target clearly above price:
-  const hardFloor = Math.max(
-    entryPx + cfg.smartTargetMinBufferATR * atr,
-    entryPx + cfg.smartTargetMinTicks * tick
-  );
-  if (!Number.isFinite(t2) || t2 <= hardFloor) t2 = Math.min(target, hardFloor);
-
-  // snap to ticks & de-round like the rest of the outputs
-  return deRound(toTick(round0(t2), stock));
 }
 
 export { getConfig }; // optional export if you want configs elsewhere
