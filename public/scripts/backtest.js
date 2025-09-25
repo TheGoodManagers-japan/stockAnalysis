@@ -320,7 +320,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const to = opts.to ? new Date(opts.to) : new Date();
   const from = opts.from
     ? new Date(opts.from)
-    : new Date(to.getFullYear(), to.getMonth() - months, to.getDate()));
+    : new Date(to.getFullYear(), to.getMonth() - months, to.getDate());
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
