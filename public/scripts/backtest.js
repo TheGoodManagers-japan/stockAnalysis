@@ -1,5 +1,5 @@
-// /scripts/backtest.js — swing-period backtest (browser) — DIP-only (TRAIL after target)
-// DIP: enter on buyNow=true; exit on stop or TRAIL after target (NO time-based exits).
+// /scripts/backtest.js — swing-period backtest (browser) — DIP-only (TRAIL at target + ratchet)
+// DIP: enter on buyNow=true; exit on stop, or (after target is hit) trail at target with ratchet (NO time-based exits).
 // ST/LT sentiment gating happens here (no changes to analyzers).
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -86,106 +86,58 @@ function afterColon(s, head) {
     .trim();
 }
 
-/* --------- TRAILING helpers (swing-low + simple ATR/MA for CF sims) --------- */
-function lastSwingLow(candles, endIdx, lookback = 8) {
-  // Return the most recent local pivot low in [endIdx - lookback, endIdx]
-  const a = Math.max(2, endIdx - lookback);
-  const b = endIdx - 1;
-  let pivot = null;
-  for (let i = b; i >= a; i--) {
-    const l = candles[i].low, lPrev = candles[i - 1].low, lNext = candles[i + 1]?.low ?? l;
-    if (l < lPrev && l < lNext) {
-      pivot = l;
-      break;
-    }
-  }
-  // Fallback to min low over window if no clean pivot
-  if (pivot == null) {
-    let m = Infinity;
-    for (let i = a; i <= b; i++) m = Math.min(m, candles[i].low);
-    pivot = Number.isFinite(m) ? m : candles[endIdx - 1].low;
-  }
-  return pivot;
-}
-function simpleMA(candles, endIdx, n = 25) {
-  if (endIdx + 1 < n) return candles[endIdx].close;
-  let s = 0;
-  for (let i = endIdx - n + 1; i <= endIdx; i++) s += candles[i].close;
-  return s / n;
-}
-function simpleATR14(candles, endIdx, n = 14) {
-  if (endIdx < 1) return Math.max(candles[endIdx].close * 0.005, 1e-6);
-  const start = Math.max(1, endIdx - n + 1);
-  let trSum = 0;
-  for (let i = start; i <= endIdx; i++) {
-    const h = candles[i].high, l = candles[i].low, pc = candles[i - 1].close;
-    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-    trSum += tr;
-  }
-  const atr = trSum / (endIdx - start + 1);
-  // tiny floor like elsewhere
-  return Math.max(atr, candles[endIdx].close * 0.005, 1e-6);
-}
-
 /* ---------------- Counterfactual helpers (parallel lane) ---------------- */
-// Updated CF simulator: when target is touched, switch to TRAIL instead of exiting
+// Updated CF simulator: after target is touched, trail starts at target and
+// then ratchets to the previous bar's close each subsequent bar (tight).
 function simulateTradeForward(candles, startIdx, entry, stopInit, target) {
   const risk = Math.max(0.01, entry - stopInit);
   let trailing = false;
-  let trailStop = stopInit;
+  let trailStop = Math.max(stopInit, target);
 
   for (let j = startIdx + 1; j < candles.length; j++) {
     const bar = candles[j];
 
-    // Conservative order: stop first (worst-case for long)
-    if (bar.low <= (trailing ? trailStop : stopInit)) {
-      const px = trailing ? trailStop : stopInit;
+    // Hard stop first (pre-trailing)
+    if (!trailing && bar.low <= stopInit) {
       return {
-        exitType: trailing ? "TRAIL" : "STOP",
-        exitPrice: px,
+        exitType: "STOP",
+        exitPrice: stopInit,
         holdingDays: j - startIdx,
         result: "LOSS",
-        R: (px - entry) / risk,
-        returnPct: ((px - entry) / entry) * 100,
+        R: (stopInit - entry) / risk,
+        returnPct: ((stopInit - entry) / entry) * 100,
       };
     }
 
-    // If not trailing yet and we hit target → enable trailing on this bar
+    // Flip to trailing at target
     if (!trailing && bar.high >= target) {
       trailing = true;
-      const atr = simpleATR14(candles, j);
-      const ma25 = simpleMA(candles, j, 25);
-      const swing = lastSwingLow(candles, j, 8);
-      const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, stopInit);
-      trailStop = Math.max(trailStop, cand);
+      trailStop = Math.max(stopInit, target);
 
-      // Same-bar fall through the new trail?
+      // Same-bar dip through trail?
       if (bar.low <= trailStop) {
         return {
           exitType: "TRAIL",
           exitPrice: trailStop,
           holdingDays: j - startIdx,
-          result: trailStop >= entry ? "WIN" : "LOSS",
+          result: "WIN",
           R: (trailStop - entry) / risk,
           returnPct: ((trailStop - entry) / entry) * 100,
         };
       }
     }
 
-    // Already trailing — update trail and check break
+    // Ratchet on subsequent bars while trailing: use previous bar's close
     if (trailing) {
-      const atr = simpleATR14(candles, j);
-      const ma25 = simpleMA(candles, j, 25);
-      const swing = lastSwingLow(candles, j, 8);
-      const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, stopInit);
-      trailStop = Math.max(trailStop, cand);
+      const prevClose = candles[j - 1]?.close ?? bar.open;
+      trailStop = Math.max(trailStop, prevClose);
 
       if (bar.low <= trailStop) {
         return {
           exitType: "TRAIL",
           exitPrice: trailStop,
           holdingDays: j - startIdx,
-          result: trailStop >= entry ? "WIN" : "LOSS",
+          result: "WIN",
           R: (trailStop - entry) / risk,
           returnPct: ((trailStop - entry) / entry) * 100,
         };
@@ -291,7 +243,7 @@ function sentiFinalize(agg) {
 }
 
 /**
- * Backtest (swing period) — DIP only (TRAIL after target).
+ * Backtest (swing period) — DIP only (TRAIL at target + ratchet).
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=5,
  *     appendTickers?: string[],
@@ -429,7 +381,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP (TRAIL after target)`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP (TRAIL at target + ratchet)`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -478,39 +430,37 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // ---------------- Manage open position (STOP / TRAIL) ----------------
+        // ---------------- Manage open position (STOP / TRAIL-at-target with ratchet) ----------------
         if (open) {
           let exit = null;
 
-          // Conservative: hard stop always first
-          if (today.low <= open.stop) {
-            exit = { type: open.trailing ? "TRAIL" : "STOP", price: open.stop, result: "LOSS" };
+          // Hard stop first (pre-trailing)
+          if (!open.trailing && today.low <= open.stop) {
+            exit = { type: "STOP", price: open.stop, result: "LOSS" };
           } else {
-            // If not trailing yet and target touched today, enable trailing
+            // If not trailing yet and target touched today, enable trailing at target (tight)
             if (!open.trailing && today.high >= open.target) {
               open.trailing = true;
-              // initialize trail on this bar using orchestrator-style rule
-              const atr = Number(stock.atr14) || Math.max(today.close * 0.005, 1e-6);
-              const ma25 = Number(stock.movingAverage25d) || simpleMA(candles, i, 25);
-              const swing = lastSwingLow(candles, i, 8);
-              const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, open.stopInit);
-              open.trailStop = Math.max(open.stop, Math.round(cand));
-            }
-
-            // Update trailing stop if trailing
-            if (open.trailing) {
-              const atr = Number(stock.atr14) || Math.max(today.close * 0.005, 1e-6);
-              const ma25 = Number(stock.movingAverage25d) || simpleMA(candles, i, 25);
-              const swing = lastSwingLow(candles, i, 8);
-              const cand = Math.max(swing - 0.5 * atr, ma25 - 0.6 * atr, open.stopInit);
-              const newTrail = Math.round(Math.max(open.stopInit, cand));
-              open.trailStop = Math.max(open.trailStop || open.stop, newTrail);
-              // The active stop while trailing is the trail
+              open.trailStop = Math.max(open.stopInit, open.target); // tight: stop at target
               open.stop = open.trailStop;
 
-              // Check break of trail in this bar
+              // Same-bar fall back through trail?
               if (today.low <= open.trailStop) {
-                exit = { type: "TRAIL", price: open.trailStop, result: open.trailStop >= open.entry ? "WIN" : "LOSS" };
+                exit = { type: "TRAIL", price: open.trailStop, result: "WIN" };
+              }
+            }
+
+            // Already trailing: ratchet trail upward to prev close, then check break
+            if (!exit && open.trailing) {
+              const prevClose = candles[i - 1]?.close ?? today.open;
+              open.trailStop = Math.max(
+                open.trailStop || open.stopInit,
+                prevClose
+              );
+              open.stop = open.trailStop;
+
+              if (today.low <= open.trailStop) {
+                exit = { type: "TRAIL", price: open.trailStop, result: "WIN" };
               }
             }
           }
@@ -529,7 +479,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               exit: r2(exit.price),
               stop: open.stopInit,
               target: open.target,
-              result: exit.result,
+              result: exit.result, // STOP=LOSS or TRAIL=WIN
               exitType: exit.type, // STOP or TRAIL
               R: r2((exit.price - open.entry) / risk),
               returnPct: r2(pctRet),
@@ -659,7 +609,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // ----- PARALLEL: simulate buyNow === false as if we entered anyway (TRAIL after target) -----
+            // ----- PARALLEL: simulate buyNow === false as if we entered anyway (TRAIL at target + ratchet) -----
             if (SIM_REJECTED) {
               const entry = today.close;
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
@@ -750,7 +700,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         byTicker.push({
           ticker: code,
           trades,
-          counts: { target: tTargets, stop: tStops, trail: tTrails, time: tTimes },
+          counts: {
+            target: tTargets,
+            stop: tStops,
+            trail: tTrails,
+            time: tTimes,
+          },
           openAtEnd: !!open,
         });
       }
@@ -1051,7 +1006,14 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       tradesPerDay: 0,
       tradingDays: 0,
       openAtEnd: 0,
-      exitCounts: { target: 0, stop: 0, trail: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      exitCounts: {
+        target: 0,
+        stop: 0,
+        trail: 0,
+        time: 0,
+        timeWins: 0,
+        timeLosses: 0,
+      },
       signals: {
         total: 0,
         afterWarmup: 0,
