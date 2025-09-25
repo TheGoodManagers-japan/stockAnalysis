@@ -1,10 +1,6 @@
 // /scripts/backtest.js — swing-period backtest (browser) — DIP-only
-// Exits: STOP (loss), TRAIL-at-target (win), BE (breakeven)
-// Rules:
-//  • As soon as bar turns positive (high ≥ entry) move stop to breakeven (entry).
-//  • When target first touched: flip to trailing at target; afterwards ratchet trail to prev close.
-//  • Any trail exit is marked WIN. BE is neutral (not win/loss).
-//  • No time-based exits.
+// DIP: enter on buyNow=true; exit on stop/target (NO time-based exits).
+// ST/LT sentiment gating happens here (no changes to analyzers).
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
@@ -47,7 +43,7 @@ async function fetchHistory(ticker, fromISO, toISO) {
       date: new Date(d.date),
       open: Number(d.open ?? d.close ?? 0),
       high: Number(d.high ?? d.close ?? 0),
-      low: Number(d.low ?? 0),
+      low: Number(d.low ?? d.close ?? 0),
       close: Number(d.close ?? 0),
       volume: Number(d.volume ?? 0),
     }))
@@ -89,75 +85,33 @@ function afterColon(s, head) {
     .slice(idx + head.length)
     .trim();
 }
-const near = (a, b, eps = 1e-9) => Math.abs((+a || 0) - (+b || 0)) <= eps;
 
 /* ---------------- Counterfactual helpers (parallel lane) ---------------- */
-// After target is touched, trail starts at target and then ratchets to prev bar's close.
-// Breakeven: as soon as bar's high ≥ entry, move stop to entry (pre-trailing).
-function simulateTradeForward(candles, startIdx, entry, stopInit, target) {
-  const risk = Math.max(0.01, entry - stopInit);
-  let trailing = false;
-  let trailStop = Math.max(stopInit, target);
-  let stop = stopInit;
-
+function simulateTradeForward(candles, startIdx, entry, stop, target) {
+  const risk = Math.max(0.01, entry - stop);
   for (let j = startIdx + 1; j < candles.length; j++) {
     const bar = candles[j];
-
-    // Pre-trailing: if trade turned positive this bar, bump stop to BE
-    if (!trailing && bar.high >= entry) {
-      stop = Math.max(stop, entry);
-    }
-
-    // Hard stop first (pre-trailing)
-    if (!trailing && bar.low <= stop) {
-      const exitPrice = stop;
-      const res = near(exitPrice, entry) ? "BE" : "LOSS";
+    if (bar.low <= stop) {
       return {
         exitType: "STOP",
-        exitPrice,
+        exitPrice: stop,
         holdingDays: j - startIdx,
-        result: res,
-        R: (exitPrice - entry) / risk,
-        returnPct: ((exitPrice - entry) / entry) * 100,
+        result: "LOSS",
+        R: (stop - entry) / risk,
+        returnPct: ((stop - entry) / entry) * 100,
       };
     }
-
-    // Flip to trailing at target
-    if (!trailing && bar.high >= target) {
-      trailing = true;
-      trailStop = Math.max(stopInit, target);
-
-      // Same-bar dip through trail?
-      if (bar.low <= trailStop) {
-        return {
-          exitType: "TRAIL",
-          exitPrice: trailStop,
-          holdingDays: j - startIdx,
-          result: "WIN",
-          R: (trailStop - entry) / risk,
-          returnPct: ((trailStop - entry) / entry) * 100,
-        };
-      }
-    }
-
-    // Ratchet on subsequent bars while trailing: previous bar's close
-    if (trailing) {
-      const prevClose = candles[j - 1]?.close ?? bar.open;
-      trailStop = Math.max(trailStop, prevClose);
-
-      if (bar.low <= trailStop) {
-        return {
-          exitType: "TRAIL",
-          exitPrice: trailStop,
-          holdingDays: j - startIdx,
-          result: "WIN",
-          R: (trailStop - entry) / risk,
-          returnPct: ((trailStop - entry) / entry) * 100,
-        };
-      }
+    if (bar.high >= target) {
+      return {
+        exitType: "TARGET",
+        exitPrice: target,
+        holdingDays: j - startIdx,
+        result: "WIN",
+        R: (target - entry) / risk,
+        returnPct: ((target - entry) / entry) * 100,
+      };
     }
   }
-
   const last = candles[candles.length - 1];
   return {
     exitType: "OPEN",
@@ -172,7 +126,7 @@ function cfInitAgg() {
   return { total: 0, winners: 0, rPos: 0, rNeg: 0, winR: [], lossR: [] };
 }
 function cfUpdateAgg(agg, outcome) {
-  if (outcome.result === "OPEN" || outcome.result === "BE") return;
+  if (outcome.result === "OPEN") return;
   agg.total++;
   if (outcome.result === "WIN") {
     agg.winners++;
@@ -256,7 +210,7 @@ function sentiFinalize(agg) {
 }
 
 /**
- * Backtest (swing period) — DIP only (BE + TRAIL-at-target + ratchet).
+ * Backtest (swing period) — DIP only.
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=5,
  *     appendTickers?: string[],
@@ -394,7 +348,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP (BE + TRAIL@target + ratchet)`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -443,49 +397,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // ---------------- Manage open position (STOP / BE / TRAIL-at-target with ratchet) ----------------
+        // manage open (stop → target ONLY; NO time exit)
         if (open) {
           let exit = null;
 
-          // Pre-trailing: if trade is positive this bar, bump stop to BE
-          if (!open.trailing && today.high >= open.entry) {
-            open.stop = Math.max(open.stop, open.entry);
-          }
-
-          // Hard stop (can be BE if stop == entry)
-          if (!open.trailing && today.low <= open.stop) {
-            const be = near(open.stop, open.entry);
-            exit = {
-              type: "STOP",
-              price: open.stop,
-              result: be ? "BE" : "LOSS",
-            };
-          } else {
-            // If not trailing yet and target touched today, enable trailing at target (tight)
-            if (!open.trailing && today.high >= open.target) {
-              open.trailing = true;
-              open.trailStop = Math.max(open.stopInit, open.target); // tight: stop at target
-              open.stop = open.trailStop;
-
-              // Same-bar fall back through trail?
-              if (today.low <= open.trailStop) {
-                exit = { type: "TRAIL", price: open.trailStop, result: "WIN" };
-              }
-            }
-
-            // Already trailing: ratchet trail upward to prev close, then check break
-            if (!exit && open.trailing) {
-              const prevClose = candles[i - 1]?.close ?? today.open;
-              open.trailStop = Math.max(
-                open.trailStop || open.stopInit,
-                prevClose
-              );
-              open.stop = open.trailStop;
-
-              if (today.low <= open.trailStop) {
-                exit = { type: "TRAIL", price: open.trailStop, result: "WIN" };
-              }
-            }
+          if (today.low <= open.stop) {
+            exit = { type: "STOP", price: open.stop, result: "LOSS" };
+          } else if (today.high >= open.target) {
+            exit = { type: "TARGET", price: open.target, result: "WIN" };
           }
 
           if (exit) {
@@ -502,8 +421,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               exit: r2(exit.price),
               stop: open.stopInit,
               target: open.target,
-              result: exit.result, // STOP: LOSS/BE, TRAIL: WIN
-              exitType: exit.type, // STOP or TRAIL
+              result: exit.result,
+              exitType: exit.type,
               R: r2((exit.price - open.entry) / risk),
               returnPct: r2(pctRet),
               ST: open.ST,
@@ -526,7 +445,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // ---------------- Look for entry (eligible state) ----------------
+        // look for entry (eligible state)
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
@@ -593,8 +512,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               target: Math.round(target),
               ST,
               LT,
-              trailing: false,
-              trailStop: null,
             };
             signalsExecuted++;
           } else {
@@ -632,7 +549,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // ----- PARALLEL: simulate buyNow === false as if we entered anyway (BE + TRAIL + ratchet) -----
+            // ----- PARALLEL: simulate buyNow === false as if we entered anyway -----
             if (SIM_REJECTED) {
               const entry = today.close;
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
@@ -675,6 +592,25 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
                   }
                   cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
+
+                  if (outcome.result === "WIN") {
+                    if (!parallel.rejectedBuys.examples[key])
+                      parallel.rejectedBuys.examples[key] = [];
+                    if (parallel.rejectedBuys.examples[key].length < EX_CAP) {
+                      parallel.rejectedBuys.examples[key].push({
+                        ticker: code,
+                        date: toISO(today.date),
+                        entry: r2(entry),
+                        stop: r2(simStop),
+                        target: r2(simTarget),
+                        exitType: outcome.exitType,
+                        R: +(outcome.R || 0).toFixed(2),
+                        returnPct: +(outcome.returnPct || 0).toFixed(2),
+                        ST,
+                        LT,
+                      });
+                    }
+                  }
                 }
               }
             }
@@ -696,33 +632,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       }
 
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
-      const tBEs = trades.filter((x) => x.result === "BE").length;
-      const tTrails = trades.filter((x) => x.exitType === "TRAIL").length;
-      const tTargets = trades.filter((x) => x.exitType === "TARGET").length; // 0
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // 0
+      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
+      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0 now
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
           ticker: code,
           trades,
-          counts: {
-            target: tTargets,
-            stop: tStops,
-            trail: tTrails,
-            be: tBEs,
-            time: tTimes,
-          },
+          counts: { target: tTargets, stop: tStops, time: tTimes },
           openAtEnd: !!open,
         });
       }
 
       const total = globalTrades.length;
       const winsSoFar = globalTrades.filter((x) => x.result === "WIN").length;
-      const lossesSoFar = globalTrades.filter(
-        (x) => x.result === "LOSS"
-      ).length;
-      const wrDen = winsSoFar + lossesSoFar || 1;
-      const winRateSoFar = pct((winsSoFar / wrDen) * 100);
+      const winRateSoFar = total ? pct((winsSoFar / total) * 100) : 0;
       const avgRetSoFar = total
         ? pct(globalTrades.reduce((a, b) => a + (b.returnPct || 0), 0) / total)
         : 0;
@@ -730,7 +654,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | ticker exits — trail:${tTrails} stop:${tStops} BE:${tBEs} target:${tTargets} time:${tTimes} | openAtEnd=${!!open}`
+        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | ticker exits — target:${tTargets} stop:${tStops} time:${tTimes} | openAtEnd=${!!open}`
       );
     } catch (e) {
       if (INCLUDE_BY_TICKER) {
@@ -752,26 +676,19 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const all = byTicker.length
     ? byTicker.flatMap((t) => t.trades)
     : globalTrades;
-
-  const wins = all.filter((t) => t.result === "WIN");
-  const losses = all.filter((t) => t.result === "LOSS");
-  const breakevens = all.filter((t) => t.result === "BE");
-  const nEff = wins.length + losses.length; // BE excluded from win-rate denominator
   const totalTrades = all.length;
-
-  const winRate = nEff ? (wins.length / nEff) * 100 : 0;
+  const wins = all.filter((t) => t.result === "WIN").length;
+  const winRate = totalTrades ? pct((wins / totalTrades) * 100) : 0;
   const avgReturnPct = totalTrades
-    ? all.reduce((a, b) => a + (b.returnPct || 0), 0) / totalTrades
+    ? pct(all.reduce((a, b) => a + (b.returnPct || 0), 0) / totalTrades)
     : 0;
   const avgHoldingDays = totalTrades
-    ? all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades
+    ? pct(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
     : 0;
 
   // exits
-  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length; // 0
+  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
-  const trailExitCount = all.filter((t) => t.exitType === "TRAIL").length;
-  const beCount = breakevens.length;
   const timeExitCount = all.filter((t) => t.exitType === "TIME").length; // 0
   const timeExitWins = all.filter(
     (t) => t.exitType === "TIME" && t.result === "WIN"
@@ -780,7 +697,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     (t) => t.exitType === "TIME" && t.result === "LOSS"
   ).length; // 0
 
-  // throughput (use the same Set collected during the run)
+  // throughput
   const days = tradingDays.size;
   const tradesPerDay = days ? totalTrades / days : 0;
   const targetTPD =
@@ -861,11 +778,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // ---- logs ----
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${r2(
-      winRate
-    )}% | avgReturn=${r2(avgReturnPct)}% | avgHold=${r2(
-      avgHoldingDays
-    )} bars | exits — trail:${trailExitCount} stop:${hitStopCount} BE:${beCount} target:${hitTargetCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses}) | openAtEnd=${globalOpenPositions}`
+  );
+  console.log(
+    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
+  );
+  console.log(
+    `[BT] DAILY AVG | tradingDays=${days} | trades/day=${tradesPerDay.toFixed(
+      3
+    )}${targetTPD ? ` | target=${targetTPD}` : ""}`
   );
 
   if (targetTPD) {
@@ -899,17 +820,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       examplesCap: EX_CAP,
     },
     totalTrades,
-    winRate: r2(winRate),
-    avgReturnPct: r2(avgReturnPct),
-    avgHoldingDays: r2(avgHoldingDays),
+    winRate,
+    avgReturnPct,
+    avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
     openAtEnd: globalOpenPositions,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
-      trail: trailExitCount,
-      be: beCount,
       time: timeExitCount,
       timeWins: timeExitWins,
       timeLosses: timeExitLosses,
@@ -947,20 +866,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
 /* ------------------------ Metrics Helpers & Logs ------------------------ */
 function computeMetrics(trades) {
+  const n = trades.length;
   const wins = trades.filter((t) => t.result === "WIN");
   const losses = trades.filter((t) => t.result === "LOSS");
-  const breakevens = trades.filter((t) => t.result === "BE");
 
-  const nEff = wins.length + losses.length; // BE excluded from win-rate
-  const nAll = trades.length;
-
-  const winRate = nEff ? (wins.length / nEff) * 100 : 0;
-  const avgReturnPct = nAll
-    ? sum(trades.map((t) => t.returnPct || 0)) / nAll
-    : 0;
-  const avgHoldingDays = nAll
-    ? sum(trades.map((t) => t.holdingDays || 0)) / nAll
-    : 0;
+  const winRate = n ? (wins.length / n) * 100 : 0;
+  const avgReturnPct = n ? sum(trades.map((t) => t.returnPct || 0)) / n : 0;
+  const avgHoldingDays = n ? sum(trades.map((t) => t.holdingDays || 0)) / n : 0;
 
   const avgWinPct = wins.length
     ? sum(wins.map((t) => t.returnPct || 0)) / wins.length
@@ -973,7 +885,7 @@ function computeMetrics(trades) {
   const rLosses = losses.map((t) => t.R || 0);
   const avgRwin = rWins.length ? sum(rWins) / rWins.length : 0;
   const avgRloss = rLosses.length ? sum(rLosses) / rLosses.length : 0;
-  const p = nEff ? wins.length / nEff : 0;
+  const p = n ? wins.length / n : 0;
   const expR = p * avgRwin + (1 - p) * avgRloss;
 
   const grossWin = sum(wins.map((t) => t.returnPct || 0));
@@ -987,13 +899,11 @@ function computeMetrics(trades) {
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
-    trail: trades.filter((t) => t.exitType === "TRAIL").length,
-    be: breakevens.length,
     time: trades.filter((t) => t.exitType === "TIME").length,
   };
 
   return {
-    trades: r2(nAll),
+    trades: r2(n),
     winRate: r2(winRate),
     avgReturnPct: r2(avgReturnPct),
     avgHoldingDays: r2(avgHoldingDays),
@@ -1027,14 +937,20 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       tradesPerDay: 0,
       tradingDays: 0,
       openAtEnd: 0,
-      exitCounts: {
-        target: 0,
-        stop: 0,
-        trail: 0,
-        be: 0,
-        time: 0,
-        timeWins: 0,
-        timeLosses: 0,
+      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      signals: {
+        total: 0,
+        afterWarmup: 0,
+        whileFlat: 0,
+        executed: 0,
+        invalid: 0,
+        riskStopGtePx: 0,
+        blocked: {
+          inTrade: 0,
+          cooldown: 0,
+          warmup: 0,
+          stlt: { dip: 0 },
+        },
       },
       strategy: {
         all: computeMetrics([]),
@@ -1066,6 +982,12 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         rejected: {},
         bestByWinRate: { actual: [], rejected: [] },
       },
+      ...(!!(
+        maybeOpts?.includeByTicker ||
+        (typeof tickersOrOpts === "object" && tickersOrOpts?.includeByTicker)
+      )
+        ? { byTicker: [] }
+        : {}),
       error: String(e?.message || e),
     };
   }
