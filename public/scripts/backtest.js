@@ -576,7 +576,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
 
-            if (telemetry.examples.buyNow.length < 5) {
+            if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
               telemetry.examples.buyNow.push({
                 ticker: code,
                 date: toISO(today.date),
@@ -759,12 +759,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const nEff = wins.length + losses.length; // BE excluded from win-rate denominator
   const totalTrades = all.length;
 
-  const winRate = nEff ? pct((wins.length / nEff) * 100) : 0;
+  const winRate = nEff ? (wins.length / nEff) * 100 : 0;
   const avgReturnPct = totalTrades
-    ? pct(all.reduce((a, b) => a + (b.returnPct || 0), 0) / totalTrades)
+    ? all.reduce((a, b) => a + (b.returnPct || 0), 0) / totalTrades
     : 0;
   const avgHoldingDays = totalTrades
-    ? pct(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
+    ? all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades
     : 0;
 
   // exits
@@ -780,9 +780,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     (t) => t.exitType === "TIME" && t.result === "LOSS"
   ).length; // 0
 
-  // throughput
-  const tradingDays = new Set(all.map((t) => t.entryDate)).size; // approximate
-  const tradesPerDay = tradingDays ? totalTrades / tradingDays : 0;
+  // throughput (use the same Set collected during the run)
+  const days = tradingDays.size;
+  const tradesPerDay = days ? totalTrades / days : 0;
   const targetTPD =
     Number.isFinite(opts.targetTradesPerDay) && opts.targetTradesPerDay > 0
       ? Number(opts.targetTradesPerDay)
@@ -861,7 +861,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // ---- logs ----
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — trail:${trailExitCount} stop:${hitStopCount} BE:${beCount} target:${hitTargetCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${r2(
+      winRate
+    )}% | avgReturn=${r2(avgReturnPct)}% | avgHold=${r2(
+      avgHoldingDays
+    )} bars | exits — trail:${trailExitCount} stop:${hitStopCount} BE:${beCount} target:${hitTargetCount} time:${timeExitCount} (win:${timeExitWins}/loss:${timeExitLosses})`
   );
 
   if (targetTPD) {
@@ -871,11 +875,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         `[BT] TARGET ✅ above target by +${diff.toFixed(3)} trades/day.`
       );
     } else {
-      const needed = Math.ceil(Math.abs(diff) * tradingDays);
+      const needed = Math.ceil(Math.abs(diff) * days);
       console.log(
         `[BT] TARGET ⚠️ below target by ${(-diff).toFixed(
           3
-        )} trades/day (~${needed} more trades over ${tradingDays} days).`
+        )} trades/day (~${needed} more trades over ${days} days).`
       );
     }
   }
@@ -895,12 +899,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       examplesCap: EX_CAP,
     },
     totalTrades,
-    winRate,
-    avgReturnPct,
-    avgHoldingDays,
+    winRate: r2(winRate),
+    avgReturnPct: r2(avgReturnPct),
+    avgHoldingDays: r2(avgHoldingDays),
     tradesPerDay,
-    tradingDays,
-    openAtEnd: 0, // not tracked post-merge here
+    tradingDays: days,
+    openAtEnd: globalOpenPositions,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
@@ -910,7 +914,20 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       timeWins: timeExitWins,
       timeLosses: timeExitLosses,
     },
-    signals: {}, // trimmed for brevity in return; logs above contain detailed counts
+    signals: {
+      total: signalsTotal,
+      afterWarmup: signalsAfterWarmup,
+      whileFlat: signalsWhileFlat,
+      executed: signalsExecuted,
+      invalid: signalsInvalid,
+      riskStopGtePx: signalsRiskBad,
+      blocked: {
+        inTrade: blockedInTrade,
+        cooldown: blockedCooldown,
+        warmup: blockedWarmup,
+        stlt: { dip: blockedBySentiment_DIP },
+      },
+    },
     strategy: {
       all: computeMetrics(all),
       dip: computeMetrics(all),
@@ -920,10 +937,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     sentiment: {
       actual: sentiActual.combos,
       rejected: sentiRejected.combos,
-      bestByWinRate: {
-        actual: sentiActual.bestByWinRate,
-        rejected: sentiRejected.bestByWinRate,
-      },
+      bestByWinRate: sentiment.bestByWinRate,
     },
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
