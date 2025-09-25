@@ -1,9 +1,6 @@
 // /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
 
-// Master toggle: turn off to disable all regime effects without touching callers
-const applyRegime = false;
-
 /* ============================ Telemetry ============================ */
 function teleInit() {
   return {
@@ -61,23 +58,11 @@ function mkTracer(opts = {}) {
 }
 
 // Public API
-// NOTE: 4th positional param `regimeGood` (boolean or undefined)
-//  - true  => easier RR need (by 0.15, floor 1.05)
-//  - false => stricter RR need (by 0.40, cap 2.20)
-//  - undefined => unchanged behavior
-export function analyzeSwingTradeEntry(
-  stock,
-  historicalData,
-  opts = {},
-  regimeGood = undefined
-) {
+export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
   const reasons = [];
   const tele = teleInit();
   const T = mkTracer(opts);
-
-  // Normalize regime flag; null means "not provided"
-  const regimeGoodFlag = typeof regimeGood === "boolean" ? regimeGood : null;
 
   // ---- Validate & prep ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
@@ -90,14 +75,7 @@ export function analyzeSwingTradeEntry(
       num(stock.openPrice) ||
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(
-      stock || {},
-      data || [],
-      ms0,
-      pxNow,
-      cfg,
-      regimeGoodFlag
-    );
+    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
     const out = withNo(r, {
       reasons: [r],
       pxNow,
@@ -111,7 +89,6 @@ export function analyzeSwingTradeEntry(
       context: {
         ticker: stock?.ticker,
         bars: Array.isArray(historicalData) ? historicalData.length : 0,
-        regimeGood: regimeGoodFlag, // optional trace
       },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
@@ -139,14 +116,7 @@ export function analyzeSwingTradeEntry(
       num(stock.openPrice) ||
       1;
     const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(
-      stock || {},
-      data || [],
-      ms0,
-      pxNow,
-      cfg,
-      regimeGoodFlag
-    );
+    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
     const out = withNo(r, {
       reasons: [r],
       pxNow,
@@ -157,11 +127,7 @@ export function analyzeSwingTradeEntry(
     });
     out.telemetry = {
       ...tele,
-      context: {
-        ticker: stock?.ticker,
-        bars: data.length,
-        regimeGood: regimeGoodFlag,
-      },
+      context: { ticker: stock?.ticker, bars: data.length },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
       trace: T.logs,
@@ -193,7 +159,6 @@ export function analyzeSwingTradeEntry(
       ma200: ms.ma200,
     },
     perfectMode: cfg.perfectMode,
-    regimeGood: regimeGoodFlag, // optional trace
   };
 
   // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
@@ -336,7 +301,6 @@ export function analyzeSwingTradeEntry(
           const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
             kind: "DIP",
             data,
-            regimeGood: regimeGoodFlag, // NEW
           });
 
           // --- Bounce/Support probation lane (flow-positive, quality-gated) ---
@@ -347,11 +311,11 @@ export function analyzeSwingTradeEntry(
             const bounceGood =
               bounceATR >= (ms.trend === "STRONG_UP" ? 0.85 : 1.0) ||
               !!dip?.diagnostics?.closeAboveYHigh;
-            const nearSupport2 = !!dip?.diagnostics?.nearSupport;
+            const nearSupport = !!dip?.diagnostics?.nearSupport;
             const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
             if (
               withinBand &&
-              nearSupport2 &&
+              nearSupport &&
               bounceGood &&
               rsiHere < 62 &&
               regimeOK
@@ -465,7 +429,7 @@ export function analyzeSwingTradeEntry(
       stock,
       ms,
       cfg,
-      { kind: "FALLBACK", data, regimeGood: regimeGoodFlag } // NEW
+      { kind: "FALLBACK", data }
     );
 
     const debug = opts.debug
@@ -490,7 +454,7 @@ export function analyzeSwingTradeEntry(
       stopLoss: deRound(toTick(round0(rr0.stop), stock)),
       priceTarget: deRound(toTick(round0(rr0.target), stock)),
       smartStopLoss: deRound(toTick(round0(rr0.stop), stock)),
-      smartPriceTarget: deRound(toTick(round0(rr0.target), stock)),
+      smartPriceTarget: tightenSmartTarget(pxNow, rr0.target, stock, cfg), // tightened smart target
       timeline: [],
       debug,
       telemetry: { ...tele, trace: T.logs },
@@ -534,7 +498,7 @@ export function analyzeSwingTradeEntry(
     stopLoss: deRound(toTick(round0(best.stop), stock)),
     priceTarget: deRound(toTick(round0(best.target), stock)),
     smartStopLoss: deRound(toTick(round0(best.stop), stock)),
-    smartPriceTarget: deRound(toTick(round0(best.target), stock)),
+    smartPriceTarget: tightenSmartTarget(px, best.target, stock, cfg), // tightened smart target
     timeline: swingTimeline,
     debug,
     telemetry: { ...tele, trace: T.logs },
@@ -585,6 +549,11 @@ function getConfig(opts = {}) {
     // volume regime (easier)
     pullbackDryFactor: 1.5,
     bounceHotFactor: 1.0,
+
+    // === NEW: smart target tightening knobs ===
+    smartTargetTightenATR: 0.3, // reduce smart target by 0.30 * ATR
+    smartTargetMinBufferATR: 0.6, // keep ≥ this many ATR above entry/current
+    smartTargetMinTicks: 3, // and ≥ this many ticks above entry/current
 
     debug,
   };
@@ -682,18 +651,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
   if (atrPct >= 3.0) need = Math.max(need, 1.5);
-
-  // === Regime-only tweak to RR need (guarded by master toggle) ===
-  // If ctx.regimeGood is not boolean, nothing changes.
-  if (applyRegime && ctx && typeof ctx.regimeGood === "boolean") {
-    if (ctx.regimeGood === true) {
-      // Good market day: slightly easier RR acceptance
-      need = Math.max(1.05, need - 0.15);
-    } else {
-      // Bad market day: stricter RR acceptance
-      need = Math.min(2.2, need + 0.4);
-    }
-  }
 
   const acceptable = ratio >= need;
 
@@ -870,7 +827,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
 }
 
 /* =========================== Provisional plan =========================== */
-function provisionalPlan(stock, data, ms, pxNow, cfg, regimeGood = null) {
+function provisionalPlan(stock, data, ms, pxNow, cfg) {
   const px = num(pxNow) || 1;
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
 
@@ -900,7 +857,7 @@ function provisionalPlan(stock, data, ms, pxNow, cfg, regimeGood = null) {
     stock,
     ms || { trend: "UP" },
     cfg || getConfig({}),
-    { kind: "FALLBACK", data, regimeGood } // NEW
+    { kind: "FALLBACK", data }
   );
   return { stop: rr.stop, target: rr.target, rr };
 }
@@ -1069,10 +1026,30 @@ function withNo(reason, ctx = {}) {
     stopLoss: deRound(toTick(round0(prov.stop), stock)),
     priceTarget: deRound(toTick(round0(prov.target), stock)),
     smartStopLoss: deRound(toTick(round0(prov.stop), stock)),
-    smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
+    smartPriceTarget: tightenSmartTarget(pxNow, prov.target, stock, cfg), // tightened smart target for withNo path
     timeline: [],
     debug,
   };
+}
+
+/* ============= NEW helper: tighten only the smartPriceTarget ============= */
+function tightenSmartTarget(entryPx, target, stock, cfg) {
+  const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
+  const tick = Number(stock?.tickSize) || inferTickFromPrice(target) || 0.1;
+
+  // reduce by configured ATR, but not below a safety buffer
+  const cut = Math.max(cfg.smartTargetTightenATR * atr, 2 * tick);
+  let t2 = target - cut;
+
+  // keep the tightened target clearly above price:
+  const hardFloor = Math.max(
+    entryPx + cfg.smartTargetMinBufferATR * atr,
+    entryPx + cfg.smartTargetMinTicks * tick
+  );
+  if (!Number.isFinite(t2) || t2 <= hardFloor) t2 = Math.min(target, hardFloor);
+
+  // snap to ticks & de-round like the rest of the outputs
+  return deRound(toTick(round0(t2), stock));
 }
 
 export { getConfig }; // optional export if you want configs elsewhere
