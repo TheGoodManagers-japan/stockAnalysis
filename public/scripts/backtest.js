@@ -1,4 +1,4 @@
-// /scripts/backtest.js — swing-period backtest (browser) — DIP-only
+// /scripts/backtest.js — swing-period backtest (browser) — MULTI playbooks
 // Runs ALL exit profiles in parallel per signal. No time-based exits.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
@@ -63,8 +63,11 @@ function bucketize(x, edges = [1.2, 1.4, 1.6, 2.0, 3.0, 5.0]) {
 }
 function extractGuardReason(s) {
   if (!s) return "";
-  const m = String(s).match(/^DIP guard veto:\s*([^()]+?)(?:\s*\(|$)/i);
-  return m ? m[1].trim() : s;
+  // Generalize beyond "DIP guard veto:"
+  const m = String(s).match(
+    /^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:\s*([^()]+?)(?:\s*\(|$)/i
+  );
+  return m ? m[2].trim() : s;
 }
 function afterColon(s, head) {
   const idx = String(s).indexOf(head);
@@ -148,7 +151,10 @@ function cfFinalizeAgg(agg) {
 function normalizeRejectedReason(reasonRaw) {
   if (!reasonRaw) return "unspecified";
   let r = String(reasonRaw).trim();
-  r = r.replace(/^DIP not ready:\s*/i, "");
+
+  // normalize "[PLAYBOOK] not ready:"
+  r = r.replace(/^(DIP|SPC|OXR|BPB|RRP)\s+not ready:\s*/i, "");
+
   if (/^bounce weak/i.test(r)) return "bounce weak / no quality pattern";
   if (/^no meaningful pullback/i.test(r)) return "no meaningful pullback";
   if (/^already recovered/i.test(r)) return "already recovered > cap";
@@ -161,9 +167,14 @@ function normalizeRejectedReason(reasonRaw) {
   if (/^DIP conditions not fully met/i.test(r))
     return "conditions not fully met";
   if (/^Structure gate/i.test(r)) return "structure gate";
-  if (/^DIP blocked \(Perfect gate\)/i.test(r)) return "perfect-mode gate";
-  if (/^DIP guard veto:/i.test(reasonRaw)) return "guard veto";
-  if (/^DIP RR too low:/i.test(reasonRaw)) return "RR too low";
+  if (/^(DIP|SPC|OXR|BPB|RRP)\s+blocked \(Perfect gate\)/i.test(r))
+    return "perfect-mode gate";
+  if (/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i.test(reasonRaw))
+    return "guard veto";
+  if (/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i.test(reasonRaw))
+    return "RR too low";
+
+  // Clean parentheticals like (RSI=..., headroom=...)
   r = r.replace(/\([^)]*\)/g, "");
   r = r.replace(/\s{2,}/g, " ").trim();
   return r.toLowerCase();
@@ -198,7 +209,7 @@ function sentiFinalize(agg) {
 }
 
 /**
- * Backtest (swing period) — DIP only.
+ * Backtest (swing period) — MULTI playbooks.
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=2,
  *     appendTickers?: string[],
@@ -306,7 +317,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=MULTI (DIP/SPC/OXR/BPB/RRP)`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -389,7 +400,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const trade = {
               ticker: code,
               profile: p.id,
-              strategy: "DIP",
+              strategy: st.kind || "DIP",
               entryDate: toISO(candles[st.entryIdx].date),
               exitDate: toISO(today.date),
               holdingDays: i - st.entryIdx,
@@ -447,7 +458,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             telemetry.trends[trend]++;
 
           if (sig?.buyNow) {
-            // DIP — gate by sentiment
+            // Gate by sentiment (kept as your original DIP policy)
             signalsTotal++;
             signalsAfterWarmup++;
             signalsWhileFlat++;
@@ -496,6 +507,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 target: Math.round(target),
                 ST,
                 LT,
+                // record playbook kind for trade labeling
+                kind:
+                  String(sig?.debug?.chosen || sig?.reason || "")
+                    .split(":")[0]
+                    .trim() || "UNKNOWN",
               };
               signalsExecuted++;
             }
@@ -522,11 +538,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 ) {
                   telemetry.gates.stackedGateFailed++;
                 }
-                if (r.startsWith("DIP guard veto:")) {
+                if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
                   const reason = extractGuardReason(r);
                   inc(telemetry.dip.guardVetoReasons, reason || "guard");
                 }
-                if (r.startsWith("DIP RR too low:")) {
+                if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
                   const m = r.match(/need\s+([0-9.]+)/i);
                   const need = m ? parseFloat(m[1]) : NaN;
                   inc(telemetry.rr.rejected, bucketize(need));
@@ -534,24 +550,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // parallel: simulate rejected buys using DIP candidate levels when available
+            // parallel: simulate rejected buys using candidate levels when available
             if (SIM_REJECTED) {
               const entry = today.close;
-              // Prefer DIP candidate levels if RR was actually computed (i.e., a candidate existed).
-              const dipStop   = Number(sig?.telemetry?.rr?.checked ? sig.telemetry.rr.stop   : NaN);
-              const dipTarget = Number(sig?.telemetry?.rr?.checked ? sig.telemetry.rr.target : NaN);
-              const usingDipLevels =
-                Number.isFinite(dipStop) &&
-                Number.isFinite(dipTarget) &&
-                dipStop < entry;
-
-              const simStop = usingDipLevels
-                ? dipStop
-                : Number(sig?.smartStopLoss ?? sig?.stopLoss);
-              const simTarget = usingDipLevels
-                ? dipTarget
-                : Number(sig?.smartPriceTarget ?? sig?.priceTarget);
-              const planUsed = usingDipLevels ? "DIP" : "FALLBACK";
+              const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
+              const simTarget = Number(
+                sig?.smartPriceTarget ?? sig?.priceTarget
+              );
 
               if (
                 Number.isFinite(simStop) &&
@@ -600,7 +605,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                         returnPct: +(outcome.returnPct || 0).toFixed(2),
                         ST,
                         LT,
-                        planUsed, // for diagnostics: 'DIP' vs 'FALLBACK'
                       });
                     }
                   }
@@ -796,6 +800,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const bestByExpR = bestProfileKey((m) => m.expR ?? -Infinity);
   const bestByPF = bestProfileKey((m) => m.profitFactor ?? -Infinity);
 
+  // optional: per-playbook breakdown (DIP/SPC/OXR/BPB/RRP)
+  const byKind = {};
+  for (const t of all) {
+    const k = t.strategy || "DIP";
+    if (!byKind[k]) byKind[k] = [];
+    byKind[k].push(t);
+  }
+  const strategyBreakdown = Object.fromEntries(
+    Object.entries(byKind).map(([k, v]) => [k, computeMetrics(v)])
+  );
+
   // logs
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount}`
@@ -824,6 +839,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       );
     }
   }
+
+  // legacy "dip" key preserved if present
+  const dipMetrics = strategyBreakdown.DIP || computeMetrics(all);
 
   return {
     from: FROM,
@@ -869,7 +887,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
     strategy: {
       all: computeMetrics(all),
-      dip: computeMetrics(all),
+      dip: dipMetrics, // legacy key
+      ...strategyBreakdown, // e.g., DIP/SPC/OXR/BPB/RRP
     },
     telemetry,
     parallel,

@@ -1,6 +1,9 @@
 // /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
 import { detectSPC } from "./spc.js";
+import { detectOXR } from "./oxr.js";
+import { detectBPB } from "./bpb.js";
+import { detectRRProbation } from "./rrp.js";
 
 /* ============================ Telemetry ============================ */
 function teleInit() {
@@ -446,6 +449,246 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           candidates.push({
             kind: "SPC ENTRY",
             why: spc.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
+      }
+    }
+  }
+
+  // ======================= OXR (Over-recovery / Breakout) =======================
+  if (candidates.length === 0) {
+    const oxr = detectOXR(stock, data, cfg, U);
+    // Optional: telemetry hook
+    // tele.oxr = { trigger: !!oxr.trigger, why: oxr.why || "", waitReason: oxr.waitReason || "", diagnostics: oxr.diagnostics || {} };
+
+    if (!oxr.trigger) {
+      // Keep reasons compatible with your reason-normalizer buckets:
+      if (oxr.waitReason?.toLowerCase().includes("already recovered > cap")) {
+        reasons.push("already recovered > cap");
+      } else if (oxr.waitReason?.toLowerCase().includes("headroom too small")) {
+        reasons.push("Headroom too small pre-entry");
+      } else if (oxr.waitReason) {
+        reasons.push(`OXR not ready: ${oxr.waitReason}`);
+      }
+    } else {
+      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
+        kind: "OXR",
+        data,
+      });
+
+      // OXR probation: allow a wider near-miss in strong regimes with volume pop
+      if (!rr.acceptable) {
+        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+        const nearBand = rr.ratio >= rr.need - 0.12;
+        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+        const volExp = (() => {
+          const slice = data.slice(-20);
+          const avg20 = Math.max(
+            1,
+            slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
+              Math.max(1, slice.length)
+          );
+          const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
+          return vNow / avg20;
+        })();
+        const momentumOK = px > Math.max(openPx, prevClose);
+
+        if (
+          nearBand &&
+          regimeOK &&
+          momentumOK &&
+          rsiHere < 68 &&
+          (!Number.isFinite(data.at(-1)?.volume) || volExp >= 1.1)
+        ) {
+          rr.acceptable = true;
+          rr.probation = true;
+        }
+      }
+
+      if (!rr.acceptable) {
+        reasons.push(
+          `OXR RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}`
+        );
+      } else {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          oxr.nearestRes,
+          "OXR"
+        );
+        if (gv.veto) {
+          reasons.push(
+            `OXR guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+          );
+        } else {
+          candidates.push({
+            kind: "OXR ENTRY",
+            why: oxr.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
+      }
+    }
+  }
+  // ======================= BPB (Breakout–Pullback–Bounce) =======================
+  if (candidates.length === 0) {
+    const bpb = detectBPB(stock, data, cfg, U);
+    // Optional telemetry:
+    // tele.bpb = { trigger: !!bpb.trigger, why: bpb.why || "", waitReason: bpb.waitReason || "", diagnostics: bpb.diagnostics || {} };
+
+    if (!bpb.trigger) {
+      // Normalize reasons to your buckets
+      if (bpb.waitReason?.toLowerCase().includes("already recovered > cap")) {
+        reasons.push("already recovered > cap");
+      } else if (bpb.waitReason?.toLowerCase().includes("headroom too small")) {
+        reasons.push("Headroom too small pre-entry");
+      } else if (bpb.waitReason) {
+        reasons.push(`BPB not ready: ${bpb.waitReason}`);
+      }
+    } else {
+      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
+        kind: "BPB",
+        data,
+      });
+
+      // BPB probation: slightly more lenient near-miss if reclaim is clean
+      if (!rr.acceptable) {
+        const nearBand = rr.ratio >= rr.need - 0.1;
+        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+        const reclaimOK = px >= Math.max(openPx, prevClose);
+
+        if (nearBand && regimeOK && reclaimOK && rsiHere < 66) {
+          rr.acceptable = true;
+          rr.probation = true;
+        }
+      }
+
+      if (!rr.acceptable) {
+        reasons.push(
+          `BPB RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}`
+        );
+      } else {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          bpb.nearestRes,
+          "BPB"
+        );
+        if (gv.veto) {
+          reasons.push(
+            `BPB guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+          );
+        } else {
+          candidates.push({
+            kind: "BPB ENTRY",
+            why: bpb.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+        }
+      }
+    }
+  }
+  /* ======================= RRP (Risk/Reward Probation) ======================= */
+  // Only try if no candidate yet
+  if (candidates.length === 0) {
+    const rrp = detectRRProbation(stock, data, cfg, U);
+
+    // breadcrumb the diagnostics like other lanes (optional)
+    checks.rrp = rrp;
+
+    if (!rrp.trigger) {
+      if (rrp.waitReason) reasons.push(`RRP not ready: ${rrp.waitReason}`);
+    } else {
+      // Compute RR with the orchestrator’s analyzer (so we keep one source of truth)
+      const rr = analyzeRR(px, rrp.stop, rrp.target, stock, ms, cfg, {
+        kind: "RRP",
+        data,
+      });
+
+      // Tighter probation band than DIP: allow (need - 0.03) under friendly tape
+      if (!rr.acceptable) {
+        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+        const nearBand = rr.ratio >= rr.need - 0.03;
+        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+        if (nearBand && regimeOK && rsiHere < 60) {
+          rr.acceptable = true;
+          rr.probation = true; // mark it so telemetry shows probation path
+        }
+      }
+
+      // record RR telemetry like the DIP path does
+      tele.rr = {
+        checked: true,
+        acceptable: !!rr.acceptable,
+        ratio: rr.ratio,
+        need: rr.need,
+        risk: rr.risk,
+        reward: rr.reward,
+        stop: rr.stop,
+        target: rr.target,
+        probation: !!rr.probation,
+      };
+
+      if (!rr.acceptable) {
+        reasons.push(
+          `RRP RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)} (risk ${fmt(rr.risk)}, reward ${fmt(
+            rr.reward
+          )}).`
+        );
+      } else {
+        // Normal guard pass (re-use your guardVeto + headroom logic)
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          rrp.nearestRes,
+          "RRP"
+        );
+
+        tele.guard = {
+          checked: true,
+          veto: !!gv.veto,
+          reason: gv.reason || "",
+          details: gv.details || {},
+        };
+
+        if (gv.veto) {
+          reasons.push(
+            `RRP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+          );
+        } else {
+          // Accept as a candidate
+          candidates.push({
+            kind: "RRP ENTRY",
+            why: rrp.why || "near-miss RR rescued in friendly regime",
             stop: rr.stop,
             target: rr.target,
             rr,
