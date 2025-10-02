@@ -209,32 +209,51 @@ function sentiFinalize(agg) {
   };
 }
 
-/* ===================== Stair-step trailing stop logic ===================== */
-/** Return desired stop price given entry, target, peakHigh; otherwise null. */
-function calcSteppedTrailStop(entry, target, peakHigh, stopInit, useRounding = true) {
-  if (!Number.isFinite(entry) || !Number.isFinite(peakHigh)) return null;
-  const gainPct = ((peakHigh - entry) / entry) * 100;
+/* ---------------- Step-ladder trailing stop logic ---------------- */
+/**
+ * Given entry price and highest favorable price since entry (HFE),
+ * return the step-ladder stop level:
+ * - ≥ +1.0%: BE
+ * - ≥ +1.5%: lock +1.0%
+ * - ≥ +2.0%: lock +1.5%
+ * - ... (each +0.5% adds +0.5% lock; always 0.5% behind last threshold)
+ *
+ * Returns null if no step should apply yet (< +1.0%).
+ */
+function computeStepLadderStop(entry, hfe) {
+  if (!Number.isFinite(entry) || !Number.isFinite(hfe) || entry <= 0)
+    return null;
+  const profitPct = ((hfe - entry) / entry) * 100;
+  if (profitPct < 1.0) return null;
 
-  // Rules:
-  // - <= 1.0%: no change
-  // - > 1.0% && <= 1.5%: stop at breakeven (0%)
-  // - > 1.5%: 1.0% + 0.5% for each additional 0.5% of gain (i.e., lags peak by 0.5%)
-  let stopPct = null;
-  if (gainPct > 1.0 && gainPct <= 1.5) {
-    stopPct = 0.0;
-  } else if (gainPct > 1.5) {
-    const stepsBeyond = Math.floor((gainPct - 1.5) / 0.5); // 0 at (1.5,2.0], 1 at (2.0,2.5], ...
-    stopPct = 1.0 + stepsBeyond * 0.5;
-  } else {
-    return null; // no move
+  // Last crossed threshold: 1.0% + k*0.5%
+  const k = Math.floor((profitPct - 1.0) / 0.5);
+  const lastThresholdPct = 1.0 + Math.max(0, k) * 0.5;
+
+  // Lock is always 0.5% behind the last threshold (BE at 1.0%)
+  const lockPct = Math.max(0, lastThresholdPct - 0.5); // 0% at 1.0%; 1.0% at 1.5%; 1.5% at 2.0%...
+
+  const stopLevel = entry * (1 + lockPct / 100);
+  return stopLevel;
+}
+
+/**
+ * Apply the step-ladder trailing stop to an open position object in-place.
+ * Ensures stop never moves down and never below the initial stop.
+ */
+function applyStepLadder(open, todayHigh) {
+  if (!open) return;
+  // Track highest favorable excursion
+  open.hfe = Math.max(open.hfe || open.entry, todayHigh || open.entry);
+
+  const stepStop = computeStepLadderStop(open.entry, open.hfe);
+  if (!Number.isFinite(stepStop)) return;
+
+  // Never below original stop; never move stop down
+  const candidate = Math.max(open.stopInit, stepStop);
+  if (!Number.isFinite(open.stop) || candidate > open.stop) {
+    open.stop = Math.round(candidate);
   }
-
-  // Compute price and clamp not to exceed target; never below initial stop.
-  let desired = entry * (1 + (stopPct / 100));
-  if (useRounding) desired = Math.round(desired);
-  if (Number.isFinite(target)) desired = Math.min(desired, target);
-  desired = Math.max(desired, stopInit); // never lower than initial stop
-  return desired;
 }
 
 /**
@@ -425,24 +444,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // ===== manage open (stop → target ONLY; NO time exit) =====
+        // --------------- Trailing stop update BEFORE exit checks ---------------
         if (open) {
-          // update peak high since entry and compute stepped trailing stop
-          open.peakHigh = Math.max(open.peakHigh, today.high);
-          const stepped = calcSteppedTrailStop(
-            open.entry,
-            open.target,
-            open.peakHigh,
-            open.stopInit
-          );
-          if (Number.isFinite(stepped)) {
-            // never reduce stop; keep below/equal to target (enforced in function)
-            open.stop = Math.max(open.stop, stepped);
-          }
+          // Update step-ladder trailing using today's high (HFE)
+          applyStepLadder(open, today.high);
+        }
 
+        // manage open (stop → target ONLY; NO time exit)
+        if (open) {
           let exit = null;
 
-          // Note: check STOP first, then TARGET (same as before)
           if (today.low <= open.stop) {
             exit = { type: "STOP", price: open.stop, result: "LOSS" };
           } else if (today.high >= open.target) {
@@ -554,9 +565,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               target: Math.round(target),
               ST,
               LT,
-              peakHigh: today.high, // << track peak since entry for trailing calc
+              hfe: today.high, // track highest favorable excursion from day 1
             };
             signalsExecuted++;
+
+            // Immediately apply trailing on the entry bar (if eligible)
+            applyStepLadder(open, today.high);
           } else {
             // --- Telemetry: why not?
             const dbg = sig?.debug || {};
@@ -872,9 +886,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
-      time: 0,
-      timeWins: 0,
-      timeLosses: 0,
+      time: timeExitCount,
+      timeWins: timeExitWins,
+      timeLosses: timeExitLosses,
     },
     signals: {
       total: signalsTotal,
@@ -932,4 +946,106 @@ function computeMetrics(trades) {
   const expR = p * avgRwin + (1 - p) * avgRloss;
 
   const grossWin = sum(wins.map((t) => t.returnPct || 0));
-  const grossLossAbs = Math.abs(sum(losses.map((t
+  const grossLossAbs = Math.abs(sum(losses.map((t) => t.returnPct || 0)));
+  const profitFactor = grossLossAbs
+    ? grossWin / grossLossAbs
+    : wins.length
+    ? Infinity
+    : 0;
+
+  const exits = {
+    target: trades.filter((t) => t.exitType === "TARGET").length,
+    stop: trades.filter((t) => t.exitType === "STOP").length,
+    time: trades.filter((t) => t.exitType === "TIME").length,
+  };
+
+  return {
+    trades: r2(n),
+    winRate: r2(winRate),
+    avgReturnPct: r2(avgReturnPct),
+    avgHoldingDays: r2(avgHoldingDays),
+    avgWinPct: r2(avgWinPct),
+    avgLossPct: r2(avgLossPct),
+    avgRwin: r2(avgRwin),
+    avgRloss: r2(avgRloss),
+    expR: r2(expR),
+    profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : Infinity,
+    exits,
+  };
+}
+
+function sum(arr) {
+  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
+}
+
+/* --------------------------- Expose for Bubble -------------------------- */
+window.backtest = async (tickersOrOpts, maybeOpts) => {
+  try {
+    return await runBacktest(tickersOrOpts, maybeOpts);
+  } catch (e) {
+    console.error("[backtest] error:", e);
+    return {
+      from: "",
+      to: "",
+      totalTrades: 0,
+      winRate: 0,
+      avgReturnPct: 0,
+      avgHoldingDays: 0,
+      tradesPerDay: 0,
+      tradingDays: 0,
+      openAtEnd: 0,
+      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      signals: {
+        total: 0,
+        afterWarmup: 0,
+        whileFlat: 0,
+        executed: 0,
+        invalid: 0,
+        riskStopGtePx: 0,
+        blocked: {
+          inTrade: 0,
+          cooldown: 0,
+          warmup: 0,
+          stlt: { dip: 0 },
+        },
+      },
+      strategy: {
+        all: computeMetrics([]),
+        dip: computeMetrics([]),
+      },
+      telemetry: {
+        trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0 },
+        gates: {
+          priceActionGateFailed: 0,
+          structureGateFailed: 0,
+          stackedGateFailed: 0,
+        },
+        dip: { notReadyReasons: {}, guardVetoReasons: {} },
+        rr: { rejected: {}, accepted: {} },
+        examples: { buyNow: [], rejected: [] },
+      },
+      parallel: {
+        rejectedBuys: {
+          totalSimulated: 0,
+          winners: 0,
+          summary: { total: 0, winners: 0, winRate: 0 },
+          topK: 12,
+          byReason: {},
+          examples: {},
+        },
+      },
+      sentiment: {
+        actual: {},
+        rejected: {},
+        bestByWinRate: { actual: [], rejected: [] },
+      },
+      ...(!!(
+        maybeOpts?.includeByTicker ||
+        (typeof tickersOrOpts === "object" && tickersOrOpts?.includeByTicker)
+      )
+        ? { byTicker: [] }
+        : {}),
+      error: String(e?.message || e),
+    };
+  }
+};
