@@ -1,4 +1,4 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
+// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, with continuation lane & refined RR/guards)
 import { detectDipBounce } from "./dip.js";
 
 /* ============================ Telemetry ============================ */
@@ -497,7 +497,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       guard: {},
     };
   }
-  
 
   // ---- Final decision ----
   if (candidates.length === 0) {
@@ -575,7 +574,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // === Positive path: DIP ===
+  // === Positive path: best candidate ===
   const best = candidates[0];
   const debug = opts.debug
     ? {
@@ -641,7 +640,7 @@ function getConfig(opts = {}) {
     nearResVetoATR: 0.18,
     nearResVetoPct: 0.5,
 
-    // RR thresholds (easier)
+    // RR thresholds (easier but still selective)
     minRRbase: 1.05,
     minRRstrongUp: 1.15,
     minRRweakUp: 1.25,
@@ -665,15 +664,14 @@ function getConfig(opts = {}) {
     bounceHotFactor: 1.0,
 
     // --- Continuation lane (strong-trend, shallow-dip) ---
-allowContinuationLane: true,
-contMinRR: 1.00,              // accept slightly lower nominal RR in strong trend
-contMaxShallowATR: 0.50,      // treat dips < 0.5 ATR as “shallow”
-contRequirePxAboveMA: 20,     // require price > MA20
-contMinBounceATR: 0.10,       // tiny reclaim is ok
-contStopATRFloor: 0.40,       // ~0.4–0.7 ATR structure stop band
-contStopATRCap: 0.70,
-contTP_R: 1.30,                 // default take-profit in R
-
+    allowContinuationLane: true,
+    contMinRR: 1.0, // accept slightly lower nominal RR in strong trend
+    contMaxShallowATR: 0.5, // treat dips < 0.5 ATR as “shallow”
+    contRequirePxAboveMA: 20, // require price > MA20
+    contMinBounceATR: 0.1, // tiny reclaim is ok
+    contStopATRFloor: 0.4, // ~0.4–0.7 ATR structure stop band
+    contStopATRCap: 0.7,
+    contTP_R: 1.3, // default take-profit in R for continuation
 
     debug,
   };
@@ -735,6 +733,8 @@ function getMarketStructure(stock, data) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
+
+  // Slightly tighter minimum stop than before to lift RR without spiking stops
   const minStopDist = 1.15 * atr; // was 1.25 → slightly tighter stops improve RR acceptance
   let adjStop = stop;
   if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
@@ -745,7 +745,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     if (riskPct > 3) stop = entryPx * (1 - 0.03);
   }
 
-  // Respect nearby resistances for target extension
+  // Respect nearby resistances for target extension (avoid micro-lids)
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
@@ -772,7 +772,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
   if (atrPct >= 3.0) need = Math.max(need, 1.5);
 
-  const acceptable = ratio >= need;
+  let acceptable = ratio >= need;
 
   // Probation band: let near-miss RR through in friendly regimes with cool RSI
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
@@ -782,8 +782,10 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < 62;
 
+  acceptable = acceptable || probation;
+
   return {
-    acceptable: acceptable || probation,
+    acceptable,
     ratio,
     stop,
     target,
