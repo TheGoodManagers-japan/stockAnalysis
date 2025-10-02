@@ -12,10 +12,6 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
-// === Regime controls (top-level flags only; NO fetching here) ===
-const REGIME_TICKER = "1306.T"; // TOPIX ETF as market regime proxy
-const USE_REGIME = true; // master toggle for regime feature
-
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
   if (!/\.T$/.test(s)) s = s.replace(/\..*$/, "") + ".T";
@@ -243,31 +239,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
-  // --- Regime benchmark (MUST be inside runBacktest, AFTER FROM/TO) ---
-  let benchCandles = [];
-  let benchIdx = new Map();
-  if (USE_REGIME) {
-    benchCandles = await fetchHistory(REGIME_TICKER, FROM, TO);
-    benchIdx = new Map(benchCandles.map((b, i) => [toISO(b.date), i]));
-  }
-  function isGreen(bar) {
-    return Number(bar.close) > Number(bar.open);
-  }
-  // true = good tape (easier RR); false = bad tape (stricter RR); null = no signal
-  function getRegimeFlagForDate(dateISO) {
-    if (!USE_REGIME) return null;
-    const i = benchIdx.get(dateISO);
-    if (i == null || i < 3) return null; // need 3 prior days
-    const d0 = benchCandles[i];
-    const d1 = benchCandles[i - 1];
-    const d2 = benchCandles[i - 2];
-    const d3 = benchCandles[i - 3];
-    if (!d0 || !d1 || !d2 || !d3) return null;
-    const threeGreen = isGreen(d1) && isGreen(d2) && isGreen(d3);
-    const openStrong = Number(d0.open) >= Number(d1.close);
-    return threeGreen && openStrong;
-  }
-
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // kept for logs/compat
@@ -449,15 +420,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
 
         if (eligible) {
-          const todayISO = toISO(today.date);
-          const regimeGood = getRegimeFlagForDate(todayISO); // true/false/null
-
-          const sig = analyzeSwingTradeEntry(
-            stock,
-            hist,
-            { debug: true, debugLevel: "verbose" },
-            regimeGood
-          );
+          const sig = analyzeSwingTradeEntry(stock, hist, {
+            debug: true,
+            debugLevel: "verbose",
+          });
 
           // compute sentiment once here so both lanes use the same snapshot
           const senti = getComprehensiveMarketSentiment(stock, hist);
