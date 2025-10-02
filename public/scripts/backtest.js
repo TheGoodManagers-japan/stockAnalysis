@@ -92,11 +92,12 @@ function simulateTradeForward(candles, startIdx, entry, stop, target) {
   for (let j = startIdx + 1; j < candles.length; j++) {
     const bar = candles[j];
     if (bar.low <= stop) {
+      const result = stop >= entry ? "WIN" : "LOSS"; // classify correctly
       return {
         exitType: "STOP",
         exitPrice: stop,
         holdingDays: j - startIdx,
-        result: "LOSS",
+        result,
         R: (stop - entry) / risk,
         returnPct: ((stop - entry) / entry) * 100,
       };
@@ -209,47 +210,28 @@ function sentiFinalize(agg) {
   };
 }
 
-/* ---------------- Step-ladder trailing stop logic ---------------- */
+/* ---------------- Single-step break-even+0.5% stop logic ---------------- */
 /**
- * Given entry price and highest favorable price since entry (HFE),
- * return the step-ladder stop level:
- * - ≥ +1.0%: BE
- * - ≥ +1.5%: lock +1.0%
- * - ≥ +2.0%: lock +1.5%
- * - ... (each +0.5% adds +0.5% lock; always 0.5% behind last threshold)
- *
- * Returns null if no step should apply yet (< +1.0%).
+ * If highest favorable excursion (HFE) since entry reaches +1.5%,
+ * return a stop level at entry +0.5%.
+ * Otherwise return null (no change).
  */
-function computeStepLadderStop(entry, hfe) {
-  if (!Number.isFinite(entry) || !Number.isFinite(hfe) || entry <= 0)
-    return null;
+function computeBEPlusHalf(entry, hfe) {
+  if (!Number.isFinite(entry) || !Number.isFinite(hfe) || entry <= 0) return null;
   const profitPct = ((hfe - entry) / entry) * 100;
-  if (profitPct < 1.0) return null;
-
-  // Last crossed threshold: 1.0% + k*0.5%
-  const k = Math.floor((profitPct - 1.0) / 0.5);
-  const lastThresholdPct = 1.0 + Math.max(0, k) * 0.5;
-
-  // Lock is always 0.5% behind the last threshold (BE at 1.0%)
-  const lockPct = Math.max(0, lastThresholdPct - 0.5); // 0% at 1.0%; 1.0% at 1.5%; 1.5% at 2.0%...
-
-  const stopLevel = entry * (1 + lockPct / 100);
-  return stopLevel;
+  if (profitPct < 1.5) return null;
+  return entry * 1.005; // break-even + 0.5%
 }
 
 /**
- * Apply the step-ladder trailing stop to an open position object in-place.
- * Ensures stop never moves down and never below the initial stop.
+ * Apply the BE+0.5% jump stop (one-time/monotonic) to an open position.
+ * Never below the original stop; never moves the stop down.
  */
-function applyStepLadder(open, todayHigh) {
+function applyBEPlusHalf(open, todayHigh) {
   if (!open) return;
-  // Track highest favorable excursion
   open.hfe = Math.max(open.hfe || open.entry, todayHigh || open.entry);
-
-  const stepStop = computeStepLadderStop(open.entry, open.hfe);
+  const stepStop = computeBEPlusHalf(open.entry, open.hfe);
   if (!Number.isFinite(stepStop)) return;
-
-  // Never below original stop; never move stop down
   const candidate = Math.max(open.stopInit, stepStop);
   if (!Number.isFinite(open.stop) || candidate > open.stop) {
     open.stop = Math.round(candidate);
@@ -444,10 +426,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        // --------------- Trailing stop update BEFORE exit checks ---------------
+        // --- Apply BE+0.5% jump stop BEFORE exit checks ---
         if (open) {
-          // Update step-ladder trailing using today's high (HFE)
-          applyStepLadder(open, today.high);
+          applyBEPlusHalf(open, today.high);
         }
 
         // manage open (stop → target ONLY; NO time exit)
@@ -455,7 +436,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           let exit = null;
 
           if (today.low <= open.stop) {
-            exit = { type: "STOP", price: open.stop, result: "LOSS" };
+            const stopResult = open.stop >= open.entry ? "WIN" : "LOSS";
+            exit = { type: "STOP", price: open.stop, result: stopResult };
           } else if (today.high >= open.target) {
             exit = { type: "TARGET", price: open.target, result: "WIN" };
           }
@@ -565,12 +547,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               target: Math.round(target),
               ST,
               LT,
-              hfe: today.high, // track highest favorable excursion from day 1
+              hfe: today.high, // start tracking HFE immediately
             };
             signalsExecuted++;
 
-            // Immediately apply trailing on the entry bar (if eligible)
-            applyStepLadder(open, today.high);
+            // one-time jump if already ≥ +1.5% on the entry bar (rare)
+            applyBEPlusHalf(open, today.high);
           } else {
             // --- Telemetry: why not?
             const dbg = sig?.debug || {};
