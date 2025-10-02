@@ -1,5 +1,6 @@
 // /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
+import { detectSPC } from "./spc.js";
 
 /* ============================ Telemetry ============================ */
 function teleInit() {
@@ -380,6 +381,76 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
               });
             }
           }
+        }
+      }
+    }
+  }
+
+  // ======================= SPC (Shallow Pullback / Continuation) =======================
+  if (candidates.length === 0) {
+    const spc = detectSPC(stock, data, cfg, U);
+    // For telemetry (optional):
+    // tele.spc = { trigger: !!spc.trigger, why: spc.why || "", waitReason: spc.waitReason || "", diagnostics: spc.diagnostics || {} };
+
+    if (!spc.trigger) {
+      // Provide a clear rejection reason that matches your backtest reason bucketing
+      // so “no meaningful pullback” continues to aggregate cleanly.
+      if (spc.waitReason?.toLowerCase().includes("no meaningful pullback")) {
+        reasons.push("no meaningful pullback");
+      } else if (spc.waitReason) {
+        reasons.push(`SPC not ready: ${spc.waitReason}`);
+      }
+    } else {
+      // Run the same RR/guard pipeline you use for DIP, but note the kind = "SPC"
+      const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
+        kind: "SPC",
+        data,
+      });
+
+      // SPC can accept slightly smaller RR than DIP in strong tape
+      if (!rr.acceptable) {
+        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+        const nearBand = rr.ratio >= rr.need - 0.1; // SPC probation a bit wider than DIP
+        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+        const momentumOK =
+          !!spc.diagnostics?.closeAboveYHigh ||
+          px > Math.max(openPx, prevClose);
+        if (nearBand && regimeOK && momentumOK && rsiHere < 64) {
+          rr.acceptable = true;
+          rr.probation = true;
+        }
+      }
+
+      if (!rr.acceptable) {
+        reasons.push(
+          `SPC RR too low: ratio ${rr.ratio.toFixed(
+            2
+          )} < need ${rr.need.toFixed(2)}`
+        );
+      } else {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          spc.nearestRes,
+          "SPC"
+        );
+        if (gv.veto) {
+          reasons.push(
+            `SPC guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+          );
+        } else {
+          candidates.push({
+            kind: "SPC ENTRY",
+            why: spc.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
         }
       }
     }

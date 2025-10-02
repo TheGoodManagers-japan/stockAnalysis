@@ -534,13 +534,24 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // parallel: simulate rejected buys using analyzer stop/target
+            // parallel: simulate rejected buys using DIP candidate levels when available
             if (SIM_REJECTED) {
               const entry = today.close;
-              const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
-              const simTarget = Number(
-                sig?.smartPriceTarget ?? sig?.priceTarget
-              );
+              // Prefer DIP candidate levels if RR was actually computed (i.e., a candidate existed).
+              const dipStop   = Number(sig?.telemetry?.rr?.checked ? sig.telemetry.rr.stop   : NaN);
+              const dipTarget = Number(sig?.telemetry?.rr?.checked ? sig.telemetry.rr.target : NaN);
+              const usingDipLevels =
+                Number.isFinite(dipStop) &&
+                Number.isFinite(dipTarget) &&
+                dipStop < entry;
+
+              const simStop = usingDipLevels
+                ? dipStop
+                : Number(sig?.smartStopLoss ?? sig?.stopLoss);
+              const simTarget = usingDipLevels
+                ? dipTarget
+                : Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+              const planUsed = usingDipLevels ? "DIP" : "FALLBACK";
 
               if (
                 Number.isFinite(simStop) &&
@@ -589,6 +600,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                         returnPct: +(outcome.returnPct || 0).toFixed(2),
                         ST,
                         LT,
+                        planUsed, // for diagnostics: 'DIP' vs 'FALLBACK'
                       });
                     }
                   }
