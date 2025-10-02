@@ -1,5 +1,5 @@
 // /scripts/backtest.js — swing-period backtest (browser) — MULTI playbooks
-// Runs ALL exit profiles in parallel per signal. No time-based exits.
+// Runs ALL exit profiles in parallel per signal. Enforces hard time-based exits.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
@@ -244,7 +244,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // logs only
+  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // enforced time exit
   const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 2;
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
@@ -317,7 +317,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=MULTI (DIP/SPC/OXR/BPB/RRP)`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (HARD time-exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=MULTI (DIP/SPC/OXR/BPB/RRP)`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -387,10 +387,26 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
 
           let exit = null;
+
+          // 1) price-based exits first (priority: stop/target)
           if (today.low <= st.stop) {
             exit = { type: "STOP", price: st.stop, result: "LOSS" };
           } else if (today.high >= st.target) {
             exit = { type: "TARGET", price: st.target, result: "WIN" };
+          }
+
+          // 2) hard time exit at HOLD_BARS (close of the current bar)
+          //    If still open by bar N => exit at today's close and label by P&L
+          if (!exit) {
+            const ageBars = i - st.entryIdx;
+            if (HOLD_BARS > 0 && ageBars >= HOLD_BARS) {
+              const rawPnL = today.close - st.entry;
+              exit = {
+                type: "TIME",
+                price: today.close,
+                result: rawPnL >= 0 ? "WIN" : "LOSS",
+              };
+            }
           }
 
           if (exit) {
@@ -628,7 +644,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       // per-ticker summary
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
       const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0
+      const tTimes = trades.filter((x) => x.exitType === "TIME").length;
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
@@ -691,7 +707,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
-  const timeExitCount = all.filter((t) => t.exitType === "TIME").length; // 0
+  const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
+  const timeWins = all.filter(
+    (t) => t.exitType === "TIME" && t.result === "WIN"
+  ).length;
+  const timeLosses = all.filter(
+    (t) => t.exitType === "TIME" && t.result === "LOSS"
+  ).length;
 
   const days = tradingDays.size;
   const tradesPerDay = days ? totalTrades / days : 0;
@@ -868,8 +890,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       target: hitTargetCount,
       stop: hitStopCount,
       time: timeExitCount,
-      timeWins: 0,
-      timeLosses: 0,
+      timeWins,
+      timeLosses,
     },
     signals: {
       total: signalsTotal,
