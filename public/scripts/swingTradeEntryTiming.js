@@ -3,7 +3,7 @@ import { detectDipBounce } from "./dip.js";
 import { detectSPC } from "./spc.js";
 import { detectOXR } from "./oxr.js";
 import { detectBPB } from "./bpb.js";
-import { detectRRProbation } from "./rrp.js";
+//import { detectRRProbation } from "./rrp.js";
 
 /* ============================ Telemetry ============================ */
 function teleInit() {
@@ -613,91 +613,91 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
   /* ======================= RRP (Risk/Reward Probation) ======================= */
   // Only try if no candidate yet
-  if (candidates.length === 0) {
-    const rrp = detectRRProbation(stock, data, cfg, U);
+  // if (candidates.length === 0) {
+  //   const rrp = detectRRProbation(stock, data, cfg, U);
 
-    // breadcrumb the diagnostics like other lanes (optional)
-    checks.rrp = rrp;
+  //   // breadcrumb the diagnostics like other lanes (optional)
+  //   checks.rrp = rrp;
 
-    if (!rrp.trigger) {
-      if (rrp.waitReason) reasons.push(`RRP not ready: ${rrp.waitReason}`);
-    } else {
-      // Compute RR with the orchestrator’s analyzer (so we keep one source of truth)
-      const rr = analyzeRR(px, rrp.stop, rrp.target, stock, ms, cfg, {
-        kind: "RRP",
-        data,
-      });
+  //   if (!rrp.trigger) {
+  //     if (rrp.waitReason) reasons.push(`RRP not ready: ${rrp.waitReason}`);
+  //   } else {
+  //     // Compute RR with the orchestrator’s analyzer (so we keep one source of truth)
+  //     const rr = analyzeRR(px, rrp.stop, rrp.target, stock, ms, cfg, {
+  //       kind: "RRP",
+  //       data,
+  //     });
 
-      // Tighter probation band than DIP: allow (need - 0.03) under friendly tape
-      if (!rr.acceptable) {
-        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.03;
-        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-        if (nearBand && regimeOK && rsiHere < 60) {
-          rr.acceptable = true;
-          rr.probation = true; // mark it so telemetry shows probation path
-        }
-      }
+  //     // Tighter probation band than DIP: allow (need - 0.03) under friendly tape
+  //     if (!rr.acceptable) {
+  //       const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+  //       const nearBand = rr.ratio >= rr.need - 0.03;
+  //       const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+  //       if (nearBand && regimeOK && rsiHere < 60) {
+  //         rr.acceptable = true;
+  //         rr.probation = true; // mark it so telemetry shows probation path
+  //       }
+  //     }
 
-      // record RR telemetry like the DIP path does
-      tele.rr = {
-        checked: true,
-        acceptable: !!rr.acceptable,
-        ratio: rr.ratio,
-        need: rr.need,
-        risk: rr.risk,
-        reward: rr.reward,
-        stop: rr.stop,
-        target: rr.target,
-        probation: !!rr.probation,
-      };
+  //     // record RR telemetry like the DIP path does
+  //     tele.rr = {
+  //       checked: true,
+  //       acceptable: !!rr.acceptable,
+  //       ratio: rr.ratio,
+  //       need: rr.need,
+  //       risk: rr.risk,
+  //       reward: rr.reward,
+  //       stop: rr.stop,
+  //       target: rr.target,
+  //       probation: !!rr.probation,
+  //     };
 
-      if (!rr.acceptable) {
-        reasons.push(
-          `RRP RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)} (risk ${fmt(rr.risk)}, reward ${fmt(
-            rr.reward
-          )}).`
-        );
-      } else {
-        // Normal guard pass (re-use your guardVeto + headroom logic)
-        const gv = guardVeto(
-          stock,
-          data,
-          px,
-          rr,
-          ms,
-          cfg,
-          rrp.nearestRes,
-          "RRP"
-        );
+  //     if (!rr.acceptable) {
+  //       reasons.push(
+  //         `RRP RR too low: ratio ${rr.ratio.toFixed(
+  //           2
+  //         )} < need ${rr.need.toFixed(2)} (risk ${fmt(rr.risk)}, reward ${fmt(
+  //           rr.reward
+  //         )}).`
+  //       );
+  //     } else {
+  //       // Normal guard pass (re-use your guardVeto + headroom logic)
+  //       const gv = guardVeto(
+  //         stock,
+  //         data,
+  //         px,
+  //         rr,
+  //         ms,
+  //         cfg,
+  //         rrp.nearestRes,
+  //         "RRP"
+  //       );
 
-        tele.guard = {
-          checked: true,
-          veto: !!gv.veto,
-          reason: gv.reason || "",
-          details: gv.details || {},
-        };
+  //       tele.guard = {
+  //         checked: true,
+  //         veto: !!gv.veto,
+  //         reason: gv.reason || "",
+  //         details: gv.details || {},
+  //       };
 
-        if (gv.veto) {
-          reasons.push(
-            `RRP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
-          );
-        } else {
-          // Accept as a candidate
-          candidates.push({
-            kind: "RRP ENTRY",
-            why: rrp.why || "near-miss RR rescued in friendly regime",
-            stop: rr.stop,
-            target: rr.target,
-            rr,
-            guard: gv.details,
-          });
-        }
-      }
-    }
-  }
+  //       if (gv.veto) {
+  //         reasons.push(
+  //           `RRP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+  //         );
+  //       } else {
+  //         // Accept as a candidate
+  //         candidates.push({
+  //           kind: "RRP ENTRY",
+  //           why: rrp.why || "near-miss RR rescued in friendly regime",
+  //           stop: rr.stop,
+  //           target: rr.target,
+  //           rr,
+  //           guard: gv.details,
+  //         });
+  //       }
+  //     }
+  //   }
+  // }
 
   // ---- Final decision ----
   if (candidates.length === 0) {
