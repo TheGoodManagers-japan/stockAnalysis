@@ -5,7 +5,7 @@ import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
 import { allTickers } from "./tickers.js";
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
-import { EXIT_PROFILES } from "./exit_profile.js"; // external profiles
+import { EXIT_PROFILES } from "./exit_profiles.js"; // external profiles
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
