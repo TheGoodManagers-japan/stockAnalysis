@@ -1,14 +1,6 @@
-// /scripts/backtest.js — swing-period backtest (browser) — DIP-only + HYBRID EXITS
-// Strategy: DIP entries (unchanged) with hybrid risk management:
-//   • Initial stop: nearest structure (recent swing low or MA20/MA50) combined with ATR.
-//   • Profit lock: at +x% or +m*ATR → jump to BE/BE+δ.
-//   • Trailing: Chandelier ATR and/or structural step (higher swing lows).
-//   • Time stop: if no progress after N bars.
-//
-// Notes:
-// - STOP still takes precedence over TARGET within a bar (conservative).
-// - Price data is integer-like (TSE); we round stops/targets to integers.
-// - All options are grouped under HYBRID_OPTS for easy tuning.
+// /scripts/backtest.js — swing-period backtest (browser) — DIP-only
+// DIP: enter on buyNow=true; exit on stop/target (NO time-based exits).
+// ST/LT sentiment gating happens here (no changes to analyzers).
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
@@ -23,52 +15,6 @@ const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 // === Regime controls (top-level flags only; NO fetching here) ===
 const REGIME_TICKER = "1306.T"; // TOPIX ETF as market regime proxy
 const USE_REGIME = true; // master toggle for regime feature
-
-/* ========================= HYBRID EXIT CONFIG ========================= */
-const HYBRID_OPTS = {
-  // ---- Initial stop selection ----
-  // How to combine structure stop (nearest support) and ATR stop:
-  //  "tighter" = choose the HIGHER of the two (closer to entry)  [DEFAULT]
-  //  "looser"  = choose the LOWER of the two (further from entry)
-  initialStopMode: "tighter",
-
-  // ATR settings (daily). Used for initial stop and Chandelier trail.
-  atrPeriod: 14,
-  kInitATR: 1.4, // initial ATR multiple (1.0–2.0 common for DIP)
-  kTrailATR: 2.0, // chandelier multiple (1.5–3.0 typical)
-
-  // Structure windowing (how we detect "nearest structure" below entry)
-  // - swingLeft/right: pivot definition for swing lows
-  // - maPeriods: we consider these MAs as potential supports
-  structure: {
-    swingLeft: 2,
-    swingRight: 2,
-    lookbackBars: 30, // how far back from entry to search swing lows
-    maPeriods: [20, 50], // MA supports to consider
-    bufferTicks: 0, // subtract a small buffer (e.g., 1) if you want undercut
-  },
-
-  // ---- Profit lock (BE jump) ----
-  // Trigger when unrealized >= beTriggerPct OR unrealizedATR >= beTriggerATR.
-  // Use one or both triggers. Set a trigger to null to disable it.
-  beTriggerPct: 0.015, // +1.5% → triggers BE jump (set null to disable)
-  beTriggerATR: null, // e.g., 0.8 → triggers when +0.8*ATR reached
-  beOffsetPct: 0.005, // jump to BE + 0.5% (use 0 for pure BE)
-
-  // ---- Trailing stops ----
-  useChandelierATR: true, // highest close since entry − kTrail*ATR
-  useStructuralTrail: true, // trail to the highest swing-low since entry
-  structuralTrailBuffer: 0, // subtract small buffer if desired (ticks)
-
-  // ---- Time stop ----
-  enableTimeStop: true,
-  maxHoldBars: 10, // if held ≥ this many bars...
-  minProfitPctToStay: 0.0, // ...and unrealized < this → exit TIME (e.g., 0.002 for 0.2%)
-
-  // ---- Misc ----
-  roundStopsTargets: true, // round stop/target to nearest integer (TSE-style)
-};
-/* ===================================================================== */
 
 function normalizeCode(t) {
   let s = String(t).trim().toUpperCase();
@@ -115,7 +61,7 @@ function shouldAllowDIP(ST, LT) {
   return lt <= 7 && st >= 1 && st <= 7;
 }
 
-/* ---------------- Math/array helpers ---------------- */
+/* ---------------- Small helpers ---------------- */
 function inc(map, key, by = 1) {
   if (!key && key !== 0) return;
   map[key] = (map[key] || 0) + by;
@@ -138,81 +84,6 @@ function afterColon(s, head) {
   return String(s)
     .slice(idx + head.length)
     .trim();
-}
-function sum(arr) {
-  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
-}
-
-/* ---------------- ATR / MAs / Swing structure helpers ---------------- */
-function computeATR(candles, period = 14) {
-  const TR = new Array(candles.length).fill(0);
-  for (let i = 0; i < candles.length; i++) {
-    const h = candles[i].high,
-      l = candles[i].low;
-    const pc = i > 0 ? candles[i - 1].close : candles[i].close;
-    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-    TR[i] = tr;
-  }
-  const ATR = new Array(candles.length).fill(NaN);
-  let sumTR = 0;
-  for (let i = 0; i < candles.length; i++) {
-    sumTR += TR[i];
-    if (i >= period) sumTR -= TR[i - period];
-    if (i >= period - 1) ATR[i] = sumTR / period;
-  }
-  return ATR;
-}
-function sma(arr, period) {
-  const out = new Array(arr.length).fill(NaN);
-  let s = 0;
-  for (let i = 0; i < arr.length; i++) {
-    s += arr[i];
-    if (i >= period) s -= arr[i - period];
-    if (i >= period - 1) out[i] = s / period;
-  }
-  return out;
-}
-// is swing-low pivot at idx (strictly lower than neighbors left/right)
-function isSwingLow(candles, idx, L = 2, R = 2) {
-  if (idx - L < 0 || idx + R >= candles.length) return false;
-  const lv = candles[idx].low;
-  for (let i = 1; i <= L; i++) if (!(lv < candles[idx - i].low)) return false;
-  for (let i = 1; i <= R; i++) if (!(lv < candles[idx + i].low)) return false;
-  return true;
-}
-// Highest support below entry: nearest swing-low or MA20/50 under entry
-function nearestStructureBelowEntry(
-  candles,
-  iEntry,
-  entryPx,
-  ma20,
-  ma50,
-  opts
-) {
-  const L = opts.swingLeft,
-    R = opts.swingRight,
-    LB = opts.lookbackBars,
-    buf = opts.bufferTicks || 0;
-  const from = Math.max(0, iEntry - LB);
-  let best = -Infinity;
-
-  // swing lows
-  for (let i = from; i <= iEntry; i++) {
-    if (isSwingLow(candles, i, L, R)) {
-      const lv = candles[i].low - buf;
-      if (lv < entryPx && lv > best) best = lv;
-    }
-  }
-
-  // MA supports
-  const maCandidates = [];
-  if (Number.isFinite(ma20[iEntry])) maCandidates.push(ma20[iEntry]);
-  if (Number.isFinite(ma50[iEntry])) maCandidates.push(ma50[iEntry]);
-  for (const v of maCandidates) {
-    if (v < entryPx && v > best) best = v;
-  }
-
-  return best > 0 && Number.isFinite(best) ? best : NaN;
 }
 
 /* ---------------- Counterfactual helpers (parallel lane) ---------------- */
@@ -281,7 +152,7 @@ function cfFinalizeAgg(agg) {
     winners: agg.winners,
     winRate: +(p * 100).toFixed(2),
     expR: +expR.toFixed(2),
-    profitFactor: Number.isFinite(pf) ? +pf.toFixed(2) : null,
+    profitFactor: Number.isFinite(pf) ? +pf.toFixed(2) : Infinity,
   };
 }
 
@@ -339,8 +210,17 @@ function sentiFinalize(agg) {
 }
 
 /**
- * Backtest (swing period) — DIP only with HYBRID EXITS.
- * opts (same as before) plus HYBRID_OPTS controls at top.
+ * Backtest (swing period) — DIP only.
+ * opts:
+ *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=5,
+ *     appendTickers?: string[],
+ *     targetTradesPerDay?: number,
+ *     countBlockedSignals?: boolean,
+ *     includeByTicker?: boolean,
+ *     simulateRejectedBuys?: boolean,     // default true
+ *     topRejectedReasons?: number,        // default 12
+ *     examplesCap?: number                // default 5
+ *   }
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -363,7 +243,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
-  // --- Regime benchmark
+  // --- Regime benchmark (MUST be inside runBacktest, AFTER FROM/TO) ---
   let benchCandles = [];
   let benchIdx = new Map();
   if (USE_REGIME) {
@@ -373,10 +253,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   function isGreen(bar) {
     return Number(bar.close) > Number(bar.open);
   }
+  // true = good tape (easier RR); false = bad tape (stricter RR); null = no signal
   function getRegimeFlagForDate(dateISO) {
     if (!USE_REGIME) return null;
     const i = benchIdx.get(dateISO);
-    if (i == null || i < 3) return null;
+    if (i == null || i < 3) return null; // need 3 prior days
     const d0 = benchCandles[i];
     const d1 = benchCandles[i - 1];
     const d2 = benchCandles[i - 2];
@@ -389,7 +270,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // for logs; real time-stop controlled by HYBRID_OPTS
+  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // kept for logs/compat
   const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 5;
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
@@ -422,7 +303,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const COUNT_BLOCKED = !!opts.countBlockedSignals;
 
-  // Telemetry aggregation (compact)
+  // -------- Telemetry aggregation (compact) --------
   const telemetry = {
     trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0 },
     gates: {
@@ -445,7 +326,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   };
   const EXAMPLE_MAX = 5;
 
-  // Parallel results (buyNow=false counterfactuals)
+  // -------- Parallel results (buyNow=false counterfactuals) --------
   const parallel = {
     rejectedBuys: {
       totalSimulated: 0,
@@ -457,7 +338,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
 
-  // Sentiment combo aggregation
+  // -------- Sentiment combo aggregation --------
   const sentiment = {
     actual: Object.create(null),
     rejected: Object.create(null),
@@ -467,7 +348,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (legacy) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP + HYBRID exits`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (ignored for exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=DIP`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -488,12 +369,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         );
         continue;
       }
-
-      // Precompute indicators for this ticker
-      const atr = computeATR(candles, HYBRID_OPTS.atrPeriod);
-      const closes = candles.map((c) => c.close);
-      const ma20 = sma(closes, 20);
-      const ma50 = sma(closes, 50);
 
       const trades = [];
       let open = null;
@@ -522,83 +397,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         else if (i <= cooldownUntil) blockedCooldown++;
         else if (i < WARMUP) blockedWarmup++;
 
-        /* ====================== MANAGE OPEN POSITION ====================== */
+        // manage open (stop → target ONLY; NO time exit)
         if (open) {
-          // 1) Update highest close since entry (for chandelier)
-          open.highestClose = Math.max(open.highestClose, today.close);
-
-          // 2) PROFIT LOCK: if price reaches trigger, jump to BE or BE+δ
-          const bePct = HYBRID_OPTS.beTriggerPct;
-          const beATR = HYBRID_OPTS.beTriggerATR;
-          const beOffset = HYBRID_OPTS.beOffsetPct || 0;
-          const upPct = (today.high - open.entry) / open.entry; // intrabar high
-          const upATR = Number.isFinite(atr[i])
-            ? (today.high - open.entry) / atr[i]
-            : -Infinity;
-
-          if (!open.beDone) {
-            const condPct = Number.isFinite(bePct) ? upPct >= bePct : false;
-            const condATR = Number.isFinite(beATR) ? upATR >= beATR : false;
-            if (condPct || condATR) {
-              const beStop = open.entry * (1 + beOffset);
-              const s = HYBRID_OPTS.roundStopsTargets
-                ? Math.round(beStop)
-                : beStop;
-              if (s > open.stop) open.stop = s;
-              open.beDone = true;
-            }
-          }
-
-          // 3) CHANDELIER ATR TRAIL
-          if (HYBRID_OPTS.useChandelierATR && Number.isFinite(atr[i])) {
-            const trail = open.highestClose - HYBRID_OPTS.kTrailATR * atr[i];
-            const t = HYBRID_OPTS.roundStopsTargets ? Math.round(trail) : trail;
-            if (t > open.stop) open.stop = t;
-          }
-
-          // 4) STRUCTURAL STEP TRAIL (trail under highest swing-low since entry)
-          if (HYBRID_OPTS.useStructuralTrail) {
-            const L = HYBRID_OPTS.structure.swingLeft;
-            const R = HYBRID_OPTS.structure.swingRight;
-            let bestSW = -Infinity;
-            for (let k = open.entryIdx; k <= i; k++) {
-              if (isSwingLow(candles, k, L, R)) {
-                const v =
-                  candles[k].low - (HYBRID_OPTS.structuralTrailBuffer || 0);
-                if (v < today.close && v > bestSW) bestSW = v;
-              }
-            }
-            if (bestSW > 0 && bestSW > open.stop) {
-              const s = HYBRID_OPTS.roundStopsTargets
-                ? Math.round(bestSW)
-                : bestSW;
-              if (s > open.stop) open.stop = s;
-            }
-          }
-
-          // 5) Check exits on this bar (STOP first, then TARGET, then TIME)
           let exit = null;
 
-          // STOP (intrabar)
           if (today.low <= open.stop) {
             exit = { type: "STOP", price: open.stop, result: "LOSS" };
           } else if (today.high >= open.target) {
-            // TARGET
             exit = { type: "TARGET", price: open.target, result: "WIN" };
-          } else if (HYBRID_OPTS.enableTimeStop) {
-            // TIME STOP (end-of-bar logic; we check on close)
-            const held = i - open.entryIdx;
-            const upNow = (today.close - open.entry) / open.entry;
-            if (
-              held >= HYBRID_OPTS.maxHoldBars &&
-              upNow < (HYBRID_OPTS.minProfitPctToStay || 0)
-            ) {
-              exit = {
-                type: "TIME",
-                price: today.close,
-                result: upNow >= 0 ? "WIN" : "LOSS",
-              };
-            }
           }
 
           if (exit) {
@@ -638,7 +444,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             cooldownUntil = i + COOLDOWN;
           }
         }
-        /* ====================== END MANAGE OPEN POSITION =================== */
 
         // look for entry (eligible state)
         const eligible = !open && i >= WARMUP && i > cooldownUntil;
@@ -659,7 +464,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const ST = senti?.shortTerm?.score ?? 4;
           const LT = senti?.longTerm?.score ?? 4;
 
-          // Telemetry: trend observed
+          // --- Telemetry: trend observed
           const trend = sig?.debug?.ms?.trend;
           if (trend && telemetry.trends.hasOwnProperty(trend))
             telemetry.trends[trend]++;
@@ -675,20 +480,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               continue;
             }
 
-            const stop0 = Number(sig.smartStopLoss ?? sig.stopLoss);
-            const target0 = Number(sig.smartPriceTarget ?? sig.priceTarget);
+            const stop = Number(sig.smartStopLoss ?? sig.stopLoss);
+            const target = Number(sig.smartPriceTarget ?? sig.priceTarget);
 
-            if (!Number.isFinite(stop0) || !Number.isFinite(target0)) {
+            if (!Number.isFinite(stop) || !Number.isFinite(target)) {
               signalsInvalid++;
               continue;
             }
-            if (stop0 >= today.close) {
+            if (stop >= today.close) {
               signalsRiskBad++;
               continue;
             }
 
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
+
             if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
               telemetry.examples.buyNow.push({
                 ticker: code,
@@ -698,70 +504,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               });
             }
 
-            // ----------------- HYBRID: compute INITIAL STOP -----------------
-            const entry = today.close;
-            // Structure stop: nearest support below entry among swing-lows & MA20/50
-            const structStop = nearestStructureBelowEntry(
-              candles,
-              i,
-              entry,
-              ma20,
-              ma50,
-              HYBRID_OPTS.structure
-            );
-
-            // ATR stop:
-            const atrHere = Number.isFinite(atr[i]) ? atr[i] : NaN;
-            const atrStopRaw = Number.isFinite(atrHere)
-              ? entry - HYBRID_OPTS.kInitATR * atrHere
-              : NaN;
-
-            // Fall back to signal stop if needed
-            const fallBackStop = stop0;
-
-            // Combine per mode
-            let combinedStopCandidates = [];
-            if (Number.isFinite(structStop))
-              combinedStopCandidates.push(structStop);
-            if (Number.isFinite(atrStopRaw))
-              combinedStopCandidates.push(atrStopRaw);
-
-            let initStop;
-            if (combinedStopCandidates.length) {
-              if (HYBRID_OPTS.initialStopMode === "looser") {
-                initStop = Math.min(...combinedStopCandidates);
-              } else {
-                initStop = Math.max(...combinedStopCandidates); // "tighter" default
-              }
-            } else {
-              initStop = fallBackStop;
-            }
-
-            // Always ensure stop is below entry
-            initStop = Math.min(initStop, entry - 0.01);
-
-            // Optional rounding
-            if (HYBRID_OPTS.roundStopsTargets) {
-              initStop = Math.round(initStop);
-            }
-
-            // ----------------- OPEN POSITION STATE -----------------
             open = {
               entryIdx: i,
-              entry,
-              stop: initStop,
-              stopInit: initStop,
-              target: HYBRID_OPTS.roundStopsTargets
-                ? Math.round(target0)
-                : target0,
+              entry: today.close,
+              stop: Math.round(stop),
+              stopInit: Math.round(stop),
+              target: Math.round(target),
               ST,
               LT,
-              highestClose: today.close,
-              beDone: false,
             };
             signalsExecuted++;
           } else {
-            // Telemetry: why not?
+            // --- Telemetry: why not?
             const dbg = sig?.debug || {};
             if (dbg && dbg.priceActionGate === false) {
               telemetry.gates.priceActionGateFailed++;
@@ -842,9 +596,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   if (outcome.result === "WIN") {
                     if (!parallel.rejectedBuys.examples[key])
                       parallel.rejectedBuys.examples[key] = [];
-                    if (
-                      (parallel.rejectedBuys.examples[key].length || 0) < EX_CAP
-                    ) {
+                    if (parallel.rejectedBuys.examples[key].length < EX_CAP) {
                       parallel.rejectedBuys.examples[key].push({
                         ticker: code,
                         date: toISO(today.date),
@@ -881,7 +633,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
       const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length;
+      const tTimes = trades.filter((x) => x.exitType === "TIME").length; // should be 0 now
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
@@ -937,13 +689,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // exits
   const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
-  const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
+  const timeExitCount = all.filter((t) => t.exitType === "TIME").length; // 0
   const timeExitWins = all.filter(
     (t) => t.exitType === "TIME" && t.result === "WIN"
-  ).length;
+  ).length; // 0
   const timeExitLosses = all.filter(
     (t) => t.exitType === "TIME" && t.result === "LOSS"
-  ).length;
+  ).length; // 0
 
   // throughput
   const days = tradingDays.size;
@@ -1163,6 +915,10 @@ function computeMetrics(trades) {
     profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : Infinity,
     exits,
   };
+}
+
+function sum(arr) {
+  return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
 /* --------------------------- Expose for Bubble -------------------------- */
