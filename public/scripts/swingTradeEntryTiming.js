@@ -1,4 +1,4 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, with continuation lane & refined RR/guards)
+// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
 import { detectDipBounce } from "./dip.js";
 
 /* ============================ Telemetry ============================ */
@@ -251,39 +251,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       if (!structureGateOk)
         reasons.push("Structure gate: trend not up or price < MA5.");
       reasons.push(`DIP not ready: ${dip.waitReason}`);
-      // === Continuation lane ===
-      const cont = considerContinuation(stock, data, ms, cfg, dip, px, T);
-      if (cont) {
-        // Re-use guards and RR telemetry, just like DIP path
-        const gv = guardVeto(
-          stock,
-          data,
-          px,
-          cont.rr,
-          ms,
-          cfg,
-          dip?.nearestRes,
-          "CONT"
-        );
-        tele.guard = {
-          checked: true,
-          veto: !!gv.veto,
-          reason: gv.reason || "",
-          details: gv.details || {},
-        };
-
-        if (!gv.veto) {
-          candidates.push(cont);
-          // clean up the “not ready” message since we DO have a buy lane
-          reasons.push("Continuation override: shallow dip in strong trend.");
-        } else {
-          reasons.push(
-            `CONT guard veto: ${gv.reason} ${summarizeGuardDetails(
-              gv.details
-            )}.`
-          );
-        }
-      }
     } else {
       // Soft red-day / price-action override on quality reclaim or strong bounce
       if (!priceActionGate && cfg.allowSmallRed) {
@@ -418,86 +385,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  function considerContinuation(stock, data, ms, cfg, dip, px, T) {
-    if (!cfg.allowContinuationLane) return null;
-
-    // Only consider when DIP said "too shallow / no meaningful pullback / bounce immature"
-    const reason = String(dip?.waitReason || "").toLowerCase();
-    const isShallowBlock =
-      reason.includes("dip too shallow") ||
-      reason.includes("no meaningful pullback") ||
-      reason.includes("bounce immature");
-
-    if (!isShallowBlock) return null;
-
-    // Strong-tape filter
-    const trendOK = ms.trend === "STRONG_UP" || ms.trend === "UP";
-    const ma20 = ms?.ma20 || sma(data, 20);
-    const aboveMA20 = px >= (ma20 || 0);
-    if (!(trendOK && aboveMA20)) return null;
-
-    // Basic bounce seed (very small reclaim allowed)
-    const d0 = data.at(-1),
-      d1 = data.at(-2);
-    const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-9);
-    const bounceATR =
-      (px - Math.min(Number(d0.low) || 0, Number(d1?.low) || px)) / atr;
-    if (bounceATR < Math.max(cfg.contMinBounceATR, 0.1)) return null;
-
-    // Structure-anchored stop: under swing/MA20, bounded by [0.4, 0.7] ATR
-    const supports = findSupportsBelow(data, px);
-    const swingStop = Number.isFinite(supports?.[0])
-      ? supports[0] - 0.25 * atr
-      : Infinity;
-    const ma20Stop = ma20 > 0 && ma20 < px ? ma20 - 0.45 * atr : Infinity;
-    let stop = Math.min(swingStop, ma20Stop, px - cfg.contStopATRFloor * atr);
-    if (px - stop > cfg.contStopATRCap * atr)
-      stop = px - cfg.contStopATRCap * atr;
-
-    // R-based target for momentum continuation; respect nearby resistance if it’s *very* close
-    const risk = Math.max(0.01, px - stop);
-    let target = px + cfg.contTP_R * risk;
-    const resList = findResistancesAbove(data, px, stock);
-    if (resList.length && resList[0] - px < 0.55 * atr)
-      target = Math.max(target, resList[0]);
-
-    // Relax RR requirement a bit for continuation
-    const cfgCont = {
-      ...cfg,
-      minRRbase: Math.min(cfg.minRRbase, cfg.contMinRR),
-    };
-    const rr = analyzeRR(px, stop, target, stock, ms, cfgCont, {
-      kind: "CONTINUATION",
-      data,
-    });
-
-    // Very light headroom sanity: if we *didn’t* clear RR, require a hair more space
-    if (!rr.acceptable) {
-      const headroom = resList.length ? (resList[0] - px) / atr : 9e9;
-      if (headroom < Math.max(0.45, (cfg.nearResVetoATR || 0.18) - 0.03))
-        return null;
-    }
-
-    T?.(
-      "CONT",
-      "candidate",
-      true,
-      `Continuation ok (RR ${rr.ratio.toFixed(2)} need ${rr.need.toFixed(2)})`,
-      { reason, bounceATR: +bounceATR.toFixed(2) }
-    );
-
-    return {
-      kind: "CONTINUATION ENTRY",
-      why: `Shallow pullback in ${
-        ms.trend
-      }; px>MA20; seed bounce ${bounceATR.toFixed(2)} ATR.`,
-      stop: rr.stop,
-      target: rr.target,
-      rr,
-      guard: {},
-    };
-  }
-
   // ---- Final decision ----
   if (candidates.length === 0) {
     const top = [];
@@ -574,7 +461,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // === Positive path: best candidate ===
+  // === Positive path: DIP ===
   const best = candidates[0];
   const debug = opts.debug
     ? {
@@ -637,13 +524,13 @@ function getConfig(opts = {}) {
     softRSI: 74,
 
     // headroom veto (friendlier)
-    nearResVetoATR: 0.18,
+    nearResVetoATR: 0.22,
     nearResVetoPct: 0.5,
 
-    // RR thresholds (easier but still selective)
-    minRRbase: 1.05,
-    minRRstrongUp: 1.15,
-    minRRweakUp: 1.25,
+    // RR thresholds (easier)
+    minRRbase: 1.15,
+    minRRstrongUp: 1.30,
+    minRRweakUp: 1.40,
 
     // pullback / bounce (slightly easier)
     dipMinPullbackPct: 0.7,
@@ -662,16 +549,6 @@ function getConfig(opts = {}) {
     // volume regime (easier)
     pullbackDryFactor: 1.5,
     bounceHotFactor: 1.0,
-
-    // --- Continuation lane (strong-trend, shallow-dip) ---
-    allowContinuationLane: true,
-    contMinRR: 1.0, // accept slightly lower nominal RR in strong trend
-    contMaxShallowATR: 0.5, // treat dips < 0.5 ATR as “shallow”
-    contRequirePxAboveMA: 20, // require price > MA20
-    contMinBounceATR: 0.1, // tiny reclaim is ok
-    contStopATRFloor: 0.4, // ~0.4–0.7 ATR structure stop band
-    contStopATRCap: 0.7,
-    contTP_R: 1.3, // default take-profit in R for continuation
 
     debug,
   };
@@ -733,9 +610,7 @@ function getMarketStructure(stock, data) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-
-  // Slightly tighter minimum stop than before to lift RR without spiking stops
-  const minStopDist = 1.15 * atr; // was 1.25 → slightly tighter stops improve RR acceptance
+  const minStopDist = 1.35 * atr; // was 1.25 → slightly tighter stops improve RR acceptance
   let adjStop = stop;
   if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
   stop = adjStop;
@@ -745,7 +620,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     if (riskPct > 3) stop = entryPx * (1 - 0.03);
   }
 
-  // Respect nearby resistances for target extension (avoid micro-lids)
+  // Respect nearby resistances for target extension
   if (ctx && ctx.data) {
     const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
@@ -772,20 +647,18 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
   if (atrPct >= 3.0) need = Math.max(need, 1.5);
 
-  let acceptable = ratio >= need;
+  const acceptable = ratio >= need;
 
   // Probation band: let near-miss RR through in friendly regimes with cool RSI
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
   const probation =
     !acceptable &&
-    ratio >= need - 0.15 &&
+    ratio >= need - 0.05 &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < 62;
 
-  acceptable = acceptable || probation;
-
   return {
-    acceptable,
+    acceptable: acceptable || probation,
     ratio,
     stop,
     target,

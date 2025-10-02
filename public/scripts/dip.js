@@ -519,20 +519,20 @@ export function detectDipBounce(stock, data, cfg, U) {
     if (isPivotLow) swingLowNear = Math.min(swingLowNear, L);
   }
   let stop = Math.min(
-    swingLowNear - 0.25 * atr,
-    ma25 > 0 ? ma25 - 0.45 * atr : Infinity
-  );
-  if (px - stop < 1.2 * atr) stop = px - 1.2 * atr; // enforce min distance
+       swingLowNear - 0.35 * atr,
+       ma25 > 0 ? ma25 - 0.65 * atr : Infinity
+     );
+     if (px - stop < 1.4 * atr) stop = px - 1.4 * atr;
 
   // Target: respect clustered resistances; otherwise ATR/structure hybrid
-  let target = Math.max(px + Math.max(1.9 * atr, px * 0.018), recentHigh20);
+  let target = Math.max(px + Math.max(2.4 * atr, px * 0.022), recentHigh20);
   if (nearestRes && nearestRes - px < 0.9 * atr) {
     target = Math.min(target, nearestRes);
   } else if (resList.length >= 2) {
     const r0 = resList[0],
       r1 = resList[1];
-    if (r0 - px < 0.6 * atr && r1 - px <= 3.2 * atr) {
-      target = Math.max(target, Math.min(r1, px + 3.0 * atr));
+      if (r0 - px < 0.6 * atr && r1 - px <= 3.4 * atr) {
+             target = Math.max(target, Math.min(r1, px + 3.4 * atr));
     }
   }
 
