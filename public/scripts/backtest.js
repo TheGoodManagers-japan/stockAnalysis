@@ -234,7 +234,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     : 12;
   const EX_CAP = Number.isFinite(opts.examplesCap) ? opts.examplesCap : 5;
 
-  const months = Number.isFinite(opts.months) ? Number(opts.months) : 6;
+  const months = Number.isFinite(opts.months) ? Number(opts.months) : 36;
   const to = opts.to ? new Date(opts.to) : new Date();
   const from = opts.from
     ? new Date(opts.from)
