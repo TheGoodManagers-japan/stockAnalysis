@@ -390,30 +390,26 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // ======================= SPC (Shallow Pullback / Continuation) =======================
-  if (candidates.length === 0) {
+  {
     const spc = detectSPC(stock, data, cfg, U);
-    // For telemetry (optional):
     // tele.spc = { trigger: !!spc.trigger, why: spc.why || "", waitReason: spc.waitReason || "", diagnostics: spc.diagnostics || {} };
 
     if (!spc.trigger) {
-      // Provide a clear rejection reason that matches your backtest reason bucketing
-      // so “no meaningful pullback” continues to aggregate cleanly.
       if (spc.waitReason?.toLowerCase().includes("no meaningful pullback")) {
         reasons.push("no meaningful pullback");
       } else if (spc.waitReason) {
         reasons.push(`SPC not ready: ${spc.waitReason}`);
       }
     } else {
-      // Run the same RR/guard pipeline you use for DIP, but note the kind = "SPC"
       const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
         kind: "SPC",
         data,
       });
 
-      // SPC can accept slightly smaller RR than DIP in strong tape
+      // SPC probation: allow a small near-miss in friendly tape
       if (!rr.acceptable) {
         const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.1; // SPC probation a bit wider than DIP
+        const nearBand = rr.ratio >= rr.need - 0.1;
         const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
         const momentumOK =
           !!spc.diagnostics?.closeAboveYHigh ||
@@ -460,13 +456,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // ======================= OXR (Over-recovery / Breakout) =======================
-  if (candidates.length === 0) {
+  {
     const oxr = detectOXR(stock, data, cfg, U);
-    // Optional: telemetry hook
     // tele.oxr = { trigger: !!oxr.trigger, why: oxr.why || "", waitReason: oxr.waitReason || "", diagnostics: oxr.diagnostics || {} };
 
     if (!oxr.trigger) {
-      // Keep reasons compatible with your reason-normalizer buckets:
       const wr = (oxr.waitReason || "").toLowerCase();
       if (wr.includes("already recovered > cap")) {
         reasons.push("already recovered > cap");
@@ -483,15 +477,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         data,
       });
 
-      // --- OXR probation (tighter): only allow a small RR near-miss
-      // Requirements: strong/up trend, green day momentum, RSI cool, and clear volume pop.
+      // OXR probation (tight): near-miss only, with momentum + vol pop + adequate headroom
       if (!rr.acceptable) {
         const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.06; // tighter than before (was 0.12)
+        const nearBand = rr.ratio >= rr.need - 0.06;
         const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
         const momentumOK = px > Math.max(openPx, prevClose);
 
-        // Volume expansion (if volume exists) — stricter than before
         const slice = data.slice(-20);
         const avg20 = Math.max(
           1,
@@ -504,7 +496,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           ? true
           : volExp >= 1.3;
 
-        // Ensure headroom is not the reason RR is tight (probation won’t override thin headroom)
         const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
         const headroomATRProb = Number.isFinite(oxr.nearestRes)
           ? (oxr.nearestRes - px) / Math.max(atr, 1e-9)
@@ -524,7 +515,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         }
       }
 
-      if (!rr.acceptable) {
+      // Enforce a higher floor for OXR unless probation saved it
+      if (rr.acceptable && !rr.probation && rr.ratio < (cfg.oxrMinRR ?? 1.9)) {
+        reasons.push(
+          `OXR RR below OXR floor: ${rr.ratio.toFixed(2)} < ${(
+            cfg.oxrMinRR ?? 1.9
+          ).toFixed(2)}`
+        );
+      } else if (!rr.acceptable) {
         reasons.push(
           `OXR RR too low: ratio ${rr.ratio.toFixed(
             2
@@ -560,13 +558,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // ======================= BPB (Breakout–Pullback–Bounce) =======================
-  if (candidates.length === 0) {
+  {
     const bpb = detectBPB(stock, data, cfg, U);
-    // Optional telemetry:
     // tele.bpb = { trigger: !!bpb.trigger, why: bpb.why || "", waitReason: bpb.waitReason || "", diagnostics: bpb.diagnostics || {} };
 
     if (!bpb.trigger) {
-      // Normalize reasons to your buckets
       if (bpb.waitReason?.toLowerCase().includes("already recovered > cap")) {
         reasons.push("already recovered > cap");
       } else if (bpb.waitReason?.toLowerCase().includes("headroom too small")) {
@@ -580,13 +576,12 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         data,
       });
 
-      // BPB probation: slightly more lenient near-miss if reclaim is clean
+      // BPB probation: slightly lenient near-miss if reclaim is clean
       if (!rr.acceptable) {
         const nearBand = rr.ratio >= rr.need - 0.1;
         const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
         const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
         const reclaimOK = px >= Math.max(openPx, prevClose);
-
         if (nearBand && regimeOK && reclaimOK && rsiHere < 66) {
           rr.acceptable = true;
           rr.probation = true;
@@ -627,6 +622,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       }
     }
   }
+
   /* ======================= RRP (Risk/Reward Probation) ======================= */
   // Only try if no candidate yet
   // if (candidates.length === 0) {
@@ -730,7 +726,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     tele.outcome = { buyNow: false, reason };
     tele.reasons = reasons.slice();
 
-    // Provisional plan even when not buyable
     const atr = Math.max(
       num(stock.atr14),
       (num(stock.currentPrice) || num(last.close)) * 0.005,
@@ -791,8 +786,48 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // === Positive path: DIP ===
+  // === Positive path: pick the best among all candidates ===
+  const score = (c) => {
+    // Prefer higher RR; slight penalty if probation
+    const base = Number(c?.rr?.ratio) || -1e9;
+    const probationPenalty = c?.rr?.probation ? 0.02 : 0; // tiny nudge
+    return base - probationPenalty;
+  };
+  candidates.sort((a, b) => score(b) - score(a));
+
+  // Optional tie-breaker: prefer non-probation if RR ties closely
+  if (candidates.length > 1) {
+    const a = candidates[0],
+      b = candidates[1];
+      if (Math.abs(score(a) - score(b)) < 0.005) {
+        if (!!b.rr?.probation && !a.rr?.probation) {
+          // keep a
+        } else if (!!a.rr?.probation && !b.rr?.probation) {
+          candidates[0] = b;
+        }
+      }
+  }
+
   const best = candidates[0];
+
+  tele.rr = {
+    checked: true,
+    acceptable: !!best?.rr?.acceptable,
+    ratio: best?.rr?.ratio,
+    need: best?.rr?.need,
+    risk: best?.rr?.risk,
+    reward: best?.rr?.reward,
+    stop: best?.rr?.stop,
+    target: best?.rr?.target,
+    probation: !!best?.rr?.probation,
+  };
+  tele.guard = {
+    checked: true,
+    veto: false,
+    reason: "",
+    details: best?.guard || {},
+  };
+  
   const debug = opts.debug
     ? {
         ms,
@@ -1034,21 +1069,42 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 }
 
 /* ============================ Guards ============================ */
+/**
+ * Lane-agnostic guardrail checks that can veto a candidate.
+ * - Kind-aware MA25 distance cap (OXR stricter)
+ * - RSI hard cap, plus OXR-specific softer ceiling
+ * - Headroom-to-resistance veto (with friendly-tape relaxations)
+ * - Consecutive up-days streak cap
+ */
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   const details = {};
-  const atr = Math.max(num(stock.atr14), px * 0.005);
-  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
-  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
 
+  // Baseline volatility floor for ratios/distances
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+
+  // --- RSI guards ---
+  const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   details.rsi = rsi;
-  if (rsi >= cfg.hardRSI)
+
+  // OXR gets a stricter ceiling even before hard cap
+  if (_kind === "OXR" && rsi >= (cfg.oxrRSI ?? cfg.softRSI)) {
+    details.oxrRSI = cfg.oxrRSI ?? cfg.softRSI;
+    return {
+      veto: true,
+      reason: `RSI ${rsi.toFixed(1)} ≥ ${details.oxrRSI}`,
+      details,
+    };
+  }
+  // Global hard cap
+  if (rsi >= cfg.hardRSI) {
     return {
       veto: true,
       reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.hardRSI}`,
       details,
     };
+  }
 
-  // Headroom: use effective resistance level, with fallback to next lid if the first is too close
+  // --- Headroom to resistance (effective lid) ---
   const resList = findResistancesAbove(data, px, stock);
   let effRes = Number.isFinite(nearestRes) ? nearestRes : resList[0];
 
@@ -1056,11 +1112,11 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   let headroomPct = null;
 
   if (isFiniteN(effRes)) {
-        // If the first lid is too close, consider the next one (mirrors SPC/DIP target logic)
-        if ((effRes - px) / Math.max(atr, 1e-9) < 0.6 && resList[1]) {
+    // If first lid is too close, prefer the next shelf (mirrors target logic)
+    if ((effRes - px) / atr < 0.6 && resList[1]) {
       effRes = resList[1];
     }
-    headroom = (effRes - px) / Math.max(atr, 1e-9);
+    headroom = (effRes - px) / atr;
     headroomPct = ((effRes - px) / Math.max(px, 1e-9)) * 100;
     details.nearestRes = effRes;
     details.headroomATR = headroom;
@@ -1069,14 +1125,17 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     details.nearestRes = null;
   }
 
-  // Eased thresholds in friendly tape or when RR is already solid
+  // Friendlier threshold in up/strong tapes, or when RR is already solid/near-miss
   let nearResMin = cfg.nearResVetoATR;
-    // NEW: also relax when RR is within ~0.02 of the requirement (near-miss that we otherwise accept via probation)
-  if ((ms.trend !== "DOWN" && rsi < 60) || rr.ratio >= rr.need + 0.05 || rr.ratio >= rr.need - 0.02) {
+  if (
+    (ms.trend !== "DOWN" && rsi < 60) ||
+    rr.ratio >= rr.need + 0.05 ||
+    rr.ratio >= rr.need - 0.02
+  ) {
     nearResMin = Math.min(nearResMin, 0.18);
   }
 
-  // Only headroom-veto if RR hasn't cleared the need
+  // Only headroom-veto if RR hasn't already cleared the requirement
   if (
     isFiniteN(headroom) &&
     (headroom < nearResMin || headroomPct < cfg.nearResVetoPct) &&
@@ -1084,37 +1143,47 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   ) {
     return {
       veto: true,
-      reason: `Headroom too small (${headroom.toFixed(
-        2
-      )} ATR / ${headroomPct.toFixed(2)}%)`,
+      reason: `Headroom too small (${headroom.toFixed(2)} ATR / ${headroomPct.toFixed(2)}%)`,
       details,
     };
   }
 
+  // --- Distance above MA25 (kind-aware cap; OXR stricter) ---
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
   if (ma25 > 0) {
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    const maxDist = cfg.maxATRfromMA25 + 0.3;
-    if (distMA25 > maxDist)
+
+    const cap =
+      _kind === "OXR"
+        ? (cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25)
+        : cfg.maxATRfromMA25;
+    const maxDist = (cap ?? 3.5) + 0.3; // tiny buffer
+    if (distMA25 > maxDist) {
       return {
         veto: true,
         reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${maxDist})`,
         details,
       };
+    }
   }
 
+  // --- Streak guard ---
   const ups = countConsecutiveUpDays(data);
   details.consecUp = ups;
-  if (ups > cfg.maxConsecUp)
+  if (ups > cfg.maxConsecUp) {
     return {
       veto: true,
       reason: `Consecutive up days ${ups} > ${cfg.maxConsecUp}`,
       details,
     };
+  }
 
+  // Allowed
   return { veto: false, reason: "", details };
 }
+
 
 /* ============================ Timeline ============================ */
 function buildSwingTimeline(entryPx, candidate, rr, ms) {
