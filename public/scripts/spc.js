@@ -38,8 +38,10 @@ export function detectSPC(stock, data, cfg, U) {
 
   // --- SPC idea: tiny dip or “no meaningful pullback” then continuation ---
   // pullback size estimate: distance from recent swing or MA5 band
-  const tinyDipPctMax = 0.7; // ≤0.7% qualifies as “tiny”
-  const tinyDipATRMax = 0.7; // ≤0.7 ATR qualifies as “tiny”
+  // friendlier tape lets us accept a slightly larger “tiny”
+  const friendlyTape = !!closeAboveYHigh || !!dayUp;
+  const tinyDipPctMax = friendlyTape ? 0.9 : 0.7; // ≤0.9% if friendly
+  const tinyDipATRMax = friendlyTape ? 0.9 : 0.7; // ≤0.9 ATR if friendly
   const pullbackFromMA5 = Math.max(0, (ma5 ? ma5 - px : 0) / (px || 1)) * 100;
 
   // recent minor dip (lookback few bars) — crude but robust:
@@ -57,7 +59,9 @@ export function detectSPC(stock, data, cfg, U) {
   const rsi = Number(stock.rsi14) || U.rsiFromData(data, 14);
   const distFromMA25_ATR = (px - ma25) / Math.max(atr, 1e-9);
   const tooExtended = distFromMA25_ATR > (cfg.maxATRfromMA25 ?? 3.5) + 0.2;
-  const rsiTooHot = rsi >= (cfg.softRSI ?? 74);
+  // allow SPC a tiny bit hotter when reclaiming Y-high
+  const rsiSoftCap = (cfg.softRSI ?? 74) + (closeAboveYHigh ? 2 : 0);
+  const rsiTooHot = rsi >= rsiSoftCap;
 
   // Headroom: we need a lid far enough to justify a small momentum pop
   const resistances = U.findResistancesAbove(data, px, stock);
@@ -66,14 +70,26 @@ export function detectSPC(stock, data, cfg, U) {
     ? (nearestRes - px) / Math.max(atr, 1e-9)
     : Infinity;
 
+  // inside/tight bar as acceptable “no meaningful pullback”
+  const dayRange = Math.max(1e-9, (last.high ?? px) - (last.low ?? px));
+  const bodyPct =
+    (Math.abs((last.close ?? px) - (last.open ?? px)) / Math.max(px, 1e-9)) *
+    100;
+  const rangeATR = dayRange / Math.max(atr, 1e-9);
+  const insideBar =
+    (last.high ?? 0) <= (prev.high ?? 0) && (last.low ?? 0) >= (prev.low ?? 0);
+  const tightDrift = rangeATR <= 0.6 && bodyPct <= 0.5; // small, quiet flag day
+
   // Basic SPC trigger:
   //  1) Up-trend-ish AND (close above Y-high OR day is green)
-  //  2) The recent “dip” was small (tiny pullback)
+  //  2) The recent “dip” was small (tiny pullback) — or inside/tight-drift
   //  3) Not too extended / overheated
   //  4) Some headroom exists
   const tinyDipOK =
     pullbackFromMA5 <= tinyDipPctMax ||
-    (dipPct <= tinyDipPctMax && dipATR <= tinyDipATRMax);
+    (dipPct <= tinyDipPctMax && dipATR <= tinyDipATRMax) ||
+    insideBar ||
+    tightDrift;
 
   const momentumOK = closeAboveYHigh || dayUp;
   const headroomOK =
@@ -116,37 +132,39 @@ export function detectSPC(stock, data, cfg, U) {
 
     if (strongClose && higherHigh && higherLow) {
       // Accept continuation without a textbook tiny dip
-      trigger = true;
-
-      // Tight, structure-first stop; keep SPC-style modest target
       const stopSwing = recentLow - 0.4 * atr;
       const stopMA5 = ma5 > 0 ? ma5 - 0.5 * atr : px - 1.0 * atr;
-      stop = Math.min(stopSwing, stopMA5);
+      let overrideStop = Math.min(stopSwing, stopMA5);
 
       // Prefer nearest usable resistance; if micro-lid too close, hop to next
-      target = Number.isFinite(nearestRes) ? nearestRes : px + 1.9 * atr;
+      let overrideTarget = Number.isFinite(nearestRes)
+        ? nearestRes
+        : px + 1.9 * atr;
       if (
         Number.isFinite(nearestRes) &&
         (nearestRes - px) / Math.max(atr, 1e-9) < 0.7 &&
         resistances[1]
       ) {
-        target = Math.max(target, resistances[1]);
+        overrideTarget = Math.max(overrideTarget, resistances[1]);
       }
 
-      // Keep the explanatory 'why' concise
       return {
         trigger: true,
         why: `SPC continuation override: strong close, HH/HL; tiny-dip missing.`,
-        stop,
-        target,
+        stop: overrideStop,
+        target: overrideTarget,
         nearestRes,
         diagnostics: {
+          friendlyTape,
+          insideBar,
+          tightDrift,
           closeAboveYHigh,
           dayUp,
           dipPct: +dipPct.toFixed(2),
           dipATR: +dipATR.toFixed(2),
           pullbackFromMA5: +pullbackFromMA5.toFixed(2),
           rsi: +rsi.toFixed(1),
+          rsiSoftCap,
           distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
           headroomATR: Number.isFinite(headroomATR)
             ? +headroomATR.toFixed(2)
@@ -170,12 +188,16 @@ export function detectSPC(stock, data, cfg, U) {
       target: NaN,
       nearestRes,
       diagnostics: {
+        friendlyTape,
+        insideBar,
+        tightDrift,
         closeAboveYHigh,
         dayUp,
         dipPct: +dipPct.toFixed(2),
         dipATR: +dipATR.toFixed(2),
         pullbackFromMA5: +pullbackFromMA5.toFixed(2),
         rsi: +rsi.toFixed(1),
+        rsiSoftCap,
         distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
         headroomATR: Number.isFinite(headroomATR)
           ? +headroomATR.toFixed(2)
@@ -210,12 +232,16 @@ export function detectSPC(stock, data, cfg, U) {
     target,
     nearestRes,
     diagnostics: {
+      friendlyTape,
+      insideBar,
+      tightDrift,
       closeAboveYHigh,
       dayUp,
       dipPct: +dipPct.toFixed(2),
       dipATR: +dipATR.toFixed(2),
       pullbackFromMA5: +pullbackFromMA5.toFixed(2),
       rsi: +rsi.toFixed(1),
+      rsiSoftCap,
       distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
       headroomATR: Number.isFinite(headroomATR)
         ? +headroomATR.toFixed(2)

@@ -297,7 +297,12 @@ function clampStopLoss(px, atr, proposed, floorStop = 0) {
  *  6) PROTECT — bearish engulfing near resistance (tighten)
  *  7) HOLD/PROTECT — default structure-first (≥MA25 = HOLD; <MA25 = PROTECT)
  */
-export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = {}) {
+export function getTradeManagementSignal_V3(
+  stock,
+  trade,
+  historicalData,
+  ctx = {}
+) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // local helper so function is self-contained
@@ -341,12 +346,13 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
 
   // --- 1) SELL — hard exit: stop-loss hit ------------------------------------
   if (px <= stop) {
-    // SELL: protective stop already touched
-    return { status: "Sell Now", reason: `Stop-loss hit at ¥${round0(stop)}.` };
+    return {
+      status: "Sell Now",
+      reason: `Stop-loss hit at ¥${Math.round(stop)}.`,
+    };
   }
 
   // --- 2) SELL — structural breakdown ----------------------------------------
-  // Definition: close < MA25 + NEW lower low + bearish context
   const brokeMA25 = lastClose(historicalData) < ma25 && ma25 > 0;
   const bearishContext =
     sentiment >= 6 ||
@@ -354,7 +360,6 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
     (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
       ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
   if (brokeMA25 && madeLowerLow(historicalData) && bearishContext) {
-    // SELL: thesis broken (trend + context confirm)
     return {
       status: "Sell Now",
       reason: "Trend break: close < MA25 with lower low and bearish context.",
@@ -362,7 +367,6 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
   }
 
   // --- 3) SCALE/SELL — reached target ----------------------------------------
-  // Strong context → SCALE (e.g., 50%) + trail the rest; weak context → SELL
   const strengthOK =
     sentiment <= 3 &&
     (ml >= 1 || ctx.deep?.longTermRegime?.type === "TRENDING") &&
@@ -371,7 +375,6 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
 
   if (px >= target) {
     if (strengthOK) {
-      // SCALE: take partial profits; continue with tighter structure/MA trailing
       const proposed = Math.max(
         stop,
         trailingStructStop(historicalData, ma25, atr)
@@ -379,17 +382,16 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
       const newSL = clampStopLoss(px, atr, proposed, stop);
       return {
         status: "Scale Partial",
-        reason: `Target reached (¥${round0(
+        reason: `Target reached (¥${Math.round(
           target
         )}). Context strong — scale 50% and trail the rest. New stop: ¥${newSL}.`,
         updatedStopLoss: newSL,
         suggest: { takeProfitPct: 50 },
       };
     } else {
-      // SELL: take the win; context not supportive to extend
       return {
         status: "Sell Now",
-        reason: `Take profit at target (¥${round0(
+        reason: `Take profit at target (¥${Math.round(
           target
         )}). Context not strong enough to extend.`,
       };
@@ -422,11 +424,40 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
     };
   }
 
+  // --- 4b) PROTECT — NO PROGRESS rule (profile: no_progress_N5bars_creep_to_BE)
+  // If last 5 bars never touched +0.5R and we're still below +0.5R, creep stop toward BE.
+  {
+    const NP_BARS = 5;
+    const NEED_TOUCH_R = 0.5;
+    const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
+
+    const win = Array.isArray(historicalData)
+      ? historicalData.slice(-NP_BARS)
+      : [];
+    const touchedHalfR = win.some((b) => n(b?.high ?? b?.close) >= halfRLevel);
+
+    if (!touchedHalfR && progressR < NEED_TOUCH_R) {
+      // creep: favor structure/MA stop, but also pull up toward (entry - 0.2R)
+      const structural = trailingStructStop(historicalData, ma25, atr);
+      const creepTarget = entry - 0.2 * riskPerShare; // keep some air below BE
+      const proposed = Math.max(stop, structural, creepTarget);
+      const newSL = clampStopLoss(px, atr, proposed, stop);
+      if (newSL > stop) {
+        return {
+          status: "Protect Profit",
+          reason:
+            `No progress for ${NP_BARS} bars (no +${NEED_TOUCH_R}R touch). ` +
+            `Creep stop toward breakeven to limit drift. New stop: ¥${newSL}.`,
+          updatedStopLoss: newSL,
+        };
+      }
+    }
+  }
+
   // --- 5) HOLD — entry-kind aware keeps --------------------------------------
   const entryKind = (ctx.entryKind || "").toUpperCase();
   const aboveMA25 = px >= ma25 || ma25 === 0;
 
-  // HOLD: pullback thesis intact (above MA25; ST not bearish)
   if (
     (entryKind === "DIP" || entryKind === "RETEST") &&
     aboveMA25 &&
@@ -439,7 +470,6 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
     };
   }
 
-  // HOLD: breakout retest behaving well (near pivot, holding zone)
   if (entryKind === "BREAKOUT") {
     const pivot = recentPivotHigh(historicalData);
     const nearPivot = pivot > 0 && Math.abs(px - pivot) <= 1.3 * atr;
@@ -478,13 +508,11 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
 
   // --- 7) DEFAULT — structure-first ------------------------------------------
   if (aboveMA25) {
-    // HOLD: trend structure intact
     return {
       status: "Hold",
       reason: "Uptrend structure intact (≥ MA25). Allow normal volatility.",
     };
   } else {
-    // PROTECT: slipped below MA25 but no full breakdown signal
     const proposed = Math.max(
       stop,
       trailingStructStop(historicalData, ma25, atr)
@@ -497,6 +525,7 @@ export function getTradeManagementSignal_V3(stock, trade, historicalData, ctx = 
     };
   }
 }
+
 
 
 

@@ -1035,8 +1035,8 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   let headroomPct = null;
 
   if (isFiniteN(effRes)) {
-    // If the first lid is too close, consider the next one
-    if ((effRes - px) / Math.max(atr, 1e-9) < 0.6 && resList[1]) {
+        // If the first lid is too close, consider the next one (mirrors SPC/DIP target logic)
+        if ((effRes - px) / Math.max(atr, 1e-9) < 0.6 && resList[1]) {
       effRes = resList[1];
     }
     headroom = (effRes - px) / Math.max(atr, 1e-9);
@@ -1050,7 +1050,8 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
 
   // Eased thresholds in friendly tape or when RR is already solid
   let nearResMin = cfg.nearResVetoATR;
-  if ((ms.trend !== "DOWN" && rsi < 60) || rr.ratio >= rr.need + 0.05) {
+    // NEW: also relax when RR is within ~0.02 of the requirement (near-miss that we otherwise accept via probation)
+  if ((ms.trend !== "DOWN" && rsi < 60) || rr.ratio >= rr.need + 0.05 || rr.ratio >= rr.need - 0.02) {
     nearResMin = Math.min(nearResMin, 0.18);
   }
 
