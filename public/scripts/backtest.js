@@ -1011,11 +1011,52 @@ function sum(arr) {
   return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
+/* ------------------------ multi-hold (fixed set) ------------------------ */
+/**
++ * Runs the backtest for fixed holdBars: [8, 10, 15, 20]
++ * - Keeps the single-run engine intact (runBacktest)
++ * - Produces a compact compare array and a variants map
++ */
+async function runBacktestFixedHolds(tickersOrOpts, maybeOpts) {
+  const holds = [8, 10, 15, 20];
+    const tickersArgIsArray = Array.isArray(tickersOrOpts);
+    const baseOpts = tickersArgIsArray ? (maybeOpts || {}) : (tickersOrOpts || {});
+  
+    const variants = {};
+    const compare = [];
+  
+    for (const hb of holds) {
+      const res = await runBacktest(
+        tickersArgIsArray ? tickersOrOpts : baseOpts,
+        tickersArgIsArray ? { ...baseOpts, holdBars: hb } : { ...baseOpts, holdBars: hb }
+      );
+      variants[String(hb)] = res;
+      compare.push({
+        holdBars: hb,
+        totalTrades: res.totalTrades,
+        winRate: res.winRate,
+        avgReturnPct: res.avgReturnPct,
+        avgHoldingDays: res.avgHoldingDays,
+        tradesPerDay: Number((res.tradesPerDay || 0).toFixed(3)),
+        exitTarget: res.exitCounts?.target || 0,
+        exitStop: res.exitCounts?.stop || 0,
+        exitTime: res.exitCounts?.time || 0,
+        timeWins: res.exitCounts?.timeWins || 0,
+        timeLosses: res.exitCounts?.timeLosses || 0,
+      });
+    }
+  
+    compare.sort((a,b)=>a.holdBars - b.holdBars);
+    return { holds, variants, compare };
+  }
+  
+
 /* --------------------------- expose for Bubble -------------------------- */
+// Always run the fixed multi-hold comparison (8,10,15,20)
 window.backtest = async (tickersOrOpts, maybeOpts) => {
-  try {
-    return await runBacktest(tickersOrOpts, maybeOpts);
-  } catch (e) {
+    try {
+      return await runBacktestFixedHolds(tickersOrOpts, maybeOpts);
+    } catch (e) {
     console.error("[backtest] error:", e);
     return {
       from: "",
