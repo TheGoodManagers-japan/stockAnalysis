@@ -97,6 +97,69 @@ export function detectSPC(stock, data, cfg, U) {
   else if (rsiTooHot) waitReason = "RSI too hot for SPC.";
   else if (!headroomOK) waitReason = "headroom too small for SPC.";
 
+  // --- Continuation override (no meaningful pullback, but momentum/structure strong)
+  // Fire SPC when tinyDip fails but tape is friendly and momentum is clean.
+  if (
+    !trigger && // only if base SPC didn't pass
+    trendIsUp && // must be above MA25
+    !tooExtended &&
+    !rsiTooHot && // not overheated/extended
+    momentumOK && // green day or Y-high reclaim
+    headroomOK // enough room to a lid
+  ) {
+    // crude momentum proxy (no ADX here): strong close near day high, HH/HL
+    const range = Math.max(1e-9, (last.high ?? px) - (last.low ?? px));
+    const body = Math.abs(px - (last.open ?? px));
+    const strongClose = body >= 0.55 * range && px >= (last.high ?? px) * 0.98;
+    const higherHigh = (last.high ?? 0) > (prev.high ?? 0);
+    const higherLow = (last.low ?? 0) >= (prev.low ?? 0) * 0.99;
+
+    if (strongClose && higherHigh && higherLow) {
+      // Accept continuation without a textbook tiny dip
+      trigger = true;
+
+      // Tight, structure-first stop; keep SPC-style modest target
+      const stopSwing = recentLow - 0.4 * atr;
+      const stopMA5 = ma5 > 0 ? ma5 - 0.5 * atr : px - 1.0 * atr;
+      stop = Math.min(stopSwing, stopMA5);
+
+      // Prefer nearest usable resistance; if micro-lid too close, hop to next
+      target = Number.isFinite(nearestRes) ? nearestRes : px + 1.9 * atr;
+      if (
+        Number.isFinite(nearestRes) &&
+        (nearestRes - px) / Math.max(atr, 1e-9) < 0.7 &&
+        resistances[1]
+      ) {
+        target = Math.max(target, resistances[1]);
+      }
+
+      // Keep the explanatory 'why' concise
+      return {
+        trigger: true,
+        why: `SPC continuation override: strong close, HH/HL; tiny-dip missing.`,
+        stop,
+        target,
+        nearestRes,
+        diagnostics: {
+          closeAboveYHigh,
+          dayUp,
+          dipPct: +dipPct.toFixed(2),
+          dipATR: +dipATR.toFixed(2),
+          pullbackFromMA5: +pullbackFromMA5.toFixed(2),
+          rsi: +rsi.toFixed(1),
+          distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
+          headroomATR: Number.isFinite(headroomATR)
+            ? +headroomATR.toFixed(2)
+            : null,
+          override: true,
+          strongClose,
+          higherHigh,
+          higherLow,
+        },
+      };
+    }
+  }
+
   // If not triggering, return with diagnostics for telemetry
   if (!trigger) {
     return {
