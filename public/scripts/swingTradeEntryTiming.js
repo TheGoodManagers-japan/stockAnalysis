@@ -1,9 +1,9 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-only, tuned to match upgraded dip.js)
+// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-first; stricter regime gate)
 import { detectDipBounce } from "./dip.js";
 import { detectSPC } from "./spc.js";
 import { detectOXR } from "./oxr.js";
 import { detectBPB } from "./bpb.js";
-//import { detectRRProbation } from "./rrp.js";
+// import { detectRRProbation } from "./rrp.js";
 
 /* ============================ Telemetry ============================ */
 function teleInit() {
@@ -13,6 +13,7 @@ function teleInit() {
       priceAction: { pass: false, why: "" },
       structure: { pass: false, why: "" },
       stacked: { pass: false, why: "" },
+      regime: { pass: false, why: "" }, // NEW
     },
     dip: { trigger: false, waitReason: "", why: "", diagnostics: {} },
     rr: {
@@ -157,6 +158,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     trend: ms.trend,
     ma: {
       ma5: ms.ma5,
+      ma20: ms.ma20, // NEW
       ma25: ms.ma25,
       ma50: ms.ma50,
       ma75: ms.ma75,
@@ -165,12 +167,58 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     perfectMode: cfg.perfectMode,
   };
 
+  // === NEW: strict regime pre-gate ===
+  const regimeTrendOk =
+    cfg.trendAllow.includes(ms.trend) ||
+    (cfg.allowWeakUpForDipOnly && ms.trend === "WEAK_UP"); // allow WEAK_UP but DIP only
+
+  const maStackLiteOk = !cfg.requireMaStackLite
+    ? true
+    : ms.ma20 > 0 &&
+      ms.ma25 > 0 &&
+      ms.ma50 > 0 &&
+      ms.ma20 > ms.ma25 &&
+      ms.ma25 > ms.ma50;
+
+  const ma20SlopeOkFlag = ma20SlopeOk(data, cfg.ma20SlopeBars);
+
+  const regimeOK = regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag;
+
+  tele.gates.regime = {
+    pass: regimeOK,
+    why: regimeOK
+      ? ""
+      : [
+          !regimeTrendOk ? `trend ${ms.trend} not allowed` : "",
+          !maStackLiteOk ? "MA20>MA25>MA50 not satisfied" : "",
+          !ma20SlopeOkFlag
+            ? `MA20 slope ≤ 0 over ${cfg.ma20SlopeBars} bars`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" | "),
+  };
+
+  // If regime fails entirely, block all lanes early.
+  if (!regimeOK) {
+    const reason = tele.gates.regime.why || "Regime pre-gate failed";
+    const out = withNo(reason, { stock, data });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason },
+      reasons: [reason],
+      trace: T.logs,
+    };
+    if (out.debug) out.debug.trace = T.logs;
+    return out;
+  }
+
   // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
   const presets = {
     STRONG_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.12), // was ≥1.15
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18), // easier hot-volume cap
-      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.16), // a touch friendlier
+      minRRbase: Math.max(cfg.minRRbase, 1.12),
+      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18),
+      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.16),
     },
     UP: {
       minRRbase: Math.max(cfg.minRRbase, 1.12),
@@ -262,8 +310,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         const yHi = !!dip?.diagnostics?.closeAboveYHigh;
         if (
           (dayPct >= cfg.redDayMaxDownPctExt && (bs >= 1.0 || yHi)) ||
-          yHi || // NEW: clear Y-high reclaim always soft-passes
-          bs >= 1.05 // NEW: strong bounce soft-pass
+          yHi ||
+          bs >= 1.05
         ) {
           priceActionGate = true;
           tele.gates.priceAction = {
@@ -282,9 +330,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         const nearSupport = !!dip?.diagnostics?.nearSupport;
         if (!structureGateOk && nearSupport) {
           const bs = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
-          // wider tolerance to MA5 when bounce strong or Y-high reclaim
           const band =
-            bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh ? 0.988 : 0.993; // was 0.99 / 0.994
+            bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh ? 0.988 : 0.993;
           if (px >= (ms.ma5 || 0) * band) {
             structureGateOk = true;
             tele.gates.structure = {
@@ -311,7 +358,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           if (!rr.acceptable) {
             const bounceATR = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
             const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-            const withinBand = rr.ratio >= rr.need - 0.25; // keep friendlier band
+            const withinBand = rr.ratio >= rr.need - 0.25;
             const bounceGood =
               bounceATR >= (ms.trend === "STRONG_UP" ? 0.85 : 1.0) ||
               !!dip?.diagnostics?.closeAboveYHigh;
@@ -391,65 +438,69 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   // ======================= SPC (Shallow Pullback / Continuation) =======================
   {
-    const spc = detectSPC(stock, data, cfg, U);
-    // tele.spc = { trigger: !!spc.trigger, why: spc.why || "", waitReason: spc.waitReason || "", diagnostics: spc.diagnostics || {} };
-
-    if (!spc.trigger) {
-      if (spc.waitReason?.toLowerCase().includes("no meaningful pullback")) {
-        reasons.push("no meaningful pullback");
-      } else if (spc.waitReason) {
-        reasons.push(`SPC not ready: ${spc.waitReason}`);
-      }
+    if (ms.trend === "WEAK_UP") {
+      reasons.push("SPC skipped: WEAK_UP allowed for DIP only.");
     } else {
-      const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
-        kind: "SPC",
-        data,
-      });
-
-      // SPC probation: allow a small near-miss in friendly tape
-      if (!rr.acceptable) {
-        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.1;
-        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-        const momentumOK =
-          !!spc.diagnostics?.closeAboveYHigh ||
-          px > Math.max(openPx, prevClose);
-        if (nearBand && regimeOK && momentumOK && rsiHere < 64) {
-          rr.acceptable = true;
-          rr.probation = true;
+      const spc = detectSPC(stock, data, cfg, U);
+      if (!spc.trigger) {
+        if (spc.waitReason?.toLowerCase().includes("no meaningful pullback")) {
+          reasons.push("no meaningful pullback");
+        } else if (spc.waitReason) {
+          reasons.push(`SPC not ready: ${spc.waitReason}`);
         }
-      }
-
-      if (!rr.acceptable) {
-        reasons.push(
-          `SPC RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)}`
-        );
       } else {
-        const gv = guardVeto(
-          stock,
+        const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
+          kind: "SPC",
           data,
-          px,
-          rr,
-          ms,
-          cfg,
-          spc.nearestRes,
-          "SPC"
-        );
-        if (gv.veto) {
+        });
+
+        // SPC probation: allow a small near-miss in friendly tape
+        if (!rr.acceptable) {
+          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+          const nearBand = rr.ratio >= rr.need - 0.1;
+          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+          const momentumOK =
+            !!spc.diagnostics?.closeAboveYHigh ||
+            px > Math.max(openPx, prevClose);
+          if (nearBand && regimeOK && momentumOK && rsiHere < 64) {
+            rr.acceptable = true;
+            rr.probation = true;
+          }
+        }
+
+        if (!rr.acceptable) {
           reasons.push(
-            `SPC guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+            `SPC RR too low: ratio ${rr.ratio.toFixed(
+              2
+            )} < need ${rr.need.toFixed(2)}`
           );
         } else {
-          candidates.push({
-            kind: "SPC ENTRY",
-            why: spc.why,
-            stop: rr.stop,
-            target: rr.target,
+          const gv = guardVeto(
+            stock,
+            data,
+            px,
             rr,
-            guard: gv.details,
-          });
+            ms,
+            cfg,
+            spc.nearestRes,
+            "SPC"
+          );
+          if (gv.veto) {
+            reasons.push(
+              `SPC guard veto: ${gv.reason} ${summarizeGuardDetails(
+                gv.details
+              )}.`
+            );
+          } else {
+            candidates.push({
+              kind: "SPC ENTRY",
+              why: spc.why,
+              stop: rr.stop,
+              target: rr.target,
+              rr,
+              guard: gv.details,
+            });
+          }
         }
       }
     }
@@ -457,101 +508,110 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   // ======================= OXR (Over-recovery / Breakout) =======================
   {
-    const oxr = detectOXR(stock, data, cfg, U);
-    // tele.oxr = { trigger: !!oxr.trigger, why: oxr.why || "", waitReason: oxr.waitReason || "", diagnostics: oxr.diagnostics || {} };
-
-    if (!oxr.trigger) {
-      const wr = (oxr.waitReason || "").toLowerCase();
-      if (wr.includes("already recovered > cap")) {
-        reasons.push("already recovered > cap");
-      } else if (wr.includes("headroom too small")) {
-        reasons.push("Headroom too small pre-entry");
-      } else if (wr.includes("no breakout")) {
-        reasons.push("OXR not ready: no valid breakout");
-      } else if (oxr.waitReason) {
-        reasons.push(`OXR not ready: ${oxr.waitReason}`);
-      }
+    if (ms.trend === "WEAK_UP") {
+      reasons.push("OXR skipped: WEAK_UP allowed for DIP only.");
     } else {
-      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
-        kind: "OXR",
-        data,
-      });
+      const oxr = detectOXR(stock, data, cfg, U);
 
-      // OXR probation (tight): near-miss only, with momentum + vol pop + adequate headroom
-      if (!rr.acceptable) {
-        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.06;
-        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-        const momentumOK = px > Math.max(openPx, prevClose);
-
-        const slice = data.slice(-20);
-        const avg20 = Math.max(
-          1,
-          slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
-            Math.max(1, slice.length)
-        );
-        const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
-        const volExp = vNow / avg20;
-        const volOK = !Number.isFinite(data.at(-1)?.volume)
-          ? true
-          : volExp >= 1.3;
-
-        const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
-        const headroomATRProb = Number.isFinite(oxr.nearestRes)
-          ? (oxr.nearestRes - px) / Math.max(atr, 1e-9)
-          : Infinity;
-        const headroomOK = headroomATRProb >= (cfg.oxrHeadroomATR ?? 1.0);
-
-        if (
-          nearBand &&
-          regimeOK &&
-          momentumOK &&
-          volOK &&
-          headroomOK &&
-          rsiHere < 64
-        ) {
-          rr.acceptable = true;
-          rr.probation = true;
+      if (!oxr.trigger) {
+        const wr = (oxr.waitReason || "").toLowerCase();
+        if (wr.includes("already recovered > cap")) {
+          reasons.push("already recovered > cap");
+        } else if (wr.includes("headroom too small")) {
+          reasons.push("Headroom too small pre-entry");
+        } else if (wr.includes("no breakout")) {
+          reasons.push("OXR not ready: no valid breakout");
+        } else if (oxr.waitReason) {
+          reasons.push(`OXR not ready: ${oxr.waitReason}`);
         }
-      }
-
-      // Enforce a higher floor for OXR unless probation saved it
-      if (rr.acceptable && !rr.probation && rr.ratio < (cfg.oxrMinRR ?? 1.9)) {
-        reasons.push(
-          `OXR RR below OXR floor: ${rr.ratio.toFixed(2)} < ${(
-            cfg.oxrMinRR ?? 1.9
-          ).toFixed(2)}`
-        );
-      } else if (!rr.acceptable) {
-        reasons.push(
-          `OXR RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)}`
-        );
       } else {
-        const gv = guardVeto(
-          stock,
+        const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
+          kind: "OXR",
           data,
-          px,
-          rr,
-          ms,
-          cfg,
-          oxr.nearestRes,
-          "OXR"
-        );
-        if (gv.veto) {
+        });
+
+        // OXR probation (tight)
+        if (!rr.acceptable) {
+          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+          const nearBand = rr.ratio >= rr.need - 0.06;
+          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+          const momentumOK = px > Math.max(openPx, prevClose);
+
+          const slice = data.slice(-20);
+          const avg20 = Math.max(
+            1,
+            slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
+              Math.max(1, slice.length)
+          );
+          const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
+          const volExp = vNow / avg20;
+          const volOK = !Number.isFinite(data.at(-1)?.volume)
+            ? true
+            : volExp >= 1.3;
+
+          const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
+          const headroomATRProb = Number.isFinite(oxr.nearestRes)
+            ? (oxr.nearestRes - px) / Math.max(atr, 1e-9)
+            : Infinity;
+          const headroomOK = headroomATRProb >= (cfg.oxrHeadroomATR ?? 1.0);
+
+          if (
+            nearBand &&
+            regimeOK &&
+            momentumOK &&
+            volOK &&
+            headroomOK &&
+            rsiHere < 64
+          ) {
+            rr.acceptable = true;
+            rr.probation = true;
+          }
+        }
+
+        // OXR floor
+        if (
+          rr.acceptable &&
+          !rr.probation &&
+          rr.ratio < (cfg.oxrMinRR ?? 1.9)
+        ) {
           reasons.push(
-            `OXR guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+            `OXR RR below OXR floor: ${rr.ratio.toFixed(2)} < ${(
+              cfg.oxrMinRR ?? 1.9
+            ).toFixed(2)}`
+          );
+        } else if (!rr.acceptable) {
+          reasons.push(
+            `OXR RR too low: ratio ${rr.ratio.toFixed(
+              2
+            )} < need ${rr.need.toFixed(2)}`
           );
         } else {
-          candidates.push({
-            kind: "OXR ENTRY",
-            why: oxr.why,
-            stop: rr.stop,
-            target: rr.target,
+          const gv = guardVeto(
+            stock,
+            data,
+            px,
             rr,
-            guard: gv.details,
-          });
+            ms,
+            cfg,
+            oxr.nearestRes,
+            "OXR"
+          );
+          if (gv.veto) {
+            reasons.push(
+              `OXR guard veto: ${gv.reason} ${summarizeGuardDetails(
+                gv.details
+              )}.`
+            );
+          } else {
+            candidates.push({
+              kind: "OXR ENTRY",
+              why: oxr.why,
+              stop: rr.stop,
+              target: rr.target,
+              rr,
+              guard: gv.details,
+            });
+          }
         }
       }
     }
@@ -559,157 +619,80 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   // ======================= BPB (Breakout–Pullback–Bounce) =======================
   {
-    const bpb = detectBPB(stock, data, cfg, U);
-    // tele.bpb = { trigger: !!bpb.trigger, why: bpb.why || "", waitReason: bpb.waitReason || "", diagnostics: bpb.diagnostics || {} };
-
-    if (!bpb.trigger) {
-      if (bpb.waitReason?.toLowerCase().includes("already recovered > cap")) {
-        reasons.push("already recovered > cap");
-      } else if (bpb.waitReason?.toLowerCase().includes("headroom too small")) {
-        reasons.push("Headroom too small pre-entry");
-      } else if (bpb.waitReason) {
-        reasons.push(`BPB not ready: ${bpb.waitReason}`);
-      }
+    if (ms.trend === "WEAK_UP") {
+      reasons.push("BPB skipped: WEAK_UP allowed for DIP only.");
     } else {
-      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
-        kind: "BPB",
-        data,
-      });
+      const bpb = detectBPB(stock, data, cfg, U);
 
-      // BPB probation: slightly lenient near-miss if reclaim is clean
-      if (!rr.acceptable) {
-        const nearBand = rr.ratio >= rr.need - 0.1;
-        const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-        const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const reclaimOK = px >= Math.max(openPx, prevClose);
-        if (nearBand && regimeOK && reclaimOK && rsiHere < 66) {
-          rr.acceptable = true;
-          rr.probation = true;
+      if (!bpb.trigger) {
+        if (bpb.waitReason?.toLowerCase().includes("already recovered > cap")) {
+          reasons.push("already recovered > cap");
+        } else if (
+          bpb.waitReason?.toLowerCase().includes("headroom too small")
+        ) {
+          reasons.push("Headroom too small pre-entry");
+        } else if (bpb.waitReason) {
+          reasons.push(`BPB not ready: ${bpb.waitReason}`);
         }
-      }
-
-      if (!rr.acceptable) {
-        reasons.push(
-          `BPB RR too low: ratio ${rr.ratio.toFixed(
-            2
-          )} < need ${rr.need.toFixed(2)}`
-        );
       } else {
-        const gv = guardVeto(
-          stock,
+        const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
+          kind: "BPB",
           data,
-          px,
-          rr,
-          ms,
-          cfg,
-          bpb.nearestRes,
-          "BPB"
-        );
-        if (gv.veto) {
+        });
+
+        // BPB probation
+        if (!rr.acceptable) {
+          const nearBand = rr.ratio >= rr.need - 0.1;
+          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
+          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+          const reclaimOK = px >= Math.max(openPx, prevClose);
+          if (nearBand && regimeOK && reclaimOK && rsiHere < 66) {
+            rr.acceptable = true;
+            rr.probation = true;
+          }
+        }
+
+        if (!rr.acceptable) {
           reasons.push(
-            `BPB guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
+            `BPB RR too low: ratio ${rr.ratio.toFixed(
+              2
+            )} < need ${rr.need.toFixed(2)}`
           );
         } else {
-          candidates.push({
-            kind: "BPB ENTRY",
-            why: bpb.why,
-            stop: rr.stop,
-            target: rr.target,
+          const gv = guardVeto(
+            stock,
+            data,
+            px,
             rr,
-            guard: gv.details,
-          });
+            ms,
+            cfg,
+            bpb.nearestRes,
+            "BPB"
+          );
+          if (gv.veto) {
+            reasons.push(
+              `BPB guard veto: ${gv.reason} ${summarizeGuardDetails(
+                gv.details
+              )}.`
+            );
+          } else {
+            candidates.push({
+              kind: "BPB ENTRY",
+              why: bpb.why,
+              stop: rr.stop,
+              target: rr.target,
+              rr,
+              guard: gv.details,
+            });
+          }
         }
       }
     }
   }
 
   /* ======================= RRP (Risk/Reward Probation) ======================= */
-  // Only try if no candidate yet
-  // if (candidates.length === 0) {
-  //   const rrp = detectRRProbation(stock, data, cfg, U);
-
-  //   // breadcrumb the diagnostics like other lanes (optional)
-  //   checks.rrp = rrp;
-
-  //   if (!rrp.trigger) {
-  //     if (rrp.waitReason) reasons.push(`RRP not ready: ${rrp.waitReason}`);
-  //   } else {
-  //     // Compute RR with the orchestrator’s analyzer (so we keep one source of truth)
-  //     const rr = analyzeRR(px, rrp.stop, rrp.target, stock, ms, cfg, {
-  //       kind: "RRP",
-  //       data,
-  //     });
-
-  //     // Tighter probation band than DIP: allow (need - 0.03) under friendly tape
-  //     if (!rr.acceptable) {
-  //       const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-  //       const nearBand = rr.ratio >= rr.need - 0.03;
-  //       const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-  //       if (nearBand && regimeOK && rsiHere < 60) {
-  //         rr.acceptable = true;
-  //         rr.probation = true; // mark it so telemetry shows probation path
-  //       }
-  //     }
-
-  //     // record RR telemetry like the DIP path does
-  //     tele.rr = {
-  //       checked: true,
-  //       acceptable: !!rr.acceptable,
-  //       ratio: rr.ratio,
-  //       need: rr.need,
-  //       risk: rr.risk,
-  //       reward: rr.reward,
-  //       stop: rr.stop,
-  //       target: rr.target,
-  //       probation: !!rr.probation,
-  //     };
-
-  //     if (!rr.acceptable) {
-  //       reasons.push(
-  //         `RRP RR too low: ratio ${rr.ratio.toFixed(
-  //           2
-  //         )} < need ${rr.need.toFixed(2)} (risk ${fmt(rr.risk)}, reward ${fmt(
-  //           rr.reward
-  //         )}).`
-  //       );
-  //     } else {
-  //       // Normal guard pass (re-use your guardVeto + headroom logic)
-  //       const gv = guardVeto(
-  //         stock,
-  //         data,
-  //         px,
-  //         rr,
-  //         ms,
-  //         cfg,
-  //         rrp.nearestRes,
-  //         "RRP"
-  //       );
-
-  //       tele.guard = {
-  //         checked: true,
-  //         veto: !!gv.veto,
-  //         reason: gv.reason || "",
-  //         details: gv.details || {},
-  //       };
-
-  //       if (gv.veto) {
-  //         reasons.push(
-  //           `RRP guard veto: ${gv.reason} ${summarizeGuardDetails(gv.details)}.`
-  //         );
-  //       } else {
-  //         // Accept as a candidate
-  //         candidates.push({
-  //           kind: "RRP ENTRY",
-  //           why: rrp.why || "near-miss RR rescued in friendly regime",
-  //           stop: rr.stop,
-  //           target: rr.target,
-  //           rr,
-  //           guard: gv.details,
-  //         });
-  //       }
-  //     }
-  //   }
-  // }
+  // (left commented out to keep behavior identical)
+  // if (candidates.length === 0) { ... }
 
   // ---- Final decision ----
   if (candidates.length === 0) {
@@ -799,13 +782,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   if (candidates.length > 1) {
     const a = candidates[0],
       b = candidates[1];
-      if (Math.abs(score(a) - score(b)) < 0.005) {
-        if (!!b.rr?.probation && !a.rr?.probation) {
-          // keep a
-        } else if (!!a.rr?.probation && !b.rr?.probation) {
-          candidates[0] = b;
-        }
+    if (Math.abs(score(a) - score(b)) < 0.005) {
+      if (!!b.rr?.probation && !a.rr?.probation) {
+        // keep a
+      } else if (!!a.rr?.probation && !b.rr?.probation) {
+        candidates[0] = b;
       }
+    }
   }
 
   const best = candidates[0];
@@ -827,7 +810,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: "",
     details: best?.guard || {},
   };
-  
+
   const debug = opts.debug
     ? {
         ms,
@@ -882,6 +865,12 @@ function getConfig(opts = {}) {
     redDayMaxDownPct: -0.6,
     redDayMaxDownPctExt: -1.4, // was -1.2 → help soft-pass good reclaims
 
+    // --- NEW: stricter regime pre-gate ---
+    trendAllow: ["UP", "STRONG_UP"], // only these regimes run globally
+    allowWeakUpForDipOnly: true, // allow WEAK_UP but only DIP lane will run
+    requireMaStackLite: true, // require MA20 > MA25 > MA50
+    ma20SlopeBars: 5, // MA20 must be rising over this lookback
+
     // loosen distance/overbought and streak checks
     maxATRfromMA25: 3.5,
     maxConsecUp: 12,
@@ -935,9 +924,10 @@ function getConfig(opts = {}) {
 function getMarketStructure(stock, data) {
   const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
 
-  // compute MAs into a single object to avoid free identifiers
+  // compute MAs in a single object
   const m = {
     ma5: num(stock.movingAverage5d) || sma(data, 5),
+    ma20: num(stock.movingAverage20d) || sma(data, 20), // NEW
     ma25: num(stock.movingAverage25d) || sma(data, 25),
     ma50: num(stock.movingAverage50d) || sma(data, 50),
     ma75: num(stock.movingAverage75d) || sma(data, 75),
@@ -967,6 +957,8 @@ function getMarketStructure(stock, data) {
       m.ma75 > m.ma200) ||
     (px > m.ma25 && m.ma25 > m.ma50 && m.ma50 > m.ma75 && m.ma75 > m.ma200);
 
+  const stackedBullLite = m.ma20 > m.ma25 && m.ma25 > m.ma50; // NEW
+
   const w = data.slice(-20);
   const recentHigh = Math.max(...w.map((d) => d.high ?? -Infinity));
   const recentLow = Math.min(...w.map((d) => d.low ?? Infinity));
@@ -976,21 +968,23 @@ function getMarketStructure(stock, data) {
     recentHigh,
     recentLow,
     ma5: m.ma5,
+    ma20: m.ma20, // NEW
     ma25: m.ma25,
     ma50: m.ma50,
     ma75: m.ma75,
-    ma200: m.ma200, // callers use ms.ma200
+    ma200: m.ma200,
     stackedBull,
+    stackedBullLite, // NEW
   };
 }
 
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-    // --- Regime-aware floor ---
+  // --- Regime-aware floor ---
   let minStopATR = cfg.minStopATRUp || 1.1;
   if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.0;
-  else if (ms.trend === "UP")   minStopATR = cfg.minStopATRUp || 1.1;
+  else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.1;
   else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.2;
   else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.35;
 
@@ -1006,7 +1000,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     ma25 > 0 ? Math.abs(stop - (ma25 - 0.6 * atr)) <= 0.6 * atr : false;
   const structuralStop = swingBased || ma25Based;
 
-  // Only widen stop if it's NOT structural and risk is unrealistically tiny for the regime
+  // Only widen stop if it's NOT structural and risk is unrealistically tiny
   const riskNow = entryPx - stop;
   const minStopDist = minStopATR * atr;
   if (!structuralStop && riskNow < minStopDist) {
@@ -1143,7 +1137,9 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   ) {
     return {
       veto: true,
-      reason: `Headroom too small (${headroom.toFixed(2)} ATR / ${headroomPct.toFixed(2)}%)`,
+      reason: `Headroom too small (${headroom.toFixed(
+        2
+      )} ATR / ${headroomPct.toFixed(2)}%)`,
       details,
     };
   }
@@ -1157,7 +1153,7 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
 
     const cap =
       _kind === "OXR"
-        ? (cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25)
+        ? cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25
         : cfg.maxATRfromMA25;
     const maxDist = (cap ?? 3.5) + 0.3; // tiny buffer
     if (distMA25 > maxDist) {
@@ -1183,7 +1179,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   // Allowed
   return { veto: false, reason: "", details };
 }
-
 
 /* ============================ Timeline ============================ */
 function buildSwingTimeline(entryPx, candidate, rr, ms) {
@@ -1319,6 +1314,13 @@ function deRound(v) {
   if (/(00|50|25|75)$/.test(s)) return v - 3 * (inferTickFromPrice(v) || 0.1);
   return v;
 }
+// NEW: MA20 slope must be positive over N bars
+function ma20SlopeOk(data, bars = 5) {
+  if (!Array.isArray(data) || data.length < 20 + bars) return false;
+  const now = sma(data, 20);
+  const prev = sma(data.slice(0, -bars), 20);
+  return Number.isFinite(now) && Number.isFinite(prev) && now - prev > 0;
+}
 function rsiFromData(data, length = 14) {
   const n = data.length;
   if (n < length + 1) return 50;
@@ -1363,7 +1365,6 @@ function countConsecutiveUpDays(data, k = 8) {
 }
 
 // NEW: cluster close-by resistance levels (reduces micro-lids)
-// Used transparently by findResistancesAbove.
 function clusterLevels(levels, atrVal, thMul = 0.3) {
   const th = thMul * Math.max(atrVal, 1e-9);
   const uniq = Array.from(
