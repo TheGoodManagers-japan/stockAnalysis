@@ -1,11 +1,9 @@
-// /scripts/swingTradeEntryTiming.js — MAIN orchestrator (DIP-first; stricter regime gate)
+// /scripts/swingTradeEntryTiming.js — STRICT volume-cut variant (DIP-focused)
 import { detectDipBounce } from "./dip.js";
 import { detectSPC } from "./spc.js";
 import { detectOXR } from "./oxr.js";
 import { detectBPB } from "./bpb.js";
-// import { detectRRProbation } from "./rrp.js";
 
-/* ============================ Telemetry ============================ */
 function teleInit() {
   return {
     context: {},
@@ -13,7 +11,7 @@ function teleInit() {
       priceAction: { pass: false, why: "" },
       structure: { pass: false, why: "" },
       stacked: { pass: false, why: "" },
-      regime: { pass: false, why: "" }, // NEW
+      regime: { pass: false, why: "" },
     },
     dip: { trigger: false, waitReason: "", why: "", diagnostics: {} },
     rr: {
@@ -30,23 +28,22 @@ function teleInit() {
     guard: { checked: false, veto: false, reason: "", details: {} },
     outcome: { buyNow: false, reason: "" },
     reasons: [],
-    trace: [], // copies tracer logs when debug is on
+    trace: [],
   };
 }
 
-/* ============================ Tracing Utils ============================ */
+/* ============================ Tracing ============================ */
 function mkTracer(opts = {}) {
-  const level = opts.debugLevel || "normal"; // "off" | "normal" | "verbose"
+  const level = opts.debugLevel || "normal"; // "off"|"normal"|"verbose"
   const logs = [];
+  const should = (lvl) =>
+    level !== "off" && (level === "verbose" || lvl !== "debug");
   const emit = (e) => {
     logs.push(e);
     try {
-      if (typeof opts.onTrace === "function") opts.onTrace(e);
+      opts.onTrace?.(e);
     } catch {}
   };
-  const should = (lvl) =>
-    level !== "off" && (level === "verbose" || lvl !== "debug");
-
   const T = (module, step, ok, msg, ctx = {}, lvl = "info") => {
     if (!should(lvl)) return;
     emit({
@@ -62,44 +59,21 @@ function mkTracer(opts = {}) {
   return T;
 }
 
-// Public API
 export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
   const reasons = [];
   const tele = teleInit();
   const T = mkTracer(opts);
 
-  // ---- Validate & prep ----
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
     const r = "Insufficient historical data (need ≥25 bars).";
-    const data = Array.isArray(historicalData) ? historicalData : [];
-    const pxNow =
-      num(stock.currentPrice) ||
-      num(data.at?.(-1)?.close) ||
-      num(stock.prevClosePrice) ||
-      num(stock.openPrice) ||
-      1;
-    const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
-    const out = withNo(r, {
-      reasons: [r],
-      pxNow,
-      ms: ms0,
-      provisional: prov,
-      stock,
-      data,
-    });
+    const out = withNo(r, { stock, data: historicalData || [] });
     out.telemetry = {
       ...tele,
-      context: {
-        ticker: stock?.ticker,
-        bars: Array.isArray(historicalData) ? historicalData.length : 0,
-      },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
       trace: T.logs,
     };
-    if (out.debug) out.debug.trace = T.logs;
     return out;
   }
 
@@ -108,47 +82,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   );
   const last = data[data.length - 1];
   if (
-    !isFiniteN(last.open) ||
-    !isFiniteN(last.high) ||
-    !isFiniteN(last.low) ||
-    !isFiniteN(last.close) ||
-    !isFiniteN(last.volume)
+    ![last?.open, last?.high, last?.low, last?.close, last?.volume].every(
+      Number.isFinite
+    )
   ) {
     const r = "Invalid last bar OHLCV.";
-    const pxNow =
-      num(stock.currentPrice) ||
-      num(stock.prevClosePrice) ||
-      num(stock.openPrice) ||
-      1;
-    const ms0 = getMarketStructure(stock || {}, data || []);
-    const prov = provisionalPlan(stock || {}, data || [], ms0, pxNow, cfg);
-    const out = withNo(r, {
-      reasons: [r],
-      pxNow,
-      ms: ms0,
-      provisional: prov,
-      stock,
-      data,
-    });
+    const out = withNo(r, { stock, data });
     out.telemetry = {
       ...tele,
-      context: { ticker: stock?.ticker, bars: data.length },
       outcome: { buyNow: false, reason: r },
       reasons: [r],
       trace: T.logs,
     };
-    if (out.debug) out.debug.trace = T.logs;
     return out;
   }
 
-  // Robust context
   const px = num(stock.currentPrice) || num(last.close);
   const openPx = num(stock.openPrice) || num(last.open) || px;
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
   const ms = getMarketStructure(stock, data);
-
   tele.context = {
     ticker: stock?.ticker,
     px,
@@ -158,7 +112,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     trend: ms.trend,
     ma: {
       ma5: ms.ma5,
-      ma20: ms.ma20, // NEW
+      ma20: ms.ma20,
       ma25: ms.ma25,
       ma50: ms.ma50,
       ma75: ms.ma75,
@@ -167,23 +121,18 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     perfectMode: cfg.perfectMode,
   };
 
-  // === NEW: strict regime pre-gate ===
+  // ----- STRICT Regime Pre-Gate -----
   const regimeTrendOk =
     cfg.trendAllow.includes(ms.trend) ||
-    (cfg.allowWeakUpForDipOnly && ms.trend === "WEAK_UP"); // allow WEAK_UP but DIP only
-
+    (cfg.allowWeakUpForDipOnly && ms.trend === "WEAK_UP");
   const maStackLiteOk = !cfg.requireMaStackLite
     ? true
-    : ms.ma20 > 0 &&
-      ms.ma25 > 0 &&
-      ms.ma50 > 0 &&
-      ms.ma20 > ms.ma25 &&
-      ms.ma25 > ms.ma50;
-
+    : ms.ma20 > ms.ma25 && ms.ma25 > ms.ma50;
   const ma20SlopeOkFlag = ma20SlopeOk(data, cfg.ma20SlopeBars);
+  const stackedReqOk = !cfg.requireStackedMAs || !!ms.stackedBull;
 
-  const regimeOK = regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag;
-
+  const regimeOK =
+    regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
   tele.gates.regime = {
     pass: regimeOK,
     why: regimeOK
@@ -194,85 +143,60 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           !ma20SlopeOkFlag
             ? `MA20 slope ≤ 0 over ${cfg.ma20SlopeBars} bars`
             : "",
+          !stackedReqOk ? "Stacked MAs required" : "",
         ]
           .filter(Boolean)
           .join(" | "),
   };
+  if (!regimeOK)
+    return withTelemetryNo(
+      tele,
+      T,
+      tele.gates.regime.why || "Regime pre-gate failed",
+      stock,
+      data
+    );
 
-  // If regime fails entirely, block all lanes early.
-  if (!regimeOK) {
-    const reason = tele.gates.regime.why || "Regime pre-gate failed";
-    const out = withNo(reason, { stock, data });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason },
-      reasons: [reason],
-      trace: T.logs,
-    };
-    if (out.debug) out.debug.trace = T.logs;
-    return out;
-  }
-
-  // Regime presets (aligned with upgraded dip.js defaults; do not over-tighten)
+  // Regime presets (still mild, RR floors do the heavy lift)
   const presets = {
     STRONG_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.12),
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18),
-      nearResVetoATR: Math.min(cfg.nearResVetoATR, 0.16),
+      minRRbase: Math.max(cfg.minRRbase, 1.5),
+      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.35),
     },
-    UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.12),
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.08), 1.18),
-    },
+    UP: { minRRbase: Math.max(cfg.minRRbase, 1.35) },
     WEAK_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.22),
-      bounceHotFactor: Math.min(Math.max(cfg.bounceHotFactor, 1.1), 1.18),
-      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.2),
-    },
-    DOWN: {
-      minRRbase: Math.max(cfg.minRRbase, 1.6),
-      allowSmallRed: false,
-      redDayMaxDownPct: Math.min(cfg.redDayMaxDownPct, -0.2),
+      minRRbase: Math.max(cfg.minRRbase, 1.7),
+      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.38),
     },
   };
   Object.assign(cfg, presets[ms.trend] || {});
 
-  let priceActionGate =
-    px > Math.max(openPx, prevClose) ||
-    (cfg.allowSmallRed && dayPct >= cfg.redDayMaxDownPct);
+  // Price-action gate (no soft red-day override by default)
+  const priceActionGate = px > Math.max(openPx, prevClose);
+  tele.gates.priceAction = {
+    pass: !!priceActionGate,
+    why: priceActionGate ? "" : "price ≤ max(open, prevClose)",
+  };
+  if (!priceActionGate) reasons.push("Price-action gate failed.");
 
-  const gateWhy = !priceActionGate
-    ? `px ${fmt(px)} ≤ max(open ${fmt(openPx)}, prevClose ${fmt(
-        prevClose
-      )}) & dayPct ${dayPct.toFixed(2)}% < ${cfg.redDayMaxDownPct}%`
-    : "";
-
-  tele.gates.priceAction = { pass: !!priceActionGate, why: gateWhy };
-
+  // Structure gate (keep simple)
   let structureGateOk =
     !cfg.requireUptrend ||
     ((ms.trend === "UP" ||
       ms.trend === "STRONG_UP" ||
       ms.trend === "WEAK_UP") &&
       px >= (ms.ma5 || 0) * 0.998);
-
   tele.gates.structure = {
     pass: !!structureGateOk,
     why: structureGateOk ? "" : "trend not up or price < MA5",
   };
 
-  const stackedOk =
-    !cfg.perfectMode || !cfg.requireStackedMAs || !!ms.stackedBull;
-
-  tele.gates.stacked = {
-    pass: !!stackedOk,
-    why: stackedOk ? "" : "MAs not stacked bullishly",
-  };
+  // Stacked gate shown in regimeOK already; leave as pass=true here for clarity
+  tele.gates.stacked = { pass: true, why: "" };
 
   const candidates = [];
   const checks = {};
   const U = {
-    // pass helpers to modules (no circular deps)
     num,
     avg,
     near,
@@ -281,15 +205,11 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     findResistancesAbove,
     findSupportsBelow,
     inferTickFromPrice,
-    tracer: T, // allow dip.js to breadcrumb if desired
+    tracer: T,
   };
 
-  // ======================= DIP =======================
-  if (!stackedOk) {
-    const msg = "DIP blocked (Perfect gate): MAs not stacked bullishly.";
-    reasons.push(msg);
-  } else {
-    // Always evaluate DIP first; we'll soft-pass structure if DIP@support is strong.
+  // ======================= DIP (primary lane) =======================
+  if (priceActionGate) {
     const dip = detectDipBounce(stock, data, cfg, U);
     checks.dip = dip;
     tele.dip = {
@@ -299,544 +219,170 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       diagnostics: dip.diagnostics || {},
     };
 
-    if (!dip.trigger) {
-      if (!structureGateOk)
-        reasons.push("Structure gate: trend not up or price < MA5.");
-      reasons.push(`DIP not ready: ${dip.waitReason}`);
-    } else {
-      // Soft red-day / price-action override on quality reclaim or strong bounce
-      if (!priceActionGate && cfg.allowSmallRed) {
-        const bs = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
-        const yHi = !!dip?.diagnostics?.closeAboveYHigh;
-        if (
-          (dayPct >= cfg.redDayMaxDownPctExt && (bs >= 1.0 || yHi)) ||
-          yHi ||
-          bs >= 1.05
-        ) {
-          priceActionGate = true;
-          tele.gates.priceAction = {
-            pass: true,
-            why: yHi
-              ? "soft-pass: reclaimed prior high"
-              : "soft-pass: strong bounce on small/flat red day",
-          };
-        }
-      }
+    if (dip.trigger && structureGateOk) {
+      const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
+        kind: "DIP",
+        data,
+      });
+      tele.rr = toTeleRR(rr);
 
-      if (!priceActionGate) {
-        reasons.push(`DIP blocked by gate: ${gateWhy}`);
+      if (!rr.acceptable) {
+        reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
       } else {
-        // Soft-pass structure if the DIP confirmed near MA/structure support
-        const nearSupport = !!dip?.diagnostics?.nearSupport;
-        if (!structureGateOk && nearSupport) {
-          const bs = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
-          const band =
-            bs >= 1.0 || dip?.diagnostics?.closeAboveYHigh ? 0.988 : 0.993;
-          if (px >= (ms.ma5 || 0) * band) {
-            structureGateOk = true;
-            tele.gates.structure = {
-              pass: true,
-              why: "soft-pass via DIP@support (bounce-assisted)",
-            };
-          } else {
-            tele.gates.structure = {
-              pass: false,
-              why: "trend not up or price < MA5 (even @support)",
-            };
-          }
-        }
-
-        if (!structureGateOk) {
-          reasons.push("Structure gate: trend not up or price < MA5.");
-        } else {
-          const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
-            kind: "DIP",
-            data,
-          });
-
-          // --- Bounce/Support probation lane (flow-positive, quality-gated) ---
-          if (!rr.acceptable) {
-            const bounceATR = Number(dip?.diagnostics?.bounceStrengthATR) || 0;
-            const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-            const withinBand = rr.ratio >= rr.need - 0.25;
-            const bounceGood =
-              bounceATR >= (ms.trend === "STRONG_UP" ? 0.85 : 1.0) ||
-              !!dip?.diagnostics?.closeAboveYHigh;
-            const nearSupport = !!dip?.diagnostics?.nearSupport;
-            const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-            if (
-              withinBand &&
-              nearSupport &&
-              bounceGood &&
-              rsiHere < 62 &&
-              regimeOK
-            ) {
-              rr.acceptable = true;
-              rr.probation = true;
-            }
-          }
-
-          tele.rr = {
-            checked: true,
-            acceptable: !!rr.acceptable,
-            ratio: rr.ratio,
-            need: rr.need,
-            risk: rr.risk,
-            reward: rr.reward,
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          dip.nearestRes,
+          "DIP"
+        );
+        tele.guard = {
+          checked: true,
+          veto: !!gv.veto,
+          reason: gv.reason || "",
+          details: gv.details || {},
+        };
+        if (gv.veto) reasons.push(`DIP guard veto: ${gv.reason}`);
+        else
+          candidates.push({
+            kind: "DIP ENTRY",
+            why: dip.why,
             stop: rr.stop,
             target: rr.target,
-            probation: !!rr.probation,
-          };
-
-          if (!rr.acceptable) {
-            reasons.push(
-              `DIP RR too low: ratio ${rr.ratio.toFixed(
-                2
-              )} < need ${rr.need.toFixed(2)} (risk ${fmt(
-                rr.risk
-              )}, reward ${fmt(rr.reward)}).`
-            );
-          } else {
-            const gv = guardVeto(
-              stock,
-              data,
-              px,
-              rr,
-              ms,
-              cfg,
-              dip.nearestRes,
-              "DIP"
-            );
-            tele.guard = {
-              checked: true,
-              veto: !!gv.veto,
-              reason: gv.reason || "",
-              details: gv.details || {},
-            };
-
-            if (gv.veto) {
-              reasons.push(
-                `DIP guard veto: ${gv.reason} ${summarizeGuardDetails(
-                  gv.details
-                )}.`
-              );
-            } else {
-              candidates.push({
-                kind: "DIP ENTRY",
-                why: dip.why,
-                stop: rr.stop,
-                target: rr.target,
-                rr,
-                guard: gv.details,
-              });
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // ======================= SPC (Shallow Pullback / Continuation) =======================
-  {
-    if (ms.trend === "WEAK_UP") {
-      reasons.push("SPC skipped: WEAK_UP allowed for DIP only.");
-    } else {
-      const spc = detectSPC(stock, data, cfg, U);
-      if (!spc.trigger) {
-        if (spc.waitReason?.toLowerCase().includes("no meaningful pullback")) {
-          reasons.push("no meaningful pullback");
-        } else if (spc.waitReason) {
-          reasons.push(`SPC not ready: ${spc.waitReason}`);
-        }
-      } else {
-        const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
-          kind: "SPC",
-          data,
-        });
-
-        // SPC probation: allow a small near-miss in friendly tape
-        if (!rr.acceptable) {
-          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-          const nearBand = rr.ratio >= rr.need - 0.1;
-          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-          const momentumOK =
-            !!spc.diagnostics?.closeAboveYHigh ||
-            px > Math.max(openPx, prevClose);
-          if (nearBand && regimeOK && momentumOK && rsiHere < 64) {
-            rr.acceptable = true;
-            rr.probation = true;
-          }
-        }
-
-        if (!rr.acceptable) {
-          reasons.push(
-            `SPC RR too low: ratio ${rr.ratio.toFixed(
-              2
-            )} < need ${rr.need.toFixed(2)}`
-          );
-        } else {
-          const gv = guardVeto(
-            stock,
-            data,
-            px,
             rr,
-            ms,
-            cfg,
-            spc.nearestRes,
-            "SPC"
-          );
-          if (gv.veto) {
-            reasons.push(
-              `SPC guard veto: ${gv.reason} ${summarizeGuardDetails(
-                gv.details
-              )}.`
-            );
-          } else {
-            candidates.push({
-              kind: "SPC ENTRY",
-              why: spc.why,
-              stop: rr.stop,
-              target: rr.target,
-              rr,
-              guard: gv.details,
-            });
-          }
-        }
+            guard: gv.details,
+          });
       }
-    }
-  }
-
-  // ======================= OXR (Over-recovery / Breakout) =======================
-  {
-    if (ms.trend === "WEAK_UP") {
-      reasons.push("OXR skipped: WEAK_UP allowed for DIP only.");
     } else {
-      const oxr = detectOXR(stock, data, cfg, U);
-
-      if (!oxr.trigger) {
-        const wr = (oxr.waitReason || "").toLowerCase();
-        if (wr.includes("already recovered > cap")) {
-          reasons.push("already recovered > cap");
-        } else if (wr.includes("headroom too small")) {
-          reasons.push("Headroom too small pre-entry");
-        } else if (wr.includes("no breakout")) {
-          reasons.push("OXR not ready: no valid breakout");
-        } else if (oxr.waitReason) {
-          reasons.push(`OXR not ready: ${oxr.waitReason}`);
-        }
-      } else {
-        const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
-          kind: "OXR",
-          data,
-        });
-
-        // OXR probation (tight)
-        if (!rr.acceptable) {
-          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-          const nearBand = rr.ratio >= rr.need - 0.06;
-          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-          const momentumOK = px > Math.max(openPx, prevClose);
-
-          const slice = data.slice(-20);
-          const avg20 = Math.max(
-            1,
-            slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
-              Math.max(1, slice.length)
-          );
-          const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
-          const volExp = vNow / avg20;
-          const volOK = !Number.isFinite(data.at(-1)?.volume)
-            ? true
-            : volExp >= 1.3;
-
-          const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
-          const headroomATRProb = Number.isFinite(oxr.nearestRes)
-            ? (oxr.nearestRes - px) / Math.max(atr, 1e-9)
-            : Infinity;
-          const headroomOK = headroomATRProb >= (cfg.oxrHeadroomATR ?? 1.0);
-
-          if (
-            nearBand &&
-            regimeOK &&
-            momentumOK &&
-            volOK &&
-            headroomOK &&
-            rsiHere < 64
-          ) {
-            rr.acceptable = true;
-            rr.probation = true;
-          }
-        }
-
-        // OXR floor
-        if (
-          rr.acceptable &&
-          !rr.probation &&
-          rr.ratio < (cfg.oxrMinRR ?? 1.9)
-        ) {
-          reasons.push(
-            `OXR RR below OXR floor: ${rr.ratio.toFixed(2)} < ${(
-              cfg.oxrMinRR ?? 1.9
-            ).toFixed(2)}`
-          );
-        } else if (!rr.acceptable) {
-          reasons.push(
-            `OXR RR too low: ratio ${rr.ratio.toFixed(
-              2
-            )} < need ${rr.need.toFixed(2)}`
-          );
-        } else {
-          const gv = guardVeto(
-            stock,
-            data,
-            px,
-            rr,
-            ms,
-            cfg,
-            oxr.nearestRes,
-            "OXR"
-          );
-          if (gv.veto) {
-            reasons.push(
-              `OXR guard veto: ${gv.reason} ${summarizeGuardDetails(
-                gv.details
-              )}.`
-            );
-          } else {
-            candidates.push({
-              kind: "OXR ENTRY",
-              why: oxr.why,
-              stop: rr.stop,
-              target: rr.target,
-              rr,
-              guard: gv.details,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // ======================= BPB (Breakout–Pullback–Bounce) =======================
-  {
-    if (ms.trend === "WEAK_UP") {
-      reasons.push("BPB skipped: WEAK_UP allowed for DIP only.");
-    } else {
-      const bpb = detectBPB(stock, data, cfg, U);
-
-      if (!bpb.trigger) {
-        if (bpb.waitReason?.toLowerCase().includes("already recovered > cap")) {
-          reasons.push("already recovered > cap");
-        } else if (
-          bpb.waitReason?.toLowerCase().includes("headroom too small")
-        ) {
-          reasons.push("Headroom too small pre-entry");
-        } else if (bpb.waitReason) {
-          reasons.push(`BPB not ready: ${bpb.waitReason}`);
-        }
-      } else {
-        const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
-          kind: "BPB",
-          data,
-        });
-
-        // BPB probation
-        if (!rr.acceptable) {
-          const nearBand = rr.ratio >= rr.need - 0.1;
-          const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-          const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-          const reclaimOK = px >= Math.max(openPx, prevClose);
-          if (nearBand && regimeOK && reclaimOK && rsiHere < 66) {
-            rr.acceptable = true;
-            rr.probation = true;
-          }
-        }
-
-        if (!rr.acceptable) {
-          reasons.push(
-            `BPB RR too low: ratio ${rr.ratio.toFixed(
-              2
-            )} < need ${rr.need.toFixed(2)}`
-          );
-        } else {
-          const gv = guardVeto(
-            stock,
-            data,
-            px,
-            rr,
-            ms,
-            cfg,
-            bpb.nearestRes,
-            "BPB"
-          );
-          if (gv.veto) {
-            reasons.push(
-              `BPB guard veto: ${gv.reason} ${summarizeGuardDetails(
-                gv.details
-              )}.`
-            );
-          } else {
-            candidates.push({
-              kind: "BPB ENTRY",
-              why: bpb.why,
-              stop: rr.stop,
-              target: rr.target,
-              rr,
-              guard: gv.details,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  /* ======================= RRP (Risk/Reward Probation) ======================= */
-  // (left commented out to keep behavior identical)
-  // if (candidates.length === 0) { ... }
-
-  // ---- Final decision ----
-  if (candidates.length === 0) {
-    const top = [];
-    if (!priceActionGate) top.push(gateWhy);
-    if (cfg.perfectMode && !ms.stackedBull)
-      top.push(
-        "Perfect gate: MAs not stacked (5 > 25 > 50 > 75 > 200) with price above."
+      reasons.push(
+        dip.trigger
+          ? "Structure gate failed for DIP."
+          : `DIP not ready: ${dip.waitReason}`
       );
-    if (ms.trend === "DOWN")
-      top.push("Trend is DOWN (signals allowed, but RR/guards may reject).");
+    }
+  }
 
-    const reason = buildNoReason(top, reasons);
-    tele.outcome = { buyNow: false, reason };
-    tele.reasons = reasons.slice();
-
-    const atr = Math.max(
-      num(stock.atr14),
-      (num(stock.currentPrice) || num(last.close)) * 0.005,
-      1e-6
-    );
-    const pxNow = num(stock.currentPrice) || num(last.close) || 1;
-    const supports = findSupportsBelow(data, pxNow);
-    const stopFromSwing = supports[0] != null ? supports[0] - 0.5 * atr : NaN;
-    const stopFromMA25 =
-      ms.ma25 > 0 && ms.ma25 < pxNow ? ms.ma25 - 0.6 * atr : NaN;
-
-    let provisionalStop = [stopFromSwing, stopFromMA25, pxNow - 1.2 * atr]
-      .filter(Number.isFinite)
-      .reduce((m, v) => Math.min(m, v), Infinity);
-    if (!Number.isFinite(provisionalStop)) provisionalStop = pxNow - 1.2 * atr;
-
-    const resList = findResistancesAbove(data, pxNow, stock);
-    let provisionalTarget = resList[0]
-      ? Math.max(resList[0], pxNow + 2.2 * atr)
-      : pxNow + 2.4 * atr;
-
-    const rr0 = analyzeRR(
-      pxNow,
-      provisionalStop,
-      provisionalTarget,
-      stock,
-      ms,
-      cfg,
-      { kind: "FALLBACK", data }
-    );
-
-    const debug = opts.debug
-      ? {
+  // ======================= SPC / OXR / BPB (default OFF) =======================
+  if (cfg.enableSPC && priceActionGate && ms.trend !== "WEAK_UP") {
+    const spc = detectSPC(stock, data, cfg, U);
+    if (spc.trigger && structureGateOk) {
+      const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
+        kind: "SPC",
+        data,
+      });
+      if (rr.acceptable) {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
           ms,
-          dayPct,
-          priceActionGate,
-          reasons,
-          checks,
-          px: pxNow,
-          openPx,
-          prevClose,
           cfg,
-          provisional: { atr, supports, resList, rr0 },
-          trace: T.logs,
-        }
-      : undefined;
+          spc.nearestRes,
+          "SPC"
+        );
+        if (!gv.veto)
+          candidates.push({
+            kind: "SPC ENTRY",
+            why: spc.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+      }
+    }
+  }
 
+  if (cfg.enableBPB && priceActionGate && ms.trend !== "WEAK_UP") {
+    const bpb = detectBPB(stock, data, cfg, U);
+    if (bpb.trigger && structureGateOk) {
+      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
+        kind: "BPB",
+        data,
+      });
+      if (rr.acceptable) {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          bpb.nearestRes,
+          "BPB"
+        );
+        if (!gv.veto)
+          candidates.push({
+            kind: "BPB ENTRY",
+            why: bpb.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+      }
+    }
+  }
+
+  // OXR left available for advanced users but heaviest filters apply
+  if (cfg.enableOXR && priceActionGate && ms.trend !== "WEAK_UP") {
+    const oxr = detectOXR(stock, data, cfg, U);
+    if (oxr.trigger && structureGateOk) {
+      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
+        kind: "OXR",
+        data,
+      });
+      if (rr.acceptable && rr.ratio >= (cfg.oxrMinRR ?? 2.2)) {
+        const gv = guardVeto(
+          stock,
+          data,
+          px,
+          rr,
+          ms,
+          cfg,
+          oxr.nearestRes,
+          "OXR"
+        );
+        if (!gv.veto)
+          candidates.push({
+            kind: "OXR ENTRY",
+            why: oxr.why,
+            stop: rr.stop,
+            target: rr.target,
+            rr,
+            guard: gv.details,
+          });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    const reason = buildNoReason([], reasons);
+    tele.outcome = { buyNow: false, reason };
     return {
       buyNow: false,
       reason,
-      stopLoss: toTick(deRound(round0(rr0.stop)), stock),
-      priceTarget: toTick(deRound(round0(rr0.target)), stock),
-      smartStopLoss: toTick(deRound(round0(rr0.stop)), stock),
-      smartPriceTarget: toTick(deRound(round0(rr0.target)), stock),
+      ...fallbackPlan(stock, data),
       timeline: [],
-      debug,
       telemetry: { ...tele, trace: T.logs },
     };
   }
 
-  // === Positive path: pick the best among all candidates ===
-  const score = (c) => {
-    // Prefer higher RR; slight penalty if probation
-    const base = Number(c?.rr?.ratio) || -1e9;
-    const probationPenalty = c?.rr?.probation ? 0.02 : 0; // tiny nudge
-    return base - probationPenalty;
-  };
-  candidates.sort((a, b) => score(b) - score(a));
-
-  // Optional tie-breaker: prefer non-probation if RR ties closely
-  if (candidates.length > 1) {
-    const a = candidates[0],
-      b = candidates[1];
-    if (Math.abs(score(a) - score(b)) < 0.005) {
-      if (!!b.rr?.probation && !a.rr?.probation) {
-        // keep a
-      } else if (!!a.rr?.probation && !b.rr?.probation) {
-        candidates[0] = b;
-      }
-    }
-  }
-
+  // pick highest RR (non-probation preferred; probation usually off anyway)
+  candidates.sort(
+    (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
+  );
   const best = candidates[0];
-
-  tele.rr = {
-    checked: true,
-    acceptable: !!best?.rr?.acceptable,
-    ratio: best?.rr?.ratio,
-    need: best?.rr?.need,
-    risk: best?.rr?.risk,
-    reward: best?.rr?.reward,
-    stop: best?.rr?.stop,
-    target: best?.rr?.target,
-    probation: !!best?.rr?.probation,
-  };
-  tele.guard = {
-    checked: true,
-    veto: false,
-    reason: "",
-    details: best?.guard || {},
-  };
-
-  const debug = opts.debug
-    ? {
-        ms,
-        dayPct,
-        priceActionGate,
-        chosen: best.kind,
-        rr: best.rr,
-        guard: best.guard,
-        checks,
-        px,
-        openPx,
-        prevClose,
-        cfg,
-        trace: T.logs,
-      }
-    : undefined;
-
-  const swingTimeline = buildSwingTimeline(px, best, best.rr, ms);
-
   tele.outcome = {
     buyNow: true,
     reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
       best.why
     }`,
   };
-  tele.reasons = reasons.slice();
 
   return {
     buyNow: true,
@@ -847,74 +393,78 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     priceTarget: toTick(deRound(round0(best.target)), stock),
     smartStopLoss: toTick(deRound(round0(best.stop)), stock),
     smartPriceTarget: toTick(deRound(round0(best.target)), stock),
-    timeline: swingTimeline,
-    debug,
+    timeline: buildSwingTimeline(px, best, best.rr, ms),
     telemetry: { ...tele, trace: T.logs },
   };
 }
 
-/* ============================ Config (DIP only) ============================ */
+/* ============================ Config ============================ */
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // general
+    // volume levers
+    enableSPC: false,
+    enableBPB: false,
+    enableOXR: false, // set true if you want OXR, but it’s heavily gated
+    allowProbation: false, // global probation OFF unless you re-enable
+
+    // general gates
     perfectMode: false,
-    requireStackedMAs: false,
+    requireStackedMAs: true,
+    requireMaStackLite: true,
     requireUptrend: true,
-    allowSmallRed: true,
-    redDayMaxDownPct: -0.6,
-    redDayMaxDownPctExt: -1.4, // was -1.2 → help soft-pass good reclaims
+    allowSmallRed: false,
 
-    // --- NEW: stricter regime pre-gate ---
-    trendAllow: ["UP", "STRONG_UP"], // only these regimes run globally
-    allowWeakUpForDipOnly: true, // allow WEAK_UP but only DIP lane will run
-    requireMaStackLite: true, // require MA20 > MA25 > MA50
-    ma20SlopeBars: 5, // MA20 must be rising over this lookback
+    // regime pre-gate
+    trendAllow: ["UP", "STRONG_UP"],
+    allowWeakUpForDipOnly: true,
+    ma20SlopeBars: 8,
 
-    // loosen distance/overbought and streak checks
-    maxATRfromMA25: 3.5,
-    maxConsecUp: 12,
-    hardRSI: 80,
-    softRSI: 74,
+    // RR floors (raised)
+    minRRbase: 1.35,
+    minRRstrongUp: 1.5,
+    minRRweakUp: 1.7,
 
-    // headroom veto (friendlier)
-    nearResVetoATR: 0.22,
-    nearResVetoPct: 0.5,
+    // headroom & extension (tighter)
+    nearResVetoATR: 0.35,
+    nearResVetoPct: 0.8,
 
-    // RR thresholds (easier)
-    minRRbase: 1.15,
-    minRRstrongUp: 1.3,
-    minRRweakUp: 1.4,
+    // extension vs MA25 (tighter, SPC/BPB will mostly self-filter)
+    maxATRfromMA25: 2.4,
+    maxATRfromMA25_OXR: 1.8,
 
-    // pullback / bounce (slightly easier)
-    dipMinPullbackPct: 0.7,
-    dipMinPullbackATR: 0.3,
-    dipMaxBounceAgeBars: 8,
-    dipMaSupportPctBand: 12,
+    // overbought guards
+    hardRSI: 78, // slightly lower to catch the extremes earlier
+    softRSI: 72,
+    oxrRSI: 70,
+
+    // DIP quality (tighter)
+    dipMinPullbackPct: 1.0,
+    dipMinPullbackATR: 0.6,
+    dipMaxBounceAgeBars: 5,
+    dipMaSupportPctBand: 8,
     dipStructMinTouches: 1,
-    dipStructTolATR: 1.4,
-    dipStructTolPct: 4.0,
-    dipMinBounceStrengthATR: 0.45,
+    dipStructTolATR: 1.2,
+    dipStructTolPct: 3.2,
+    dipMinBounceStrengthATR: 0.8,
 
-    // recovery & fib tolerance (orchestrator baseline)
-    dipMaxRecoveryPct: 135,
-    fibTolerancePct: 15,
+    // recovery caps (cut “already recovered” spam)
+    dipMaxRecoveryPct: 115,
+    fibTolerancePct: 12,
 
-    // volume regime (easier)
-    pullbackDryFactor: 1.5,
-    bounceHotFactor: 1.0,
+    // volume regime
+    pullbackDryFactor: 1.8,
+    bounceHotFactor: 1.12,
 
-    // min stop distance (in ATR) — regime aware
-    minStopATRStrong: 1.0,
-    minStopATRUp: 1.1,
-    minStopATRWeak: 1.2,
-    minStopATRDown: 1.35,
+    // min stop distance (slightly wider)
+    minStopATRStrong: 1.15,
+    minStopATRUp: 1.2,
+    minStopATRWeak: 1.3,
+    minStopATRDown: 1.45,
 
-    // --- OXR-specific tightening ---
-    oxrMinRR: 1.9, // higher RR floor for OXR only
-    maxATRfromMA25_OXR: 1.8, // stricter "too extended" cap vs general 3.5
-    oxrHeadroomATR: 1.0, // need ≥1.0 ATR of air to first effective shelf
-    oxrRSI: 72, // cut overheated breakouts sooner
+    // OXR-specific
+    oxrMinRR: 2.2,
+    oxrHeadroomATR: 1.2,
 
     debug,
   };
@@ -923,11 +473,9 @@ function getConfig(opts = {}) {
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
   const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
-
-  // compute MAs in a single object
   const m = {
     ma5: num(stock.movingAverage5d) || sma(data, 5),
-    ma20: num(stock.movingAverage20d) || sma(data, 20), // NEW
+    ma20: num(stock.movingAverage20d) || sma(data, 20),
     ma25: num(stock.movingAverage25d) || sma(data, 25),
     ma50: num(stock.movingAverage50d) || sma(data, 50),
     ma75: num(stock.movingAverage75d) || sma(data, 75),
@@ -948,7 +496,6 @@ function getMarketStructure(stock, data) {
       : score === 1
       ? "WEAK_UP"
       : "DOWN";
-
   const stackedBull =
     (px > m.ma5 &&
       m.ma5 > m.ma25 &&
@@ -956,8 +503,6 @@ function getMarketStructure(stock, data) {
       m.ma50 > m.ma75 &&
       m.ma75 > m.ma200) ||
     (px > m.ma25 && m.ma25 > m.ma50 && m.ma50 > m.ma75 && m.ma75 > m.ma200);
-
-  const stackedBullLite = m.ma20 > m.ma25 && m.ma25 > m.ma50; // NEW
 
   const w = data.slice(-20);
   const recentHigh = Math.max(...w.map((d) => d.high ?? -Infinity));
@@ -967,28 +512,24 @@ function getMarketStructure(stock, data) {
     trend,
     recentHigh,
     recentLow,
-    ma5: m.ma5,
-    ma20: m.ma20, // NEW
-    ma25: m.ma25,
-    ma50: m.ma50,
-    ma75: m.ma75,
-    ma200: m.ma200,
+    ...m,
     stackedBull,
-    stackedBullLite, // NEW
+    stackedBullLite: m.ma20 > m.ma25 && m.ma25 > m.ma50,
   };
 }
 
-/* ======================== Risk / Reward ======================== */
+/* ======================== RR ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  // --- Regime-aware floor ---
-  let minStopATR = cfg.minStopATRUp || 1.1;
-  if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.0;
-  else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.1;
-  else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.2;
-  else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.35;
 
-  // --- Detect structural stops (swing/MA25) and avoid inflating those ---
+  // regime-aware minimum stop
+  let minStopATR = cfg.minStopATRUp || 1.2;
+  if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.15;
+  else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.2;
+  else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.3;
+  else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.45;
+
+  // avoid unrealistically tight, non-structural stops
   const data = ctx?.data || [];
   const supports = Array.isArray(data) ? findSupportsBelow(data, entryPx) : [];
   const swingTop = Number.isFinite(supports?.[0]) ? supports[0] : NaN;
@@ -1000,27 +541,17 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     ma25 > 0 ? Math.abs(stop - (ma25 - 0.6 * atr)) <= 0.6 * atr : false;
   const structuralStop = swingBased || ma25Based;
 
-  // Only widen stop if it's NOT structural and risk is unrealistically tiny
   const riskNow = entryPx - stop;
   const minStopDist = minStopATR * atr;
-  if (!structuralStop && riskNow < minStopDist) {
-    stop = entryPx - minStopDist;
-  }
+  if (!structuralStop && riskNow < minStopDist) stop = entryPx - minStopDist;
 
-  if (cfg.perfectMode) {
-    const riskPct = ((entryPx - stop) / Math.max(1e-9, entryPx)) * 100;
-    if (riskPct > 3) stop = entryPx * (1 - 0.03);
-  }
-
-  // Respect nearby resistances for target extension
-  if (ctx && ctx.data) {
-    const resList = findResistancesAbove(ctx.data, entryPx, stock);
+  // respect nearby resistances for targets
+  if (data.length) {
+    const resList = findResistancesAbove(data, entryPx, stock);
     if (resList.length) {
       const head0 = resList[0] - entryPx;
-      if (head0 < 0.7 * atr && resList[1]) {
-        // prefer next resistance when the first lid is too close
+      if (head0 < 0.7 * atr && resList[1])
         target = Math.max(target, resList[1]);
-      }
     }
   }
 
@@ -1028,29 +559,29 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const reward = Math.max(0, target - entryPx);
   const ratio = reward / risk;
 
-  // Base RR requirement by regime…
   let need = cfg.minRRbase;
   if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp);
   if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp);
-  if (cfg.perfectMode) need = Math.max(need, 3.0);
 
-  // …and volatility-aware tweak (ATR% of price)
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
-  if (atrPct <= 1.2) need = Math.max(need - 0.1, 1.05);
-  if (atrPct >= 3.0) need = Math.max(need, 1.5);
+  if (atrPct <= 1.0) need = Math.max(need - 0.1, 1.25);
+  if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
-  const acceptable = ratio >= need;
+  let acceptable = ratio >= need;
 
-  // Probation band: let near-miss RR through in friendly regimes with cool RSI
-  const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
+  // global probation gate (OFF by default, or very tight if enabled)
+  const allowProb = !!cfg.allowProbation;
+  const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
   const probation =
+    allowProb &&
     !acceptable &&
-    ratio >= need - 0.05 &&
+    ratio >= need - 0.02 &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
-    rsiHere < 62;
+    rsiHere < 58;
+  acceptable = acceptable || probation;
 
   return {
-    acceptable: acceptable || probation,
+    acceptable,
     ratio,
     stop,
     target,
@@ -1063,124 +594,85 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 }
 
 /* ============================ Guards ============================ */
-/**
- * Lane-agnostic guardrail checks that can veto a candidate.
- * - Kind-aware MA25 distance cap (OXR stricter)
- * - RSI hard cap, plus OXR-specific softer ceiling
- * - Headroom-to-resistance veto (with friendly-tape relaxations)
- * - Consecutive up-days streak cap
- */
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   const details = {};
-
-  // Baseline volatility floor for ratios/distances
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
 
-  // --- RSI guards ---
+  // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   details.rsi = rsi;
-
-  // OXR gets a stricter ceiling even before hard cap
   if (_kind === "OXR" && rsi >= (cfg.oxrRSI ?? cfg.softRSI)) {
-    details.oxrRSI = cfg.oxrRSI ?? cfg.softRSI;
     return {
       veto: true,
-      reason: `RSI ${rsi.toFixed(1)} ≥ ${details.oxrRSI}`,
+      reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.oxrRSI ?? cfg.softRSI}`,
       details,
     };
   }
-  // Global hard cap
-  if (rsi >= cfg.hardRSI) {
+  if (rsi >= cfg.hardRSI)
     return {
       veto: true,
       reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.hardRSI}`,
       details,
     };
-  }
 
-  // --- Headroom to resistance (effective lid) ---
+  // headroom
   const resList = findResistancesAbove(data, px, stock);
   let effRes = Number.isFinite(nearestRes) ? nearestRes : resList[0];
-
-  let headroom = null;
-  let headroomPct = null;
+  if (isFiniteN(effRes) && (effRes - px) / atr < 0.6 && resList[1])
+    effRes = resList[1];
 
   if (isFiniteN(effRes)) {
-    // If first lid is too close, prefer the next shelf (mirrors target logic)
-    if ((effRes - px) / atr < 0.6 && resList[1]) {
-      effRes = resList[1];
-    }
-    headroom = (effRes - px) / atr;
-    headroomPct = ((effRes - px) / Math.max(px, 1e-9)) * 100;
+    const headroomATR = (effRes - px) / atr;
+    const headroomPct = ((effRes - px) / Math.max(px, 1e-9)) * 100;
     details.nearestRes = effRes;
-    details.headroomATR = headroom;
+    details.headroomATR = headroomATR;
     details.headroomPct = headroomPct;
-  } else {
-    details.nearestRes = null;
-  }
 
-  // Friendlier threshold in up/strong tapes, or when RR is already solid/near-miss
-  let nearResMin = cfg.nearResVetoATR;
-  if (
-    (ms.trend !== "DOWN" && rsi < 60) ||
-    rr.ratio >= rr.need + 0.05 ||
-    rr.ratio >= rr.need - 0.02
-  ) {
-    nearResMin = Math.min(nearResMin, 0.18);
-  }
-
-  // Only headroom-veto if RR hasn't already cleared the requirement
-  if (
-    isFiniteN(headroom) &&
-    (headroom < nearResMin || headroomPct < cfg.nearResVetoPct) &&
-    rr.ratio < rr.need
-  ) {
-    return {
-      veto: true,
-      reason: `Headroom too small (${headroom.toFixed(
-        2
-      )} ATR / ${headroomPct.toFixed(2)}%)`,
-      details,
-    };
-  }
-
-  // --- Distance above MA25 (kind-aware cap; OXR stricter) ---
-  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
-  if (ma25 > 0) {
-    const distMA25 = (px - ma25) / atr;
-    details.ma25 = ma25;
-    details.distFromMA25_ATR = distMA25;
-
-    const cap =
-      _kind === "OXR"
-        ? cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25
-        : cfg.maxATRfromMA25;
-    const maxDist = (cap ?? 3.5) + 0.3; // tiny buffer
-    if (distMA25 > maxDist) {
+    // always enforce headroom when RR hasn't already cleared
+    if (
+      (headroomATR < (cfg.nearResVetoATR ?? 0.35) ||
+        headroomPct < (cfg.nearResVetoPct ?? 0.8)) &&
+      rr.ratio < rr.need
+    ) {
       return {
         veto: true,
-        reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR > ${maxDist})`,
+        reason: `Headroom too small (${headroomATR.toFixed(
+          2
+        )} ATR / ${headroomPct.toFixed(2)}%)`,
         details,
       };
     }
   }
 
-  // --- Streak guard ---
-  const ups = countConsecutiveUpDays(data);
-  details.consecUp = ups;
-  if (ups > cfg.maxConsecUp) {
-    return {
-      veto: true,
-      reason: `Consecutive up days ${ups} > ${cfg.maxConsecUp}`,
-      details,
-    };
+  // distance above MA25
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
+  if (ma25 > 0) {
+    const distMA25 = (px - ma25) / atr;
+    details.ma25 = ma25;
+    details.distFromMA25_ATR = distMA25;
+    const cap =
+      _kind === "OXR"
+        ? cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25
+        : cfg.maxATRfromMA25;
+    if (distMA25 > (cap ?? 2.4) + 0.2) {
+      return {
+        veto: true,
+        reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR)`,
+        details,
+      };
+    }
   }
 
-  // Allowed
+  // streak guard
+  const ups = countConsecutiveUpDays(data);
+  details.consecUp = ups;
+  if (ups > 8)
+    return { veto: true, reason: `Consecutive up days ${ups} > 8`, details };
+
   return { veto: false, reason: "", details };
 }
 
-/* ============================ Timeline ============================ */
+/* ============================ Helpers & Fallback ============================ */
 function buildSwingTimeline(entryPx, candidate, rr, ms) {
   const steps = [];
   const atr = Number(rr?.atr) || 0;
@@ -1188,17 +680,6 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   const finalTarget = Number(candidate.target);
   const risk = Math.max(0.01, entryPx - initialStop);
   const kind = candidate.kind || "ENTRY";
-
-  if (!(risk > 0)) {
-    steps.push({
-      when: "T+0",
-      condition: "On fill",
-      stopLoss: initialStop,
-      priceTarget: finalTarget,
-      note: `${kind}: invalid R fallback`,
-    });
-    return steps;
-  }
 
   steps.push({
     when: "T+0",
@@ -1215,18 +696,11 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
     note: "Move stop to breakeven",
   });
   steps.push({
-    when: "+1.2R",
-    condition: `price ≥ ${entryPx + 1.2 * risk}`,
-    stopLoss: entryPx + 0.3 * risk,
-    priceTarget: finalTarget,
-    note: "Partial lock before +1.5R",
-  });
-  steps.push({
     when: "+1.5R",
     condition: `price ≥ ${entryPx + 1.5 * risk}`,
-    stopLoss: entryPx + 0.5 * risk,
+    stopLoss: entryPx + 0.6 * risk,
     priceTarget: finalTarget,
-    note: "Stop = entry + 0.5R",
+    note: "Lock 0.6R",
   });
   steps.push({
     when: "+2R",
@@ -1237,42 +711,48 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   });
   steps.push({
     when: "TRAIL",
-    condition: "After +2R (or strong momentum)",
-    stopLossRule: "max( last swing low - 0.5*ATR, MA25 - 0.6*ATR )",
+    condition: "After +2R",
+    stopLossRule: "max( swing low - 0.5*ATR, MA25 - 0.6*ATR )",
     stopLossHint: Math.max(
       ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop,
       initialStop
     ),
     priceTarget: finalTarget,
-    note: "Trail via structure/MA; keep final target unless justified",
+    note: "Trail by structure/MA",
   });
   return steps;
 }
 
-/* =========================== Provisional plan =========================== */
+function fallbackPlan(stock, data) {
+  const cfg = getConfig({});
+  const ms = getMarketStructure(stock, data);
+  const pxNow = num(stock.currentPrice) || num(data.at?.(-1)?.close) || 1;
+  const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
+  return {
+    stopLoss: deRound(toTick(round0(prov.stop), stock)),
+    priceTarget: deRound(toTick(round0(prov.target), stock)),
+    smartStopLoss: deRound(toTick(round0(prov.stop), stock)),
+    smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
+  };
+}
+
 function provisionalPlan(stock, data, ms, pxNow, cfg) {
   const px = num(pxNow) || 1;
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
-
-  const supports = Array.isArray(data) ? findSupportsBelow(data, px) : [];
+  const supports = findSupportsBelow(data, px);
   const stopFromSwing = Number.isFinite(supports?.[0])
     ? supports[0] - 0.5 * atr
     : NaN;
   const stopFromMA25 =
     ms && ms.ma25 > 0 && ms.ma25 < px ? ms.ma25 - 0.6 * atr : NaN;
-
   let stop = [stopFromSwing, stopFromMA25, px - 1.2 * atr]
     .filter(Number.isFinite)
     .reduce((m, v) => Math.min(m, v), Infinity);
   if (!Number.isFinite(stop)) stop = px - 1.2 * atr;
-
-  const resList = Array.isArray(data)
-    ? findResistancesAbove(data, px, stock)
-    : [];
+  const resList = findResistancesAbove(data, px, stock);
   let target = Number.isFinite(resList?.[0])
     ? Math.max(resList[0], px + 2.2 * atr)
     : px + 2.4 * atr;
-
   const rr = analyzeRR(
     px,
     stop,
@@ -1285,12 +765,11 @@ function provisionalPlan(stock, data, ms, pxNow, cfg) {
   return { stop: rr.stop, target: rr.target, rr };
 }
 
-/* =========================== Utilities =========================== */
+/* =========================== Utils =========================== */
 function sma(data, n, field = "close") {
   if (!Array.isArray(data) || data.length < n) return 0;
   let s = 0;
-  for (let i = data.length - n; i < data.length; i++)
-    s += Number(data[i][field]) || 0;
+  for (let i = data.length - n; i < data.length; i++) s += +data[i][field] || 0;
   return s / n;
 }
 function round0(v) {
@@ -1314,28 +793,27 @@ function deRound(v) {
   if (/(00|50|25|75)$/.test(s)) return v - 3 * (inferTickFromPrice(v) || 0.1);
   return v;
 }
-// NEW: MA20 slope must be positive over N bars
 function ma20SlopeOk(data, bars = 5) {
   if (!Array.isArray(data) || data.length < 20 + bars) return false;
   const now = sma(data, 20);
   const prev = sma(data.slice(0, -bars), 20);
   return Number.isFinite(now) && Number.isFinite(prev) && now - prev > 0;
 }
-function rsiFromData(data, length = 14) {
+function rsiFromData(data, len = 14) {
   const n = data.length;
-  if (n < length + 1) return 50;
+  if (n < len + 1) return 50;
   let gains = 0,
     losses = 0;
-  for (let i = n - length; i < n; i++) {
-    const prev = Number(data[i - 1].close) || 0;
-    const curr = Number(data[i].close) || 0;
-    const diff = curr - prev;
-    if (diff > 0) gains += diff;
-    else losses -= diff;
+  for (let i = n - len; i < n; i++) {
+    const prev = +data[i - 1].close || 0;
+    const curr = +data[i].close || 0;
+    const d = curr - prev;
+    if (d > 0) gains += d;
+    else losses -= d;
   }
-  const avgGain = gains / length;
-  const avgLoss = losses / length || 1e-9;
-  const rs = avgGain / avgLoss;
+  const ag = gains / len,
+    al = losses / len || 1e-9;
+  const rs = ag / al;
   return 100 - 100 / (1 + rs);
 }
 function num(v) {
@@ -1345,26 +823,23 @@ function isFiniteN(v) {
   return Number.isFinite(v);
 }
 function avg(arr) {
-  return arr.length
-    ? arr.reduce((a, b) => a + (Number(b) || 0), 0) / arr.length
-    : 0;
+  return arr.length ? arr.reduce((a, b) => a + (+b || 0), 0) / arr.length : 0;
 }
 function fmt(x) {
-  return Number.isFinite(x) ? x.toFixed(2) : String(x);
+  return Number.isFinite(x) ? (+x).toFixed(2) : String(x);
 }
 function near(a, b, eps = 1e-8) {
-  return Math.abs((Number(a) || 0) - (Number(b) || 0)) <= eps;
+  return Math.abs((+a || 0) - (+b || 0)) <= eps;
 }
 function countConsecutiveUpDays(data, k = 8) {
   let c = 0;
   for (let i = data.length - 1; i > 0 && c < k; i--) {
-    if (num(data[i].close) > num(data[i - 1].close)) c++;
+    if (+data[i].close > +data[i - 1].close) c++;
     else break;
   }
   return c;
 }
 
-// NEW: cluster close-by resistance levels (reduces micro-lids)
 function clusterLevels(levels, atrVal, thMul = 0.3) {
   const th = thMul * Math.max(atrVal, 1e-9);
   const uniq = Array.from(
@@ -1383,7 +858,6 @@ function clusterLevels(levels, atrVal, thMul = 0.3) {
   if (bucket.length) out.push(avg(bucket));
   return out;
 }
-
 function findResistancesAbove(data, px, stock) {
   const ups = [];
   const win = data.slice(-60);
@@ -1394,12 +868,9 @@ function findResistancesAbove(data, px, stock) {
   }
   const yHigh = num(stock.fiftyTwoWeekHigh);
   if (yHigh > px) ups.push(yHigh);
-
-  // CLUSTER nearby levels using ATR to avoid overcounting tiny shelves
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
   return clusterLevels(ups, atr, 0.3);
 }
-
 function findSupportsBelow(data, px) {
   const downs = [];
   const win = data.slice(-60);
@@ -1413,7 +884,6 @@ function findSupportsBelow(data, px) {
   );
   return uniq;
 }
-
 function buildNoReason(top, list) {
   const head = top.filter(Boolean).join(" | ");
   const uniq = Array.from(new Set(list.filter(Boolean)));
@@ -1423,42 +893,41 @@ function buildNoReason(top, list) {
     .join("\n");
   return [head, bullet].filter(Boolean).join("\n");
 }
-function summarizeGuardDetails(d) {
-  if (!d || typeof d !== "object") return "";
-  const bits = [];
-  if (typeof d.rsi === "number") bits.push(`RSI=${d.rsi.toFixed(1)}`);
-  if (typeof d.headroomATR === "number")
-    bits.push(`headroom=${d.headroomATR.toFixed(2)} ATR`);
-  if (typeof d.headroomPct === "number")
-    bits.push(`headroomPct=${d.headroomPct.toFixed(2)}%`);
-  if (typeof d.distFromMA25_ATR === "number")
-    bits.push(`distMA25=${d.distFromMA25_ATR.toFixed(2)} ATR`);
-  if (typeof d.consecUp === "number") bits.push(`consecUp=${d.consecUp}`);
-  return bits.length ? `(${bits.join(", ")})` : "";
-}
 function withNo(reason, ctx = {}) {
   const stock = ctx.stock || {};
   const data = Array.isArray(ctx.data) ? ctx.data : [];
-  const cfg = getConfig({});
-  const ms = getMarketStructure(stock, data);
-  const pxNow =
-    num(stock.currentPrice) ||
-    num(data.at?.(-1)?.close) ||
-    num(stock.prevClosePrice) ||
-    num(stock.openPrice) ||
-    1;
-  const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
-  const debug = ctx;
-  return {
+  const out = {
     buyNow: false,
     reason,
-    stopLoss: deRound(toTick(round0(prov.stop), stock)),
-    priceTarget: deRound(toTick(round0(prov.target), stock)),
-    smartStopLoss: deRound(toTick(round0(prov.stop), stock)),
-    smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
+    ...fallbackPlan(stock, data),
     timeline: [],
-    debug,
+    debug: ctx,
+  };
+  out.telemetry = undefined;
+  return out;
+}
+function withTelemetryNo(tele, T, reason, stock, data) {
+  const out = withNo(reason, { stock, data });
+  out.telemetry = {
+    ...tele,
+    outcome: { buyNow: false, reason },
+    reasons: [reason],
+    trace: T.logs,
+  };
+  return out;
+}
+function toTeleRR(rr) {
+  return {
+    checked: true,
+    acceptable: !!rr.acceptable,
+    ratio: rr.ratio,
+    need: rr.need,
+    risk: rr.risk,
+    reward: rr.reward,
+    stop: rr.stop,
+    target: rr.target,
+    probation: !!rr.probation,
   };
 }
 
-export { getConfig }; // optional export if you want configs elsewhere
+export { getConfig };
