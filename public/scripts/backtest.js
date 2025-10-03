@@ -227,7 +227,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? maybeOpts || {}
     : tickersOrOpts || {};
 
-  const INCLUDE_BY_TICKER = !!opts.includeByTicker;
+  const INCLUDE_BY_TICKER = false;
   const SIM_REJECTED = opts.simulateRejectedBuys ?? true;
   const TOP_K = Number.isFinite(opts.topRejectedReasons)
     ? Math.max(1, opts.topRejectedReasons)
