@@ -248,88 +248,87 @@ export const EXIT_PROFILES = [
       return true;
     },
   },
-
   {
-    id: "v3_core_hybrid",
-    label: "V3 core: +1R→BE, +2R→structure trail, timeguard, bearish-engulf tighten",
+    id: "go_to_blend",
+    label:
+      "Go-to: stop=entry-1.3*ATR → no-progress(5)→BE → +2R structure trail (floor CH2.5); target jumps if lid<0.7*ATR",
     compute: function ({ entry, stock, sig, hist }) {
-      // use your analyzer’s smart stop/target when available
+      var atr = ensureATR(entry, stock);
+      var stop = entry - 1.3 * atr;
+
+      // Base target: analyzer’s target if available, else 3R fallback
+      var tSig = Number(sig && (sig.smartPriceTarget ?? sig.priceTarget));
       var s0 = Number(sig && (sig.smartStopLoss ?? sig.stopLoss));
-      var t0 = Number(sig && (sig.smartPriceTarget ?? sig.priceTarget));
-      if (!isFinite(t0)) t0 = entry * 10; // effectively trail-only when no target
-      return { stop: s0, target: t0 };
+      if (!isFinite(s0)) s0 = stop;
+      var risk = Math.max(0.01, entry - s0);
+      var target = isFinite(tSig) ? tSig : entry + 3 * risk;
+
+      // Lids: nearest (last 20 highs) and 52w high
+      var r20 = -Infinity,
+        rY = -Infinity;
+      var tail20 = hist.slice(-20);
+      for (var i = 0; i < tail20.length; i++)
+        r20 = Math.max(r20, (tail20[i] && Number(tail20[i].high)) || 0);
+      rY = fiftyTwoWeekHighFromHist(hist);
+
+      var lids = [];
+      if (isFinite(r20)) lids.push(r20);
+      if (isFinite(rY)) lids.push(rY);
+      lids.sort(function (a, b) {
+        return a - b;
+      });
+
+      // Headroom rule: if first lid is too close (<0.7*ATR above entry), jump to next;
+      // otherwise prefer the nearest lid (but don’t cap below a reasonable R target).
+      if (lids.length) {
+        var first = lids[0];
+        var next = lids.length > 1 ? lids[1] : NaN;
+        if (isFinite(first) && first - entry < 0.7 * atr && isFinite(next)) {
+          target = Math.max(target, next);
+        } else {
+          // keep nearest lid but don’t let it be worse than ~2.6R if sig target was small
+          target = Math.max(target, first, entry + 2.6 * risk);
+        }
+      }
+
+      return { stop: stop, target: target };
     },
     advance: function ({ bar, state, hist, stock }) {
-      var num = (v) => (isFinite(v) ? Number(v) : 0);
-  
-      // helpers already defined above in this file:
-      // - structuralTrail(hist, stock, padATR, padMA)
-      // - maSMA(hist, nBars, field)
-      // - ensureATR(pxOrEntry, stock)
-  
-      var entry = num(state.entry);
-      var stopInit = num(state.stopInit); // original stop (from compute)
-      var risk = Math.max(0.01, entry - stopInit);
-      var bh = num(bar && bar.high);
-      var bc = num(bar && bar.close);
-      var bo = num(bar && bar.open);
-  
-      var atr = ensureATR(entry, stock);
-      var ma25 = maSMA(hist, 25, "close") || 0;
-  
-      // ---- 1) +1R → move stop to breakeven (use high to detect touch)
-      if (bh >= entry + 1.0 * risk) {
-        state.stop = Math.max(state.stop, entry);
-      }
-  
-      // ---- 2) +2R → start/continue structural trail (entry+1.2R floor)
-      if (bh >= entry + 2.0 * risk) {
-        var st = structuralTrail(hist, stock, 0.5, 0.6);
-        state.stop = Math.max(state.stop, entry + 1.2 * risk, st);
-      }
-  
-      // ---- 3) Time guard: if N=5 bars since entry and not even +0.5R touched → creep to BE
-      var N = 5;
-      if (hist.length - 1 - state.entryIdx >= N) {
+      // N=5 no-progress → BE
+      var risk = Math.max(0.01, state.entry - state.stopInit);
+      var age = hist.length - 1 - state.entryIdx;
+
+      if (age >= 5) {
         var touched = false;
         for (var i = state.entryIdx + 1; i < hist.length; i++) {
-          var hi = num((hist[i] || {}).high);
-          if (hi >= entry + 0.5 * risk) { touched = true; break; }
+          var hi = Number((hist[i] || {}).high) || 0;
+          if (hi >= state.entry + 0.5 * risk) {
+            touched = true;
+            break;
+          }
         }
-        if (!touched) state.stop = Math.max(state.stop, entry);
+        if (!touched) state.stop = Math.max(state.stop, state.entry);
       }
-  
-      // ---- 4) Bearish engulf near resistance (52w high within ~2%) → tighten to structure
-      var last = hist.at(-1) || {};
-      var prev = hist.at(-2) || {};
-      var bearishEngulf =
-        num(last.close) < num(last.open) &&
-        num(prev.close) > num(prev.open) &&
-        num(last.close) < num(prev.open) &&
-        num(last.open) > num(prev.close);
-  
-      var near52w = false;
-      var lid = Number(stock && stock.fiftyTwoWeekHigh);
-      if (isFinite(lid) && lid > 0) {
-        var px = num(last.close || last.high || last.open || entry);
-        near52w = Math.abs(px - lid) / lid <= 0.02;
+
+      // If at any time we’ve reached +2R, start trailing
+      var bh = Number(bar && bar.high) || 0;
+      var maxHi = bh;
+      for (var j = state.entryIdx; j < hist.length; j++) {
+        var hj = Number((hist[j] || {}).high) || 0;
+        if (hj > maxHi) maxHi = hj;
       }
-  
-      if (near52w && bearishEngulf) {
-        var st2 = structuralTrail(hist, stock, 0.5, 0.6);
-        state.stop = Math.max(state.stop, st2);
+      var progressR = (maxHi - state.entry) / risk;
+      if (!state._trailStarted && progressR >= 2) state._trailStarted = true;
+
+      if (state._trailStarted) {
+        // Structure trail (tighter pad on ATR); and a floor = Chandelier(2.5)
+        var stpStruct = structuralTrail(hist, stock, 1.2, 0.6);
+        var stpCh = chandelier(state.entryIdx, hist, stock, 2.5);
+        state.stop = Math.max(state.stop, stpStruct, stpCh);
       }
-  
-      // ---- 5) Default tighten if slipped below MA25 (no full breakdown logic here; that’s handled by stop/target)
-      if (ma25 > 0 && bc < ma25) {
-        var st3 = structuralTrail(hist, stock, 0.5, 0.6);
-        state.stop = Math.max(state.stop, st3);
-      }
-  
-      return true; // continuing strategy (no explicit time exit)
+      return true;
     },
-  }
-,  
+  },
 
   /* ===== Chandelier ATR trails ===== */
   {
