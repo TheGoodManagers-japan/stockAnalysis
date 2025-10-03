@@ -243,6 +243,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     : tickersOrOpts || {};
 
   const INCLUDE_BY_TICKER = false;
+  const INCLUDE_PROFILE_SAMPLES = !!opts.includeProfileSamples; // default off
   const SIM_REJECTED = opts.simulateRejectedBuys ?? true;
   const TOP_K = Number.isFinite(opts.topRejectedReasons)
     ? Math.max(1, opts.topRejectedReasons)
@@ -399,10 +400,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           // dynamic rule hook
           if (typeof p.advance === "function") {
             p.advance({ bar: today, state: st, hist, stock });
-             
+
             // ensure any updated levels remain on the tick grid
-            if (Number.isFinite(st.stop))   st.stop   = toTick(st.stop, stock);      
-                  if (Number.isFinite(st.target)) st.target = toTick(st.target, stock);
+            if (Number.isFinite(st.stop)) st.stop = toTick(st.stop, stock);
+            if (Number.isFinite(st.target))
+              st.target = toTick(st.target, stock);
           }
 
           let exit = null;
@@ -534,17 +536,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 continue;
               }
 
-                           // snap execution levels to tick grid (no integer rounding)
-              const qStop   = toTick(stop, stock);
+              // snap execution levels to tick grid (no integer rounding)
+              const qStop = toTick(stop, stock);
               const qTarget = toTick(target, stock);
-
 
               openByProfile[p.id] = {
                 entryIdx: i,
                 entry,
-                                stop: qStop,
-                                stopInit: qStop,
-                                target: qTarget,
+                stop: qStop,
+                stopInit: qStop,
+                target: qTarget,
                 ST,
                 LT,
                 // record playbook kind for trade labeling
@@ -826,7 +827,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         stop: list.filter((t) => t.exitType === "STOP").length,
         time: list.filter((t) => t.exitType === "TIME").length,
       },
-      samples: list.slice(0, 8),
+      ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
   function bestProfileKey(get) {
@@ -902,6 +903,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       simulateRejectedBuys: SIM_REJECTED,
       topRejectedReasons: TOP_K,
       examplesCap: EX_CAP,
+      includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
     },
     totalTrades,
     winRate,
