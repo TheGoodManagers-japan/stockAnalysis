@@ -1,11 +1,11 @@
-// /scripts/backtest.js — swing-period backtest (browser) — MULTI playbooks
-// Runs ALL exit profiles in parallel per signal. Enforces hard time-based exits.
+// /scripts/backtest.js — swing-period backtest (browser) — GO-TO BLEND ONLY
+// Runs a single exit profile: "go_to_blend". Enforces hard time-based exits.
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore } from "./main.js";
 import { allTickers } from "./tickers.js";
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
-import { EXIT_PROFILES } from "./exit_profiles.js"; // external profiles
+import { EXIT_PROFILES } from "./exit_profiles.js"; // we only extract go_to_blend if present
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
@@ -15,18 +15,18 @@ const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
 /* ---------------- tick helpers (match swingTradeEntryTiming ladder) ---------------- */
 function inferTickFromPrice(p) {
-    const x = Number(p) || 0;
-    if (x >= 5000) return 1;
-    if (x >= 1000) return 0.5;
-    if (x >= 100) return 0.1;
-    if (x >= 10) return 0.05;
-    return 0.01;
-  }
-  function toTick(v, stock) {
-    const tick = Number(stock?.tickSize) || inferTickFromPrice(v) || 0.1;
-    const x = Number(v) || 0;
-    return Math.round(x / tick) * tick;
-  }
+  const x = Number(p) || 0;
+  if (x >= 5000) return 1;
+  if (x >= 1000) return 0.5;
+  if (x >= 100) return 0.1;
+  if (x >= 10) return 0.05;
+  return 0.01;
+}
+function toTick(v, stock) {
+  const tick = Number(stock?.tickSize) || inferTickFromPrice(v) || 0.1;
+  const x = Number(v) || 0;
+  return Math.round(x / tick) * tick;
+}
 
 /* ---------------- data ---------------- */
 async function fetchHistory(ticker, fromISO, toISO) {
@@ -58,17 +58,10 @@ async function fetchHistory(ticker, fromISO, toISO) {
 }
 
 /* ---------------- ST/LT gating policy (1..7 where 1=strong bull) ---------------- */
-const ALLOWED_SENTIMENTS = new Set([
-  "LT6-ST4",
-  "LT7-ST4",
-  "LT7-ST1",
-  "LT1-ST3",
-]);
-
 function shouldAllowDIP(ST, LT) {
-  var st = Number.isFinite(ST) ? ST : 4;
-  var lt = Number.isFinite(LT) ? LT : 4;
-  return ALLOWED_SENTIMENTS.has("LT" + lt + "-ST" + st);
+  const st = Number.isFinite(ST) ? ST : 4;
+  const lt = Number.isFinite(LT) ? LT : 4;
+  return lt <= 7 && st >= 1 && st <= 7;
 }
 
 /* ---------------- small helpers ---------------- */
@@ -85,7 +78,6 @@ function bucketize(x, edges = [1.2, 1.4, 1.6, 2.0, 3.0, 5.0]) {
 }
 function extractGuardReason(s) {
   if (!s) return "";
-  // Generalize beyond "DIP guard veto:"
   const m = String(s).match(
     /^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:\s*([^()]+?)(?:\s*\(|$)/i
   );
@@ -173,10 +165,7 @@ function cfFinalizeAgg(agg) {
 function normalizeRejectedReason(reasonRaw) {
   if (!reasonRaw) return "unspecified";
   let r = String(reasonRaw).trim();
-
-  // normalize "[PLAYBOOK] not ready:"
   r = r.replace(/^(DIP|SPC|OXR|BPB|RRP)\s+not ready:\s*/i, "");
-
   if (/^bounce weak/i.test(r)) return "bounce weak / no quality pattern";
   if (/^no meaningful pullback/i.test(r)) return "no meaningful pullback";
   if (/^already recovered/i.test(r)) return "already recovered > cap";
@@ -195,8 +184,6 @@ function normalizeRejectedReason(reasonRaw) {
     return "guard veto";
   if (/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i.test(reasonRaw))
     return "RR too low";
-
-  // Clean parentheticals like (RSI=..., headroom=...)
   r = r.replace(/\([^)]*\)/g, "");
   r = r.replace(/\s{2,}/g, " ").trim();
   return r.toLowerCase();
@@ -230,8 +217,130 @@ function sentiFinalize(agg) {
   };
 }
 
+/* ===================== Activate ONLY the Go-to blend profile ===================== */
+// We’ll pull it from EXIT_PROFILES if present; else we define a fallback here.
+
+function num(v) {
+  const x = Number(v);
+  return isNaN(x) ? 0 : x;
+}
+function ensureATR(pxOrEntry, stock) {
+  const atr14 = stock && stock.atr14 != null ? Number(stock.atr14) : 0;
+  const px = num(pxOrEntry);
+  return Math.max(isNaN(atr14) ? 0 : atr14, px * 0.005, 1e-6);
+}
+function highestCloseSince(hist, fromIdx) {
+  let hi = -Infinity;
+  for (let i = fromIdx; i < hist.length; i++)
+    hi = Math.max(hi, num(hist[i]?.close));
+  return hi;
+}
+function maSMA(hist, n, field = "close") {
+  if (!Array.isArray(hist) || hist.length < n) return NaN;
+  let s = 0;
+  for (let i = hist.length - n; i < hist.length; i++)
+    s += num(hist[i]?.[field]);
+  return s / n;
+}
+function lastSwingLow(hist, lookback = 10) {
+  if (!Array.isArray(hist)) return NaN;
+  const w = hist.slice(-lookback);
+  let low = Infinity;
+  for (let i = 2; i < w.length - 2; i++) {
+    const L = num(w[i]?.low),
+      Lp = num(w[i - 1]?.low),
+      Ln = num(w[i + 1]?.low);
+    if (L < Lp && L < Ln) low = Math.min(low, L);
+  }
+  return Number.isFinite(low) ? low : NaN;
+}
+function chandelier(entryIdx, hist, stock, kATR) {
+  const hiClose = highestCloseSince(hist, entryIdx);
+  const atr = ensureATR(hiClose, stock);
+  return hiClose - kATR * atr;
+}
+function structuralTrail(hist, stock, padATR = 0.5, padMA = 0.6) {
+  const last = hist.at(-1) || {};
+  const px = num(last.close);
+  const atr = ensureATR(px, stock);
+  const sl = lastSwingLow(hist, 10);
+  const ma25 = maSMA(hist, 25, "close");
+  const cands = [];
+  if (Number.isFinite(sl)) cands.push(sl - padATR * atr);
+  if (Number.isFinite(ma25) && ma25 < px) cands.push(ma25 - padMA * atr);
+  return cands.length ? Math.max(...cands) : px - 1.2 * atr;
+}
+
+// Try to locate in the imported pack
+const ONLY_ID = "go_to_blend";
+const _GOTO = (EXIT_PROFILES || []).find((p) => p.id === ONLY_ID);
+
+// Fallback definition if missing
+const FALLBACK_GOTO = {
+  id: ONLY_ID,
+  label:
+    "Go-to: stop=entry-1.3*ATR → no-progress(5)→BE → +2R structure trail (floor CH2.5); target jumps if lid<0.7*ATR",
+  compute: ({ entry, stock, sig, hist }) => {
+    const atr = ensureATR(entry, stock);
+    const stop = entry - 1.3 * atr;
+
+    // default target from analyzer if present
+    let tgt = Number(sig && (sig.smartPriceTarget ?? sig.priceTarget));
+    if (!Number.isFinite(tgt)) tgt = entry + 2.4 * atr;
+
+    // nearest lid jump: if first lid <0.7*ATR, use next
+    const highs = hist.slice(-60).map((c) => num(c?.high));
+    let r1 = -Infinity;
+    for (let i = Math.max(0, highs.length - 20); i < highs.length; i++)
+      r1 = Math.max(r1, highs[i]);
+    const rY = hist.length
+      ? Math.max(...hist.slice(-252).map((c) => num(c?.high)))
+      : -Infinity;
+
+    const lids = [r1, rY]
+      .filter((x) => Number.isFinite(x))
+      .sort((a, b) => a - b);
+    if (lids.length) {
+      const first = lids[0];
+      if (first - entry < 0.7 * atr && lids[1] != null)
+        tgt = Math.max(tgt, lids[1]);
+    }
+    return { stop, target: tgt };
+  },
+  advance: ({ bar, state, hist, stock }) => {
+    // “no progress in 5 bars” → creep stop to BE
+    const risk = Math.max(0.01, state.entry - state.stopInit);
+    const age = hist.length - 1 - state.entryIdx;
+    if (age >= 5) {
+      let touched = false;
+      for (let i = state.entryIdx + 1; i < hist.length; i++) {
+        if (num(hist[i]?.high) >= state.entry + 0.5 * risk) {
+          touched = true;
+          break;
+        }
+      }
+      if (!touched) state.stop = Math.max(state.stop, state.entry);
+    }
+
+    // After +2R, structure trail; always keep CH(2.5) as a floor
+    if (num(bar?.high) >= state.entry + 2 * risk) {
+      const st = structuralTrail(hist, stock, 0.5, 0.6);
+      const ch = chandelier(state.entryIdx, hist, stock, 2.5);
+      state.stop = Math.max(state.stop, st, ch);
+    } else {
+      // Before +2R, allow CH(2.5) to pull stop up if it rises
+      const ch = chandelier(state.entryIdx, hist, stock, 2.5);
+      state.stop = Math.max(state.stop, ch);
+    }
+    return true;
+  },
+};
+
+// Active profile set = ONLY go_to_blend
+const PROFILES = [_GOTO || FALLBACK_GOTO];
+
 /**
- * Backtest (swing period) — MULTI playbooks.
+ * Backtest (swing period) — GO-TO BLEND ONLY.
  * opts:
  *   { months=6, from, to, limit=0, warmupBars=60, holdBars=10, cooldownDays=2,
  *     appendTickers?: string[],
@@ -340,7 +449,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let globalOpenPositions = 0;
 
   console.log(
-    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (HARD time-exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=MULTI (DIP/SPC/OXR/BPB/RRP)`
+    `[BT] window ${FROM}→${TO} | hold=${HOLD_BARS} bars (HARD time-exit) | warmup=${WARMUP} | cooldown=${COOLDOWN} | strategy=GO_TO_BLEND_ONLY`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -364,11 +473,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       const trades = [];
       const tradesByProfile = Object.fromEntries(
-        EXIT_PROFILES.map((p) => [p.id, []])
+        PROFILES.map((p) => [p.id, []])
       );
       const openByProfile = Object.create(null); // id -> open state
       const cooldownUntilByProfile = Object.create(null);
-      for (const p of EXIT_PROFILES) cooldownUntilByProfile[p.id] = -1;
+      for (const p of PROFILES) cooldownUntilByProfile[p.id] = -1;
 
       // per-ticker loop
       for (let i = 0; i < candles.length; i++) {
@@ -382,7 +491,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           highPrice: today.high,
           lowPrice: today.low,
           openPrice: today.open,
-          // safer if no transpile:
           prevClosePrice: candles[i - 1] ? candles[i - 1].close : today.close,
           fiftyTwoWeekHigh: Math.max(...hist.map((c) => c.high)),
           fiftyTwoWeekLow: Math.min(...hist.map((c) => c.low)),
@@ -390,25 +498,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // blocked counters (optional, per profile)
         if (COUNT_BLOCKED) {
-          for (const p of EXIT_PROFILES) {
+          for (const p of PROFILES) {
             if (openByProfile[p.id]) blockedInTrade++;
             else if (i <= cooldownUntilByProfile[p.id]) blockedCooldown++;
           }
           if (i < WARMUP) blockedWarmup++;
         }
 
-        // manage open positions per profile
-        for (const p of EXIT_PROFILES) {
+        // manage open positions
+        for (const p of PROFILES) {
           const st = openByProfile[p.id];
           if (!st) continue;
 
-          // dynamic rule hook
           if (typeof p.advance === "function") {
             p.advance({ bar: today, state: st, hist, stock });
-
-            // ensure any updated levels remain on the tick grid
             if (Number.isFinite(st.stop)) st.stop = toTick(st.stop, stock);
             if (Number.isFinite(st.target))
               st.target = toTick(st.target, stock);
@@ -416,15 +520,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
           let exit = null;
 
-          // 1) price-based exits first (priority: stop/target)
+          // price-based exits
           if (today.low <= st.stop) {
             exit = { type: "STOP", price: st.stop, result: "LOSS" };
           } else if (today.high >= st.target) {
             exit = { type: "TARGET", price: st.target, result: "WIN" };
           }
 
-          // 2) hard time exit at HOLD_BARS (close of the current bar)
-          //    If still open by bar N => exit at today's close and label by P&L
+          // hard time exit at HOLD_BARS
           if (!exit) {
             const ageBars = i - st.entryIdx;
             if (HOLD_BARS > 0 && ageBars >= HOLD_BARS) {
@@ -478,10 +581,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // try new entries if any profile is free and warmup passed
+        // try new entry if profile free and warmup passed
         const anyProfileEligible =
           i >= WARMUP &&
-          EXIT_PROFILES.some(
+          PROFILES.some(
             (p) => !openByProfile[p.id] && i > cooldownUntilByProfile[p.id]
           );
 
@@ -496,13 +599,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const ST = senti?.shortTerm?.score ?? 4;
           const LT = senti?.longTerm?.score ?? 4;
 
-          // trend telemetry
+          // trend telemetry (optional: not emphasized in go-to-only)
           const trend = sig?.debug?.ms?.trend;
           if (trend && telemetry.trends.hasOwnProperty(trend))
             telemetry.trends[trend]++;
 
           if (sig?.buyNow) {
-            // Gate by sentiment (kept as your original DIP policy)
+            // Gate by sentiment (kept same)
             signalsTotal++;
             signalsAfterWarmup++;
             signalsWhileFlat++;
@@ -512,7 +615,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               continue;
             }
 
-            // RR telemetry (same analyzer RR for all profiles)
+            // RR telemetry bucket (from analyzer)
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
             if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
@@ -524,8 +627,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               });
             }
 
-            // open one virtual trade PER profile
-            for (const p of EXIT_PROFILES) {
+            // open one virtual trade for our single profile
+            for (const p of PROFILES) {
               if (openByProfile[p.id]) continue;
               if (i <= cooldownUntilByProfile[p.id]) continue;
 
@@ -543,7 +646,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 continue;
               }
 
-              // snap execution levels to tick grid (no integer rounding)
+              // snap execution levels to tick grid
               const qStop = toTick(stop, stock);
               const qTarget = toTick(target, stock);
 
@@ -555,7 +658,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 target: qTarget,
                 ST,
                 LT,
-                // record playbook kind for trade labeling
                 kind:
                   String(sig?.debug?.chosen || sig?.reason || "")
                     .split(":")[0]
@@ -564,7 +666,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               signalsExecuted++;
             }
           } else {
-            // why not buy? (telemetry)
+            // why not buy? (telemetry/minimal in go-to-only mode)
             const dbg = sig?.debug || {};
             if (dbg && dbg.priceActionGate === false) {
               telemetry.gates.priceActionGateFailed++;
@@ -598,7 +700,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // parallel: simulate rejected buys using candidate levels when available
+            // parallel sim (optional): simulate rejected buys using analyzer levels
             if (SIM_REJECTED) {
               const entry = today.close;
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
@@ -683,13 +785,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           ticker: code,
           trades,
           counts: { target: tTargets, stop: tStops, time: tTimes },
-          // ✅ are any profiles still open for this ticker?
-          openAtEnd: EXIT_PROFILES.some((p) => !!openByProfile[p.id]),
+          openAtEnd: PROFILES.some((p) => !!openByProfile[p.id]),
         });
       }
 
-      // count how many profiles are still open at the end of this ticker
-      const stillOpenCount = EXIT_PROFILES.reduce(
+      const stillOpenCount = PROFILES.reduce(
         (a, p) => a + (openByProfile[p.id] ? 1 : 0),
         0
       );
@@ -822,9 +922,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   sentiment.bestByWinRate.actual = sentiActual.bestByWinRate;
   sentiment.bestByWinRate.rejected = sentiRejected.bestByWinRate;
 
-  // per-profile metrics
+  // per-profile metrics (single profile)
   const profiles = {};
-  for (const p of EXIT_PROFILES) {
+  for (const p of PROFILES) {
     const list = globalTrades.filter((t) => t.profile === p.id);
     profiles[p.id] = {
       label: p.label,
@@ -854,7 +954,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const bestByExpR = bestProfileKey((m) => m.expR ?? -Infinity);
   const bestByPF = bestProfileKey((m) => m.profitFactor ?? -Infinity);
 
-  // optional: per-playbook breakdown (DIP/SPC/OXR/BPB/RRP)
+  // optional: per-playbook breakdown label (still based on telemetry strategy tag)
   const byKind = {};
   for (const t of all) {
     const k = t.strategy || "DIP";
@@ -894,7 +994,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     }
   }
 
-  // legacy "dip" key preserved if present
+  // legacy "dip" key still points to all trades (for compatibility)
   const dipMetrics = strategyBreakdown.DIP || computeMetrics(all);
 
   return {
@@ -918,7 +1018,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
-    openAtEnd: globalOpenPositions, // ✅ real count of open positions at end
+    openAtEnd: globalOpenPositions,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
@@ -930,7 +1030,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       total: signalsTotal,
       afterWarmup: signalsAfterWarmup,
       whileFlat: signalsWhileFlat,
-      executed: signalsExecuted, // counts profile entries
+      executed: signalsExecuted, // profile entries (single profile)
       invalid: signalsInvalid,
       riskStopGtePx: signalsRiskBad,
       blocked: {
@@ -943,7 +1043,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     strategy: {
       all: computeMetrics(all),
       dip: dipMetrics, // legacy key
-      ...strategyBreakdown, // e.g., DIP/SPC/OXR/BPB/RRP
+      ...strategyBreakdown,
     },
     telemetry,
     parallel,
@@ -1018,8 +1118,6 @@ function sum(arr) {
   return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
-
-  
 /* --------------------------- expose for Bubble -------------------------- */
 window.backtest = async (tickersOrOpts, maybeOpts) => {
   try {
@@ -1089,4 +1187,3 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
     };
   }
 };
-
