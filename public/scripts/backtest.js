@@ -58,10 +58,17 @@ async function fetchHistory(ticker, fromISO, toISO) {
 }
 
 /* ---------------- ST/LT gating policy (1..7 where 1=strong bull) ---------------- */
+const ALLOWED_SENTIMENTS = new Set([
+  "LT6-ST4",
+  "LT7-ST4",
+  "LT7-ST1",
+  "LT1-ST3",
+]);
+
 function shouldAllowDIP(ST, LT) {
-  const st = Number.isFinite(ST) ? ST : 4;
-  const lt = Number.isFinite(LT) ? LT : 4;
-  return lt <= 7 && st >= 1 && st <= 7;
+  var st = Number.isFinite(ST) ? ST : 4;
+  var lt = Number.isFinite(LT) ? LT : 4;
+  return ALLOWED_SENTIMENTS.has("LT" + lt + "-ST" + st);
 }
 
 /* ---------------- small helpers ---------------- */
