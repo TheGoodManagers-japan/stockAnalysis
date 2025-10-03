@@ -13,6 +13,21 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+/* ---------------- tick helpers (match swingTradeEntryTiming ladder) ---------------- */
+function inferTickFromPrice(p) {
+    const x = Number(p) || 0;
+    if (x >= 5000) return 1;
+    if (x >= 1000) return 0.5;
+    if (x >= 100) return 0.1;
+    if (x >= 10) return 0.05;
+    return 0.01;
+  }
+  function toTick(v, stock) {
+    const tick = Number(stock?.tickSize) || inferTickFromPrice(v) || 0.1;
+    const x = Number(v) || 0;
+    return Math.round(x / tick) * tick;
+  }
+
 /* ---------------- data ---------------- */
 async function fetchHistory(ticker, fromISO, toISO) {
   const r = await fetch(
@@ -384,6 +399,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           // dynamic rule hook
           if (typeof p.advance === "function") {
             p.advance({ bar: today, state: st, hist, stock });
+             
+            // ensure any updated levels remain on the tick grid
+            if (Number.isFinite(st.stop))   st.stop   = toTick(st.stop, stock);      
+                  if (Number.isFinite(st.target)) st.target = toTick(st.target, stock);
           }
 
           let exit = null;
@@ -515,12 +534,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 continue;
               }
 
+                           // snap execution levels to tick grid (no integer rounding)
+              const qStop   = toTick(stop, stock);
+              const qTarget = toTick(target, stock);
+
+
               openByProfile[p.id] = {
                 entryIdx: i,
                 entry,
-                stop: Math.round(stop),
-                stopInit: Math.round(stop),
-                target: Math.round(target),
+                                stop: qStop,
+                                stopInit: qStop,
+                                target: qTarget,
                 ST,
                 LT,
                 // record playbook kind for trade labeling

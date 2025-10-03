@@ -765,10 +765,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason,
-      stopLoss: deRound(toTick(round0(rr0.stop), stock)),
-      priceTarget: deRound(toTick(round0(rr0.target), stock)),
-      smartStopLoss: deRound(toTick(round0(rr0.stop), stock)),
-      smartPriceTarget: deRound(toTick(round0(rr0.target), stock)),
+          stopLoss: toTick(deRound(round0(rr0.stop)), stock),
+          priceTarget: toTick(deRound(round0(rr0.target)), stock),
+          smartStopLoss: toTick(deRound(round0(rr0.stop)), stock),
+          smartPriceTarget: toTick(deRound(round0(rr0.target)), stock),
       timeline: [],
       debug,
       telemetry: { ...tele, trace: T.logs },
@@ -809,10 +809,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
       best.why
     }`,
-    stopLoss: deRound(toTick(round0(best.stop), stock)),
-    priceTarget: deRound(toTick(round0(best.target), stock)),
-    smartStopLoss: deRound(toTick(round0(best.stop), stock)),
-    smartPriceTarget: deRound(toTick(round0(best.target), stock)),
+        stopLoss: toTick(deRound(round0(best.stop)), stock),
+        priceTarget: toTick(deRound(round0(best.target)), stock),
+        smartStopLoss: toTick(deRound(round0(best.stop)), stock),
+        smartPriceTarget: toTick(deRound(round0(best.target)), stock),
     timeline: swingTimeline,
     debug,
     telemetry: { ...tele, trace: T.logs },
@@ -863,6 +863,13 @@ function getConfig(opts = {}) {
     // volume regime (easier)
     pullbackDryFactor: 1.5,
     bounceHotFactor: 1.0,
+
+    
+    // min stop distance (in ATR) — regime aware
+    minStopATRStrong: 1.0,
+    minStopATRUp: 1.1,
+    minStopATRWeak: 1.2,
+    minStopATRDown: 1.35,
 
     debug,
   };
@@ -924,10 +931,31 @@ function getMarketStructure(stock, data) {
 /* ======================== Risk / Reward ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
-  const minStopDist = 1.35 * atr; // was 1.25 → slightly tighter stops improve RR acceptance
-  let adjStop = stop;
-  if (entryPx - adjStop < minStopDist) adjStop = entryPx - minStopDist;
-  stop = adjStop;
+    // --- Regime-aware floor ---
+  let minStopATR = cfg.minStopATRUp || 1.1;
+  if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.0;
+  else if (ms.trend === "UP")   minStopATR = cfg.minStopATRUp || 1.1;
+  else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.2;
+  else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.35;
+
+  // --- Detect structural stops (swing/MA25) and avoid inflating those ---
+  const data = ctx?.data || [];
+  const supports = Array.isArray(data) ? findSupportsBelow(data, entryPx) : [];
+  const swingTop = Number.isFinite(supports?.[0]) ? supports[0] : NaN;
+  const swingBased = Number.isFinite(swingTop)
+    ? Math.abs(stop - (swingTop - 0.5 * atr)) <= 0.6 * atr
+    : false;
+  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
+  const ma25Based =
+    ma25 > 0 ? Math.abs(stop - (ma25 - 0.6 * atr)) <= 0.6 * atr : false;
+  const structuralStop = swingBased || ma25Based;
+
+  // Only widen stop if it's NOT structural and risk is unrealistically tiny for the regime
+  const riskNow = entryPx - stop;
+  const minStopDist = minStopATR * atr;
+  if (!structuralStop && riskNow < minStopDist) {
+    stop = entryPx - minStopDist;
+  }
 
   if (cfg.perfectMode) {
     const riskPct = ((entryPx - stop) / Math.max(1e-9, entryPx)) * 100;
