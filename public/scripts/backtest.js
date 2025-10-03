@@ -1026,10 +1026,15 @@ async function runBacktestFixedHolds(tickersOrOpts, maybeOpts) {
     const compare = [];
   
     for (const hb of holds) {
-      const res = await runBacktest(
-        tickersArgIsArray ? tickersOrOpts : baseOpts,
-        tickersArgIsArray ? { ...baseOpts, holdBars: hb } : { ...baseOpts, holdBars: hb }
-      );
+          // visibility on which variant is running
+    console.log(`[BT][multi] starting variant holdBars=${hb}`);
+
+    // IMPORTANT: when the first arg is options-only, pass a single options object
+    // so runBacktest picks it up as 'opts'. When first arg is tickers[], pass
+    // tickers as arg1 and options (with holdBars) as arg2.
+    const res = tickersArgIsArray
+      ? await runBacktest(tickersOrOpts, { ...baseOpts, holdBars: hb })
+      : await runBacktest({ ...baseOpts, holdBars: hb });
       variants[String(hb)] = res;
       compare.push({
         holdBars: hb,
