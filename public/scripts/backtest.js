@@ -260,7 +260,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 10; // enforced time exit
+  const HOLD_BARS = 20; // enforced time exit (locked to 20 bars)
   const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 2;
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
@@ -1011,57 +1011,17 @@ function sum(arr) {
   return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
 
-/* ------------------------ multi-hold (fixed set) ------------------------ */
-/**
-+ * Runs the backtest for fixed holdBars: [8, 10, 15, 20]
-+ * - Keeps the single-run engine intact (runBacktest)
-+ * - Produces a compact compare array and a variants map
-+ */
-async function runBacktestFixedHolds(tickersOrOpts, maybeOpts) {
-  const holds = [8, 10, 15, 20];
-    const tickersArgIsArray = Array.isArray(tickersOrOpts);
-    const baseOpts = tickersArgIsArray ? (maybeOpts || {}) : (tickersOrOpts || {});
-  
-    const variants = {};
-    const compare = [];
-  
-    for (const hb of holds) {
-          // visibility on which variant is running
-    console.log(`[BT][multi] starting variant holdBars=${hb}`);
 
-    // IMPORTANT: when the first arg is options-only, pass a single options object
-    // so runBacktest picks it up as 'opts'. When first arg is tickers[], pass
-    // tickers as arg1 and options (with holdBars) as arg2.
-    const res = tickersArgIsArray
-      ? await runBacktest(tickersOrOpts, { ...baseOpts, holdBars: hb })
-      : await runBacktest({ ...baseOpts, holdBars: hb });
-      variants[String(hb)] = res;
-      compare.push({
-        holdBars: hb,
-        totalTrades: res.totalTrades,
-        winRate: res.winRate,
-        avgReturnPct: res.avgReturnPct,
-        avgHoldingDays: res.avgHoldingDays,
-        tradesPerDay: Number((res.tradesPerDay || 0).toFixed(3)),
-        exitTarget: res.exitCounts?.target || 0,
-        exitStop: res.exitCounts?.stop || 0,
-        exitTime: res.exitCounts?.time || 0,
-        timeWins: res.exitCounts?.timeWins || 0,
-        timeLosses: res.exitCounts?.timeLosses || 0,
-      });
-    }
   
-    compare.sort((a,b)=>a.holdBars - b.holdBars);
-    return { holds, variants, compare };
-  }
-  
-
 /* --------------------------- expose for Bubble -------------------------- */
-// Always run the fixed multi-hold comparison (8,10,15,20)
 window.backtest = async (tickersOrOpts, maybeOpts) => {
-    try {
-      return await runBacktestFixedHolds(tickersOrOpts, maybeOpts);
-    } catch (e) {
+  try {
+    // We run a single backtest with HOLD_BARS hard-locked to 20 inside runBacktest.
+    // Still pass through other options the UI may set.
+    return Array.isArray(tickersOrOpts)
+      ? await runBacktest(tickersOrOpts, { ...maybeOpts })
+      : await runBacktest({ ...(tickersOrOpts || {}) });
+  } catch (e) {
     console.error("[backtest] error:", e);
     return {
       from: "",
@@ -1118,13 +1078,8 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         rejected: {},
         bestByWinRate: { actual: [], rejected: [] },
       },
-      ...(!!(
-        maybeOpts?.includeByTicker ||
-        (typeof tickersOrOpts === "object" && tickersOrOpts?.includeByTicker)
-      )
-        ? { byTicker: [] }
-        : {}),
       error: String(e?.message || e),
     };
   }
 };
+

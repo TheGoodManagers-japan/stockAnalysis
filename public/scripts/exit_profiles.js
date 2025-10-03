@@ -249,6 +249,88 @@ export const EXIT_PROFILES = [
     },
   },
 
+  {
+    id: "v3_core_hybrid",
+    label: "V3 core: +1R→BE, +2R→structure trail, timeguard, bearish-engulf tighten",
+    compute: function ({ entry, stock, sig, hist }) {
+      // use your analyzer’s smart stop/target when available
+      var s0 = Number(sig && (sig.smartStopLoss ?? sig.stopLoss));
+      var t0 = Number(sig && (sig.smartPriceTarget ?? sig.priceTarget));
+      if (!isFinite(t0)) t0 = entry * 10; // effectively trail-only when no target
+      return { stop: s0, target: t0 };
+    },
+    advance: function ({ bar, state, hist, stock }) {
+      var num = (v) => (isFinite(v) ? Number(v) : 0);
+  
+      // helpers already defined above in this file:
+      // - structuralTrail(hist, stock, padATR, padMA)
+      // - maSMA(hist, nBars, field)
+      // - ensureATR(pxOrEntry, stock)
+  
+      var entry = num(state.entry);
+      var stopInit = num(state.stopInit); // original stop (from compute)
+      var risk = Math.max(0.01, entry - stopInit);
+      var bh = num(bar && bar.high);
+      var bc = num(bar && bar.close);
+      var bo = num(bar && bar.open);
+  
+      var atr = ensureATR(entry, stock);
+      var ma25 = maSMA(hist, 25, "close") || 0;
+  
+      // ---- 1) +1R → move stop to breakeven (use high to detect touch)
+      if (bh >= entry + 1.0 * risk) {
+        state.stop = Math.max(state.stop, entry);
+      }
+  
+      // ---- 2) +2R → start/continue structural trail (entry+1.2R floor)
+      if (bh >= entry + 2.0 * risk) {
+        var st = structuralTrail(hist, stock, 0.5, 0.6);
+        state.stop = Math.max(state.stop, entry + 1.2 * risk, st);
+      }
+  
+      // ---- 3) Time guard: if N=5 bars since entry and not even +0.5R touched → creep to BE
+      var N = 5;
+      if (hist.length - 1 - state.entryIdx >= N) {
+        var touched = false;
+        for (var i = state.entryIdx + 1; i < hist.length; i++) {
+          var hi = num((hist[i] || {}).high);
+          if (hi >= entry + 0.5 * risk) { touched = true; break; }
+        }
+        if (!touched) state.stop = Math.max(state.stop, entry);
+      }
+  
+      // ---- 4) Bearish engulf near resistance (52w high within ~2%) → tighten to structure
+      var last = hist.at(-1) || {};
+      var prev = hist.at(-2) || {};
+      var bearishEngulf =
+        num(last.close) < num(last.open) &&
+        num(prev.close) > num(prev.open) &&
+        num(last.close) < num(prev.open) &&
+        num(last.open) > num(prev.close);
+  
+      var near52w = false;
+      var lid = Number(stock && stock.fiftyTwoWeekHigh);
+      if (isFinite(lid) && lid > 0) {
+        var px = num(last.close || last.high || last.open || entry);
+        near52w = Math.abs(px - lid) / lid <= 0.02;
+      }
+  
+      if (near52w && bearishEngulf) {
+        var st2 = structuralTrail(hist, stock, 0.5, 0.6);
+        state.stop = Math.max(state.stop, st2);
+      }
+  
+      // ---- 5) Default tighten if slipped below MA25 (no full breakdown logic here; that’s handled by stop/target)
+      if (ma25 > 0 && bc < ma25) {
+        var st3 = structuralTrail(hist, stock, 0.5, 0.6);
+        state.stop = Math.max(state.stop, st3);
+      }
+  
+      return true; // continuing strategy (no explicit time exit)
+    },
+  }
+,  
+
   /* ===== Chandelier ATR trails ===== */
   {
     id: "trail_ch_2.5",
