@@ -467,10 +467,13 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
     if (!oxr.trigger) {
       // Keep reasons compatible with your reason-normalizer buckets:
-      if (oxr.waitReason?.toLowerCase().includes("already recovered > cap")) {
+      const wr = (oxr.waitReason || "").toLowerCase();
+      if (wr.includes("already recovered > cap")) {
         reasons.push("already recovered > cap");
-      } else if (oxr.waitReason?.toLowerCase().includes("headroom too small")) {
+      } else if (wr.includes("headroom too small")) {
         reasons.push("Headroom too small pre-entry");
+      } else if (wr.includes("no breakout")) {
+        reasons.push("OXR not ready: no valid breakout");
       } else if (oxr.waitReason) {
         reasons.push(`OXR not ready: ${oxr.waitReason}`);
       }
@@ -480,29 +483,41 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         data,
       });
 
-      // OXR probation: allow a wider near-miss in strong regimes with volume pop
+      // --- OXR probation (tighter): only allow a small RR near-miss
+      // Requirements: strong/up trend, green day momentum, RSI cool, and clear volume pop.
       if (!rr.acceptable) {
         const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
-        const nearBand = rr.ratio >= rr.need - 0.12;
+        const nearBand = rr.ratio >= rr.need - 0.06; // tighter than before (was 0.12)
         const regimeOK = ms.trend === "UP" || ms.trend === "STRONG_UP";
-        const volExp = (() => {
-          const slice = data.slice(-20);
-          const avg20 = Math.max(
-            1,
-            slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
-              Math.max(1, slice.length)
-          );
-          const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
-          return vNow / avg20;
-        })();
         const momentumOK = px > Math.max(openPx, prevClose);
+
+        // Volume expansion (if volume exists) — stricter than before
+        const slice = data.slice(-20);
+        const avg20 = Math.max(
+          1,
+          slice.reduce((a, b) => a + (Number(b.volume) || 0), 0) /
+            Math.max(1, slice.length)
+        );
+        const vNow = Math.max(1, Number(data.at(-1)?.volume) || 1);
+        const volExp = vNow / avg20;
+        const volOK = !Number.isFinite(data.at(-1)?.volume)
+          ? true
+          : volExp >= 1.3;
+
+        // Ensure headroom is not the reason RR is tight (probation won’t override thin headroom)
+        const atr = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
+        const headroomATRProb = Number.isFinite(oxr.nearestRes)
+          ? (oxr.nearestRes - px) / Math.max(atr, 1e-9)
+          : Infinity;
+        const headroomOK = headroomATRProb >= (cfg.oxrHeadroomATR ?? 1.0);
 
         if (
           nearBand &&
           regimeOK &&
           momentumOK &&
-          rsiHere < 68 &&
-          (!Number.isFinite(data.at(-1)?.volume) || volExp >= 1.1)
+          volOK &&
+          headroomOK &&
+          rsiHere < 64
         ) {
           rr.acceptable = true;
           rr.probation = true;
@@ -543,6 +558,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       }
     }
   }
+
   // ======================= BPB (Breakout–Pullback–Bounce) =======================
   if (candidates.length === 0) {
     const bpb = detectBPB(stock, data, cfg, U);
@@ -765,10 +781,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason,
-          stopLoss: toTick(deRound(round0(rr0.stop)), stock),
-          priceTarget: toTick(deRound(round0(rr0.target)), stock),
-          smartStopLoss: toTick(deRound(round0(rr0.stop)), stock),
-          smartPriceTarget: toTick(deRound(round0(rr0.target)), stock),
+      stopLoss: toTick(deRound(round0(rr0.stop)), stock),
+      priceTarget: toTick(deRound(round0(rr0.target)), stock),
+      smartStopLoss: toTick(deRound(round0(rr0.stop)), stock),
+      smartPriceTarget: toTick(deRound(round0(rr0.target)), stock),
       timeline: [],
       debug,
       telemetry: { ...tele, trace: T.logs },
@@ -809,10 +825,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
       best.why
     }`,
-        stopLoss: toTick(deRound(round0(best.stop)), stock),
-        priceTarget: toTick(deRound(round0(best.target)), stock),
-        smartStopLoss: toTick(deRound(round0(best.stop)), stock),
-        smartPriceTarget: toTick(deRound(round0(best.target)), stock),
+    stopLoss: toTick(deRound(round0(best.stop)), stock),
+    priceTarget: toTick(deRound(round0(best.target)), stock),
+    smartStopLoss: toTick(deRound(round0(best.stop)), stock),
+    smartPriceTarget: toTick(deRound(round0(best.target)), stock),
     timeline: swingTimeline,
     debug,
     telemetry: { ...tele, trace: T.logs },
@@ -843,8 +859,8 @@ function getConfig(opts = {}) {
 
     // RR thresholds (easier)
     minRRbase: 1.15,
-    minRRstrongUp: 1.30,
-    minRRweakUp: 1.40,
+    minRRstrongUp: 1.3,
+    minRRweakUp: 1.4,
 
     // pullback / bounce (slightly easier)
     dipMinPullbackPct: 0.7,
@@ -864,12 +880,17 @@ function getConfig(opts = {}) {
     pullbackDryFactor: 1.5,
     bounceHotFactor: 1.0,
 
-    
     // min stop distance (in ATR) — regime aware
     minStopATRStrong: 1.0,
     minStopATRUp: 1.1,
     minStopATRWeak: 1.2,
     minStopATRDown: 1.35,
+
+    // --- OXR-specific tightening ---
+    oxrMinRR: 1.9, // higher RR floor for OXR only
+    maxATRfromMA25_OXR: 1.8, // stricter "too extended" cap vs general 3.5
+    oxrHeadroomATR: 1.0, // need ≥1.0 ATR of air to first effective shelf
+    oxrRSI: 72, // cut overheated breakouts sooner
 
     debug,
   };

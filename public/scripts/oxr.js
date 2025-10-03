@@ -1,4 +1,4 @@
-// /scripts/oxr.js — Over-recovery / Breakout (OXR)
+// /scripts/oxr.js — Over-recovery / Breakout (OXR) — TIGHTER VERSION
 // Breakout after shallow/base consolidation or rapid over-recovery.
 // Exports: detectOXR(stock, data, cfg, U)
 
@@ -74,61 +74,73 @@ export function detectOXR(stock, data, cfg, U) {
 
   // Trend/range context
   const trendIsUp = px > ma25 && ma25 > ma50 && ma50 > 0;
-  const reclaimedYHigh = px > (Number(prev.high) || 0) + 1e-8;
   const dayUp = px >= Math.max(Number(last.open) || 0, Number(prev.close) || 0);
 
-  // Breakout definition: close above recent high with some cushion OR strong reclaim
-  const breakoutCushionPct = 0.15; // 0.15% above recent high
+  // ======================= TIGHTER DEFINITIONS =======================
+
+  // Breakout definition: must clear **40-bar high** with cushion, on a green day
+  const breakoutCushionPct = 0.4; // was 0.15%
   const above20 = px >= recentHigh20 * (1 + breakoutCushionPct / 100);
   const above40 = px >= recentHigh40 * (1 + breakoutCushionPct / 100);
-  const breakout = above20 || above40 || reclaimedYHigh;
 
-  // Guardrails/overheat
+  // NOTE: we no longer accept reclaimedYHigh as a standalone trigger.
+  const breakout = above40 && dayUp;
+
+  // Guardrails/overheat — OXR stricter than global
   const distFromMA25_ATR = (px - ma25) / Math.max(atr, 1e-9);
-  const tooExtended = distFromMA25_ATR > (cfg.maxATRfromMA25 ?? 3.5) + 0.4;
-  const rsiTooHot = rsi >= (cfg.softRSI ?? 74) + 4; // OXR tolerates a bit more, but still cap
+  const tooExtended = distFromMA25_ATR > (cfg.maxATRfromMA25_OXR ?? 1.8);
+  const rsiTooHot = rsi >= (cfg.oxrRSI ?? 72);
 
-  // Headroom / resistances above
+  // Headroom / resistances above — need ≥ 1.0 ATR of air
   const resistances = U.findResistancesAbove(data, px, stock);
   let nearestRes = resistances[0];
   let headroomATR = Number.isFinite(nearestRes)
     ? (nearestRes - px) / Math.max(atr, 1e-9)
     : Infinity;
   // If first lid is too close, look to next
-  if (Number.isFinite(nearestRes) && headroomATR < 0.6 && resistances[1]) {
+  if (Number.isFinite(nearestRes) && headroomATR < 0.8 && resistances[1]) {
     nearestRes = resistances[1];
     headroomATR = (nearestRes - px) / Math.max(atr, 1e-9);
   }
-  const headroomOK =
-    headroomATR >= Math.max(0.55, (cfg.nearResVetoATR ?? 0.22) - 0.06);
+  const headroomOK = headroomATR >= (cfg.oxrHeadroomATR ?? 1.0);
 
-  // Base/structure quality
+  // Base/structure quality — real box (tight + not too shallow/loose)
   const baseDepthPct =
     ((recentHigh20 - recentLow20) / Math.max(recentHigh20, 1e-9)) * 100;
-  const baseTightEnough = contraction < 0.9 && baseDepthPct <= 8; // not too loose
+  const baseDepthATR = (recentHigh20 - recentLow20) / Math.max(atr, 1e-9);
+  // require real contraction and 1.0–2.5 ATR deep base
+  const baseTightEnough =
+    contraction <= 0.7 && baseDepthATR >= 1.0 && baseDepthATR <= 2.5;
 
-  // Trigger logic (lenient on vol if no volume data)
+  // Volume: require a real pop if volume exists
+  const volExpNeed = 1.5; // was 1.15
+  const volGood = Number.isFinite(last.volume) ? volExp >= volExpNeed : true;
+
+  // ======================= TRIGGER =======================
   let trigger =
     trendIsUp &&
     breakout &&
-    (dayUp || reclaimedYHigh) &&
+    dayUp &&
     !tooExtended &&
     !rsiTooHot &&
     headroomOK &&
-    (baseTightEnough || contraction < 1.0) &&
-    (Number.isFinite(last.volume) ? volExp >= 1.15 : true);
+    baseTightEnough &&
+    volGood;
 
   let waitReason = "";
   if (!trendIsUp) waitReason = "trend not up enough for OXR.";
-  else if (!breakout) waitReason = "no breakout above recent highs.";
+  else if (!breakout)
+    waitReason = "no breakout above 40-bar high with cushion.";
   else if (tooExtended)
     waitReason = "already recovered > cap (too extended for OXR).";
   else if (rsiTooHot) waitReason = "RSI too hot for OXR.";
-  else if (!headroomOK) waitReason = "headroom too small post-breakout.";
-  else if (!(baseTightEnough || contraction < 1.0))
-    waitReason = "base not tight/contracting.";
-  else if (Number.isFinite(last.volume) && volExp < 1.15)
-    waitReason = "no volume expansion on breakout.";
+  else if (!headroomOK)
+    waitReason = "headroom too small post-breakout (need ≥1.0 ATR).";
+  else if (!baseTightEnough)
+    waitReason =
+      "base not tight/deep enough (need contraction ≤0.70 & 1–2.5 ATR depth).";
+  else if (!volGood)
+    waitReason = "no volume expansion on breakout (need ≥1.5× 20d).";
 
   if (!trigger) {
     return {
@@ -142,10 +154,10 @@ export function detectOXR(stock, data, cfg, U) {
         breakout,
         above20,
         above40,
-        reclaimedYHigh,
         dayUp,
         contraction: +contraction.toFixed(2),
         baseDepthPct: +baseDepthPct.toFixed(2),
+        baseDepthATR: +baseDepthATR.toFixed(2),
         volExp: +volExp.toFixed(2),
         rsi: +rsi.toFixed(1),
         distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
@@ -156,18 +168,22 @@ export function detectOXR(stock, data, cfg, U) {
     };
   }
 
-  // Plan: stop under breakout level / base top, target via next shelf or measured move
+  // ======================= PLAN =======================
+  // Stop under **base low** or MA25-band; measured move ≥ 2.2 ATR
   const baseTop = recentHigh20;
   const baseLow = recentLow20;
-  const measured = Math.max(1.8 * atr, baseTop - baseLow); // simple measured move
-  const stopBase = baseTop - 0.6 * atr; // fail of breakout
+  const measured = Math.max(2.2 * atr, baseTop - baseLow); // was 1.8*ATR
+
+  const stopBase = baseLow - 0.5 * atr; // below base, not top
   const stopMA25 = ma25 > 0 ? ma25 - 0.8 * atr : px - 1.6 * atr;
   let stop = Math.min(stopBase, stopMA25);
 
+  // Target honors shelves but never less than measured
   let target = Number.isFinite(nearestRes)
     ? Math.max(nearestRes, px + measured)
-    : px + 2.4 * atr;
-  // If target still too close, try next resistance
+    : px + Math.max(2.4 * atr, measured);
+
+  // If the first shelf is still too close, try the next one
   if (
     Number.isFinite(nearestRes) &&
     (nearestRes - px) / Math.max(atr, 1e-9) < 0.8 &&
@@ -178,7 +194,7 @@ export function detectOXR(stock, data, cfg, U) {
 
   return {
     trigger: true,
-    why: "OXR breakout: volatility contraction + high reclaim.",
+    why: "OXR breakout: volatility contraction + clean 40-bar high reclaim.",
     stop,
     target,
     nearestRes,
@@ -186,6 +202,7 @@ export function detectOXR(stock, data, cfg, U) {
       breakout,
       contraction: +contraction.toFixed(2),
       baseDepthPct: +baseDepthPct.toFixed(2),
+      baseDepthATR: +baseDepthATR.toFixed(2),
       volExp: +volExp.toFixed(2),
       rsi: +rsi.toFixed(1),
       distFromMA25_ATR: +distFromMA25_ATR.toFixed(2),
