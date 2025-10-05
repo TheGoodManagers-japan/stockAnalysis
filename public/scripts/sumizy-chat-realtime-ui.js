@@ -85,76 +85,58 @@ function aggregateReactionsFallback(raw, currentUserId) {
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // --- NEW: file-safe branch ----------------------------------------------
+  // --- File messages (incl. images): no URL text, ensure attachment block ---
   if (msg?.isFile) {
-    // Remove any stray text nodes we might have created previously
-    contentWrap
-      .querySelectorAll(":scope > .message-text")
-      .forEach((n) => n.remove());
+    // Remove any stray text nodes we might have created before
+    contentWrap.querySelectorAll(':scope > .message-text').forEach(n => n.remove());
 
-    // Ensure/refresh the file attachment block
-    let fa = contentWrap.querySelector(":scope > .file-attachment");
-    const url = msg.message || "#";
-    const name = msg.file_name || url.split("/").pop() || "download";
+    // Ensure file attachment exists/updates
+    let fa = contentWrap.querySelector(':scope > .file-attachment');
+    const url  = msg.message || "#";
+    const name = msg.file_name || (url.split("/").pop() || "download");
     const type = String(msg.file_type || "").toLowerCase();
     const isImg = type.startsWith("image");
 
     if (!fa) {
-      // Use your existing helper if available
+      // Use your renderer helper if present
       if (typeof window.renderFileAttachment === "function") {
-        contentWrap.insertAdjacentHTML(
-          "beforeend",
-          window.renderFileAttachment(msg)
-        );
-        fa = contentWrap.querySelector(":scope > .file-attachment");
+        contentWrap.insertAdjacentHTML("beforeend", window.renderFileAttachment(msg));
+        fa = contentWrap.querySelector(':scope > .file-attachment');
       } else {
-        // minimal fallback
+        // Minimal fallback (no URL text)
         contentWrap.insertAdjacentHTML(
           "beforeend",
-          `<div class="file-attachment ${
-            isImg ? "image-attachment" : "generic-attachment"
-          }"
-                data-url="${_esc(url)}" data-name="${_esc(
-            name
-          )}" data-type="${_esc(type)}">
+          `<div class="file-attachment ${isImg ? "image-attachment" : "generic-attachment"}"
+                data-url="${_esc(url)}" data-name="${_esc(name)}" data-type="${_esc(type)}">
              <a href="#" class="file-open-trigger" tabindex="0">
-               ${
-                 isImg
-                   ? `<img src="${_esc(url)}" alt="${_esc(
-                       name
-                     )}" class="file-image-preview">`
-                   : `<span class="file-icon">📎</span>`
-               }
+               ${isImg ? `<img src="${_esc(url)}" alt="${_esc(name)}" class="file-image-preview">`
+                       : `<span class="file-icon">📎</span>`}
                <span class="file-name">${_esc(name)}</span>
              </a>
            </div>`
         );
-        fa = contentWrap.querySelector(":scope > .file-attachment");
+        fa = contentWrap.querySelector(':scope > .file-attachment');
       }
     } else {
-      // Update existing attachment dataset + visible bits
-      fa.dataset.url = url;
+      // Refresh existing block (still no URL text)
+      fa.dataset.url  = url;
       fa.dataset.name = name;
       fa.dataset.type = type;
-      const nameEl = fa.querySelector(".file-name");
-      if (nameEl) nameEl.textContent = name;
-      const img = fa.querySelector(".file-image-preview");
-      if (img && isImg) {
-        if (img.src !== url) img.src = url;
-        img.alt = name;
-      }
-      // adjust classes if type flipped between image/non-image
       fa.classList.toggle("image-attachment", isImg);
       fa.classList.toggle("generic-attachment", !isImg);
+      const nm = fa.querySelector(".file-name"); if (nm) nm.textContent = name;
+      const img = fa.querySelector(".file-image-preview");
+      if (img && isImg) { if (img.src !== url) img.src = url; img.alt = name; }
     }
 
-    // Sync data-message to file name (not URL)
+    // Important: make replies/action menus use the filename, not URL
     msgEl.dataset.message = name;
 
-    // If deletion flag arrives, let the reply-preview updater handle styling
+    // Keep reply preview & deleted styling in sync
     updateReplyPreviewsForMessage(msg);
-    return; // <-- IMPORTANT: don't run the text path below
+    return; // Stop here for files ⇒ never add message-text for files
   }
+
   // --- END file-safe branch -----------------------------------------------
 
   const translations = Array.isArray(msg._translations)
