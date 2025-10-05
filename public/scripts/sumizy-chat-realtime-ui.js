@@ -81,6 +81,44 @@ function aggregateReactionsFallback(raw, currentUserId) {
   return Array.from(map.values());
 }
 
+// put near other helpers
+function sanitizeInjectedFileMessageNode(el, msg) {
+  if (!el || !msg?.isFile) return;
+  const type = String(msg.file_type || "").toLowerCase();
+  const isImg = type.startsWith("image");
+  if (!isImg) return;
+
+  // 1) remove any stray text blobs
+  el.querySelectorAll(':scope > .message-content-wrapper > .message-text')
+    .forEach(n => n.remove());
+
+  // 2) ensure there's a file-attachment; if not, create minimal image block
+  const wrap = el.querySelector('.message-content-wrapper') || el;
+  let fa = wrap.querySelector(':scope > .file-attachment');
+  const url = msg.message || "#";
+  if (!fa) {
+    wrap.insertAdjacentHTML(
+      "beforeend",
+      `<div class="file-attachment image-attachment" data-url="${_esc(url)}" data-name="${_esc(msg.file_name||"")}" data-type="${_esc(type)}">
+         <a href="#" class="file-open-trigger" tabindex="0">
+           <img src="${_esc(url)}" alt="" class="file-image-preview">
+         </a>
+       </div>`
+    );
+  } else {
+    fa.classList.add("image-attachment");
+    fa.classList.remove("generic-attachment");
+    const nm = fa.querySelector(".file-name");
+    if (nm) nm.remove(); // hide filename for images
+  }
+
+  // 3) blank out the summary for menus/replies
+  el.dataset.message = "";
+}
+
+
+
+
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
@@ -458,10 +496,21 @@ function afterInjectUiRefresh(rg) {
     } catch {}
   }
 }
+// *** modify injectBatch ***
 function injectBatch(rg, chatId, batch) {
   if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
+
   window.injectMessages(rg, batch, window.currentUserId);
+
+  // ⬇ NEW: sanitize each newly injected node
+  for (const m of batch) {
+    if (!m?.id) continue;
+    const el = document.querySelector(
+      `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
+    );
+    sanitizeInjectedFileMessageNode(el, m);
+  }
 
   const st = getState(chatId);
   for (const m of batch) {
@@ -473,6 +522,8 @@ function injectBatch(rg, chatId, batch) {
   }
   afterInjectUiRefresh(rg);
 }
+
+
 function injectHistoryAndGoLive(chatId, incomingHistory) {
   const rg = window.findVisibleRG?.() ?? null;
   if (rg === null) return;
