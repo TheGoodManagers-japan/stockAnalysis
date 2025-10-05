@@ -83,6 +83,80 @@ function aggregateReactionsFallback(raw, currentUserId) {
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
+  const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
+
+  // --- NEW: file-safe branch ----------------------------------------------
+  if (msg?.isFile) {
+    // Remove any stray text nodes we might have created previously
+    contentWrap
+      .querySelectorAll(":scope > .message-text")
+      .forEach((n) => n.remove());
+
+    // Ensure/refresh the file attachment block
+    let fa = contentWrap.querySelector(":scope > .file-attachment");
+    const url = msg.message || "#";
+    const name = msg.file_name || url.split("/").pop() || "download";
+    const type = String(msg.file_type || "").toLowerCase();
+    const isImg = type.startsWith("image");
+
+    if (!fa) {
+      // Use your existing helper if available
+      if (typeof window.renderFileAttachment === "function") {
+        contentWrap.insertAdjacentHTML(
+          "beforeend",
+          window.renderFileAttachment(msg)
+        );
+        fa = contentWrap.querySelector(":scope > .file-attachment");
+      } else {
+        // minimal fallback
+        contentWrap.insertAdjacentHTML(
+          "beforeend",
+          `<div class="file-attachment ${
+            isImg ? "image-attachment" : "generic-attachment"
+          }"
+                data-url="${_esc(url)}" data-name="${_esc(
+            name
+          )}" data-type="${_esc(type)}">
+             <a href="#" class="file-open-trigger" tabindex="0">
+               ${
+                 isImg
+                   ? `<img src="${_esc(url)}" alt="${_esc(
+                       name
+                     )}" class="file-image-preview">`
+                   : `<span class="file-icon">📎</span>`
+               }
+               <span class="file-name">${_esc(name)}</span>
+             </a>
+           </div>`
+        );
+        fa = contentWrap.querySelector(":scope > .file-attachment");
+      }
+    } else {
+      // Update existing attachment dataset + visible bits
+      fa.dataset.url = url;
+      fa.dataset.name = name;
+      fa.dataset.type = type;
+      const nameEl = fa.querySelector(".file-name");
+      if (nameEl) nameEl.textContent = name;
+      const img = fa.querySelector(".file-image-preview");
+      if (img && isImg) {
+        if (img.src !== url) img.src = url;
+        img.alt = name;
+      }
+      // adjust classes if type flipped between image/non-image
+      fa.classList.toggle("image-attachment", isImg);
+      fa.classList.toggle("generic-attachment", !isImg);
+    }
+
+    // Sync data-message to file name (not URL)
+    msgEl.dataset.message = name;
+
+    // If deletion flag arrives, let the reply-preview updater handle styling
+    updateReplyPreviewsForMessage(msg);
+    return; // <-- IMPORTANT: don't run the text path below
+  }
+  // --- END file-safe branch -----------------------------------------------
+
   const translations = Array.isArray(msg._translations)
     ? msg._translations
     : [];
@@ -92,16 +166,18 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const deleteText =
     (enTr && enTr.translated_text) || msg.message || "Message Unsent";
 
-  const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
+  const contentWrap2 = contentWrap; // preserve name used below
 
-  // Ensure we have the "original" node
+  // Ensure "original" node exists (for non-file messages)
   const original =
-    contentWrap.querySelector(":scope > .message-text.lang-original") ||
-    contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
+    contentWrap2.querySelector(":scope > .message-text.lang-original") ||
+    contentWrap2.querySelector(
+      ":scope > .message-text:not([class*='lang-'])"
+    ) ||
     (() => {
       const d = document.createElement("div");
       d.className = "message-text lang-original";
-      contentWrap.appendChild(d);
+      contentWrap2.appendChild(d);
       return d;
     })();
 
@@ -109,50 +185,42 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  // --- NEW: ensure translation nodes exist and update them
+  // markdown-for-AI logic unchanged…
   const isAIChat =
     typeof window.isAIChat === "function" ? window.isAIChat() : false;
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
   const isAIMessage = String(msg.user_id) === AI_USER_ID;
-
   const renderTr = (txt) => {
     const s = String(txt || "");
     if (isAIChat && isAIMessage && typeof window.parseMarkdown === "function") {
-      // For AI messages in AI chat, keep Markdown rendering behavior
       return window.parseMarkdown(s);
     }
-    // Else, keep it escaped text
     return _esc(s);
   };
 
-  // Build a set of langs we just received
   const langsIncoming = new Set();
   for (const t of translations) {
     const lang = String(t?.language || "").toLowerCase();
     if (!lang || lang === "original") continue;
     langsIncoming.add(lang);
-
-    // Find or create the node for this language
-    let node = contentWrap.querySelector(`:scope > .message-text.lang-${lang}`);
+    let node = contentWrap2.querySelector(
+      `:scope > .message-text.lang-${lang}`
+    );
     if (!node) {
       node = document.createElement("div");
       node.className = `message-text lang-${lang}`;
-      node.style.display = "none"; // hidden until switchLanguage() shows it
-      contentWrap.appendChild(node);
+      node.style.display = "none";
+      contentWrap2.appendChild(node);
     }
     node.innerHTML = renderTr(t.translated_text || "");
   }
 
-  // If you want to also clear removed languages, you could remove nodes whose
-  // lang-* class isn’t in langsIncoming. (Usually not necessary.)
-  // [...contentWrap.querySelectorAll(':scope > .message-text[class*="lang-"]')]
-  //   .forEach(n => { /* optional cleanup */ });
-
-  // Keep data-message in sync
   if (typeof msg.message === "string") {
+    // For text messages, keep data-message in sync with the *text*, not URL
     msgEl.dataset.message = msg.message;
   }
 }
+
 
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
