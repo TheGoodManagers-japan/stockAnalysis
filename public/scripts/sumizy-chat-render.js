@@ -283,7 +283,12 @@ const renderMsgWithMarkdown = (m, cuid) => {
   }"
                  data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
                  data-username="${esc(u.name || "Unknown")}"
-                 data-message="${esc(m.isFile ? m.file_name : m.message)}">
+                 +                 data-message="${esc(
+                   m.isFile && ((m.file_type||"").toLowerCase().startsWith("image")
+                                || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(m.message||""))
+                     ? ""                       // no summary for images
+                     : (m.isFile ? m.file_name : m.message)
+                 )}">
               <div class="message-wrapper">
                 <div class="message-gutter">
                   <div class="avatar" ${avatarStyle}>${avatarContent}</div>
@@ -311,22 +316,24 @@ window.renderMsg = renderMsgWithMarkdown;
 
 /* ─────────── FILE ATTACHMENT (message = URL) ─────────── */
 function renderFileAttachment(m) {
-  const url = esc(m.message || "#");
+  const url  = esc(m.message || "#");
   const name = esc(m.file_name || url.split("/").pop() || "download");
-  const type = (m.file_type || "").toLowerCase();
-  const cls = type.startsWith("image")
-    ? "image-attachment"
-    : "generic-attachment";
-  const thumb = type.startsWith("image")
-    ? `<img src="${url}" alt="${name}" class="file-image-preview">`
-    : `<span class="file-icon">📎</span>`;
-
-  return `
-      <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
-        <a href="#" class="file-open-trigger" tabindex="0">
-          ${thumb}<span class="file-name">${name}</span>
-        </a>
-      </div>`;
+  const looksImage =
+   type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
+ const cls = looksImage ? "image-attachment" : "generic-attachment";
+ return looksImage
+   ? `
+     <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+       <a href="#" class="file-open-trigger" tabindex="0">
+         <img src="${url}" alt="" class="file-image-preview">
+       </a>
+     </div>`
+   : `
+     <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+       <a href="#" class="file-open-trigger" tabindex="0">
+         <span class="file-icon">📎</span><span class="file-name">${name}</span>
+       </a>
+     </div>`;
 }
 
 function renderInlineReplyPreview(r) {

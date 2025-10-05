@@ -84,8 +84,9 @@ function aggregateReactionsFallback(raw, currentUserId) {
 // put near other helpers
 function sanitizeInjectedFileMessageNode(el, msg) {
   if (!el || !msg?.isFile) return;
-  const type = String(msg.file_type || "").toLowerCase();
-  const isImg = type.startsWith("image");
+    const type    = String(msg.file_type || "").toLowerCase();
+    const urlStr  = String(msg.message || "");
+    const isImg   = type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(urlStr);
   if (!isImg) return;
 
   // 1) remove any stray text blobs
@@ -95,13 +96,15 @@ function sanitizeInjectedFileMessageNode(el, msg) {
   // 2) ensure there's a file-attachment; if not, create minimal image block
   const wrap = el.querySelector('.message-content-wrapper') || el;
   let fa = wrap.querySelector(':scope > .file-attachment');
-  const url = msg.message || "#";
+  const safeUrl = urlStr || "#";
   if (!fa) {
     wrap.insertAdjacentHTML(
       "beforeend",
-      `<div class="file-attachment image-attachment" data-url="${_esc(url)}" data-name="${_esc(msg.file_name||"")}" data-type="${_esc(type)}">
+      `<div class="file-attachment image-attachment" data-url="${_esc(
+        safeUrl
+      )}" data-name="${_esc(msg.file_name || "")}" data-type="${_esc(type)}">
          <a href="#" class="file-open-trigger" tabindex="0">
-           <img src="${_esc(url)}" alt="" class="file-image-preview">
+           <img src="${_esc(safeUrl)}" alt="" class="file-image-preview">
          </a>
        </div>`
     );
@@ -137,7 +140,8 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     const url = msg.message || "#";
     const name = msg.file_name || url.split("/").pop() || "download";
     const type = String(msg.file_type || "").toLowerCase();
-    const isImg = type.startsWith("image");
+    const isImg =
+      type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
 
     let fa = contentWrap.querySelector(":scope > .file-attachment");
     if (!fa) {
@@ -363,7 +367,8 @@ function updateReplyPreviewsForMessage(msg) {
     const url = _esc(msg.message || "#");
     const fname = _esc(msg.file_name || url.split("/").pop() || "download");
     const type = (msg.file_type || "").toLowerCase();
-    const isImg = type.startsWith("image");
+    const isImg =
+      type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
     const cls = isImg ? "image-attachment" : "generic-attachment";
     const thumb = isImg
       ? `<img src="${url}" alt="${fname}" class="file-image-preview">`
