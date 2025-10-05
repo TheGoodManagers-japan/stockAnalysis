@@ -86,55 +86,68 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
   // --- File messages (incl. images): no URL text, ensure attachment block ---
+  // in sumizy-chat-realtime-ui.js (inside updateMessageTextsInPlace)
   if (msg?.isFile) {
-    // Remove any stray text nodes we might have created before
-    contentWrap.querySelectorAll(':scope > .message-text').forEach(n => n.remove());
+    const contentWrap =
+      msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-    // Ensure file attachment exists/updates
-    let fa = contentWrap.querySelector(':scope > .file-attachment');
-    const url  = msg.message || "#";
-    const name = msg.file_name || (url.split("/").pop() || "download");
+    // remove any stray text nodes
+    contentWrap
+      .querySelectorAll(":scope > .message-text")
+      .forEach((n) => n.remove());
+
+    const url = msg.message || "#";
+    const name = msg.file_name || url.split("/").pop() || "download";
     const type = String(msg.file_type || "").toLowerCase();
     const isImg = type.startsWith("image");
 
+    let fa = contentWrap.querySelector(":scope > .file-attachment");
     if (!fa) {
-      // Use your renderer helper if present
-      if (typeof window.renderFileAttachment === "function") {
-        contentWrap.insertAdjacentHTML("beforeend", window.renderFileAttachment(msg));
-        fa = contentWrap.querySelector(':scope > .file-attachment');
-      } else {
-        // Minimal fallback (no URL text)
-        contentWrap.insertAdjacentHTML(
-          "beforeend",
-          `<div class="file-attachment ${isImg ? "image-attachment" : "generic-attachment"}"
-                data-url="${_esc(url)}" data-name="${_esc(name)}" data-type="${_esc(type)}">
-             <a href="#" class="file-open-trigger" tabindex="0">
-               ${isImg ? `<img src="${_esc(url)}" alt="${_esc(name)}" class="file-image-preview">`
-                       : `<span class="file-icon">📎</span>`}
-               <span class="file-name">${_esc(name)}</span>
-             </a>
-           </div>`
-        );
-        fa = contentWrap.querySelector(':scope > .file-attachment');
-      }
+      // render fresh (no filename for images)
+      const html = isImg
+        ? `<div class="file-attachment image-attachment" data-url="${_esc(
+            url
+          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
+           <a href="#" class="file-open-trigger" tabindex="0">
+             <img src="${_esc(url)}" alt="" class="file-image-preview">
+           </a>
+         </div>`
+        : typeof window.renderFileAttachment === "function"
+        ? window.renderFileAttachment(msg)
+        : `<div class="file-attachment generic-attachment" data-url="${_esc(
+            url
+          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
+               <a href="#" class="file-open-trigger" tabindex="0">
+                 <span class="file-icon">📎</span><span class="file-name">${_esc(
+                   name
+                 )}</span>
+               </a>
+             </div>`;
+      contentWrap.insertAdjacentHTML("beforeend", html);
+      fa = contentWrap.querySelector(":scope > .file-attachment");
     } else {
-      // Refresh existing block (still no URL text)
-      fa.dataset.url  = url;
+      // update existing
+      fa.dataset.url = url;
       fa.dataset.name = name;
       fa.dataset.type = type;
       fa.classList.toggle("image-attachment", isImg);
       fa.classList.toggle("generic-attachment", !isImg);
-      const nm = fa.querySelector(".file-name"); if (nm) nm.textContent = name;
       const img = fa.querySelector(".file-image-preview");
-      if (img && isImg) { if (img.src !== url) img.src = url; img.alt = name; }
+      if (isImg && img) {
+        if (img.src !== url) img.src = url;
+        img.alt = "";
+      }
+      if (isImg) {
+        const nm = fa.querySelector(".file-name");
+        if (nm) nm.remove();
+      }
     }
 
-    // Important: make replies/action menus use the filename, not URL
-    msgEl.dataset.message = name;
+    // no text summary for images
+    msgEl.dataset.message = isImg ? "" : name;
 
-    // Keep reply preview & deleted styling in sync
     updateReplyPreviewsForMessage(msg);
-    return; // Stop here for files ⇒ never add message-text for files
+    return;
   }
 
   // --- END file-safe branch -----------------------------------------------
