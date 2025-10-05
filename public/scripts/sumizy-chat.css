@@ -1272,3 +1272,21 @@ body.ai-chat-mode .message-actions-trigger {
     color: #9ca3af;
     font-style: italic;
 }
+
+/* Download button — brand blue by default, keep success/error states */
+.file-viewer-modal .file-viewer-download:not(.download-success):not(.download-error) {
+    background: #3A81DF !important;
+    color: #fff !important;
+    border: none !important;
+}
+
+.file-viewer-modal .file-viewer-download:not(.download-success):not(.download-error):hover {
+    background: #2F6FC5 !important;
+    /* hover shade */
+    box-shadow: 0 4px 12px rgba(58, 129, 223, .30);
+}
+
+.file-viewer-modal .file-viewer-download:not(.download-success):not(.download-error):active {
+    background: #285FA8 !important;
+    /* active shade */
+}
