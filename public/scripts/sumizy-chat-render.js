@@ -1,4 +1,4 @@
-//sumizy-chat-render.js
+// sumizy-chat-render.js
 
 /* ─────────── ROBUST MARKDOWN PARSER FOR NESTED LISTS ─────────── */
 function parseMarkdown(text) {
@@ -169,7 +169,6 @@ function parseMarkdown(text) {
   html = processedLines.join("\n");
 
   // Step 6: Handle paragraphs and line breaks
-  // Split on double newlines for paragraphs
   const blocks = html.split(/\n\n+/);
 
   html = blocks
@@ -228,7 +227,7 @@ const renderMsgWithMarkdown = (m, cuid) => {
   if (isAIChat && isAIMessage) {
     avatarContent = "AI";
   } else if (u.profilePicture) {
-    avatarStyle = `style="background-image:url('${u.profilePicture}')"`;
+    avatarStyle = `style="background-image:url('${u.profilePicture}')"`; // already trusted path
   } else {
     const initial = (u.name || "U").charAt(0).toUpperCase();
     avatarStyle = `style="background: #3a81df; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600;"`;
@@ -278,16 +277,21 @@ const renderMsgWithMarkdown = (m, cuid) => {
     ? ""
     : '<div class="message-actions-trigger">⋮</div>';
 
+  // decide summary for data-message (blank for images)
+  const imageLike =
+    m.isFile &&
+    (String(m.file_type || "")
+      .toLowerCase()
+      .startsWith("image") ||
+      /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(m.message || "")));
+
   return `<div class="message${m._reply ? " has-reply" : ""}${
     isAIChat && isAIMessage ? " ai-message" : ""
   }"
                  data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
                  data-username="${esc(u.name || "Unknown")}"
-                 +                 data-message="${esc(
-                   m.isFile && ((m.file_type||"").toLowerCase().startsWith("image")
-                                || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(m.message||""))
-                     ? ""                       // no summary for images
-                     : (m.isFile ? m.file_name : m.message)
+                 data-message="${esc(
+                   imageLike ? "" : m.isFile ? m.file_name : m.message
                  )}">
               <div class="message-wrapper">
                 <div class="message-gutter">
@@ -316,30 +320,36 @@ window.renderMsg = renderMsgWithMarkdown;
 
 /* ─────────── FILE ATTACHMENT (message = URL) ─────────── */
 function renderFileAttachment(m) {
-  const url  = esc(m.message || "#");
-  const name = esc(m.file_name || url.split("/").pop() || "download");
+  const type = String(m.file_type || "").toLowerCase();
+  const rawUrl = String(m.message || ""); // unescaped for regex checks
+  const url = esc(rawUrl); // escaped for HTML
+  const name = esc(m.file_name || rawUrl.split("/").pop() || "download");
+
   const looksImage =
-   type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
- const cls = looksImage ? "image-attachment" : "generic-attachment";
- return looksImage
-   ? `
-     <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
-       <a href="#" class="file-open-trigger" tabindex="0">
-         <img src="${url}" alt="" class="file-image-preview">
-       </a>
-     </div>`
-   : `
-     <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
-       <a href="#" class="file-open-trigger" tabindex="0">
-         <span class="file-icon">📎</span><span class="file-name">${name}</span>
-       </a>
-     </div>`;
+    type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(rawUrl);
+
+  const cls = looksImage ? "image-attachment" : "generic-attachment";
+
+  return looksImage
+    ? `
+      <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+        <a href="#" class="file-open-trigger" tabindex="0">
+          <img src="${url}" alt="" class="file-image-preview">
+        </a>
+      </div>`
+    : `
+      <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+        <a href="#" class="file-open-trigger" tabindex="0">
+          <span class="file-icon">📎</span><span class="file-name">${name}</span>
+        </a>
+      </div>`;
 }
 
 function renderInlineReplyPreview(r) {
   if (!r?.id) return "";
   const un = esc(r._users?.name || "Unknown");
   const isDeleted = !!r.isDeleted;
+
   const body = isDeleted
     ? `<div class="message-text lang-original">${esc("Message Unsent")}</div>`
     : r.isFile
@@ -368,7 +378,6 @@ function renderInlineReplyPreview(r) {
       </div>${body}
     </div>`;
 }
-
 
 /* ─────────── REPLY HTML FOR BUBBLE ─────────── */
 function buildReplyHtml(msgEl) {
