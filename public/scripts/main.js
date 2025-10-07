@@ -843,6 +843,7 @@ export async function fetchStockAnalysis({
         macdSignal: yahooData.macdSignal,
         bollingerMid: yahooData.bollingerMid,
         bollingerUpper: yahooData.bollingerUpper,
+        todayVolume: yahooData.todayVolume,
         bollingerLower: yahooData.bollingerLower,
         stochasticK: yahooData.stochasticK,
         stochasticD: yahooData.stochasticD,
