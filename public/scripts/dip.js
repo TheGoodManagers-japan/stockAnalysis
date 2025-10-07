@@ -193,14 +193,10 @@ export function detectDipBounce(stock, data, cfg, U) {
     bounceStrengthATR >= 1.15;
 
   // preferred supports; MA50-alone no longer enough by itself
-    const ma50SupportOK = nearMA50 && !(slopeDown20 && slopeDown25);
-    const nearSupport =
-      nearMA20 ||
-      nearMA25 ||
-      structureSupport ||
-      microBase ||
-      ma50SupportOK ||
-      strongBounceOverride;
+   const nearSupport =
+     nearMA20 || nearMA25 || structureSupport || microBase || strongBounceOverride ||
+     // fallback: if the thrust is A+ and we are hugging MA50, accept
+     (nearMA50 && strongBounceOverride && !slopeComboFlag);
   // (MA50-alone can still count indirectly via strongBounceOverride/structure; MA20/25/structure preferred)
 
   const passedPreBounce =
@@ -326,15 +322,17 @@ export function detectDipBounce(stock, data, cfg, U) {
   const bodyQuality = body >= 0.3 * barRange;
   const closeQuality =
     num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
-  const v20ok = avgVol20 > 0 ? num(d0.volume) >= 1.0 * avgVol20 : true;
+    const v20ok = avgVol20 > 0 ? num(d0.volume) >= 0.97 * avgVol20 : true;
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
 
   // 3) Volume regime (stop green-but-thin passes)
-    const volumeRegimeOK =
-      (bounceVolHot && v20ok) ||
-      (dryPullback && (closeAboveYHigh || hammer || engulf));
+   const volumeRegimeOK =
+     // any bona fide hot day OR respectable-on-avg volume
+     (bounceVolHot || v20ok) ||
+     // dry pullback plus a proper signal OR a truly strong thrust
+     (dryPullback && (closeAboveYHigh || hammer || engulf || strongBounceOverride));
   
     const bounceOK = strongBounceOverride
       // strong bar can pass with any one of: v20 ok, hot vol, or a dry pullback
@@ -551,7 +549,11 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
 
   // 6) Fib alternative path (requires real strength)
-  const fibAltOK = !fibOK && closeAboveYHigh && bounceStrengthATR >= 0.98;
+   const fibAltOK =
+   !fibOK && (
+     (closeAboveYHigh && bounceStrengthATR >= 0.98) ||
+     (strongBounceOverride && (v20ok || dryPullback))
+   );
   // 9) Headroom small guardrail
     const headroomOK =
       headroomATR == null || headroomPct == null

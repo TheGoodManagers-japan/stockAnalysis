@@ -532,6 +532,38 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const risk = Math.max(0.01, entryPx - stop);
   const reward = Math.max(0, target - entryPx);
   const ratio = reward / risk;
+  
+ // If RR is just shy but we have an A+ bar, give a tiny bump or lift target if next res is reasonable
+ if (rr < (cfg.minRRbase ?? 1.5)) {
+   // try to lift target to next clustered resistance if it doesn't exceed ~4.2 ATR
+   if (resList.length >= 2) {
+     const nextRes = resList[1];
+     const lifted = Math.min(nextRes, px + 4.2 * atr);
+     if (lifted > target) {
+       target = lifted;
+       rr = (target - px) / risk;
+     }
+   }
+   // last chance: strong-bounce grace band
+   if (rr < (cfg.minRRbase ?? 1.5) &&
+       strongBounceOverride &&
+       (closeAboveYHigh || v20ok)) {
+     // allow 0.05 under the floor, but not below 1.45
+     const floor = Math.max((cfg.minRRbase ?? 1.5) - 0.05, 1.45);
+     if (rr >= floor) {
+       // mark via diagnostics if you want (optional)
+     } else {
+       return {
+         trigger: false,
+         waitReason: `dip rr too low: ${rr.toFixed(2)} < need ${(cfg.minRRbase ?? 1.5).toFixed(2)}`,
+         diagnostics: { stop, target, atr, px, code: "RR_FAIL" },
+         reasonTrace
+       };
+     }
+   }
+ } else {
+   // no change
+ }
 
   let need = cfg.minRRbase;
   if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp);
