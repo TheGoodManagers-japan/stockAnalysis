@@ -410,7 +410,7 @@ function getConfig(opts = {}) {
 
     // general gates
     perfectMode: false,
-    requireStackedMAs: true,
+    requireStackedMAs: false,
     requireMaStackLite: false,
     requireUptrend: true,
     allowSmallRed: false,
@@ -418,7 +418,7 @@ function getConfig(opts = {}) {
     // regime pre-gate
     trendAllow: ["UP", "STRONG_UP"],
     allowWeakUpForDipOnly: true,
-    ma20SlopeBars: 4,
+    ma20SlopeBars: 2,
 
     // RR floors (raised)
     minRRbase: 1.35,
