@@ -392,56 +392,64 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
 /* ============================ Config ============================ */
 function getConfig(opts = {}) {
-const debug = !!opts.debug;
+  const debug = !!opts.debug;
   return {
     // general
     perfectMode: false,
 
-    // RR floors (kept modest; DIP trades often tighter)
-    minRRbase: 1.30,
-    minRRstrongUp: 1.45,
-    minRRweakUp: 1.55,
+    // RR floors (slightly higher; DIP has its own floor too)
+    minRRbase: 1.35,
+    minRRstrongUp: 1.5,
+    minRRweakUp: 1.6,
 
-    // headroom & extension guards
-    nearResVetoATR: 0.35,
-    nearResVetoPct: 0.8,
+    // headroom & extension guards (align with dip.js headroomOK of ≥0.50 ATR / ≥1.00%)
+    nearResVetoATR: 0.5,
+    nearResVetoPct: 1.0,
     maxATRfromMA25: 2.4,
 
     // overbought guards
     hardRSI: 78,
     softRSI: 72,
 
-    // --- DIP proximity/structure knobs (new) ---
-    dipMaSupportATRBands: 0.9, // MA proximity in ATRs (try 0.8–1.1)
-    dipStructTolATR: 1.0, // structure proximity in ATRs (was 1.2 in older cfg)
-    dipStructTolPct: 3.5, // fallback % tolerance for structure
-    // (optional) if you want explicit caps instead of the internal defaults:
-    dipMaxRecoveryPct: 150, // base “already recovered” cap (in % of dip span)
-    dipMaxRecoveryStrongUp: 185,
-    fibTolerancePct: 12, // +- tolerance around 50–61.8 retrace window
-    pullbackDryFactor: 1.6, // avg pullback vol vs 20SMA(vol) (<= means “dry”)
-    bounceHotFactor: 1.05, // today vol vs 20SMA(vol) (>= means “hot”)
+    // --- DIP proximity/structure knobs (tighter but still forgiving) ---
+    dipMaSupportATRBands: 0.8, // was 0.9
+    dipStructTolATR: 0.9, // was 1.0
+    dipStructTolPct: 3.0, // was 3.5
 
-    // DIP parameters (diagnostic-friendly; your dip.js can use them)
-    dipMinPullbackATR: 0.6,
-    dipMaxBounceAgeBars: 5,
-    dipMinBounceStrengthATR: 0.8,
+    // recovery caps (trim late entries; keep strong-up allowance)
+    dipMaxRecoveryPct: 140, // was 150
+    dipMaxRecoveryStrongUp: 165, // was 185
+
+    // fib window tolerance
+    fibTolerancePct: 9, // was 12
+
+    // volume regime
+    pullbackDryFactor: 1.2, // was 1.6 (<= means “dry”: require drier pullback)
+    bounceHotFactor: 1.08, // was 1.05 (>= means “hot”: bounce should be a bit hot)
+
+    // DIP parameters (used by dip.js)
+    dipMinPullbackPct: 4.8, // new: minimum pullback in %
+    dipMinPullbackATR: 1.9, // was 0.6
+    dipMaxBounceAgeBars: 7, // was 5
+    dipMinBounceStrengthATR: 0.72, // was 0.8 (other gates tightened; this stays reasonable)
+    dipMinRR: 1.55, // new: DIP-specific RR floor
 
     // allow DIPs even if broader regime softened
     allowDipInDowntrend: false,
 
-    // min stop distance (NOT forced for DIP; kept for non-DIP fallbacks)
+    // min stop distance (used by non-DIP fallbacks; DIP stop logic handled in dip.js)
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
 
-    // probation OFF by default
+    // probation
     allowProbation: true,
 
     debug,
   };
 }
+
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
