@@ -852,7 +852,38 @@ export async function fetchStockAnalysis({
 
       // 3) history + enrichment
       const historicalData = await fetchHistoricalData(stock.ticker);
+      // after: const historicalData = await fetchHistoricalData(stock.ticker);
       stock.historicalData = historicalData || [];
+
+      // 👇 append a synthetic “today” candle if history stops at yesterday
+      {
+        const today = new Date();
+        const last = stock.historicalData.at(-1);
+        const sameDay =
+          last?.date &&
+          last.date.getFullYear() === today.getFullYear() &&
+          last.date.getMonth() === today.getMonth() &&
+          last.date.getDate() === today.getDate();
+
+        if (!sameDay) {
+          const o =
+            Number(stock.openPrice) ||
+            Number(last?.close) ||
+            Number(stock.currentPrice);
+          const c = Number(stock.currentPrice) || o;
+          const h = Math.max(o, c, Number(stock.highPrice) || -Infinity);
+          const l = Math.min(o, c, Number(stock.lowPrice) || Infinity);
+          stock.historicalData.push({
+            date: today,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+            volume: Number(stock.todayVolume) || 0, // you already expose this from /api/stocks
+          });
+        }
+      }
+
       enrichForTechnicalScore(stock);
 
       // 4) scores
