@@ -94,8 +94,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
     return out;
   }
- // normalize volume to a finite number for downstream calcs
- if (!Number.isFinite(last.volume)) last.volume = 0;
+  // normalize volume to a finite number for downstream calcs
+  if (!Number.isFinite(last.volume)) last.volume = 0;
 
   const px = num(stock.currentPrice) || num(last.close);
   const openPx = num(stock.openPrice) || num(last.open) || px;
@@ -122,17 +122,47 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   };
 
   // ----- STRICT Regime Pre-Gate -----
+  const slope = ma20SlopeInfo(data, cfg.ma20SlopeBars);
+
   const regimeTrendOk =
     cfg.trendAllow.includes(ms.trend) ||
     (cfg.allowWeakUpForDipOnly && ms.trend === "WEAK_UP");
   const maStackLiteOk = !cfg.requireMaStackLite
     ? true
     : ms.ma20 > ms.ma25 && ms.ma25 > ms.ma50;
-  const ma20SlopeOkFlag = ma20SlopeOk(data, cfg.ma20SlopeBars);
+  const ma20SlopeOkFlag = slope.ok;
   const stackedReqOk = !cfg.requireStackedMAs || !!ms.stackedBull;
 
   const regimeOK =
     regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
+
+  // Numeric regime trace
+  T(
+    "regime",
+    "preGate",
+    regimeOK,
+    regimeOK ? "Regime OK" : "Regime failed",
+    {
+      trend: ms.trend,
+      ma: {
+        ma5: ms.ma5,
+        ma20: ms.ma20,
+        ma25: ms.ma25,
+        ma50: ms.ma50,
+        ma75: ms.ma75,
+        ma200: ms.ma200,
+      },
+      stackedBull: ms.stackedBull,
+      stackedBullLite: ms.stackedBullLite,
+      slopeBars: slope.bars,
+      ma20_now: slope.now,
+      ma20_prev: slope.prev,
+      ma20_diff: slope.diff,
+      checks: { regimeTrendOk, maStackLiteOk, ma20SlopeOkFlag, stackedReqOk },
+    },
+    "verbose"
+  );
+
   tele.gates.regime = {
     pass: regimeOK,
     why: regimeOK
@@ -171,18 +201,39 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   };
   Object.assign(cfg, presets[ms.trend] || {});
 
-  // Price-action gate (no soft red-day override by default)
-   const priceActionGateRaw = px > Math.max(openPx, prevClose);
- let priceActionGate = priceActionGateRaw;
- if (!priceActionGateRaw && cfg.allowSmallRed) {
-   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
-   const redBodyATR = Math.max(0, (Math.max(openPx, prevClose) - px) / atr);
-   const msLocal = getMarketStructure(stock, data);
-   const aboveMA25 = msLocal.ma25 > 0 && px >= msLocal.ma25;
-   if (aboveMA25 && redBodyATR <= (cfg.smallRedMaxATR ?? 0.35)) {
-     priceActionGate = true; // tiny red while above MA25 → allowed
-   }
- }
+  // Price-action gate (with optional tiny-red override)
+  const priceActionGateRaw = px > Math.max(openPx, prevClose);
+  let priceActionGate = priceActionGateRaw;
+
+  let redBodyATR = 0,
+    aboveMA25 = false;
+  if (!priceActionGateRaw && cfg.allowSmallRed) {
+    const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+    redBodyATR = Math.max(0, (Math.max(openPx, prevClose) - px) / atr);
+    const msLocal = getMarketStructure(stock, data);
+    aboveMA25 = msLocal.ma25 > 0 && px >= msLocal.ma25;
+    if (aboveMA25 && redBodyATR <= (cfg.smallRedMaxATR ?? 0.35)) {
+      priceActionGate = true;
+    }
+  }
+
+  T(
+    "price",
+    "gate",
+    priceActionGate,
+    priceActionGate ? "Price-action OK" : "Price-action failed",
+    {
+      px,
+      openPx,
+      prevClose,
+      dayPct,
+      allowSmallRed: cfg.allowSmallRed,
+      redBodyATR,
+      aboveMA25,
+    },
+    "verbose"
+  );
+
   tele.gates.priceAction = {
     pass: !!priceActionGate,
     why: priceActionGate ? "" : "price ≤ max(open, prevClose)",
@@ -196,6 +247,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ms.trend === "STRONG_UP" ||
       ms.trend === "WEAK_UP") &&
       px >= (ms.ma5 || 0) * 0.998);
+
+  T(
+    "structure",
+    "gate",
+    structureGateOk,
+    structureGateOk ? "Structure OK" : "Structure failed",
+    { trend: ms.trend, px, ma5: ms.ma5 },
+    "verbose"
+  );
+
   tele.gates.structure = {
     pass: !!structureGateOk,
     why: structureGateOk ? "" : "trend not up or price < MA5",
@@ -222,6 +283,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   if (priceActionGate) {
     const dip = detectDipBounce(stock, data, cfg, U);
     checks.dip = dip;
+
+    T(
+      "dip",
+      "detect",
+      !!dip.trigger,
+      dip.trigger ? "DIP trigger" : dip.waitReason || "DIP not ready",
+      { why: dip.why, waitReason: dip.waitReason, diag: dip.diagnostics },
+      "verbose"
+    );
+
     tele.dip = {
       trigger: !!dip.trigger,
       waitReason: dip.waitReason || "",
@@ -234,6 +305,24 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
         kind: "DIP",
         data,
       });
+
+      T(
+        "rr",
+        "calc",
+        rr.acceptable,
+        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)} risk ${fmt(
+          rr.risk
+        )} reward ${fmt(rr.reward)}`,
+        {
+          stop: rr.stop,
+          target: rr.target,
+          atr: rr.atr,
+          probation: rr.probation,
+          kind: "DIP",
+        },
+        "verbose"
+      );
+
       tele.rr = toTeleRR(rr);
 
       if (!rr.acceptable) {
@@ -249,6 +338,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           dip.nearestRes,
           "DIP"
         );
+
+        T(
+          "guard",
+          "veto",
+          !gv.veto,
+          gv.veto ? `VETO: ${gv.reason}` : "No veto",
+          gv.details,
+          "verbose"
+        );
+
         tele.guard = {
           checked: true,
           veto: !!gv.veto,
@@ -278,11 +377,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // ======================= SPC / OXR / BPB (default OFF) =======================
   if (cfg.enableSPC && priceActionGate && ms.trend !== "WEAK_UP") {
     const spc = detectSPC(stock, data, cfg, U);
+    T(
+      "spc",
+      "detect",
+      !!spc.trigger,
+      spc.trigger ? "SPC trigger" : spc.waitReason || "SPC not ready",
+      { why: spc.why, waitReason: spc.waitReason, diag: spc.diagnostics },
+      "verbose"
+    );
     if (spc.trigger && structureGateOk) {
       const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
         kind: "SPC",
         data,
       });
+      T(
+        "rr",
+        "calc",
+        rr.acceptable,
+        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
+        { stop: rr.stop, target: rr.target, kind: "SPC" },
+        "verbose"
+      );
       if (rr.acceptable) {
         const gv = guardVeto(
           stock,
@@ -293,6 +408,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           cfg,
           spc.nearestRes,
           "SPC"
+        );
+        T(
+          "guard",
+          "veto",
+          !gv.veto,
+          gv.veto ? `VETO: ${gv.reason}` : "No veto",
+          gv.details,
+          "verbose"
         );
         if (!gv.veto)
           candidates.push({
@@ -309,11 +432,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   if (cfg.enableBPB && priceActionGate && ms.trend !== "WEAK_UP") {
     const bpb = detectBPB(stock, data, cfg, U);
+    T(
+      "bpb",
+      "detect",
+      !!bpb.trigger,
+      bpb.trigger ? "BPB trigger" : bpb.waitReason || "BPB not ready",
+      { why: bpb.why, waitReason: bpb.waitReason, diag: bpb.diagnostics },
+      "verbose"
+    );
     if (bpb.trigger && structureGateOk) {
       const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
         kind: "BPB",
         data,
       });
+      T(
+        "rr",
+        "calc",
+        rr.acceptable,
+        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
+        { stop: rr.stop, target: rr.target, kind: "BPB" },
+        "verbose"
+      );
       if (rr.acceptable) {
         const gv = guardVeto(
           stock,
@@ -324,6 +463,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           cfg,
           bpb.nearestRes,
           "BPB"
+        );
+        T(
+          "guard",
+          "veto",
+          !gv.veto,
+          gv.veto ? `VETO: ${gv.reason}` : "No veto",
+          gv.details,
+          "verbose"
         );
         if (!gv.veto)
           candidates.push({
@@ -341,11 +488,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // OXR left available for advanced users but heaviest filters apply
   if (cfg.enableOXR && priceActionGate && ms.trend !== "WEAK_UP") {
     const oxr = detectOXR(stock, data, cfg, U);
+    T(
+      "oxr",
+      "detect",
+      !!oxr.trigger,
+      oxr.trigger ? "OXR trigger" : oxr.waitReason || "OXR not ready",
+      { why: oxr.why, waitReason: oxr.waitReason, diag: oxr.diagnostics },
+      "verbose"
+    );
     if (oxr.trigger && structureGateOk) {
       const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
         kind: "OXR",
         data,
       });
+      T(
+        "rr",
+        "calc",
+        rr.acceptable,
+        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
+        { stop: rr.stop, target: rr.target, kind: "OXR" },
+        "verbose"
+      );
       if (rr.acceptable && rr.ratio >= (cfg.oxrMinRR ?? 2.2)) {
         const gv = guardVeto(
           stock,
@@ -356,6 +519,14 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           cfg,
           oxr.nearestRes,
           "OXR"
+        );
+        T(
+          "guard",
+          "veto",
+          !gv.veto,
+          gv.veto ? `VETO: ${gv.reason}` : "No veto",
+          gv.details,
+          "verbose"
         );
         if (!gv.veto)
           candidates.push({
@@ -483,15 +654,15 @@ function getConfig(opts = {}) {
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
-    const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
-    const m = {
-      ma5:   sma(data, 5),
-      ma20:  sma(data, 20),
-      ma25:  sma(data, 25),
-      ma50:  sma(data, 50),
-      ma75:  sma(data, 75),
-      ma200: sma(data, 200),
-    };
+  const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
+  const m = {
+    ma5: sma(data, 5),
+    ma20: sma(data, 20),
+    ma25: sma(data, 25),
+    ma50: sma(data, 50),
+    ma75: sma(data, 75),
+    ma200: sma(data, 200),
+  };
 
   let score = 0;
   if (px > m.ma25 && m.ma25 > 0) score++;
@@ -804,12 +975,22 @@ function deRound(v) {
   if (/(00|50|25|75)$/.test(s)) return v - 3 * (inferTickFromPrice(v) || 0.1);
   return v;
 }
-function ma20SlopeOk(data, bars = 5) {
-  if (!Array.isArray(data) || data.length < 20 + bars) return false;
+
+// New: verbose slope info (used in logs and gates)
+function ma20SlopeInfo(data, bars = 2) {
+  if (!Array.isArray(data) || data.length < 20 + bars) {
+    return { ok: false, now: NaN, prev: NaN, diff: NaN, bars };
+  }
   const now = sma(data, 20);
   const prev = sma(data.slice(0, -bars), 20);
-  return Number.isFinite(now) && Number.isFinite(prev) && now - prev > 0;
+  const diff = (Number(now) || 0) - (Number(prev) || 0);
+  const ok = Number.isFinite(now) && Number.isFinite(prev) && diff > 0;
+  return { ok, now, prev, diff, bars };
 }
+function ma20SlopeOk(data, bars = 5) {
+  return ma20SlopeInfo(data, bars).ok;
+}
+
 function rsiFromData(data, len = 14) {
   const n = data.length;
   if (n < len + 1) return 50;
@@ -941,4 +1122,39 @@ function toTeleRR(rr) {
   };
 }
 
-export { getConfig };
+// Optional: handy compact summary for console logs in callers
+function summarizeTelemetryForLog(tele) {
+  try {
+    const g = tele?.gates || {};
+    const rr = tele?.rr || {};
+    const guard = tele?.guard || {};
+    return {
+      gates: {
+        regime: { pass: g.regime?.pass, why: g.regime?.why },
+        price: { pass: g.priceAction?.pass, why: g.priceAction?.why },
+        structure: { pass: g.structure?.pass, why: g.structure?.why },
+        stacked: { pass: g.stacked?.pass, why: g.stacked?.why },
+      },
+      rr: {
+        checked: rr.checked,
+        acceptable: rr.acceptable,
+        ratio: rr.ratio,
+        need: rr.need,
+        stop: rr.stop,
+        target: rr.target,
+        probation: rr.probation,
+      },
+      guard: {
+        checked: guard.checked,
+        veto: guard.veto,
+        reason: guard.reason,
+        details: guard.details,
+      },
+      context: tele?.context,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export { getConfig, summarizeTelemetryForLog };
