@@ -7,7 +7,10 @@
 // NOTE: API base is fixed and DEBUG is always true per your request.
 
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
-import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
+import {
+  analyzeSwingTradeEntry,
+  summarizeBlocks,
+} from "./swingTradeEntryTiming.js";
 import {
   getTechnicalScore,
   getAdvancedFundamentalScore,
@@ -773,6 +776,15 @@ export async function fetchStockAnalysis({
   const emit = typeof onItem === "function" ? onItem : () => {};
   const errors = [];
 
+  // collect detailed telemetry per item
+  const teleList = [];
+  const histo = {
+    slopeBuckets: Object.create(null),
+    rrShortfall: [],
+    headroom: [],
+    distMA25: [],
+  };
+
   const summary = {
     totals: { count: 0, buyNow: 0, noBuy: 0 },
     bySenti: Object.create(null),
@@ -921,6 +933,19 @@ export async function fetchStockAnalysis({
         dataForLevels, // for RR/headroom etc.
         { debug: true, dataForGates } // hand the completed-bars view to the analyzer
       );
+       // keep detailed telemetry for session-level diagnostics
+ if (finalSignal?.telemetry) {
+   teleList.push(finalSignal.telemetry);
+   // merge histograms
+   const t = finalSignal.telemetry?.histos || {};
+   for (const [k, v] of Object.entries(t.slopeBuckets || {})) {
+     histo.slopeBuckets[k] = (histo.slopeBuckets[k] || 0) + v;
+   }
+   if (Array.isArray(t.rrShortfall)) histo.rrShortfall.push(...t.rrShortfall);
+   if (Array.isArray(t.headroom))    histo.headroom.push(...t.headroom);
+   if (Array.isArray(t.distMA25))    histo.distMA25.push(...t.distMA25);
+ }
+
       log("Swing entry timing done");
 
       stock.isBuyNow = finalSignal.buyNow;
@@ -1099,6 +1124,17 @@ export async function fetchStockAnalysis({
       .sort((a, b) => b.count - a.count)
       .slice(0, k);
   }
+
+   // session-level block breakdowns & histograms
+ const blocksTop = summarizeBlocks(teleList); // [{code,count,examples,ctxSample}]
+ // optional: RR shortfall binning for a quick “how far off” view
+ const rrShortBins = histo.rrShortfall.reduce((m, r) => {
+   const s = Number(r.short) || 0;
+   const key = s <= 0.05 ? "≤0.05" : s <= 0.10 ? "0.05..0.10" : s <= 0.25 ? "0.10..0.25" : ">0.25";
+   m[key] = (m[key] || 0) + 1;
+   return m;
+ }, {});
+
   const summaryOut = {
     ...summary,
     sentiTable: sentiRows,
@@ -1106,6 +1142,14 @@ export async function fetchStockAnalysis({
     topReasons: {
       buy: topK(summary.reasons.buy, 10),
       noBuy: topK(summary.reasons.noBuy, 10),
+    },
+        // NEW: detailed diagnostics (compact)
+    debug: {
+      blocksTop,                 // grouped “why blocked” with examples
+      slopeBuckets: histo.slopeBuckets,
+      rrShortfallBins: rrShortBins,
+      headroomSample: histo.headroom.slice(0, 50),   // keep small samples in console
+      distMA25Sample: histo.distMA25.slice(0, 50),
     },
   };
   // after building summaryOut:
