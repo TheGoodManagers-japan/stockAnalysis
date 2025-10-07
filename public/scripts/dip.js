@@ -125,66 +125,55 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
 
   // --- Support (MA20/25/50 or tested structure) ---
-  // --- Support (ATR-based MA bands OR tested/micro structure) ---
-  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 0.9, 0.6) * atr; // default 0.9 ATR
-  const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
-  const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
-  // Keep MA50 as a secondary anchor; in strong-up regimes it may sit far below.
-  // Let it count only when price actually dipped into that area.
-  const nearMA50 =
-    ma50 > 0 && Math.abs(dipLow - ma50) <= Math.max(bandATR, 1.2 * atr);
-
-  // Prior structure: broaden lookback slightly and keep low touch count (1)
-  const structureSupport = (() => {
-    const lookback = data.slice(-120, -8);
-    const tolAbs = Math.max(
-      (cfg.dipStructTolATR ?? 1.0) * atr,
-      dipLow * ((cfg.dipStructTolPct ?? 3.5) / 100)
-    );
-    let touches = 0,
-      lastTouchIdx = -999;
-    for (let i = 2; i < lookback.length - 2; i++) {
-      const L = num(lookback[i].low);
-      const isPivotLow =
-        L < num(lookback[i - 1].low) && L < num(lookback[i + 1].low);
-      if (
-        isPivotLow &&
-        Math.abs(L - dipLow) <= tolAbs &&
-        i - lastTouchIdx >= 2
-      ) {
-        touches++;
-        lastTouchIdx = i;
-        if (touches >= Math.min(cfg.dipStructMinTouches ?? 1, 2)) return true;
+    // --- Prepare bar refs & bounce strength *early* (used by multiple gates) ---
+    const d0 = data.at(-1), d1 = data.at(-2);
+    const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
+  
+    // --- Support (ATR-based MA bands OR tested/micro structure) ---
+    const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 0.9, 0.6) * atr; // default 0.9 ATR
+    const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
+    const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
+    // Keep MA50 as a secondary anchor; let it count only when price actually dipped into that area.
+    const nearMA50 = ma50 > 0 && Math.abs(dipLow - ma50) <= Math.max(bandATR, 1.2 * atr);
+  
+    // Prior structure: broaden lookback slightly and keep low touch count (1)
+    const structureSupport = (() => {
+      const lookback = data.slice(-120, -8);
+      const tolAbs = Math.max(
+        (cfg.dipStructTolATR ?? 1.0) * atr,
+        dipLow * ((cfg.dipStructTolPct ?? 3.5) / 100)
+      );
+      let touches = 0, lastTouchIdx = -999;
+      for (let i = 2; i < lookback.length - 2; i++) {
+        const L = num(lookback[i].low);
+        const isPivotLow = L < num(lookback[i - 1].low) && L < num(lookback[i + 1].low);
+        if (isPivotLow && Math.abs(L - dipLow) <= tolAbs && i - lastTouchIdx >= 2) {
+          touches++; lastTouchIdx = i;
+          if (touches >= Math.min(cfg.dipStructMinTouches ?? 1, 2)) return true;
+        }
       }
-    }
-    return false;
-  })();
-
-  // NEW: micro-base: 2 recent pivots within 0.5 ATR of current dip
-  const microBase = (() => {
-    const win = data.slice(-20);
-    let hits = 0;
-    for (let i = 2; i < win.length - 2; i++) {
-      const L = num(win[i].low);
-      const isPivot = L < num(win[i - 1].low) && L < num(win[i + 1].low);
-      if (isPivot && Math.abs(L - dipLow) <= 0.5 * atr) hits++;
-    }
-    return hits >= 2;
-  })();
-
-  // Strong bounce override for support (keeps false negatives down on TSE)
-  const strongBounceOverride =
-    (bounceStrengthATR >= 1.0 &&
-      num(data.at(-1).close) > num(data.at(-2).high)) ||
-    bounceStrengthATR >= 1.1;
-
-  const nearSupport =
-    nearMA20 ||
-    nearMA25 ||
-    nearMA50 ||
-    structureSupport ||
-    microBase ||
-    strongBounceOverride;
+      return false;
+    })();
+  
+    // NEW: micro-base: 2 recent pivots within 0.5 ATR of current dip
+    const microBase = (() => {
+      const win = data.slice(-20);
+      let hits = 0;
+      for (let i = 2; i < win.length - 2; i++) {
+        const L = num(win[i].low);
+        const isPivot = L < num(win[i - 1].low) && L < num(win[i + 1].low);
+        if (isPivot && Math.abs(L - dipLow) <= 0.5 * atr) hits++;
+      }
+      return hits >= 2;
+    })();
+  
+    // Strong bounce override for support (needs bounceStrengthATR and d0/d1 defined above)
+    const strongBounceOverride =
+      (bounceStrengthATR >= 1.0 && num(d0.close) > num(d1.high)) ||
+      bounceStrengthATR >= 1.1;
+  
+    const nearSupport =
+      nearMA20 || nearMA25 || nearMA50 || structureSupport || microBase || strongBounceOverride;
 
   if (!nearSupport) {
     const why = "not at adaptive support (MA±ATR / structure)";
@@ -223,14 +212,12 @@ export function detectDipBounce(stock, data, cfg, U) {
       ? pullbackVol <= avgVol20 * Math.max(cfg.pullbackDryFactor, 1.3)
       : true;
 
-  const d0 = data.at(-1),
-    d1 = data.at(-2);
+  
   const bounceHotX = Math.min(cfg.bounceHotFactor || 1.0, 1.18);
   const bounceVolHot =
     avgVol20 > 0 ? num(d0.volume) >= avgVol20 * bounceHotX : true;
 
-  // --- Bounce confirmation (quality, slightly relaxed) ---
-  const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
+
 
   // "Immature" bounce handling: allow green seed bars to continue to quality checks.
   // This reduces false negatives when the low forms today and the close ≈ low.
