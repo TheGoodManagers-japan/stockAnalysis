@@ -149,6 +149,40 @@ function safeJsonParse(text) {
 
 /* ---- Helpers required by getTradeManagementSignal_V3 ---- */
 
+// Built from your backtests (actual + rejected).
+// If a combo isn't listed, we return 3 (neutral) by default.
+const SENTIMENT_COMBO_SCORE = {
+  "LT1-ST6": 100, "LT1-ST7": 98,  "LT1-ST2": 96,  "LT1-ST4": 94,  "LT1-ST5": 92,
+  "LT4-ST2": 90,  "LT4-ST6": 89,  "LT4-ST4": 88,  "LT2-ST7": 87,  "LT2-ST4": 86,
+  "LT2-ST6": 85,  "LT4-ST1": 84,  "LT4-ST7": 83,  "LT4-ST5": 82,  "LT3-ST1": 80,
+  "LT3-ST4": 79,  "LT3-ST3": 78,  "LT3-ST5": 77,  "LT3-ST2": 76,  "LT3-ST6": 75,
+  "LT5-ST7": 74,  "LT6-ST6": 72,  "LT6-ST4": 71,  "LT6-ST5": 70,  "LT7-ST5": 68,
+  "LT7-ST4": 67,  "LT7-ST6": 66,  "LT7-ST3": 65,  "LT7-ST2": 64,  "LT7-ST7": 63,
+  "LT5-ST2": 62,  "LT1-ST1": 61,  "LT2-ST1": 60,  "LT5-ST3": 59,  "LT5-ST4": 58,
+  "LT5-ST1": 56,  "LT6-ST1": 55,  "LT6-ST3": 54,  "LT6-ST2": 53,  "LT5-ST6": 52,
+  "LT4-ST3": 51,  "LT2-ST3": 45,  "LT1-ST3": 44,  "LT3-ST7": 40,  "LT3-ST6": 38,
+  "LT2-ST5": 36
+};
+
+// Score → rank (1..5)
+function rankFromScore(score) {
+  if (score >= 90) return 1; // really good
+  if (score >= 80) return 2; // good
+  if (score >= 65) return 3; // neutral/ok
+  if (score >= 50) return 4; // weak
+  return 5;                  // avoid
+}
+
+export function getSentimentCombinationRank(ST, LT) {
+  const key = `LT${Number(LT) || 0}-ST${Number(ST) || 0}`;
+  const score = SENTIMENT_COMBO_SCORE[key];
+  return score == null ? 3 : rankFromScore(score);
+}
+
+// usage:
+// const rank = getSentimentCombinationRank(6, 1); // e.g. LT1-ST6 → 1
+
+
 // Round a number safely
 function round0(v) {
   return Math.round(Number(v) || 0);
@@ -883,19 +917,19 @@ export async function fetchStockAnalysis({
         obvMA20: yahooData.obvMA20,
         atr14: yahooData.atr14,
         enterpriseValue: yahooData.enterpriseValue,
-       totalDebt: yahooData.totalDebt,
-       totalCash: yahooData.totalCash,
-       freeCashflow: yahooData.freeCashflow,
-       ebit: yahooData.ebit,
-       ebitda: yahooData.ebitda,
-       sharesOutstanding: yahooData.sharesOutstanding,
-       tangibleBookValue: yahooData.tangibleBookValue,
-       evToEbit: yahooData.evToEbit,
-       evToEbitda: yahooData.evToEbitda,
-       fcfYieldPct: yahooData.fcfYieldPct,
-       buybackYieldPct: yahooData.buybackYieldPct,
-       shareholderYieldPct: yahooData.shareholderYieldPct,
-       ptbv: yahooData.ptbv,
+        totalDebt: yahooData.totalDebt,
+        totalCash: yahooData.totalCash,
+        freeCashflow: yahooData.freeCashflow,
+        ebit: yahooData.ebit,
+        ebitda: yahooData.ebitda,
+        sharesOutstanding: yahooData.sharesOutstanding,
+        tangibleBookValue: yahooData.tangibleBookValue,
+        evToEbit: yahooData.evToEbit,
+        evToEbitda: yahooData.evToEbitda,
+        fcfYieldPct: yahooData.fcfYieldPct,
+        buybackYieldPct: yahooData.buybackYieldPct,
+        shareholderYieldPct: yahooData.shareholderYieldPct,
+        ptbv: yahooData.ptbv,
       };
 
       // 3) history + enrichment
@@ -947,26 +981,26 @@ export async function fetchStockAnalysis({
       enrichForTechnicalScore(stock);
 
       // 4) scores
-      
- // 4) scores (value-first JP)
- // Technicals don’t drive valuation/tier now; keep 0 to be explicit
- stock.technicalScore   = 0;
- stock.fundamentalScore = getAdvancedFundamentalScore(stock); // 0..10
- stock.valuationScore   = getValuationScore(stock);           // 0..10
- stock.tier = getNumericTier(
-   {
-     technicalScore: stock.technicalScore,
-     fundamentalScore: stock.fundamentalScore,
-     valuationScore: stock.valuationScore,
-     // tiny guards used by getNumericTier anti-trap tweaks:
-     debtEquityRatio: stock.debtEquityRatio,
-     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
-   },
-   { mode: "value_only" }
- );
- const quad = classifyValueQuadrant(stock);
- stock.valueQuadrant = quad.label;   // "Great & Cheap", etc.
- stock.valueVerdict  = quad.verdict; // short text summary
+
+      // 4) scores (value-first JP)
+      // Technicals don’t drive valuation/tier now; keep 0 to be explicit
+      stock.technicalScore = 0;
+      stock.fundamentalScore = getAdvancedFundamentalScore(stock); // 0..10
+      stock.valuationScore = getValuationScore(stock); // 0..10
+      stock.tier = getNumericTier(
+        {
+          technicalScore: stock.technicalScore,
+          fundamentalScore: stock.fundamentalScore,
+          valuationScore: stock.valuationScore,
+          // tiny guards used by getNumericTier anti-trap tweaks:
+          debtEquityRatio: stock.debtEquityRatio,
+          epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+        },
+        { mode: "value_only" }
+      );
+      const quad = classifyValueQuadrant(stock);
+      stock.valueQuadrant = quad.label; // "Great & Cheap", etc.
+      stock.valueVerdict = quad.verdict; // short text summary
 
       // 5) sentiment horizons
       const horizons = getComprehensiveMarketSentiment(stock, historicalData);
@@ -977,6 +1011,16 @@ export async function fetchStockAnalysis({
       stock.shortTermConf = horizons.shortTerm.confidence;
       stock.longTermConf = horizons.longTerm.confidence;
 
+      // 👇 NEW: combo key + rank (1..5; 1=really good, 5=avoid)
+      stock.sentimentComboKey = sentiKey(
+        stock.shortTermScore,
+        stock.longTermScore
+      );
+      stock.sentimentComboRank = getSentimentCombinationRank(
+        stock.shortTermScore,
+        stock.longTermScore
+      );
+
       // 6) entry timing
       log("Running swing entry timing…");
       const finalSignal = analyzeSwingTradeEntry(
@@ -984,23 +1028,24 @@ export async function fetchStockAnalysis({
         dataForLevels, // for RR/headroom etc.
         { debug: true, dataForGates } // hand the completed-bars view to the analyzer
       );
-       // keep detailed telemetry for session-level diagnostics
- if (finalSignal?.telemetry) {
-   teleList.push(finalSignal.telemetry);
-   // merge histograms
-   const t = finalSignal.telemetry?.histos || {};
-   for (const [k, v] of Object.entries(t.slopeBuckets || {})) {
-     histo.slopeBuckets[k] = (histo.slopeBuckets[k] || 0) + v;
-   }
-   if (Array.isArray(t.rrShortfall)) histo.rrShortfall.push(...t.rrShortfall);
-   if (Array.isArray(t.headroom)) histo.headroom.push(...t.headroom);
-   if (Array.isArray(t.distMA25)) histo.distMA25.push(...t.distMA25);
-   // NEW: merge numeric distros
-   const d = finalSignal.telemetry?.distros || {};
-   for (const key of Object.keys(distro)) {
-     if (Array.isArray(d[key])) distro[key].push(...d[key]);
-   }
- }
+      // keep detailed telemetry for session-level diagnostics
+      if (finalSignal?.telemetry) {
+        teleList.push(finalSignal.telemetry);
+        // merge histograms
+        const t = finalSignal.telemetry?.histos || {};
+        for (const [k, v] of Object.entries(t.slopeBuckets || {})) {
+          histo.slopeBuckets[k] = (histo.slopeBuckets[k] || 0) + v;
+        }
+        if (Array.isArray(t.rrShortfall))
+          histo.rrShortfall.push(...t.rrShortfall);
+        if (Array.isArray(t.headroom)) histo.headroom.push(...t.headroom);
+        if (Array.isArray(t.distMA25)) histo.distMA25.push(...t.distMA25);
+        // NEW: merge numeric distros
+        const d = finalSignal.telemetry?.distros || {};
+        for (const key of Object.keys(distro)) {
+          if (Array.isArray(d[key])) distro[key].push(...d[key]);
+        }
+      }
 
       log("Swing entry timing done");
 
@@ -1105,6 +1150,7 @@ export async function fetchStockAnalysis({
         _api_c2_limitOrder: stock.limitOrder,
         _api_c2_isBuyNow: stock.isBuyNow,
         _api_c2_buyNowReason: stock.buyNowReason,
+        _api_c2_sentimentComboRank: stock.sentimentComboRank,
         _api_c2_managementSignalStatus: stock.managementSignalStatus,
         _api_c2_managementSignalReason: stock.managementSignalReason,
         _api_c2_otherData: JSON.stringify({
