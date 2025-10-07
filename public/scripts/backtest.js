@@ -1045,6 +1045,13 @@ function computeMetrics(trades) {
     ? Infinity
     : 0;
 
+  // ✅ FIX: count exits over ALL trades, not wins/losses subsets
+  const exits = {
+    target: trades.filter((t) => t.exitType === "TARGET").length,
+    stop: trades.filter((t) => t.exitType === "STOP").length,
+    time: trades.filter((t) => t.exitType === "TIME").length,
+  };
+
   return {
     trades: r2(n),
     winRate: r2(winRate),
@@ -1056,11 +1063,7 @@ function computeMetrics(trades) {
     avgRloss: r2(avgRloss),
     expR: r2(expR),
     profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : Infinity,
-    exits: {
-      target: wins.filter((t) => t.exitType === "TARGET").length, // informational only
-      stop: losses.filter((t) => t.exitType === "STOP").length,
-      time: trades.filter((t) => t.exitType === "TIME").length,
-    },
+    exits,
   };
 }
 function sum(arr) {
