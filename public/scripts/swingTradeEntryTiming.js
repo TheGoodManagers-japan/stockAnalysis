@@ -392,7 +392,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
 /* ============================ Config ============================ */
 function getConfig(opts = {}) {
-  const debug = !!opts.debug;
+const debug = !!opts.debug;
   return {
     // general
     perfectMode: false,
@@ -410,6 +410,17 @@ function getConfig(opts = {}) {
     // overbought guards
     hardRSI: 78,
     softRSI: 72,
+
+    // --- DIP proximity/structure knobs (new) ---
+    dipMaSupportATRBands: 0.9, // MA proximity in ATRs (try 0.8–1.1)
+    dipStructTolATR: 1.0, // structure proximity in ATRs (was 1.2 in older cfg)
+    dipStructTolPct: 3.5, // fallback % tolerance for structure
+    // (optional) if you want explicit caps instead of the internal defaults:
+    dipMaxRecoveryPct: 150, // base “already recovered” cap (in % of dip span)
+    dipMaxRecoveryStrongUp: 175,
+    fibTolerancePct: 12, // +- tolerance around 50–61.8 retrace window
+    pullbackDryFactor: 1.6, // avg pullback vol vs 20SMA(vol) (<= means “dry”)
+    bounceHotFactor: 1.05, // today vol vs 20SMA(vol) (>= means “hot”)
 
     // DIP parameters (diagnostic-friendly; your dip.js can use them)
     dipMinPullbackATR: 0.6,

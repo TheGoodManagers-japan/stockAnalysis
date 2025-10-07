@@ -125,25 +125,21 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
 
   // --- Support (MA20/25/50 or tested structure) ---
-  const band = Math.max(cfg.dipMaSupportPctBand, 9);
-  const nearMA20 =
-    ma20 > 0 &&
-    dipLow <= ma20 * (1 + band / 100) &&
-    dipLow >= ma20 * (1 - band / 100);
-  const nearMA25 =
-    ma25 > 0 &&
-    dipLow <= ma25 * (1 + band / 100) &&
-    dipLow >= ma25 * (1 - band / 100);
+  // --- Support (ATR-based MA bands OR tested/micro structure) ---
+  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 0.9, 0.6) * atr; // default 0.9 ATR
+  const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
+  const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
+  // Keep MA50 as a secondary anchor; in strong-up regimes it may sit far below.
+  // Let it count only when price actually dipped into that area.
   const nearMA50 =
-    ma50 > 0 &&
-    dipLow <= ma50 * (1 + band / 100) &&
-    dipLow >= ma50 * (1 - band / 100);
+    ma50 > 0 && Math.abs(dipLow - ma50) <= Math.max(bandATR, 1.2 * atr);
 
+  // Prior structure: broaden lookback slightly and keep low touch count (1)
   const structureSupport = (() => {
-    const lookback = data.slice(-80, -10);
+    const lookback = data.slice(-120, -8);
     const tolAbs = Math.max(
-      cfg.dipStructTolATR * atr,
-      dipLow * (Math.max(cfg.dipStructTolPct, 3.5) / 100)
+      (cfg.dipStructTolATR ?? 1.0) * atr,
+      dipLow * ((cfg.dipStructTolPct ?? 3.5) / 100)
     );
     let touches = 0,
       lastTouchIdx = -999;
@@ -158,15 +154,40 @@ export function detectDipBounce(stock, data, cfg, U) {
       ) {
         touches++;
         lastTouchIdx = i;
-        if (touches >= Math.min(cfg.dipStructMinTouches, 1)) return true; // allow 1 touch
+        if (touches >= Math.min(cfg.dipStructMinTouches ?? 1, 2)) return true;
       }
     }
     return false;
   })();
 
-  const nearSupport = nearMA20 || nearMA25 || nearMA50 || structureSupport;
+  // NEW: micro-base: 2 recent pivots within 0.5 ATR of current dip
+  const microBase = (() => {
+    const win = data.slice(-20);
+    let hits = 0;
+    for (let i = 2; i < win.length - 2; i++) {
+      const L = num(win[i].low);
+      const isPivot = L < num(win[i - 1].low) && L < num(win[i + 1].low);
+      if (isPivot && Math.abs(L - dipLow) <= 0.5 * atr) hits++;
+    }
+    return hits >= 2;
+  })();
+
+  // Strong bounce override for support (keeps false negatives down on TSE)
+  const strongBounceOverride =
+    (bounceStrengthATR >= 1.0 &&
+      num(data.at(-1).close) > num(data.at(-2).high)) ||
+    bounceStrengthATR >= 1.1;
+
+  const nearSupport =
+    nearMA20 ||
+    nearMA25 ||
+    nearMA50 ||
+    structureSupport ||
+    microBase ||
+    strongBounceOverride;
+
   if (!nearSupport) {
-    const why = "not at MA20/25/50 or tested structure";
+    const why = "not at adaptive support (MA±ATR / structure)";
     reasonTrace.push(why);
     return {
       trigger: false,
@@ -176,10 +197,16 @@ export function detectDipBounce(stock, data, cfg, U) {
         ma20,
         ma25,
         ma50,
+        bandATR,
+        distMA20_ATR: ma20 > 0 ? (dipLow - ma20) / Math.max(atr, 1e-9) : null,
+        distMA25_ATR: ma25 > 0 ? (dipLow - ma25) / Math.max(atr, 1e-9) : null,
+        distMA50_ATR: ma50 > 0 ? (dipLow - ma50) / Math.max(atr, 1e-9) : null,
         nearMA20,
         nearMA25,
         nearMA50,
         structureSupport,
+        microBase,
+        strongBounceOverride,
       },
       reasonTrace,
     };
@@ -204,7 +231,6 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Bounce confirmation (quality, slightly relaxed) ---
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
-
 
   // "Immature" bounce handling: allow green seed bars to continue to quality checks.
   // This reduces false negatives when the low forms today and the close ≈ low.
@@ -519,10 +545,10 @@ export function detectDipBounce(stock, data, cfg, U) {
     if (isPivotLow) swingLowNear = Math.min(swingLowNear, L);
   }
   let stop = Math.min(
-       swingLowNear - 0.35 * atr,
-       ma25 > 0 ? ma25 - 0.65 * atr : Infinity
-     );
-     if (px - stop < 1.4 * atr) stop = px - 1.4 * atr;
+    swingLowNear - 0.35 * atr,
+    ma25 > 0 ? ma25 - 0.65 * atr : Infinity
+  );
+  if (px - stop < 1.4 * atr) stop = px - 1.4 * atr;
 
   // Target: respect clustered resistances; otherwise ATR/structure hybrid
   let target = Math.max(px + Math.max(2.4 * atr, px * 0.022), recentHigh20);
@@ -531,8 +557,8 @@ export function detectDipBounce(stock, data, cfg, U) {
   } else if (resList.length >= 2) {
     const r0 = resList[0],
       r1 = resList[1];
-      if (r0 - px < 0.6 * atr && r1 - px <= 3.4 * atr) {
-             target = Math.max(target, Math.min(r1, px + 3.4 * atr));
+    if (r0 - px < 0.6 * atr && r1 - px <= 3.4 * atr) {
+      target = Math.max(target, Math.min(r1, px + 3.4 * atr));
     }
   }
 
