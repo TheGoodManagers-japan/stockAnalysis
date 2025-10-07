@@ -41,6 +41,28 @@ function teleInit() {
       headroom: [], // [{atr, pct, nearestRes, ticker}]
       distMA25: [], // [{distATR, ma25, px, ticker}]
     },
+    /* numeric distributions for "how much to relax" analysis */
+    distros: {
+      // regime slope: actual % slope and missing diff to pass (raw & % of MA20)
+      slopePctVals: [], // e.g. -0.07 (% of MA20 over 2 bars)
+      slopeEpsNeeded: [], // raw delta needed to beat eps (same units as price)
+      slopeEpsNeededPct: [], // same as % of MA20
+      // price-action: size of red body in ATR and distance to MA25 in ATR
+      priceRedBodyATR: [],
+      priceDistMA25ATR: [],
+      // structure: margin vs MA5 when it fails (percent)
+      structureMarginPct: [],
+      // DIP quality mirrors (only pushed if dip.js provides them)
+      dipV20ratio: [],
+      dipBodyPct: [],
+      dipRangePctATR: [],
+      dipCloseDeltaATR: [],
+      dipPullbackPct: [],
+      dipPullbackATR: [],
+      dipRecoveryPct: [],
+      // optional: RSI sample near veto thresholds
+      rsiSample: [],
+    },
   };
 }
 function pushBlock(tele, code, gate, why, ctx = {}) {
@@ -168,11 +190,27 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const regimeOK =
     regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
 
-  // slope bucket (for grouping the 205 soft-fails, etc.)
+  // slope bucket (for grouping)
   const slopePct = Number(slopeInfo.now)
     ? (slopeInfo.diff / Math.max(1e-9, slopeInfo.now)) * 100
     : 0;
   const slopeBucket = bucketSlopePct(slopePct);
+
+  // store numeric distributions for slope
+  tele.distros.slopePctVals.push(+slopePct.toFixed(4));
+  if (!ma20SlopeOkFlag) {
+    // how much raw diff is missing to pass eps?
+    const neededRaw = Math.max(
+      0,
+      (cfg.ma20SlopeEps || 0) - (slopeInfo.diff || 0)
+    );
+    const neededPct = Number(slopeInfo.now)
+      ? (neededRaw / Math.max(1e-9, slopeInfo.now)) * 100
+      : 0;
+    tele.distros.slopeEpsNeeded.push(+neededRaw.toFixed(6));
+    tele.distros.slopeEpsNeededPct.push(+neededPct.toFixed(4));
+  }
+
   tele.gates.regime = {
     pass: regimeOK,
     why: regimeOK
@@ -212,6 +250,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ma20: msGates.ma20,
       ma25: msGates.ma25,
       ma50: msGates.ma50,
+      eps: cfg.ma20SlopeEps,
+      needRaw: tele.distros.slopeEpsNeeded.at(-1),
+      needPct: tele.distros.slopeEpsNeededPct.at(-1),
     });
     if (regimeTrendOk && maStackLiteOk && stackedReqOk) {
       T(
@@ -316,11 +357,30 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   };
   if (!priceActionGate) {
     reasons.push("Price-action gate failed.");
+    // numeric distros for price-action fail
+    try {
+      const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+      const ma25 = msGates.ma25 || 0;
+      if (Number.isFinite(redBodyATR)) {
+        tele.distros.priceRedBodyATR.push(+redBodyATR.toFixed(3));
+      }
+      if (ma25 > 0) {
+        tele.distros.priceDistMA25ATR.push(+((px - ma25) / atr).toFixed(3));
+      }
+    } catch {}
     pushBlock(tele, "PRICE_ACTION", "price", "price ≤ max(open, prevClose)", {
       px,
       openPx,
       prevClose,
       dayPct,
+      redBodyATR,
+      distMA25_ATR:
+        msGates.ma25 > 0
+          ? +(
+              (px - msGates.ma25) /
+              Math.max(num(stock.atr14), px * 0.005, 1e-6)
+            ).toFixed(3)
+          : null,
     });
   }
 
@@ -348,6 +408,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   if (!structureGateOk) {
     const margin =
       ((px - (msGates.ma5 || 0)) / Math.max(msGates.ma5 || 1e-9, 1e-9)) * 100;
+    tele.distros.structureMarginPct.push(+margin.toFixed(3));
     pushBlock(tele, "STRUCTURE", "structure", "trend not up or price < MA5", {
       trend: msGates.trend,
       px,
@@ -393,6 +454,29 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       why: dip.why || "",
       diagnostics: dip.diagnostics || {},
     };
+
+    // mirror selected numeric diagnostics into distros if present
+    try {
+      const d = dip?.diagnostics || {};
+      if (isFiniteN(d.bounceV20ratio ?? d.v20ratio))
+        tele.distros.dipV20ratio.push(
+          +(d.bounceV20ratio ?? d.v20ratio).toFixed(3)
+        );
+      if (isFiniteN(d.bodyPct))
+        tele.distros.dipBodyPct.push(+d.bodyPct.toFixed(3));
+      if (isFiniteN(d.rangePctATR ?? d.bounceStrengthATR))
+        tele.distros.dipRangePctATR.push(
+          +(d.rangePctATR ?? d.bounceStrengthATR).toFixed(3)
+        );
+      if (isFiniteN(d.closeDeltaATR))
+        tele.distros.dipCloseDeltaATR.push(+d.closeDeltaATR.toFixed(3));
+      if (isFiniteN(d.pullbackPct))
+        tele.distros.dipPullbackPct.push(+d.pullbackPct.toFixed(3));
+      if (isFiniteN(d.pullbackATR))
+        tele.distros.dipPullbackATR.push(+d.pullbackATR.toFixed(3));
+      if (isFiniteN(d.recoveryPct))
+        tele.distros.dipRecoveryPct.push(+d.recoveryPct.toFixed(3));
+    } catch {}
 
     if (!dip.trigger) {
       const wait = (dip.waitReason || "").toLowerCase();
@@ -987,6 +1071,10 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   details.rsi = rsi;
+  // store sample of RSIs to understand veto margins later
+  try {
+    if (isFiniteN(rsi)) teleGlobal._lastRSI = rsi;
+  } catch {}
   if (_kind === "OXR" && rsi >= (cfg.oxrRSI ?? cfg.softRSI)) {
     return {
       veto: true,
@@ -1384,6 +1472,7 @@ function summarizeTelemetryForLog(tele) {
       context: tele?.context,
       blocks: tele?.blocks,
       histos: tele?.histos,
+      distros: tele?.distros,
     };
   } catch {
     return {};

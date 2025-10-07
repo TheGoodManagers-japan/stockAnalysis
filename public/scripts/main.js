@@ -784,6 +784,22 @@ export async function fetchStockAnalysis({
     headroom: [],
     distMA25: [],
   };
+  const distro = {
+    slopePctVals: [],
+    slopeEpsNeeded: [],
+    slopeEpsNeededPct: [],
+    priceRedBodyATR: [],
+    priceDistMA25ATR: [],
+    structureMarginPct: [],
+    dipV20ratio: [],
+    dipBodyPct: [],
+    dipRangePctATR: [],
+    dipCloseDeltaATR: [],
+    dipPullbackPct: [],
+    dipPullbackATR: [],
+    dipRecoveryPct: [],
+    rsiSample: [],
+  };
 
   const summary = {
     totals: { count: 0, buyNow: 0, noBuy: 0 },
@@ -942,8 +958,13 @@ export async function fetchStockAnalysis({
      histo.slopeBuckets[k] = (histo.slopeBuckets[k] || 0) + v;
    }
    if (Array.isArray(t.rrShortfall)) histo.rrShortfall.push(...t.rrShortfall);
-   if (Array.isArray(t.headroom))    histo.headroom.push(...t.headroom);
-   if (Array.isArray(t.distMA25))    histo.distMA25.push(...t.distMA25);
+   if (Array.isArray(t.headroom)) histo.headroom.push(...t.headroom);
+   if (Array.isArray(t.distMA25)) histo.distMA25.push(...t.distMA25);
+   // NEW: merge numeric distros
+   const d = finalSignal.telemetry?.distros || {};
+   for (const key of Object.keys(distro)) {
+     if (Array.isArray(d[key])) distro[key].push(...d[key]);
+   }
  }
 
       log("Swing entry timing done");
@@ -1143,13 +1164,16 @@ export async function fetchStockAnalysis({
       buy: topK(summary.reasons.buy, 10),
       noBuy: topK(summary.reasons.noBuy, 10),
     },
-        // NEW: detailed diagnostics (compact)
+    // NEW: detailed diagnostics (compact)
     debug: {
-      blocksTop,                 // grouped “why blocked” with examples
+      blocksTop, // grouped “why blocked” with examples
       slopeBuckets: histo.slopeBuckets,
       rrShortfallBins: rrShortBins,
-      headroomSample: histo.headroom.slice(0, 50),   // keep small samples in console
+      headroomSample: histo.headroom.slice(0, 50), // keep small samples in console
       distMA25Sample: histo.distMA25.slice(0, 50),
+      distroSample: Object.fromEntries(
+        Object.entries(distro).map(([k, arr]) => [k, arr.slice(0, 100)])
+      ),
     },
   };
   // after building summaryOut:
