@@ -184,17 +184,18 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const maStackLiteOk = !cfg.requireMaStackLite
     ? true
     : msGates.ma20 > msGates.ma25 && msGates.ma25 > msGates.ma50;
-  const ma20SlopeOkFlag = slopeInfo.ok;
+  // compute slope as % of MA20 over the lookback and allow a tiny negative tolerance
+  const slopePct = Number(slopeInfo.now)
+    ? (slopeInfo.diff / Math.max(1e-9, slopeInfo.now)) * 100
+    : 0;
+  const ma20SlopeOkFlag =
+    slopeInfo.ok || slopePct >= (cfg.ma20SlopePctMin ?? -0.05);
   const stackedReqOk = !cfg.requireStackedMAs || !!msGates.stackedBull;
 
   const regimeOK =
     regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
 
   // slope bucket (for grouping)
-  const slopePct = Number(slopeInfo.now)
-    ? (slopeInfo.diff / Math.max(1e-9, slopeInfo.now)) * 100
-    : 0;
-  const slopeBucket = bucketSlopePct(slopePct);
 
   // store numeric distributions for slope
   tele.distros.slopePctVals.push(+slopePct.toFixed(4));
@@ -881,13 +882,14 @@ function getConfig(opts = {}) {
     requireMaStackLite: false,
     requireUptrend: true,
     allowSmallRed: true,
-    smallRedMaxATR: 0.35,
+    smallRedMaxATR: 0.6,
 
     // regime pre-gate
     trendAllow: ["UP", "STRONG_UP"],
     allowWeakUpForDipOnly: true,
     ma20SlopeBars: 2,
     ma20SlopeEps: 0.0005, // treat near-flat MA20 as OK intraday
+    ma20SlopePctMin: -0.05, // NEW: accept down to −0.05% over 2 bars
 
     // RR floors (raised)
     minRRbase: 1.35,
@@ -919,11 +921,11 @@ function getConfig(opts = {}) {
 
     // recovery caps (cut “already recovered” spam)
     dipMaxRecoveryPct: 115,
-    fibTolerancePct: 12,
+    fibTolerancePct: 15,
 
     // volume regime
     pullbackDryFactor: 1.8,
-    bounceHotFactor: 1.12,
+    bounceHotFactor: 1.05,
 
     // min stop distance (slightly wider)
     minStopATRStrong: 1.15,
