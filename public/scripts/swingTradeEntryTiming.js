@@ -411,7 +411,7 @@ function getConfig(opts = {}) {
     // general gates
     perfectMode: false,
     requireStackedMAs: true,
-    requireMaStackLite: true,
+    requireMaStackLite: false,
     requireUptrend: true,
     allowSmallRed: false,
 
