@@ -773,14 +773,18 @@ export async function fetchStockAnalysis({
   const emit = typeof onItem === "function" ? onItem : () => {};
   const errors = [];
 
-  // NEW: session summary
   const summary = {
     totals: { count: 0, buyNow: 0, noBuy: 0 },
-    bySenti: Object.create(null), // key -> total
-    buyBySenti: Object.create(null), // key -> buyNow count
+    bySenti: Object.create(null),
+    buyBySenti: Object.create(null),
     reasons: {
-      buy: Object.create(null), // reason -> count
-      noBuy: Object.create(null), // reason -> count
+      buy: Object.create(null),
+      noBuy: Object.create(null),
+    },
+    // NEW: tiers
+    tiers: {
+      byTier: Object.create(null), // tier -> total scans
+      buyByTier: Object.create(null), // tier -> buyNow true
     },
   };
 
@@ -874,6 +878,11 @@ export async function fetchStockAnalysis({
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
 
+      // NEW: tier aggregation
+      const tierKey = String(Number.isFinite(stock.tier) ? stock.tier : "na");
+      inc(summary.tiers.byTier, tierKey);
+      if (stock.isBuyNow) inc(summary.tiers.buyByTier, tierKey);
+
       // NEW: summary update
       summary.totals.count += 1;
       const k = sentiKey(stock.shortTermScore, stock.longTermScore);
@@ -961,7 +970,7 @@ export async function fetchStockAnalysis({
         _api_c2_score: stock.score,
         _api_c2_trigger: stock.trigger,
         _api_c2_finalScore: stock.finalScore,
-        _api_c2_tier: getNumericTier(stock),
+        _api_c2_tier: stock.tier,
         _api_c2_smartStopLoss: stock.smartStopLoss,
         _api_c2_smartPriceTarget: stock.smartPriceTarget,
         _api_c2_limitOrder: stock.limitOrder,
@@ -1014,6 +1023,17 @@ export async function fetchStockAnalysis({
   }
 
   log("Scan complete", { count, errorsCount: errors.length });
+
+  // NEW: derive buy-rate by tier
+  const tierRows = Object.keys(summary.tiers.byTier)
+    .map((tier) => {
+      const tot = summary.tiers.byTier[tier] || 0;
+      const buys = summary.tiers.buyByTier[tier] || 0;
+      const buyRate = tot ? Math.round((buys / tot) * 10000) / 100 : 0;
+      return { tier, total: tot, buys, buyRatePct: buyRate };
+    })
+    .sort((a, b) => b.buyRatePct - a.buyRatePct || b.total - a.total);
+
   // derive buy-rate by sentiment combo
   const sentiRows = Object.keys(summary.bySenti)
     .map((key) => {
@@ -1034,11 +1054,18 @@ export async function fetchStockAnalysis({
   const summaryOut = {
     ...summary,
     sentiTable: sentiRows,
+    tierTable: tierRows,
     topReasons: {
       buy: topK(summary.reasons.buy, 10),
       noBuy: topK(summary.reasons.noBuy, 10),
     },
   };
+  // after building summaryOut:
+  summaryOut.totals.buyRatePct = summaryOut.totals.count
+    ? Math.round((summaryOut.totals.buyNow / summaryOut.totals.count) * 10000) /
+      100
+    : 0;
+  
 
   // console snapshot
   // single, complete object in console
