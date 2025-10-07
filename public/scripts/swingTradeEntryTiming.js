@@ -505,14 +505,21 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   }
 
   // respect nearby resistances for targets
-  if (Array.isArray(ctx?.data) && ctx.data.length) {
-    const resList = findResistancesAbove(ctx.data, entryPx, stock);
-    if (resList.length) {
-      const head0 = resList[0] - entryPx;
-      if (head0 < 0.7 * atr && resList[1])
-        target = Math.max(target, resList[1]);
-    }
-  }
+    if (Array.isArray(ctx?.data) && ctx.data.length) {
+       const resList = findResistancesAbove(ctx.data, entryPx, stock);
+        if (resList.length) {
+          const head0 = resList[0] - entryPx;
+          // If the nearest resistance is too close, skip to the next cluster for DIPs
+          const hopThresh = ctx?.kind === "DIP" ? 1.1 * atr : 0.7 * atr;
+          if (head0 < hopThresh && resList[1]) {
+            target = Math.max(target, resList[1]);
+          }
+          // Ensure a healthier minimum extension for DIPs
+          if (ctx?.kind === "DIP") {
+            target = Math.max(target, entryPx + Math.max(2.6 * atr, entryPx * 0.022));
+          }
+        }
+      }
 
   const risk = Math.max(0.01, entryPx - stop);
   const reward = Math.max(0, target - entryPx);

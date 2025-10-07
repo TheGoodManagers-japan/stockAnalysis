@@ -27,9 +27,8 @@ export function detectDipBounce(stock, data, cfg, U) {
   const ma25Prev = sma(data.slice(0, -1), 25);
 
   const ma25SoftUp = ma25Prev > 0 && (ma25 >= ma25Prev * 0.997 || px >= ma25);
-  if (!ma25SoftUp) {
+  if (!ma25SoftUp)
     reasonTrace.push("MA25 not rising and price below MA25 (weak base)");
-  }
 
   const slopeDown20 = ma20Prev > 0 && ma20 < ma20Prev * 0.998;
   const slopeDown25 = ma25Prev > 0 && ma25 < ma25Prev * 0.998;
@@ -146,7 +145,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
 
   // --- Support (ATR-based MA bands OR tested/micro structure) ---
-  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 1.0, 0.6) * atr; // default widened to 1.0 ATR
+  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 1.0, 0.6) * atr; // widened to 1.0 ATR
   const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
   const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
   const nearMA50 =
@@ -358,7 +357,7 @@ export function detectDipBounce(stock, data, cfg, U) {
         rangeQuality,
         closeQuality,
         v20ok,
-        passedPreBounce: true, // <-- THIS is the key bit
+        passedPreBounce: true,
         code: "DIP_BOUNCE_WEAK",
       },
       reasonTrace,
@@ -371,7 +370,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     (bounceStrengthATR >= 0.9 ||
       (dryPullback && (closeAboveYHigh || bounceStrengthATR >= 0.85)));
 
-  // --- Optional: very light RSI divergence veto (now soft, with override) ---
+  // --- Optional: very light RSI divergence veto (soft, with override) ---
   function rsiFromDataLocal(arr, length = 14) {
     const n = arr.length;
     if (n < length + 1) return 50;
@@ -439,7 +438,36 @@ export function detectDipBounce(stock, data, cfg, U) {
     }
   }
 
-  // --- Recovery cap (regime-aware, a touch wider) ---
+  // --- Pre-entry headroom (diagnostic only) ---
+  function clusterLevels(levels, atrVal, thMul = 0.3) {
+    const th = thMul * atrVal;
+    const uniq = Array.from(
+      new Set(levels.map((v) => +Number(v).toFixed(2)))
+    ).sort((a, b) => a - b);
+    const out = [];
+    let bucket = [];
+    for (let i = 0; i < uniq.length; i++) {
+      if (!bucket.length || Math.abs(uniq[i] - bucket[bucket.length - 1]) <= th)
+        bucket.push(uniq[i]);
+      else {
+        out.push(avg(bucket));
+        bucket = [uniq[i]];
+      }
+    }
+    if (bucket.length) out.push(avg(bucket));
+    return out;
+  }
+  const rawResEarly = findResistancesAbove(data, px, stock);
+  const resListEarly = clusterLevels(rawResEarly, atr, 0.3);
+  const nearestResEarly = resListEarly.length ? resListEarly[0] : null;
+  let headroomATR = null,
+    headroomPct = null;
+  if (nearestResEarly) {
+    headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
+    headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
+  }
+
+  // --- Recovery cap (regime-aware, with headroom override) ---
   const spanRaw = recentHigh - dipLow;
   const span = Math.max(spanRaw, Math.max(0.7 * atr, px * 0.003));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
@@ -455,29 +483,37 @@ export function detectDipBounce(stock, data, cfg, U) {
   else if (upLike) maxRec = Math.max(maxRec, 160);
   else maxRec = Math.max(maxRec, 140);
 
+  // Soft-pass if over-recovered *but* still decent headroom and strength
   if (recoveryPctCapped > maxRec) {
-    const why = `already recovered ${recoveryPctCapped.toFixed(
-      0
-    )}% > ${maxRec}%`;
-    reasonTrace.push(why);
-    return {
-      trigger: false,
-      waitReason: why,
-      diagnostics: {
-        recoveryPct: recoveryPctCapped,
-        px,
-        dipLow,
-        recentHigh,
-        passedPreBounce: true,
-        code: "DIP_OVERRECOVERED",
-      },
-      reasonTrace,
-    };
+    if (headroomATR != null && headroomATR >= 1.2 && bounceStrengthATR >= 1.0) {
+      reasonTrace.push(
+        `over-recovery soft-pass (headroom ${headroomATR.toFixed(2)} ATR)`
+      );
+    } else {
+      const why = `already recovered ${recoveryPctCapped.toFixed(
+        0
+      )}% > ${maxRec}%`;
+      reasonTrace.push(why);
+      return {
+        trigger: false,
+        waitReason: why,
+        diagnostics: {
+          recoveryPct: recoveryPctCapped,
+          px,
+          dipLow,
+          recentHigh,
+          passedPreBounce: true,
+          code: "DIP_OVERRECOVERED",
+        },
+        reasonTrace,
+      };
+    }
   }
 
   // --- Higher low (looser) & volume acceptance ---
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
   const higherLow = dipLow >= prevLow * 0.988 || dipLow >= prevLow - 0.5 * atr;
+  const higherLowOK = higherLow || strongBounceOverride || closeAboveYHigh;
 
   const volumeRegimeOK =
     dryPullback || bounceVolHot || closeAboveYHigh || bounceStrengthATR >= 0.85;
@@ -518,38 +554,13 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  // --- Pre-entry headroom (diagnostic only) ---
-  function clusterLevels(levels, atrVal, thMul = 0.3) {
-    const th = thMul * atrVal;
-    const uniq = Array.from(
-      new Set(levels.map((v) => +Number(v).toFixed(2)))
-    ).sort((a, b) => a - b);
-    const out = [];
-    let bucket = [];
-    for (let i = 0; i < uniq.length; i++) {
-      if (!bucket.length || Math.abs(uniq[i] - bucket[bucket.length - 1]) <= th)
-        bucket.push(uniq[i]);
-      else {
-        out.push(avg(bucket));
-        bucket = [uniq[i]];
-      }
-    }
-    if (bucket.length) out.push(avg(bucket));
-    return out;
-  }
-  const rawResEarly = findResistancesAbove(data, px, stock);
-  const resListEarly = clusterLevels(rawResEarly, atr, 0.3);
-  const nearestResEarly = resListEarly.length ? resListEarly[0] : null;
-  let headroomATR = null,
-    headroomPct = null;
-  if (nearestResEarly) {
-    headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
-    headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
-  }
-
   // --- Final trigger (allow fib OR fibAlt) ---
   const trigger =
-    hadPullback && (fibOK || fibAltOK) && nearSupport && bounceOK && higherLow;
+    hadPullback &&
+    (fibOK || fibAltOK) &&
+    nearSupport &&
+    bounceOK &&
+    higherLowOK;
 
   if (!trigger) {
     const why = "DIP conditions not fully met";
@@ -563,17 +574,18 @@ export function detectDipBounce(stock, data, cfg, U) {
         fibAltOK,
         nearSupport,
         bounceOK,
-        higherLow,
+        higherLow: higherLow,
+        higherLowOK,
         lowBarIndex,
         recoveryPct: recoveryPctCapped,
-        passedPreBounce: true, // made it past support & bounce
+        passedPreBounce: true,
         code: "DIP_CONDS_INCOMPLETE",
       },
       reasonTrace,
     };
   }
 
-  // --- Targets & stops (smarter structure-aware) ---
+  // --- Targets & stops (smarter structure-aware; improved RR) ---
   const rawRes = findResistancesAbove(data, px, stock);
   const resList = clusterLevels(rawRes, atr, 0.3);
   const nearestRes = resList.length ? resList[0] : null;
@@ -589,24 +601,34 @@ export function detectDipBounce(stock, data, cfg, U) {
       L < num(recent[i + 1].low);
     if (isPivotLow) swingLowNear = Math.min(swingLowNear, L);
   }
+
+  // Tighter default stop to help RR; still sane
   let stop = Math.min(
     swingLowNear - 0.35 * atr,
     ma25 > 0 ? ma25 - 0.65 * atr : Infinity
   );
-  if (px - stop < 1.4 * atr) stop = px - 1.4 * atr;
+  const minRiskATR = strongBounceOverride ? 1.15 : 1.2;
+  if (px - stop < minRiskATR * atr) stop = px - minRiskATR * atr;
 
-  let target = Math.max(px + Math.max(2.4 * atr, px * 0.022), recentHigh20);
-  if (nearestRes && nearestRes - px < 0.9 * atr) {
-    target = Math.min(target, nearestRes);
+  // Grow target; skip too-near first resistance when second is reasonable
+  let target = Math.max(px + Math.max(2.8 * atr, px * 0.024), recentHigh20);
+  if (nearestRes && nearestRes - px < 1.1 * atr) {
+    if (resList.length >= 2) {
+      const r1 = resList[1];
+      target = Math.max(target, Math.min(r1, px + 3.6 * atr));
+    } else {
+      // If only one very close res, push beyond by ATR multiple (guard will still check headroom later)
+      target = Math.max(target, px + 3.2 * atr);
+    }
   } else if (resList.length >= 2) {
     const r0 = resList[0],
       r1 = resList[1];
-    if (r0 - px < 0.6 * atr && r1 - px <= 3.4 * atr) {
-      target = Math.max(target, Math.min(r1, px + 3.4 * atr));
+    if (r0 - px < 0.8 * atr && r1 - px <= 3.8 * atr) {
+      target = Math.max(target, Math.min(r1, px + 3.8 * atr));
     }
   }
 
-  const why = `Retrace at MA/structure; quality bounce (${bounceStrengthATR.toFixed(
+  const why = `Retrace at MA/structure; quality/strong bounce (${bounceStrengthATR.toFixed(
     2
   )} ATR); recovery ${recoveryPctCapped.toFixed(0)}%.`;
 
