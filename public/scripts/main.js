@@ -12,11 +12,12 @@ import {
   summarizeBlocks,
 } from "./swingTradeEntryTiming.js";
 import {
-  getTechnicalScore,
-  getAdvancedFundamentalScore,
-  getValuationScore,
-  getNumericTier,
-} from "./techFundValAnalysis.js";
+     getTechnicalScore,                 // noop (returns 0) in JP value-first file
+     getAdvancedFundamentalScore,      // alias of getQualityScore
+     getValuationScore,
+     getNumericTier,
+     classifyValueQuadrant,
+   } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
 
 /* -------------------------------------------
@@ -847,6 +848,9 @@ export async function fetchStockAnalysis({
       const stock = {
         ticker: code,
         sector,
+        symbol: yahooData.symbol,
+        currency: yahooData.currency,
+        shortName: yahooData.shortName,
         currentPrice: yahooData.currentPrice,
         highPrice: yahooData.highPrice,
         lowPrice: yahooData.lowPrice,
@@ -876,7 +880,22 @@ export async function fetchStockAnalysis({
         stochasticK: yahooData.stochasticK,
         stochasticD: yahooData.stochasticD,
         obv: yahooData.obv,
+        obvMA20: yahooData.obvMA20,
         atr14: yahooData.atr14,
+        enterpriseValue: yahooData.enterpriseValue,
+       totalDebt: yahooData.totalDebt,
+       totalCash: yahooData.totalCash,
+       freeCashflow: yahooData.freeCashflow,
+       ebit: yahooData.ebit,
+       ebitda: yahooData.ebitda,
+       sharesOutstanding: yahooData.sharesOutstanding,
+       tangibleBookValue: yahooData.tangibleBookValue,
+       evToEbit: yahooData.evToEbit,
+       evToEbitda: yahooData.evToEbitda,
+       fcfYieldPct: yahooData.fcfYieldPct,
+       buybackYieldPct: yahooData.buybackYieldPct,
+       shareholderYieldPct: yahooData.shareholderYieldPct,
+       ptbv: yahooData.ptbv,
       };
 
       // 3) history + enrichment
@@ -928,10 +947,26 @@ export async function fetchStockAnalysis({
       enrichForTechnicalScore(stock);
 
       // 4) scores
-      stock.technicalScore = getTechnicalScore(stock);
-      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-      stock.valuationScore = getValuationScore(stock);
-      stock.tier = getNumericTier(stock);
+      
+ // 4) scores (value-first JP)
+ // Technicals don’t drive valuation/tier now; keep 0 to be explicit
+ stock.technicalScore   = 0;
+ stock.fundamentalScore = getAdvancedFundamentalScore(stock); // 0..10
+ stock.valuationScore   = getValuationScore(stock);           // 0..10
+ stock.tier = getNumericTier(
+   {
+     technicalScore: stock.technicalScore,
+     fundamentalScore: stock.fundamentalScore,
+     valuationScore: stock.valuationScore,
+     // tiny guards used by getNumericTier anti-trap tweaks:
+     debtEquityRatio: stock.debtEquityRatio,
+     epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+   },
+   { mode: "value_only" }
+ );
+ const quad = classifyValueQuadrant(stock);
+ stock.valueQuadrant = quad.label;   // "Great & Cheap", etc.
+ stock.valueVerdict  = quad.verdict; // short text summary
 
       // 5) sentiment horizons
       const horizons = getComprehensiveMarketSentiment(stock, historicalData);
