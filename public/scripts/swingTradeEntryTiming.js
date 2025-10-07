@@ -400,7 +400,7 @@ function getConfig(opts = {}) {
     // RR floors (slightly higher; DIP has its own floor too)
     minRRbase: 1.35,
     minRRstrongUp: 1.5,
-    minRRweakUp: 1.6,
+    minRRweakUp: 1.55,
 
     // headroom & extension guards (align with dip.js headroomOK of ≥0.50 ATR / ≥1.00%)
     nearResVetoATR: 0.5,
@@ -417,8 +417,8 @@ function getConfig(opts = {}) {
     dipStructTolPct: 3.0, // was 3.5
 
     // recovery caps (trim late entries; keep strong-up allowance)
-    dipMaxRecoveryPct: 140, // was 150
-    dipMaxRecoveryStrongUp: 165, // was 185
+    dipMaxRecoveryPct: 135, // was 150
+    dipMaxRecoveryStrongUp: 155, // was 185
 
     // fib window tolerance
     fibTolerancePct: 9, // was 12
@@ -442,6 +442,12 @@ function getConfig(opts = {}) {
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
+
+    scootEnabled: true,
+    scootNearMissBand: 0.25, // how far below 'need' we’ll try a 2nd hop
+    scootATRCapDIP: 4.2, // max extra distance in ATR for DIPs
+    scootATRCapNonDIP: 3.5, // a bit tighter for non-DIPs
+    scootMaxHops: 2, // first to res[1], optional second to res[2]
 
     // probation
     allowProbation: true,
@@ -498,24 +504,23 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (ctx?.kind !== "DIP") {
     let minStopATR = cfg.minStopATRUp || 1.2;
     if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.15;
-    else if (ms.trend === "UP")   minStopATR = cfg.minStopATRUp     || 1.2;
+    else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.2;
     else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.3;
-    else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown   || 1.45;
+    else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.45;
 
     const riskNow = entryPx - stop;
     const minStopDist = minStopATR * atr;
     if (riskNow < minStopDist) stop = entryPx - minStopDist;
   } else {
-    // DIP: just ensure stop < entry; keep dip.js logic intact
+    // DIP: ensure stop < entry; keep dip.js logic intact
     if (!(stop < entryPx)) stop = entryPx - 0.8 * atr;
   }
 
-  // 2) Light target sanity with resistances (safe, local)
+  // 2) Light target sanity with resistances
   let resList = [];
   if (Array.isArray(ctx?.data) && ctx.data.length) {
     resList = findResistancesAbove(ctx.data, entryPx, stock) || [];
   }
-
   if (resList.length) {
     const head0 = resList[0] - entryPx;
     const hopThresh = ctx?.kind === "DIP" ? 1.1 * atr : 0.7 * atr;
@@ -528,36 +533,55 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     target = Math.max(target, entryPx + Math.max(2.6 * atr, entryPx * 0.022));
   }
 
-  // 3) Compute RR
-  const risk   = Math.max(0.01, entryPx - stop);
-  let   reward = Math.max(0, target - entryPx);
-  let   ratio  = reward / risk;
+  // 3) Compute base RR
+  const risk = Math.max(0.01, entryPx - stop);
+  let reward = Math.max(0, target - entryPx);
+  let ratio = reward / risk;
 
-  // 4) If ratio is just shy, try a single, bounded target lift to next cluster
-  if (ratio < (cfg.minRRbase ?? 1.5) && resList.length >= 2) {
-    const nextRes = resList[1];
-    const lifted  = Math.min(nextRes, entryPx + 4.2 * atr);
-    if (lifted > target) {
-      target = lifted;
-      reward = Math.max(0, target - entryPx);
-      ratio  = reward / risk;
-    }
-  }
-
-  // 5) RR floors (use DIP-specific if applicable)
+  // 4) RR floors (use DIP-specific if applicable)
   let need = cfg.minRRbase ?? 1.5;
   if (ctx?.kind === "DIP" && Number.isFinite(cfg.dipMinRR)) {
     need = Math.max(need, cfg.dipMinRR);
   }
-  if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp ?? need);
-  if (ms.trend === "WEAK_UP")   need = Math.max(need, cfg.minRRweakUp   ?? need);
+  if (ms.trend === "STRONG_UP")
+    need = Math.max(need, cfg.minRRstrongUp ?? need);
+  if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp ?? need);
 
-  // micro adjustment by instrument volatility (optional, safe)
+  // micro adjustment by instrument volatility
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.0) need = Math.max(need - 0.1, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
-  // 6) Probation (tiny grace) – doesn’t rely on bounce context
+  // 5) SCOOT: bounded target lifts to nearby clustered resistances
+  const atrCap = ctx?.kind === "DIP" ? 4.2 : 3.5; // or make configurable
+
+  // First hop: try resList[1]
+  if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
+    const nextRes = resList[1];
+    const lifted = Math.min(nextRes, entryPx + atrCap * atr);
+    if (lifted > target) {
+      target = lifted;
+      reward = Math.max(0, target - entryPx);
+      ratio = reward / risk;
+    }
+  }
+
+  // Second hop: only if still within 0.25 of the floor and we have resList[2]
+  if (
+    ratio < need &&
+    need - ratio <= 0.25 &&
+    Array.isArray(resList) &&
+    resList.length >= 3
+  ) {
+    const next2 = Math.min(resList[2], entryPx + atrCap * atr);
+    if (next2 > target) {
+      target = next2;
+      reward = Math.max(0, target - entryPx);
+      ratio = reward / risk;
+    }
+  }
+
+  // 6) Acceptable / probation
   let acceptable = ratio >= need;
   const allowProb = !!cfg.allowProbation;
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
@@ -582,6 +606,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     probation,
   };
 }
+
 
 
 /* ============================ Guards ============================ */
