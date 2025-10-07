@@ -77,9 +77,20 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return out;
   }
 
-  const data = [...historicalData].sort(
+  // keep full data (incl. synthetic "today") for RR/levels
+  const sorted = [...historicalData].sort(
     (a, b) => new Date(a.date) - new Date(b.date)
   );
+  const data = sorted;
+
+  // use completed bars (from main.js) for regime/structure/slope gates
+  const gatesData =
+    Array.isArray(opts.dataForGates) && opts.dataForGates.length >= 25
+      ? [...opts.dataForGates].sort(
+          (a, b) => new Date(a.date) - new Date(b.date)
+        )
+      : data;
+
   const last = data[data.length - 1];
   if (
     ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
@@ -102,76 +113,56 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  const ms = getMarketStructure(stock, data);
+  // structure snapshots: full (for display) and gates (for decisions)
+  const msFull = getMarketStructure(stock, data);
+  const msGates = getMarketStructure(stock, gatesData);
   tele.context = {
     ticker: stock?.ticker,
     px,
     openPx,
     prevClose,
     dayPct,
-    trend: ms.trend,
+    trend: msFull.trend,
     ma: {
-      ma5: ms.ma5,
-      ma20: ms.ma20,
-      ma25: ms.ma25,
-      ma50: ms.ma50,
-      ma75: ms.ma75,
-      ma200: ms.ma200,
+      ma5: msFull.ma5,
+      ma20: msFull.ma20,
+      ma25: msFull.ma25,
+      ma50: msFull.ma50,
+      ma75: msFull.ma75,
+      ma200: msFull.ma200,
     },
     perfectMode: cfg.perfectMode,
+    gatesDataset: { bars: gatesData.length, lastDate: gatesData.at(-1)?.date },
   };
 
   // ----- STRICT Regime Pre-Gate -----
-  const slope = ma20SlopeInfo(data, cfg.ma20SlopeBars);
-
+  const slopeInfo = ma20SlopeInfo(
+    gatesData,
+    cfg.ma20SlopeBars,
+    cfg.ma20SlopeEps
+  );
   const regimeTrendOk =
-    cfg.trendAllow.includes(ms.trend) ||
-    (cfg.allowWeakUpForDipOnly && ms.trend === "WEAK_UP");
+    cfg.trendAllow.includes(msGates.trend) ||
+    (cfg.allowWeakUpForDipOnly && msGates.trend === "WEAK_UP");
   const maStackLiteOk = !cfg.requireMaStackLite
     ? true
-    : ms.ma20 > ms.ma25 && ms.ma25 > ms.ma50;
-  const ma20SlopeOkFlag = slope.ok;
-  const stackedReqOk = !cfg.requireStackedMAs || !!ms.stackedBull;
+    : msGates.ma20 > msGates.ma25 && msGates.ma25 > msGates.ma50;
+  const ma20SlopeOkFlag = slopeInfo.ok;
+  const stackedReqOk = !cfg.requireStackedMAs || !!msGates.stackedBull;
 
   const regimeOK =
     regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
-
-  // Numeric regime trace
-  T(
-    "regime",
-    "preGate",
-    regimeOK,
-    regimeOK ? "Regime OK" : "Regime failed",
-    {
-      trend: ms.trend,
-      ma: {
-        ma5: ms.ma5,
-        ma20: ms.ma20,
-        ma25: ms.ma25,
-        ma50: ms.ma50,
-        ma75: ms.ma75,
-        ma200: ms.ma200,
-      },
-      stackedBull: ms.stackedBull,
-      stackedBullLite: ms.stackedBullLite,
-      slopeBars: slope.bars,
-      ma20_now: slope.now,
-      ma20_prev: slope.prev,
-      ma20_diff: slope.diff,
-      checks: { regimeTrendOk, maStackLiteOk, ma20SlopeOkFlag, stackedReqOk },
-    },
-    "verbose"
-  );
-
   tele.gates.regime = {
     pass: regimeOK,
     why: regimeOK
       ? ""
       : [
-          !regimeTrendOk ? `trend ${ms.trend} not allowed` : "",
+          !regimeTrendOk ? `trend ${msGates.trend} not allowed` : "",
           !maStackLiteOk ? "MA20>MA25>MA50 not satisfied" : "",
           !ma20SlopeOkFlag
-            ? `MA20 slope ≤ 0 over ${cfg.ma20SlopeBars} bars`
+            ? `MA20 slope ≤ eps over ${cfg.ma20SlopeBars} bars (diff=${(
+                slopeInfo.diff ?? 0
+              ).toFixed(5)})`
             : "",
           !stackedReqOk ? "Stacked MAs required" : "",
         ]
@@ -199,21 +190,19 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.38),
     },
   };
-  Object.assign(cfg, presets[ms.trend] || {});
+  Object.assign(cfg, presets[msGates.trend] || {});
 
   // Price-action gate (with optional tiny-red override)
   const priceActionGateRaw = px > Math.max(openPx, prevClose);
   let priceActionGate = priceActionGateRaw;
-
-  let redBodyATR = 0,
-    aboveMA25 = false;
+  let redBodyATR = null;
+  let aboveMA25 = false;
   if (!priceActionGateRaw && cfg.allowSmallRed) {
     const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
     redBodyATR = Math.max(0, (Math.max(openPx, prevClose) - px) / atr);
-    const msLocal = getMarketStructure(stock, data);
-    aboveMA25 = msLocal.ma25 > 0 && px >= msLocal.ma25;
+    aboveMA25 = msGates.ma25 > 0 && px >= msGates.ma25;
     if (aboveMA25 && redBodyATR <= (cfg.smallRedMaxATR ?? 0.35)) {
-      priceActionGate = true;
+      priceActionGate = true; // tiny red while above MA25 → allowed
     }
   }
 
@@ -243,17 +232,17 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   // Structure gate (keep simple)
   let structureGateOk =
     !cfg.requireUptrend ||
-    ((ms.trend === "UP" ||
-      ms.trend === "STRONG_UP" ||
-      ms.trend === "WEAK_UP") &&
-      px >= (ms.ma5 || 0) * 0.998);
+    ((msGates.trend === "UP" ||
+      msGates.trend === "STRONG_UP" ||
+      msGates.trend === "WEAK_UP") &&
+      px >= (msGates.ma5 || 0) * 0.998);
 
   T(
     "structure",
     "gate",
     structureGateOk,
     structureGateOk ? "Structure OK" : "Structure failed",
-    { trend: ms.trend, px, ma5: ms.ma5 },
+    { trend: msGates.trend, px, ma5: msGates.ma5 },
     "verbose"
   );
 
@@ -301,7 +290,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
 
     if (dip.trigger && structureGateOk) {
-      const rr = analyzeRR(px, dip.stop, dip.target, stock, ms, cfg, {
+      const rr = analyzeRR(px, dip.stop, dip.target, stock, msGates, cfg, {
         kind: "DIP",
         data,
       });
@@ -333,7 +322,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           data,
           px,
           rr,
-          ms,
+          msGates,
           cfg,
           dip.nearestRes,
           "DIP"
@@ -375,7 +364,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // ======================= SPC / OXR / BPB (default OFF) =======================
-  if (cfg.enableSPC && priceActionGate && ms.trend !== "WEAK_UP") {
+  if (cfg.enableSPC && priceActionGate && msGates.trend !== "WEAK_UP") {
     const spc = detectSPC(stock, data, cfg, U);
     T(
       "spc",
@@ -386,7 +375,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       "verbose"
     );
     if (spc.trigger && structureGateOk) {
-      const rr = analyzeRR(px, spc.stop, spc.target, stock, ms, cfg, {
+      const rr = analyzeRR(px, spc.stop, spc.target, stock, msGates, cfg, {
         kind: "SPC",
         data,
       });
@@ -404,7 +393,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           data,
           px,
           rr,
-          ms,
+          msGates,
           cfg,
           spc.nearestRes,
           "SPC"
@@ -430,7 +419,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     }
   }
 
-  if (cfg.enableBPB && priceActionGate && ms.trend !== "WEAK_UP") {
+  if (cfg.enableBPB && priceActionGate && msGates.trend !== "WEAK_UP") {
     const bpb = detectBPB(stock, data, cfg, U);
     T(
       "bpb",
@@ -441,7 +430,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       "verbose"
     );
     if (bpb.trigger && structureGateOk) {
-      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, ms, cfg, {
+      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, msGates, cfg, {
         kind: "BPB",
         data,
       });
@@ -459,7 +448,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           data,
           px,
           rr,
-          ms,
+          msGates,
           cfg,
           bpb.nearestRes,
           "BPB"
@@ -486,7 +475,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   }
 
   // OXR left available for advanced users but heaviest filters apply
-  if (cfg.enableOXR && priceActionGate && ms.trend !== "WEAK_UP") {
+  if (cfg.enableOXR && priceActionGate && msGates.trend !== "WEAK_UP") {
     const oxr = detectOXR(stock, data, cfg, U);
     T(
       "oxr",
@@ -497,7 +486,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       "verbose"
     );
     if (oxr.trigger && structureGateOk) {
-      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, ms, cfg, {
+      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, msGates, cfg, {
         kind: "OXR",
         data,
       });
@@ -515,7 +504,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
           data,
           px,
           rr,
-          ms,
+          msGates,
           cfg,
           oxr.nearestRes,
           "OXR"
@@ -574,7 +563,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     priceTarget: toTick(deRound(round0(best.target)), stock),
     smartStopLoss: toTick(deRound(round0(best.stop)), stock),
     smartPriceTarget: toTick(deRound(round0(best.target)), stock),
-    timeline: buildSwingTimeline(px, best, best.rr, ms),
+    timeline: buildSwingTimeline(px, best, best.rr, msFull),
     telemetry: { ...tele, trace: T.logs },
   };
 }
@@ -601,6 +590,7 @@ function getConfig(opts = {}) {
     trendAllow: ["UP", "STRONG_UP"],
     allowWeakUpForDipOnly: true,
     ma20SlopeBars: 2,
+    ma20SlopeEps: 0.0005, // treat near-flat MA20 as OK intraday
 
     // RR floors (raised)
     minRRbase: 1.35,
@@ -976,19 +966,19 @@ function deRound(v) {
   return v;
 }
 
-// New: verbose slope info (used in logs and gates)
-function ma20SlopeInfo(data, bars = 2) {
+// Verbose slope info (tolerant)
+function ma20SlopeInfo(data, bars = 2, eps = 0) {
   if (!Array.isArray(data) || data.length < 20 + bars) {
-    return { ok: false, now: NaN, prev: NaN, diff: NaN, bars };
+    return { ok: false, now: NaN, prev: NaN, diff: NaN, bars, eps };
   }
   const now = sma(data, 20);
   const prev = sma(data.slice(0, -bars), 20);
   const diff = (Number(now) || 0) - (Number(prev) || 0);
-  const ok = Number.isFinite(now) && Number.isFinite(prev) && diff > 0;
-  return { ok, now, prev, diff, bars };
+  const ok = Number.isFinite(now) && Number.isFinite(prev) && diff > (eps || 0);
+  return { ok, now, prev, diff, bars, eps };
 }
-function ma20SlopeOk(data, bars = 5) {
-  return ma20SlopeInfo(data, bars).ok;
+function ma20SlopeOk(data, bars = 2) {
+  return ma20SlopeInfo(data, bars, 0).ok;
 }
 
 function rsiFromData(data, len = 14) {
