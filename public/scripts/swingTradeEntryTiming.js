@@ -195,7 +195,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const regimeOK =
     regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
 
-  // slope bucket (for grouping)
+      // slope bucket (for grouping)
+      const slopeBucket = bucketSlopePct(slopePct);
 
   // store numeric distributions for slope
   tele.distros.slopePctVals.push(+slopePct.toFixed(4));
