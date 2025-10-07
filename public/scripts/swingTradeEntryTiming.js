@@ -1,8 +1,5 @@
-// /scripts/swingTradeEntryTiming.js — STRICT volume-cut variant (DIP-focused)
+// /scripts/swingTradeEntryTiming.js — DIP-only, simplified (rich diagnostics kept)
 import { detectDipBounce } from "./dip.js";
-import { detectSPC } from "./spc.js";
-import { detectOXR } from "./oxr.js";
-import { detectBPB } from "./bpb.js";
 
 /* ============== lightweight global bus for guard histos ============== */
 const teleGlobal = { histos: { headroom: [], distMA25: [] } };
@@ -12,10 +9,8 @@ function teleInit() {
   return {
     context: {},
     gates: {
-      priceAction: { pass: false, why: "" },
-      structure: { pass: false, why: "" },
-      stacked: { pass: false, why: "" },
-      regime: { pass: false, why: "" },
+      structure: { pass: false, why: "" }, // minimal, DIP-friendly
+      regime: { pass: true, why: "" }, // no strict pre-gate; keep slot for logs
     },
     dip: { trigger: false, waitReason: "", why: "", diagnostics: {} },
     rr: {
@@ -36,22 +31,12 @@ function teleInit() {
     /* blocks & histograms for compact “why blocked?” analysis */
     blocks: [], // [{code, gate, why, ctx}]
     histos: {
-      slopeBuckets: {}, // {bucketLabel: count}
       rrShortfall: [], // [{need, have, short, atrPct, trend, ticker}]
       headroom: [], // [{atr, pct, nearestRes, ticker}]
       distMA25: [], // [{distATR, ma25, px, ticker}]
     },
     /* numeric distributions for "how much to relax" analysis */
     distros: {
-      // regime slope: actual % slope and missing diff to pass (raw & % of MA20)
-      slopePctVals: [], // e.g. -0.07 (% of MA20 over 2 bars)
-      slopeEpsNeeded: [], // raw delta needed to beat eps (same units as price)
-      slopeEpsNeededPct: [], // same as % of MA20
-      // price-action: size of red body in ATR and distance to MA25 in ATR
-      priceRedBodyATR: [],
-      priceDistMA25ATR: [],
-      // structure: margin vs MA5 when it fails (percent)
-      structureMarginPct: [],
       // DIP quality mirrors (only pushed if dip.js provides them)
       dipV20ratio: [],
       dipBodyPct: [],
@@ -120,14 +105,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   );
   const data = sorted;
 
-  // use completed bars (from main.js) for regime/structure/slope gates
-  const gatesData =
-    Array.isArray(opts.dataForGates) && opts.dataForGates.length >= 25
-      ? [...opts.dataForGates].sort(
-          (a, b) => new Date(a.date) - new Date(b.date)
-        )
-      : data;
-
   const last = data[data.length - 1];
   if (
     ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
@@ -150,9 +127,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   const prevClose = num(stock.prevClosePrice) || num(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  // structure snapshots: full (for display) and gates (for decisions)
+  // structure snapshot (for display + minimal sanity)
   const msFull = getMarketStructure(stock, data);
-  const msGates = getMarketStructure(stock, gatesData);
   tele.context = {
     ticker: stock?.ticker,
     px,
@@ -169,261 +145,30 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       ma200: msFull.ma200,
     },
     perfectMode: cfg.perfectMode,
-    gatesDataset: { bars: gatesData.length, lastDate: gatesData.at(-1)?.date },
+    gatesDataset: { bars: data.length, lastDate: data.at(-1)?.date },
   };
 
-  /* ----- STRICT Regime Pre-Gate ----- */
-  const slopeInfo = ma20SlopeInfo(
-    gatesData,
-    cfg.ma20SlopeBars,
-    cfg.ma20SlopeEps
-  );
-  const regimeTrendOk =
-    cfg.trendAllow.includes(msGates.trend) ||
-    (cfg.allowWeakUpForDipOnly && msGates.trend === "WEAK_UP");
-  const maStackLiteOk = !cfg.requireMaStackLite
-    ? true
-    : msGates.ma20 > msGates.ma25 && msGates.ma25 > msGates.ma50;
-  // compute slope as % of MA20 over the lookback and allow a tiny negative tolerance
-  const slopePct = Number(slopeInfo.now)
-    ? (slopeInfo.diff / Math.max(1e-9, slopeInfo.now)) * 100
-    : 0;
-  const ma20SlopeOkFlag =
-    slopeInfo.ok || slopePct >= (cfg.ma20SlopePctMin ?? -0.05);
-  const stackedReqOk = !cfg.requireStackedMAs || !!msGates.stackedBull;
-
-  const regimeOK =
-    regimeTrendOk && maStackLiteOk && ma20SlopeOkFlag && stackedReqOk;
-
-      // slope bucket (for grouping)
-      const slopeBucket = bucketSlopePct(slopePct);
-
-  // store numeric distributions for slope
-  tele.distros.slopePctVals.push(+slopePct.toFixed(4));
-  if (!ma20SlopeOkFlag) {
-    // how much raw diff is missing to pass eps?
-    const neededRaw = Math.max(
-      0,
-      (cfg.ma20SlopeEps || 0) - (slopeInfo.diff || 0)
-    );
-    const neededPct = Number(slopeInfo.now)
-      ? (neededRaw / Math.max(1e-9, slopeInfo.now)) * 100
-      : 0;
-    tele.distros.slopeEpsNeeded.push(+neededRaw.toFixed(6));
-    tele.distros.slopeEpsNeededPct.push(+neededPct.toFixed(4));
-  }
-
-  tele.gates.regime = {
-    pass: regimeOK,
-    why: regimeOK
-      ? ""
-      : [
-          !regimeTrendOk ? `trend ${msGates.trend} not allowed` : "",
-          !maStackLiteOk ? "MA20>MA25>MA50 not satisfied" : "",
-          !ma20SlopeOkFlag
-            ? `MA20 slope ≤ eps over ${cfg.ma20SlopeBars} bars (diff=${(
-                slopeInfo.diff ?? 0
-              ).toFixed(5)})`
-            : "",
-          !stackedReqOk ? "Stacked MAs required" : "",
-        ]
-          .filter(Boolean)
-          .join(" | "),
-    slope: {
-      ok: !!ma20SlopeOkFlag,
-      diff: slopeInfo.diff,
-      pct: slopePct,
-      bucket: slopeBucket,
-      now: slopeInfo.now,
-      prev: slopeInfo.prev,
-      bars: slopeInfo.bars,
-    },
-  };
-  tele.histos.slopeBuckets[slopeBucket] =
-    (tele.histos.slopeBuckets[slopeBucket] || 0) + 1;
-
-  if (!ma20SlopeOkFlag) {
-    pushBlock(tele, "REGIME_SLOPE", "regime", "MA20 slope soft-fail", {
-      bucket: slopeBucket,
-      pct: +slopePct.toFixed(4),
-      diff: slopeInfo.diff,
-      bars: slopeInfo.bars,
-      trend: msGates.trend,
-      ma20: msGates.ma20,
-      ma25: msGates.ma25,
-      ma50: msGates.ma50,
-      eps: cfg.ma20SlopeEps,
-      needRaw: tele.distros.slopeEpsNeeded.at(-1),
-      needPct: tele.distros.slopeEpsNeededPct.at(-1),
-    });
-    if (regimeTrendOk && maStackLiteOk && stackedReqOk) {
-      T(
-        "regime",
-        "slope-borderline",
-        false,
-        "Only slope failed",
-        { slopePct, diff: slopeInfo.diff, eps: cfg.ma20SlopeEps },
-        "verbose"
-      );
-    }
-  }
-  if (!regimeTrendOk) {
-    pushBlock(
-      tele,
-      "REGIME_TREND",
-      "regime",
-      `trend ${msGates.trend} not allowed`,
-      { trend: msGates.trend }
-    );
-  }
-  if (!maStackLiteOk) {
-    pushBlock(
-      tele,
-      "REGIME_STACKLITE",
-      "regime",
-      "MA20>MA25>MA50 not satisfied",
-      { ma20: msGates.ma20, ma25: msGates.ma25, ma50: msGates.ma50 }
-    );
-  }
-  if (!stackedReqOk) {
-    pushBlock(tele, "REGIME_STACKED_REQ", "regime", "Stacked MAs required", {
-      stackedBull: msGates.stackedBull,
-    });
-  }
-
-  if (!regimeOK)
-    return withTelemetryNo(
-      tele,
-      T,
-      tele.gates.regime.why || "Regime pre-gate failed",
-      stock,
-      data
-    );
-
-  // Regime presets (still mild, RR floors do the heavy lift)
-  const presets = {
-    STRONG_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.5),
-      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.35),
-    },
-    UP: { minRRbase: Math.max(cfg.minRRbase, 1.35) },
-    WEAK_UP: {
-      minRRbase: Math.max(cfg.minRRbase, 1.7),
-      nearResVetoATR: Math.max(cfg.nearResVetoATR, 0.38),
-    },
-  };
-  Object.assign(cfg, presets[msGates.trend] || {});
-
-  /* ----- Price-action gate (with optional tiny-red override) ----- */
-  const priceActionGateRaw = px > Math.max(openPx, prevClose);
-  let priceActionGate = priceActionGateRaw;
-  let redBodyATR = null;
-  let aboveMA25 = false;
-  if (!priceActionGateRaw && cfg.allowSmallRed) {
-    const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
-    redBodyATR = Math.max(0, (Math.max(openPx, prevClose) - px) / atr);
-    aboveMA25 = msGates.ma25 > 0 && px >= msGates.ma25;
-    if (aboveMA25 && redBodyATR <= (cfg.smallRedMaxATR ?? 0.35)) {
-      priceActionGate = true; // tiny red while above MA25 → allowed
-      T(
-        "price",
-        "tiny-red-override",
-        true,
-        "Allowed small red above MA25",
-        { redBodyATR, aboveMA25, smallRedMaxATR: cfg.smallRedMaxATR },
-        "verbose"
-      );
-    }
-  }
-
-  T(
-    "price",
-    "gate",
-    priceActionGate,
-    priceActionGate ? "Price-action OK" : "Price-action failed",
-    {
-      px,
-      openPx,
-      prevClose,
-      dayPct,
-      allowSmallRed: cfg.allowSmallRed,
-      redBodyATR,
-      aboveMA25,
-    },
-    "verbose"
-  );
-
-  tele.gates.priceAction = {
-    pass: !!priceActionGate,
-    why: priceActionGate ? "" : "price ≤ max(open, prevClose)",
-  };
-  if (!priceActionGate) {
-    reasons.push("Price-action gate failed.");
-    // numeric distros for price-action fail
-    try {
-      const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
-      const ma25 = msGates.ma25 || 0;
-      if (Number.isFinite(redBodyATR)) {
-        tele.distros.priceRedBodyATR.push(+redBodyATR.toFixed(3));
-      }
-      if (ma25 > 0) {
-        tele.distros.priceDistMA25ATR.push(+((px - ma25) / atr).toFixed(3));
-      }
-    } catch {}
-    pushBlock(tele, "PRICE_ACTION", "price", "price ≤ max(open, prevClose)", {
-      px,
-      openPx,
-      prevClose,
-      dayPct,
-      redBodyATR,
-      distMA25_ATR:
-        msGates.ma25 > 0
-          ? +(
-              (px - msGates.ma25) /
-              Math.max(num(stock.atr14), px * 0.005, 1e-6)
-            ).toFixed(3)
-          : null,
-    });
-  }
-
-  /* ----- Structure gate (keep simple) ----- */
-  let structureGateOk =
-    !cfg.requireUptrend ||
-    ((msGates.trend === "UP" ||
-      msGates.trend === "STRONG_UP" ||
-      msGates.trend === "WEAK_UP") &&
-      px >= (msGates.ma5 || 0) * 0.998);
-
-  T(
-    "structure",
-    "gate",
-    structureGateOk,
-    structureGateOk ? "Structure OK" : "Structure failed",
-    { trend: msGates.trend, px, ma5: msGates.ma5 },
-    "verbose"
-  );
-
+  /* ----- Minimal structure check (DIP-friendly) ----- */
+  // Allow WEAK_UP/UP/STRONG_UP, forbid clear DOWN unless cfg allows
+  const structureGateOk =
+    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
+    px >= (msFull.ma5 || 0) * 0.992; // tiny slack
   tele.gates.structure = {
     pass: !!structureGateOk,
-    why: structureGateOk ? "" : "trend not up or price < MA5",
+    why: structureGateOk ? "" : "trend DOWN or price < MA5",
   };
   if (!structureGateOk) {
     const margin =
-      ((px - (msGates.ma5 || 0)) / Math.max(msGates.ma5 || 1e-9, 1e-9)) * 100;
-    tele.distros.structureMarginPct.push(+margin.toFixed(3));
-    pushBlock(tele, "STRUCTURE", "structure", "trend not up or price < MA5", {
-      trend: msGates.trend,
+      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
+    pushBlock(tele, "STRUCTURE", "structure", "trend DOWN or price < MA5", {
+      trend: msFull.trend,
       px,
-      ma5: msGates.ma5,
+      ma5: msFull.ma5,
       marginPct: +margin.toFixed(3),
     });
   }
 
-  // Stacked gate is reflected in regimeOK; keep display here
-  tele.gates.stacked = { pass: true, why: "" };
-
   const candidates = [];
-  const checks = {};
   const U = {
     num,
     avg,
@@ -436,387 +181,165 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     tracer: T,
   };
 
-  /* ======================= DIP (primary lane) ======================= */
-  if (priceActionGate) {
-    const dip = detectDipBounce(stock, data, cfg, U);
-    checks.dip = dip;
+  /* ======================= DIP (primary & only lane) ======================= */
+  const dip = detectDipBounce(stock, data, cfg, U);
+
+  T(
+    "dip",
+    "detect",
+    !!dip?.trigger,
+    dip?.trigger ? "DIP trigger" : dip?.waitReason || "DIP not ready",
+    { why: dip?.why, waitReason: dip?.waitReason, diag: dip?.diagnostics },
+    "verbose"
+  );
+
+  tele.dip = {
+    trigger: !!dip?.trigger,
+    waitReason: dip?.waitReason || "",
+    why: dip?.why || "",
+    diagnostics: dip?.diagnostics || {},
+  };
+
+  // mirror selected numeric diagnostics into distros if present
+  try {
+    const d = dip?.diagnostics || {};
+    if (isFiniteN(d.bounceV20ratio ?? d.v20ratio))
+      tele.distros.dipV20ratio.push(
+        +(d.bounceV20ratio ?? d.v20ratio).toFixed(3)
+      );
+    if (isFiniteN(d.bodyPct))
+      tele.distros.dipBodyPct.push(+d.bodyPct.toFixed(3));
+    if (isFiniteN(d.rangePctATR ?? d.bounceStrengthATR))
+      tele.distros.dipRangePctATR.push(
+        +(d.rangePctATR ?? d.bounceStrengthATR).toFixed(3)
+      );
+    if (isFiniteN(d.closeDeltaATR))
+      tele.distros.dipCloseDeltaATR.push(+d.closeDeltaATR.toFixed(3));
+    if (isFiniteN(d.pullbackPct))
+      tele.distros.dipPullbackPct.push(+d.pullbackPct.toFixed(3));
+    if (isFiniteN(d.pullbackATR))
+      tele.distros.dipPullbackATR.push(+d.pullbackATR.toFixed(3));
+    if (isFiniteN(d.recoveryPct))
+      tele.distros.dipRecoveryPct.push(+d.recoveryPct.toFixed(3));
+  } catch {}
+
+  if (!dip?.trigger) {
+    const wait = (dip?.waitReason || "").toLowerCase();
+    let code = "DIP_WAIT";
+    if (wait.includes("too shallow")) code = "DIP_TOO_SHALLOW";
+    else if (wait.includes("already recovered")) code = "DIP_OVERRECOVERED";
+    else if (wait.includes("bounce weak")) code = "DIP_WEAK_BOUNCE";
+    else if (wait.includes("no meaningful pullback")) code = "DIP_NO_PULLBACK";
+    else if (wait.includes("conditions not fully"))
+      code = "DIP_CONDS_INCOMPLETE";
+    pushBlock(tele, code, "dip", dip?.waitReason || "DIP not ready", {
+      px,
+      diag: dip?.diagnostics || {},
+    });
+  }
+
+  if (dip?.trigger && structureGateOk) {
+    // RR uses DIP stop/target as-is; no structural reshaping for DIPs
+    const rr = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
+      kind: "DIP",
+      data,
+    });
 
     T(
-      "dip",
-      "detect",
-      !!dip.trigger,
-      dip.trigger ? "DIP trigger" : dip.waitReason || "DIP not ready",
-      { why: dip.why, waitReason: dip.waitReason, diag: dip.diagnostics },
+      "rr",
+      "calc",
+      rr.acceptable,
+      `RR ${fmt(rr.ratio)} need ${fmt(rr.need)} risk ${fmt(
+        rr.risk
+      )} reward ${fmt(rr.reward)}`,
+      {
+        stop: rr.stop,
+        target: rr.target,
+        atr: rr.atr,
+        probation: rr.probation,
+        kind: "DIP",
+      },
       "verbose"
     );
 
-    tele.dip = {
-      trigger: !!dip.trigger,
-      waitReason: dip.waitReason || "",
-      why: dip.why || "",
-      diagnostics: dip.diagnostics || {},
-    };
+    tele.rr = toTeleRR(rr);
 
-    // mirror selected numeric diagnostics into distros if present
-    try {
-      const d = dip?.diagnostics || {};
-      if (isFiniteN(d.bounceV20ratio ?? d.v20ratio))
-        tele.distros.dipV20ratio.push(
-          +(d.bounceV20ratio ?? d.v20ratio).toFixed(3)
-        );
-      if (isFiniteN(d.bodyPct))
-        tele.distros.dipBodyPct.push(+d.bodyPct.toFixed(3));
-      if (isFiniteN(d.rangePctATR ?? d.bounceStrengthATR))
-        tele.distros.dipRangePctATR.push(
-          +(d.rangePctATR ?? d.bounceStrengthATR).toFixed(3)
-        );
-      if (isFiniteN(d.closeDeltaATR))
-        tele.distros.dipCloseDeltaATR.push(+d.closeDeltaATR.toFixed(3));
-      if (isFiniteN(d.pullbackPct))
-        tele.distros.dipPullbackPct.push(+d.pullbackPct.toFixed(3));
-      if (isFiniteN(d.pullbackATR))
-        tele.distros.dipPullbackATR.push(+d.pullbackATR.toFixed(3));
-      if (isFiniteN(d.recoveryPct))
-        tele.distros.dipRecoveryPct.push(+d.recoveryPct.toFixed(3));
-    } catch {}
-
-    if (!dip.trigger) {
-      const wait = (dip.waitReason || "").toLowerCase();
-      let code = "DIP_WAIT";
-      if (wait.includes("too shallow")) code = "DIP_TOO_SHALLOW";
-      else if (wait.includes("already recovered")) code = "DIP_OVERRECOVERED";
-      else if (wait.includes("bounce weak")) code = "DIP_WEAK_BOUNCE";
-      else if (wait.includes("no meaningful pullback"))
-        code = "DIP_NO_PULLBACK";
-      else if (wait.includes("conditions not fully"))
-        code = "DIP_CONDS_INCOMPLETE";
-      pushBlock(tele, code, "dip", dip.waitReason || "DIP not ready", {
-        nearMA25_ATR:
-          msGates.ma25 > 0
-            ? (px - msGates.ma25) / Math.max(num(stock.atr14), px * 0.005, 1e-6)
-            : null,
-        diag: dip.diagnostics || {},
+    if (!rr.acceptable) {
+      const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
+      const short = +(rr.need - rr.ratio).toFixed(3);
+      tele.histos.rrShortfall.push({
+        need: +rr.need.toFixed(2),
+        have: +rr.ratio.toFixed(2),
+        short,
+        atrPct: +atrPct.toFixed(2),
+        trend: msFull.trend,
+        ticker: stock?.ticker,
       });
-    }
-
-    if (dip.trigger && structureGateOk) {
-      const rr = analyzeRR(px, dip.stop, dip.target, stock, msGates, cfg, {
-        kind: "DIP",
-        data,
-      });
-
-      T(
+      pushBlock(
+        tele,
+        "RR_FAIL",
         "rr",
-        "calc",
-        rr.acceptable,
-        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)} risk ${fmt(
-          rr.risk
-        )} reward ${fmt(rr.reward)}`,
+        `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
         {
           stop: rr.stop,
           target: rr.target,
           atr: rr.atr,
-          probation: rr.probation,
-          kind: "DIP",
-        },
-        "verbose"
-      );
-
-      tele.rr = toTeleRR(rr);
-
-      if (!rr.acceptable) {
-        reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
-        const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
-        const short = +(rr.need - rr.ratio).toFixed(3);
-        tele.histos.rrShortfall.push({
-          need: +rr.need.toFixed(2),
-          have: +rr.ratio.toFixed(2),
-          short,
-          atrPct: +atrPct.toFixed(2),
-          trend: msGates.trend,
-          ticker: stock?.ticker,
-        });
-        pushBlock(
-          tele,
-          "RR_FAIL",
-          "rr",
-          `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
-          { stop: rr.stop, target: rr.target, atr: rr.atr, atrPct }
-        );
-      } else {
-        const gv = guardVeto(
-          stock,
-          data,
           px,
-          rr,
-          msGates,
-          cfg,
-          dip.nearestRes,
-          "DIP"
-        );
-        T(
-          "guard",
-          "veto",
-          !gv.veto,
-          gv.veto ? `VETO: ${gv.reason}` : "No veto",
-          gv.details,
-          "verbose"
-        );
-
-        tele.guard = {
-          checked: true,
-          veto: !!gv.veto,
-          reason: gv.reason || "",
-          details: gv.details || {},
-        };
-
-        if (gv.veto) {
-          reasons.push(`DIP guard veto: ${gv.reason}`);
-          const code = gv.reason?.startsWith("Headroom")
-            ? "VETO_HEADROOM"
-            : gv.reason?.startsWith("RSI")
-            ? "VETO_RSI"
-            : gv.reason?.startsWith("Too far above MA25")
-            ? "VETO_MA25_EXT"
-            : "VETO_OTHER";
-          pushBlock(tele, code, "guard", gv.reason, gv.details);
-        } else {
-          candidates.push({
-            kind: "DIP ENTRY",
-            why: dip.why,
-            stop: rr.stop,
-            target: rr.target,
-            rr,
-            guard: gv.details,
-          });
         }
-      }
-    } else if (priceActionGate && !dip.trigger) {
-      reasons.push(`DIP not ready: ${dip.waitReason}`);
-    } else if (dip.trigger && !structureGateOk) {
-      reasons.push("Structure gate failed for DIP.");
-    }
-  }
-
-  /* ======================= SPC / OXR / BPB (default OFF) ======================= */
-  if (cfg.enableSPC && priceActionGate && msGates.trend !== "WEAK_UP") {
-    const spc = detectSPC(stock, data, cfg, U);
-    T(
-      "spc",
-      "detect",
-      !!spc.trigger,
-      spc.trigger ? "SPC trigger" : spc.waitReason || "SPC not ready",
-      { why: spc.why, waitReason: spc.waitReason, diag: spc.diagnostics },
-      "verbose"
-    );
-    if (spc.trigger && structureGateOk) {
-      const rr = analyzeRR(px, spc.stop, spc.target, stock, msGates, cfg, {
-        kind: "SPC",
+      );
+      reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
+    } else {
+      const gv = guardVeto(
+        stock,
         data,
-      });
+        px,
+        rr,
+        msFull,
+        cfg,
+        dip.nearestRes,
+        "DIP"
+      );
       T(
-        "rr",
-        "calc",
-        rr.acceptable,
-        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
-        { stop: rr.stop, target: rr.target, kind: "SPC" },
+        "guard",
+        "veto",
+        !gv.veto,
+        gv.veto ? `VETO: ${gv.reason}` : "No veto",
+        gv.details,
         "verbose"
       );
-      if (rr.acceptable) {
-        const gv = guardVeto(
-          stock,
-          data,
-          px,
-          rr,
-          msGates,
-          cfg,
-          spc.nearestRes,
-          "SPC"
-        );
-        T(
-          "guard",
-          "veto",
-          !gv.veto,
-          gv.veto ? `VETO: ${gv.reason}` : "No veto",
-          gv.details,
-          "verbose"
-        );
-        if (!gv.veto)
-          candidates.push({
-            kind: "SPC ENTRY",
-            why: spc.why,
-            stop: rr.stop,
-            target: rr.target,
-            rr,
-            guard: gv.details,
-          });
-        else pushBlock(tele, "VETO_OTHER", "guard", gv.reason, gv.details);
+
+      tele.guard = {
+        checked: true,
+        veto: !!gv.veto,
+        reason: gv.reason || "",
+        details: gv.details || {},
+      };
+
+      if (gv.veto) {
+        reasons.push(`DIP guard veto: ${gv.reason}`);
+        const code = gv.reason?.startsWith("Headroom")
+          ? "VETO_HEADROOM"
+          : gv.reason?.startsWith("RSI")
+          ? "VETO_RSI"
+          : gv.reason?.startsWith("Too far above MA25")
+          ? "VETO_MA25_EXT"
+          : "VETO_OTHER";
+        pushBlock(tele, code, "guard", gv.reason, gv.details);
       } else {
-        const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
-        tele.histos.rrShortfall.push({
-          need: +rr.need.toFixed(2),
-          have: +rr.ratio.toFixed(2),
-          short: +(rr.need - rr.ratio).toFixed(3),
-          atrPct: +atrPct.toFixed(2),
-          trend: msGates.trend,
-          ticker: stock?.ticker,
-        });
-        pushBlock(
-          tele,
-          "RR_FAIL",
-          "rr",
-          `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
-          { stop: rr.stop, target: rr.target, atr: rr.atr, atrPct }
-        );
-      }
-    }
-  }
-
-  if (cfg.enableBPB && priceActionGate && msGates.trend !== "WEAK_UP") {
-    const bpb = detectBPB(stock, data, cfg, U);
-    T(
-      "bpb",
-      "detect",
-      !!bpb.trigger,
-      bpb.trigger ? "BPB trigger" : bpb.waitReason || "BPB not ready",
-      { why: bpb.why, waitReason: bpb.waitReason, diag: bpb.diagnostics },
-      "verbose"
-    );
-    if (bpb.trigger && structureGateOk) {
-      const rr = analyzeRR(px, bpb.stop, bpb.target, stock, msGates, cfg, {
-        kind: "BPB",
-        data,
-      });
-      T(
-        "rr",
-        "calc",
-        rr.acceptable,
-        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
-        { stop: rr.stop, target: rr.target, kind: "BPB" },
-        "verbose"
-      );
-      if (rr.acceptable) {
-        const gv = guardVeto(
-          stock,
-          data,
-          px,
+        candidates.push({
+          kind: "DIP ENTRY",
+          why: dip.why,
+          stop: rr.stop,
+          target: rr.target,
           rr,
-          msGates,
-          cfg,
-          bpb.nearestRes,
-          "BPB"
-        );
-        T(
-          "guard",
-          "veto",
-          !gv.veto,
-          gv.veto ? `VETO: ${gv.reason}` : "No veto",
-          gv.details,
-          "verbose"
-        );
-        if (!gv.veto)
-          candidates.push({
-            kind: "BPB ENTRY",
-            why: bpb.why,
-            stop: rr.stop,
-            target: rr.target,
-            rr,
-            guard: gv.details,
-          });
-        else pushBlock(tele, "VETO_OTHER", "guard", gv.reason, gv.details);
-      } else {
-        const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
-        tele.histos.rrShortfall.push({
-          need: +rr.need.toFixed(2),
-          have: +rr.ratio.toFixed(2),
-          short: +(rr.need - rr.ratio).toFixed(3),
-          atrPct: +atrPct.toFixed(2),
-          trend: msGates.trend,
-          ticker: stock?.ticker,
+          guard: gv.details,
         });
-        pushBlock(
-          tele,
-          "RR_FAIL",
-          "rr",
-          `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
-          { stop: rr.stop, target: rr.target, atr: rr.atr, atrPct }
-        );
       }
     }
-  }
-
-  // OXR left available for advanced users but heaviest filters apply
-  if (cfg.enableOXR && priceActionGate && msGates.trend !== "WEAK_UP") {
-    const oxr = detectOXR(stock, data, cfg, U);
-    T(
-      "oxr",
-      "detect",
-      !!oxr.trigger,
-      oxr.trigger ? "OXR trigger" : oxr.waitReason || "OXR not ready",
-      { why: oxr.why, waitReason: oxr.waitReason, diag: oxr.diagnostics },
-      "verbose"
-    );
-    if (oxr.trigger && structureGateOk) {
-      const rr = analyzeRR(px, oxr.stop, oxr.target, stock, msGates, cfg, {
-        kind: "OXR",
-        data,
-      });
-      T(
-        "rr",
-        "calc",
-        rr.acceptable,
-        `RR ${fmt(rr.ratio)} need ${fmt(rr.need)}`,
-        { stop: rr.stop, target: rr.target, kind: "OXR" },
-        "verbose"
-      );
-      if (rr.acceptable && rr.ratio >= (cfg.oxrMinRR ?? 2.2)) {
-        const gv = guardVeto(
-          stock,
-          data,
-          px,
-          rr,
-          msGates,
-          cfg,
-          oxr.nearestRes,
-          "OXR"
-        );
-        T(
-          "guard",
-          "veto",
-          !gv.veto,
-          gv.veto ? `VETO: ${gv.reason}` : "No veto",
-          gv.details,
-          "verbose"
-        );
-        if (!gv.veto)
-          candidates.push({
-            kind: "OXR ENTRY",
-            why: oxr.why,
-            stop: rr.stop,
-            target: rr.target,
-            rr,
-            guard: gv.details,
-          });
-        else pushBlock(tele, "VETO_OTHER", "guard", gv.reason, gv.details);
-      } else if (!rr.acceptable) {
-        const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
-        tele.histos.rrShortfall.push({
-          need: +rr.need.toFixed(2),
-          have: +rr.ratio.toFixed(2),
-          short: +(rr.need - rr.ratio).toFixed(3),
-          atrPct: +atrPct.toFixed(2),
-          trend: msGates.trend,
-          ticker: stock?.ticker,
-        });
-        pushBlock(
-          tele,
-          "RR_FAIL",
-          "rr",
-          `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
-          { stop: rr.stop, target: rr.target, atr: rr.atr, atrPct }
-        );
-      }
-    }
+  } else if (!dip?.trigger) {
+    reasons.push(`DIP not ready: ${dip?.waitReason}`);
+  } else if (dip?.trigger && !structureGateOk) {
+    reasons.push("Structure gate failed for DIP.");
   }
 
   /* attach global guard histos */
@@ -841,7 +364,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
   }
 
-  // pick highest RR (non-probation preferred; probation usually off anyway)
+  // pick highest RR
   candidates.sort(
     (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
   );
@@ -871,72 +394,39 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
   return {
-    // volume levers
-    enableSPC: false,
-    enableBPB: false,
-    enableOXR: false, // set true if you want OXR, but it’s heavily gated
-    allowProbation: false, // global probation OFF unless you re-enable
-
-    // general gates
+    // general
     perfectMode: false,
-    requireStackedMAs: false,
-    requireMaStackLite: false,
-    requireUptrend: true,
-    allowSmallRed: true,
-    smallRedMaxATR: 0.6,
 
-    // regime pre-gate
-    trendAllow: ["UP", "STRONG_UP"],
-    allowWeakUpForDipOnly: true,
-    ma20SlopeBars: 2,
-    ma20SlopeEps: 0.0005, // treat near-flat MA20 as OK intraday
-    ma20SlopePctMin: -0.05, // NEW: accept down to −0.05% over 2 bars
-
-    // RR floors (raised)
+    // RR floors (kept modest; DIP trades often tighter)
     minRRbase: 1.35,
     minRRstrongUp: 1.5,
-    minRRweakUp: 1.7,
+    minRRweakUp: 1.6,
 
-    // headroom & extension (tighter)
+    // headroom & extension guards
     nearResVetoATR: 0.35,
     nearResVetoPct: 0.8,
-
-    // extension vs MA25 (tighter, SPC/BPB will mostly self-filter)
     maxATRfromMA25: 2.4,
-    maxATRfromMA25_OXR: 1.8,
 
     // overbought guards
-    hardRSI: 78, // slightly lower to catch the extremes earlier
+    hardRSI: 78,
     softRSI: 72,
-    oxrRSI: 70,
 
-    // DIP quality (tighter)
-    dipMinPullbackPct: 1.0,
+    // DIP parameters (diagnostic-friendly; your dip.js can use them)
     dipMinPullbackATR: 0.6,
     dipMaxBounceAgeBars: 5,
-    dipMaSupportPctBand: 8,
-    dipStructMinTouches: 1,
-    dipStructTolATR: 1.2,
-    dipStructTolPct: 3.2,
     dipMinBounceStrengthATR: 0.8,
 
-    // recovery caps (cut “already recovered” spam)
-    dipMaxRecoveryPct: 115,
-    fibTolerancePct: 15,
+    // allow DIPs even if broader regime softened
+    allowDipInDowntrend: false,
 
-    // volume regime
-    pullbackDryFactor: 1.8,
-    bounceHotFactor: 1.05,
-
-    // min stop distance (slightly wider)
+    // min stop distance (NOT forced for DIP; kept for non-DIP fallbacks)
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
 
-    // OXR-specific
-    oxrMinRR: 2.2,
-    oxrHeadroomATR: 1.2,
+    // probation OFF by default
+    allowProbation: false,
 
     debug,
   };
@@ -969,14 +459,6 @@ function getMarketStructure(stock, data) {
       ? "WEAK_UP"
       : "DOWN";
 
-  const stackedBull =
-    (px > m.ma5 &&
-      m.ma5 > m.ma25 &&
-      m.ma25 > m.ma50 &&
-      m.ma50 > m.ma75 &&
-      m.ma75 > m.ma200) ||
-    (px > m.ma25 && m.ma25 > m.ma50 && m.ma50 > m.ma75 && m.ma75 > m.ma200);
-
   const w = data.slice(-20);
   const recentHigh = Math.max(...w.map((d) => d.high ?? -Infinity));
   const recentLow = Math.min(...w.map((d) => d.low ?? Infinity));
@@ -986,8 +468,6 @@ function getMarketStructure(stock, data) {
     recentHigh,
     recentLow,
     ...m,
-    stackedBull,
-    stackedBullLite: m.ma20 > m.ma25 && m.ma25 > m.ma50,
   };
 }
 
@@ -995,32 +475,27 @@ function getMarketStructure(stock, data) {
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
 
-  // regime-aware minimum stop
-  let minStopATR = cfg.minStopATRUp || 1.2;
-  if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.15;
-  else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.2;
-  else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.3;
-  else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.45;
+  // For DIPs: TRUST provided stop (below dip low). Do NOT reshape to structural minimums.
+  // Only ensure risk is positive and sane; keep target sanity via resistances (done below).
+  if (ctx?.kind !== "DIP") {
+    // non-DIP fallback (rare in this file)
+    let minStopATR = cfg.minStopATRUp || 1.2;
+    if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.15;
+    else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.2;
+    else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.3;
+    else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.45;
 
-  // avoid unrealistically tight, non-structural stops
-  const data = ctx?.data || [];
-  const supports = Array.isArray(data) ? findSupportsBelow(data, entryPx) : [];
-  const swingTop = Number.isFinite(supports?.[0]) ? supports[0] : NaN;
-  const swingBased = Number.isFinite(swingTop)
-    ? Math.abs(stop - (swingTop - 0.5 * atr)) <= 0.6 * atr
-    : false;
-  const ma25 = num(stock.movingAverage25d) || sma(data, 25);
-  const ma25Based =
-    ma25 > 0 ? Math.abs(stop - (ma25 - 0.6 * atr)) <= 0.6 * atr : false;
-  const structuralStop = swingBased || ma25Based;
-
-  const riskNow = entryPx - stop;
-  const minStopDist = minStopATR * atr;
-  if (!structuralStop && riskNow < minStopDist) stop = entryPx - minStopDist;
+    const riskNow = entryPx - stop;
+    const minStopDist = minStopATR * atr;
+    if (riskNow < minStopDist) stop = entryPx - minStopDist;
+  } else {
+    // DIP: ensure stop < entry and risk is > 0
+    if (!(stop < entryPx)) stop = entryPx - 0.8 * atr; // backstop if dip.js gave a bad stop
+  }
 
   // respect nearby resistances for targets
-  if (data.length) {
-    const resList = findResistancesAbove(data, entryPx, stock);
+  if (Array.isArray(ctx?.data) && ctx.data.length) {
+    const resList = findResistancesAbove(ctx.data, entryPx, stock);
     if (resList.length) {
       const head0 = resList[0] - entryPx;
       if (head0 < 0.7 * atr && resList[1])
@@ -1044,7 +519,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 
   // global probation gate (OFF by default, or very tight if enabled)
   const allowProb = !!cfg.allowProbation;
-  const rsiHere = Number(stock.rsi14) || rsiFromData(data, 14);
+  const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
   const probation =
     allowProb &&
     !acceptable &&
@@ -1074,17 +549,9 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   details.rsi = rsi;
-  // store sample of RSIs to understand veto margins later
   try {
     if (isFiniteN(rsi)) teleGlobal._lastRSI = rsi;
   } catch {}
-  if (_kind === "OXR" && rsi >= (cfg.oxrRSI ?? cfg.softRSI)) {
-    return {
-      veto: true,
-      reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.oxrRSI ?? cfg.softRSI}`,
-      details,
-    };
-  }
   if (rsi >= cfg.hardRSI)
     return {
       veto: true,
@@ -1114,7 +581,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
       });
     } catch {}
 
-    // always enforce headroom when RR hasn't already cleared
     if (
       (headroomATR < (cfg.nearResVetoATR ?? 0.35) ||
         headroomPct < (cfg.nearResVetoPct ?? 0.8)) &&
@@ -1136,7 +602,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    // histogram
     try {
       teleGlobal.histos.distMA25.push({
         distATR: distMA25,
@@ -1145,10 +610,7 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
         ticker: stock?.ticker,
       });
     } catch {}
-    const cap =
-      _kind === "OXR"
-        ? cfg.maxATRfromMA25_OXR ?? cfg.maxATRfromMA25
-        : cfg.maxATRfromMA25;
+    const cap = cfg.maxATRfromMA25;
     if (distMA25 > (cap ?? 2.4) + 0.2) {
       return {
         veto: true,
@@ -1255,7 +717,10 @@ function provisionalPlan(stock, data, ms, pxNow, cfg) {
     stock,
     ms || { trend: "UP" },
     cfg || getConfig({}),
-    { kind: "FALLBACK", data }
+    {
+      kind: "FALLBACK",
+      data,
+    }
   );
   return { stop: rr.stop, target: rr.target, rr };
 }
@@ -1288,32 +753,6 @@ function deRound(v) {
   if (/(00|50|25|75)$/.test(s)) return v - 3 * (inferTickFromPrice(v) || 0.1);
   return v;
 }
-
-// Verbose slope info (tolerant)
-function ma20SlopeInfo(data, bars = 2, eps = 0) {
-  if (!Array.isArray(data) || data.length < 20 + bars) {
-    return { ok: false, now: NaN, prev: NaN, diff: NaN, bars, eps };
-  }
-  const now = sma(data, 20);
-  const prev = sma(data.slice(0, -bars), 20);
-  const diff = (Number(now) || 0) - (Number(prev) || 0);
-  const ok = Number.isFinite(now) && Number.isFinite(prev) && diff > (eps || 0);
-  return { ok, now, prev, diff, bars, eps };
-}
-function ma20SlopeOk(data, bars = 2) {
-  return ma20SlopeInfo(data, bars, 0).ok;
-}
-
-function bucketSlopePct(pct) {
-  // pct is 2-bar delta as % of current MA20 (per 100)
-  if (pct <= -0.1) return "≤ -0.10%";
-  if (pct <= -0.05) return "-0.10..-0.05%";
-  if (pct <= 0) return "-0.05..0%";
-  if (pct <= 0.05) return "0..0.05%";
-  if (pct <= 0.15) return "0.05..0.15%";
-  return "> 0.15%";
-}
-
 function rsiFromData(data, len = 14) {
   const n = data.length;
   if (n < len + 1) return 50;
@@ -1420,16 +859,6 @@ function withNo(reason, ctx = {}) {
   out.telemetry = undefined;
   return out;
 }
-function withTelemetryNo(tele, T, reason, stock, data) {
-  const out = withNo(reason, { stock, data });
-  out.telemetry = {
-    ...tele,
-    outcome: { buyNow: false, reason },
-    reasons: [reason],
-    trace: T.logs,
-  };
-  return out;
-}
 function toTeleRR(rr) {
   return {
     checked: true,
@@ -1452,10 +881,8 @@ function summarizeTelemetryForLog(tele) {
     const guard = tele?.guard || {};
     return {
       gates: {
-        regime: { pass: g.regime?.pass, why: g.regime?.why },
-        price: { pass: g.priceAction?.pass, why: g.priceAction?.why },
+        regime: { pass: true, why: "" }, // regime disabled; keep shape
         structure: { pass: g.structure?.pass, why: g.structure?.why },
-        stacked: { pass: g.stacked?.pass, why: g.stacked?.why },
       },
       rr: {
         checked: rr.checked,
