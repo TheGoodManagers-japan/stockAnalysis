@@ -82,9 +82,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   );
   const last = data[data.length - 1];
   if (
-    ![last?.open, last?.high, last?.low, last?.close, last?.volume].every(
-      Number.isFinite
-    )
+    ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
   ) {
     const r = "Invalid last bar OHLCV.";
     const out = withNo(r, { stock, data });
@@ -96,6 +94,8 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
     return out;
   }
+ // normalize volume to a finite number for downstream calcs
+ if (!Number.isFinite(last.volume)) last.volume = 0;
 
   const px = num(stock.currentPrice) || num(last.close);
   const openPx = num(stock.openPrice) || num(last.open) || px;
@@ -172,7 +172,17 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   Object.assign(cfg, presets[ms.trend] || {});
 
   // Price-action gate (no soft red-day override by default)
-  const priceActionGate = px > Math.max(openPx, prevClose);
+   const priceActionGateRaw = px > Math.max(openPx, prevClose);
+ let priceActionGate = priceActionGateRaw;
+ if (!priceActionGateRaw && cfg.allowSmallRed) {
+   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+   const redBodyATR = Math.max(0, (Math.max(openPx, prevClose) - px) / atr);
+   const msLocal = getMarketStructure(stock, data);
+   const aboveMA25 = msLocal.ma25 > 0 && px >= msLocal.ma25;
+   if (aboveMA25 && redBodyATR <= (cfg.smallRedMaxATR ?? 0.35)) {
+     priceActionGate = true; // tiny red while above MA25 → allowed
+   }
+ }
   tele.gates.priceAction = {
     pass: !!priceActionGate,
     why: priceActionGate ? "" : "price ≤ max(open, prevClose)",
@@ -413,7 +423,8 @@ function getConfig(opts = {}) {
     requireStackedMAs: false,
     requireMaStackLite: false,
     requireUptrend: true,
-    allowSmallRed: false,
+    allowSmallRed: true,
+    smallRedMaxATR: 0.35,
 
     // regime pre-gate
     trendAllow: ["UP", "STRONG_UP"],
@@ -472,15 +483,15 @@ function getConfig(opts = {}) {
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
-  const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
-  const m = {
-    ma5: num(stock.movingAverage5d) || sma(data, 5),
-    ma20: num(stock.movingAverage20d) || sma(data, 20),
-    ma25: num(stock.movingAverage25d) || sma(data, 25),
-    ma50: num(stock.movingAverage50d) || sma(data, 50),
-    ma75: num(stock.movingAverage75d) || sma(data, 75),
-    ma200: num(stock.movingAverage200d) || sma(data, 200),
-  };
+    const px = num(stock.currentPrice) || num(data.at?.(-1)?.close);
+    const m = {
+      ma5:   sma(data, 5),
+      ma20:  sma(data, 20),
+      ma25:  sma(data, 25),
+      ma50:  sma(data, 50),
+      ma75:  sma(data, 75),
+      ma200: sma(data, 200),
+    };
 
   let score = 0;
   if (px > m.ma25 && m.ma25 > 0) score++;

@@ -853,10 +853,9 @@ export async function fetchStockAnalysis({
 
       // 3) history + enrichment
       const historicalData = await fetchHistoricalData(stock.ticker);
-      // after: const historicalData = await fetchHistoricalData(stock.ticker);
       stock.historicalData = historicalData || [];
 
-      // 👇 append a synthetic “today” candle if history stops at yesterday
+      // 👇 append synthetic “today” candle if needed (do this FIRST)
       {
         const today = new Date();
         const last = stock.historicalData.at(-1);
@@ -874,16 +873,29 @@ export async function fetchStockAnalysis({
           const c = Number(stock.currentPrice) || o;
           const h = Math.max(o, c, Number(stock.highPrice) || -Infinity);
           const l = Math.min(o, c, Number(stock.lowPrice) || Infinity);
+          const vol = Number(stock.todayVolume) || Number(last?.volume) || 0; // avoid hard zero if you can
+
           stock.historicalData.push({
             date: today,
             open: o,
             high: h,
             low: l,
             close: c,
-            volume: Number(stock.todayVolume) || 0, // you already expose this from /api/stocks
+            volume: vol,
           });
         }
       }
+
+      // NOW split the views
+      const lastIsToday =
+        stock.historicalData.length &&
+        stock.historicalData.at(-1)?.date?.toDateString?.() ===
+          new Date().toDateString();
+
+      const dataForGates = lastIsToday
+        ? stock.historicalData.slice(0, -1)
+        : stock.historicalData; // completed bars only
+      const dataForLevels = stock.historicalData; // includes today
 
       enrichForTechnicalScore(stock);
 
@@ -904,7 +916,11 @@ export async function fetchStockAnalysis({
 
       // 6) entry timing
       log("Running swing entry timing…");
-      const finalSignal = analyzeSwingTradeEntry(stock, historicalData);
+      const finalSignal = analyzeSwingTradeEntry(
+        { ...stock }, // live px
+        dataForLevels, // for RR/headroom etc.
+        { debug: true, dataForGates } // hand the completed-bars view to the analyzer
+      );
       log("Swing entry timing done");
 
       stock.isBuyNow = finalSignal.buyNow;
