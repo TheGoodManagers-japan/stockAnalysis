@@ -114,7 +114,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   // --- Bounce freshness ---
   let lowBarIndex = -1;
   const ageWin = Math.min(
-    Math.max(cfg.dipMaxBounceAgeBars, 8),
+    Math.max((cfg.dipMaxBounceAgeBars ?? 6) + 1, 9),
     recentBars.length
   );
   for (let i = 0; i < ageWin; i++) {
@@ -146,7 +146,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
 
   // --- Support (ATR-based MA bands OR tested/micro structure) ---
-  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 0.9, 0.6) * atr; // default 0.9 ATR
+  const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 1.0, 0.6) * atr; // default widened to 1.0 ATR
   const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
   const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
   const nearMA50 =
@@ -190,7 +190,7 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   const strongBounceOverride =
     (bounceStrengthATR >= 1.0 && num(d0.close) > num(d1.high)) ||
-    bounceStrengthATR >= 1.1;
+    bounceStrengthATR >= 1.15;
 
   const nearSupport =
     nearMA20 ||
@@ -276,7 +276,10 @@ export function detectDipBounce(stock, data, cfg, U) {
     );
   }
 
-  const minStr = Math.min(Math.max(cfg.dipMinBounceStrengthATR, 0.6), 0.65);
+  const minStr = Math.min(
+    Math.max(cfg.dipMinBounceStrengthATR ?? 0.55, 0.55),
+    0.62
+  );
 
   const closeAboveYHigh =
     num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
@@ -309,9 +312,9 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   const basicCloseUp =
     (num(d0.close) > num(d0.open) &&
-      num(d0.close) >= ma5 &&
-      bounceStrengthATR >= Math.max(0.62, minStr)) ||
-    (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.8);
+      num(d0.close) >= Math.min(ma5, ma20) &&
+      bounceStrengthATR >= Math.max(0.58, minStr)) ||
+    (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.75);
 
   const barRange = num(d0.high) - num(d0.low);
   const body = Math.abs(num(d0.close) - num(d0.open));
@@ -320,17 +323,21 @@ export function detectDipBounce(stock, data, cfg, U) {
   const rangeQuality = barRange >= 0.55 * atr;
   const bodyQuality = body >= 0.28 * barRange;
   const closeQuality =
-    num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
+    num(d0.close) >= Math.max(midPrev, ma5 * 0.995, ma20) &&
+    (num(d0.close) > num(d0.open) || strongBounceOverride);
   const v20ok = avgVol20 > 0 ? num(d0.volume) >= 0.95 * avgVol20 : true;
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
+
+  // Accept if (a) bounce itself is powerful OR (b) classical conditions met
   const bounceOK =
-    patternOK &&
-    bodyQuality &&
-    rangeQuality &&
-    (v20ok || (dryPullback && closeAboveYHigh)) &&
-    closeQuality;
+    strongBounceOverride ||
+    (patternOK &&
+      bodyQuality &&
+      rangeQuality &&
+      (v20ok || dryPullback || closeAboveYHigh) &&
+      closeQuality);
 
   if (!bounceOK) {
     const why = `bounce weak (${bounceStrengthATR.toFixed(
@@ -444,7 +451,7 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   let maxRec = cfg.dipMaxRecoveryPct;
   if (strongUpLike)
-    maxRec = Math.max(maxRec, cfg.dipMaxRecoveryStrongUp || 175);
+    maxRec = Math.max(maxRec, cfg.dipMaxRecoveryStrongUp || 185);
   else if (upLike) maxRec = Math.max(maxRec, 160);
   else maxRec = Math.max(maxRec, 140);
 
@@ -470,7 +477,7 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Higher low (looser) & volume acceptance ---
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
-  const higherLow = dipLow >= prevLow * 0.992 || dipLow >= prevLow - 0.35 * atr;
+  const higherLow = dipLow >= prevLow * 0.988 || dipLow >= prevLow - 0.5 * atr;
 
   const volumeRegimeOK =
     dryPullback || bounceVolHot || closeAboveYHigh || bounceStrengthATR >= 0.85;

@@ -398,9 +398,9 @@ const debug = !!opts.debug;
     perfectMode: false,
 
     // RR floors (kept modest; DIP trades often tighter)
-    minRRbase: 1.35,
-    minRRstrongUp: 1.5,
-    minRRweakUp: 1.6,
+    minRRbase: 1.30,
+    minRRstrongUp: 1.45,
+    minRRweakUp: 1.55,
 
     // headroom & extension guards
     nearResVetoATR: 0.35,
@@ -417,7 +417,7 @@ const debug = !!opts.debug;
     dipStructTolPct: 3.5, // fallback % tolerance for structure
     // (optional) if you want explicit caps instead of the internal defaults:
     dipMaxRecoveryPct: 150, // base “already recovered” cap (in % of dip span)
-    dipMaxRecoveryStrongUp: 175,
+    dipMaxRecoveryStrongUp: 185,
     fibTolerancePct: 12, // +- tolerance around 50–61.8 retrace window
     pullbackDryFactor: 1.6, // avg pullback vol vs 20SMA(vol) (<= means “dry”)
     bounceHotFactor: 1.05, // today vol vs 20SMA(vol) (>= means “hot”)
@@ -437,7 +437,7 @@ const debug = !!opts.debug;
     minStopATRDown: 1.45,
 
     // probation OFF by default
-    allowProbation: false,
+    allowProbation: true,
 
     debug,
   };
