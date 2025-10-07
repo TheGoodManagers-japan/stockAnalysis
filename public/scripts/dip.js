@@ -193,12 +193,14 @@ export function detectDipBounce(stock, data, cfg, U) {
     bounceStrengthATR >= 1.15;
 
   // preferred supports; MA50-alone no longer enough by itself
-  const nearSupport =
-    nearMA20 ||
-    nearMA25 ||
-    structureSupport ||
-    microBase ||
-    strongBounceOverride;
+    const ma50SupportOK = nearMA50 && !(slopeDown20 && slopeDown25);
+    const nearSupport =
+      nearMA20 ||
+      nearMA25 ||
+      structureSupport ||
+      microBase ||
+      ma50SupportOK ||
+      strongBounceOverride;
   // (MA50-alone can still count indirectly via strongBounceOverride/structure; MA20/25/structure preferred)
 
   const passedPreBounce =
@@ -330,14 +332,14 @@ export function detectDipBounce(stock, data, cfg, U) {
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
 
   // 3) Volume regime (stop green-but-thin passes)
-  const volumeRegimeOK =
-    (bounceVolHot && v20ok) ||
-    (dryPullback && (closeAboveYHigh || hammer || engulf));
-
-  const bounceOK =
-    (strongBounceOverride ||
-      (patternOK && bodyQuality && rangeQuality && closeQuality)) &&
-    volumeRegimeOK;
+    const volumeRegimeOK =
+      (bounceVolHot && v20ok) ||
+      (dryPullback && (closeAboveYHigh || hammer || engulf));
+  
+    const bounceOK = strongBounceOverride
+      // strong bar can pass with any one of: v20 ok, hot vol, or a dry pullback
+      ? (v20ok || bounceVolHot || dryPullback)
+      : (patternOK && bodyQuality && rangeQuality && closeQuality && volumeRegimeOK);
 
   if (!bounceOK) {
     const why = `bounce weak (${bounceStrengthATR.toFixed(
@@ -549,13 +551,14 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
 
   // 6) Fib alternative path (requires real strength)
-  const fibAltOK = !fibOK && closeAboveYHigh && bounceStrengthATR >= 1.0;
-
+  const fibAltOK = !fibOK && closeAboveYHigh && bounceStrengthATR >= 0.98;
   // 9) Headroom small guardrail
-  const headroomOK =
-    headroomATR == null || headroomPct == null
-      ? true
-      : headroomATR >= 0.5 && headroomPct >= 1.0;
+    const headroomOK =
+      headroomATR == null || headroomPct == null
+        ? true
+        : (headroomATR >= 0.40 && headroomPct >= 0.80) ||
+          // strong reclaim handles nearby noise levels
+          (strongBounceOverride && headroomATR >= 0.30);
 
   // --- Final trigger
   const trigger =
@@ -618,7 +621,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   if (px - stop < minRiskATR * atr) stop = px - minRiskATR * atr;
 
   // 10) micro-stop guard (nudge)
-  if (px - stop < 1.5 * atr) stop = px - 1.5 * atr;
+  if (px - stop < 1.45 * atr) stop = px - 1.45 * atr;
 
   // Grow target; skip too-near first resistance when second is reasonable
   let target = Math.max(px + Math.max(2.8 * atr, px * 0.024), recentHigh20);
