@@ -418,7 +418,7 @@ function getConfig(opts = {}) {
     // regime pre-gate
     trendAllow: ["UP", "STRONG_UP"],
     allowWeakUpForDipOnly: true,
-    ma20SlopeBars: 8,
+    ma20SlopeBars: 4,
 
     // RR floors (raised)
     minRRbase: 1.35,
