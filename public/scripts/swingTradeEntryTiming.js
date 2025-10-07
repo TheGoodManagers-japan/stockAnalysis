@@ -531,7 +531,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 
   const risk = Math.max(0.01, entryPx - stop);
   const reward = Math.max(0, target - entryPx);
-  const ratio = reward / risk;
+  const rr = reward / risk;
   
  // If RR is just shy but we have an A+ bar, give a tiny bump or lift target if next res is reasonable
  if (rr < (cfg.minRRbase ?? 1.5)) {
