@@ -43,6 +43,26 @@ function errorLog(...args) {
   console.error(`[SCAN:${where}]`, ...args);
 }
 
+function inc(obj, key, by = 1) {
+  if (!key && key !== 0) return;
+  obj[key] = (obj[key] || 0) + by;
+}
+function sentiKey(ST, LT) {
+  const st = Number.isFinite(ST) ? ST : 4;
+  const lt = Number.isFinite(LT) ? LT : 4;
+  return `LT${lt}-ST${st}`;
+}
+function normalizeReason(reasonRaw) {
+  if (!reasonRaw) return "unspecified";
+  let r = String(reasonRaw).trim();
+  // unify common prefixes and noisy details
+  r = r.replace(/^(DIP|SPC|OXR|BPB|RRP)\s+(not ready:|guard veto:)\s*/i, "");
+  r = r.replace(/\([^)]*\)/g, ""); // drop parentheticals
+  r = r.replace(/\s{2,}/g, " ").trim();
+  return r.toLowerCase();
+}
+
+
 /* -------------------------------------------
    1) Yahoo / API helpers
 ------------------------------------------- */
@@ -753,6 +773,17 @@ export async function fetchStockAnalysis({
   const emit = typeof onItem === "function" ? onItem : () => {};
   const errors = [];
 
+  // NEW: session summary
+  const summary = {
+    totals: { count: 0, buyNow: 0, noBuy: 0 },
+    bySenti: Object.create(null), // key -> total
+    buyBySenti: Object.create(null), // key -> buyNow count
+    reasons: {
+      buy: Object.create(null), // reason -> count
+      noBuy: Object.create(null), // reason -> count
+    },
+  };
+
   const filteredTickers = resolveTickers(tickers);
   let count = 0;
 
@@ -842,6 +873,19 @@ export async function fetchStockAnalysis({
 
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
+
+      // NEW: summary update
+      summary.totals.count += 1;
+      const k = sentiKey(stock.shortTermScore, stock.longTermScore);
+      inc(summary.bySenti, k);
+      if (stock.isBuyNow) {
+        summary.totals.buyNow += 1;
+        inc(summary.buyBySenti, k);
+        inc(summary.reasons.buy, normalizeReason(stock.buyNowReason));
+      } else {
+        summary.totals.noBuy += 1;
+        inc(summary.reasons.noBuy, normalizeReason(finalSignal.reason));
+      }
 
       // Normalize + mirror (handles both buyNow true/false)
       const normSL = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
@@ -970,7 +1014,38 @@ export async function fetchStockAnalysis({
   }
 
   log("Scan complete", { count, errorsCount: errors.length });
-  return { count, errors };
+  // derive buy-rate by sentiment combo
+  const sentiRows = Object.keys(summary.bySenti)
+    .map((key) => {
+      const tot = summary.bySenti[key] || 0;
+      const buys = summary.buyBySenti[key] || 0;
+      const buyRate = tot ? Math.round((buys / tot) * 10000) / 100 : 0;
+      return { combo: key, total: tot, buys, buyRatePct: buyRate };
+    })
+    .sort((a, b) => b.buyRatePct - a.buyRatePct || b.total - a.total);
+
+  // top reasons (take top 10 each)
+  function topK(obj, k = 10) {
+    return Object.entries(obj)
+      .map(([reason, cnt]) => ({ reason, count: cnt }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, k);
+  }
+  const summaryOut = {
+    ...summary,
+    sentiTable: sentiRows,
+    topReasons: {
+      buy: topK(summary.reasons.buy, 10),
+      noBuy: topK(summary.reasons.noBuy, 10),
+    },
+  };
+
+  // console snapshot
+  // single, complete object in console
+  log("SESSION SUMMARY", summaryOut);
+
+  // expose
+  return { count, errors, summary: summaryOut };
 }
 
 /* -------------------------------------------
