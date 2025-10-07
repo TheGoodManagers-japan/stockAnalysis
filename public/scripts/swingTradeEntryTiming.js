@@ -494,88 +494,71 @@ function getMarketStructure(stock, data) {
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
 
-  // For DIPs: TRUST provided stop (below dip low). Do NOT reshape to structural minimums.
-  // Only ensure risk is positive and sane; keep target sanity via resistances (done below).
+  // 1) Stop hygiene
   if (ctx?.kind !== "DIP") {
-    // non-DIP fallback (rare in this file)
     let minStopATR = cfg.minStopATRUp || 1.2;
     if (ms.trend === "STRONG_UP") minStopATR = cfg.minStopATRStrong || 1.15;
-    else if (ms.trend === "UP") minStopATR = cfg.minStopATRUp || 1.2;
+    else if (ms.trend === "UP")   minStopATR = cfg.minStopATRUp     || 1.2;
     else if (ms.trend === "WEAK_UP") minStopATR = cfg.minStopATRWeak || 1.3;
-    else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown || 1.45;
+    else if (ms.trend === "DOWN") minStopATR = cfg.minStopATRDown   || 1.45;
 
     const riskNow = entryPx - stop;
     const minStopDist = minStopATR * atr;
     if (riskNow < minStopDist) stop = entryPx - minStopDist;
   } else {
-    // DIP: ensure stop < entry and risk is > 0
-    if (!(stop < entryPx)) stop = entryPx - 0.8 * atr; // backstop if dip.js gave a bad stop
+    // DIP: just ensure stop < entry; keep dip.js logic intact
+    if (!(stop < entryPx)) stop = entryPx - 0.8 * atr;
   }
 
-  // respect nearby resistances for targets
-    if (Array.isArray(ctx?.data) && ctx.data.length) {
-       const resList = findResistancesAbove(ctx.data, entryPx, stock);
-        if (resList.length) {
-          const head0 = resList[0] - entryPx;
-          // If the nearest resistance is too close, skip to the next cluster for DIPs
-          const hopThresh = ctx?.kind === "DIP" ? 1.1 * atr : 0.7 * atr;
-          if (head0 < hopThresh && resList[1]) {
-            target = Math.max(target, resList[1]);
-          }
-          // Ensure a healthier minimum extension for DIPs
-          if (ctx?.kind === "DIP") {
-            target = Math.max(target, entryPx + Math.max(2.6 * atr, entryPx * 0.022));
-          }
-        }
-      }
+  // 2) Light target sanity with resistances (safe, local)
+  let resList = [];
+  if (Array.isArray(ctx?.data) && ctx.data.length) {
+    resList = findResistancesAbove(ctx.data, entryPx, stock) || [];
+  }
 
-  const risk = Math.max(0.01, entryPx - stop);
-  const reward = Math.max(0, target - entryPx);
-  const rr = reward / risk;
-  
- // If RR is just shy but we have an A+ bar, give a tiny bump or lift target if next res is reasonable
- if (rr < (cfg.minRRbase ?? 1.5)) {
-   // try to lift target to next clustered resistance if it doesn't exceed ~4.2 ATR
-   if (resList.length >= 2) {
-     const nextRes = resList[1];
-     const lifted = Math.min(nextRes, px + 4.2 * atr);
-     if (lifted > target) {
-       target = lifted;
-       rr = (target - px) / risk;
-     }
-   }
-   // last chance: strong-bounce grace band
-   if (rr < (cfg.minRRbase ?? 1.5) &&
-       strongBounceOverride &&
-       (closeAboveYHigh || v20ok)) {
-     // allow 0.05 under the floor, but not below 1.45
-     const floor = Math.max((cfg.minRRbase ?? 1.5) - 0.05, 1.45);
-     if (rr >= floor) {
-       // mark via diagnostics if you want (optional)
-     } else {
-       return {
-         trigger: false,
-         waitReason: `dip rr too low: ${rr.toFixed(2)} < need ${(cfg.minRRbase ?? 1.5).toFixed(2)}`,
-         diagnostics: { stop, target, atr, px, code: "RR_FAIL" },
-         reasonTrace
-       };
-     }
-   }
- } else {
-   // no change
- }
+  if (resList.length) {
+    const head0 = resList[0] - entryPx;
+    const hopThresh = ctx?.kind === "DIP" ? 1.1 * atr : 0.7 * atr;
+    if (head0 < hopThresh && resList[1]) {
+      target = Math.max(target, resList[1]);
+    }
+  }
+  if (ctx?.kind === "DIP") {
+    // ensure a minimum extension for DIPs
+    target = Math.max(target, entryPx + Math.max(2.6 * atr, entryPx * 0.022));
+  }
 
-  let need = cfg.minRRbase;
-  if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp);
-  if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp);
+  // 3) Compute RR
+  const risk   = Math.max(0.01, entryPx - stop);
+  let   reward = Math.max(0, target - entryPx);
+  let   ratio  = reward / risk;
 
+  // 4) If ratio is just shy, try a single, bounded target lift to next cluster
+  if (ratio < (cfg.minRRbase ?? 1.5) && resList.length >= 2) {
+    const nextRes = resList[1];
+    const lifted  = Math.min(nextRes, entryPx + 4.2 * atr);
+    if (lifted > target) {
+      target = lifted;
+      reward = Math.max(0, target - entryPx);
+      ratio  = reward / risk;
+    }
+  }
+
+  // 5) RR floors (use DIP-specific if applicable)
+  let need = cfg.minRRbase ?? 1.5;
+  if (ctx?.kind === "DIP" && Number.isFinite(cfg.dipMinRR)) {
+    need = Math.max(need, cfg.dipMinRR);
+  }
+  if (ms.trend === "STRONG_UP") need = Math.max(need, cfg.minRRstrongUp ?? need);
+  if (ms.trend === "WEAK_UP")   need = Math.max(need, cfg.minRRweakUp   ?? need);
+
+  // micro adjustment by instrument volatility (optional, safe)
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.0) need = Math.max(need - 0.1, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
+  // 6) Probation (tiny grace) – doesn’t rely on bounce context
   let acceptable = ratio >= need;
-
-  // global probation gate (OFF by default, or very tight if enabled)
   const allowProb = !!cfg.allowProbation;
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
   const probation =
@@ -584,6 +567,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     ratio >= need - 0.02 &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < 58;
+
   acceptable = acceptable || probation;
 
   return {
@@ -598,6 +582,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     probation,
   };
 }
+
 
 /* ============================ Guards ============================ */
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
