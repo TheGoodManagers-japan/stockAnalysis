@@ -3,6 +3,51 @@
 // History comes via {action:"message"} (while joining).
 // Live comes via {action:"event", payload.data:"[]"} or {action:"message"} after live.
 
+/* ─────────── Debug Logger ─────────── */
+(function initSumizyDebug() {
+  // Set this to true in console to enable logs: window.SUMIZY_DEBUG = true
+  if (typeof window.SUMIZY_DEBUG !== "boolean") window.SUMIZY_DEBUG = true;
+
+  const NS = "sumizy-rt";
+  const palette = {
+    debug: "#8899aa",
+    info: "#2d7ef7",
+    warn: "#e5a50a",
+    error: "#d11a2a",
+  };
+  const fmt = (lvl, msg) => [
+    `%c[${NS}]%c ${lvl.toUpperCase()} %c${msg}`,
+    "color:#666;font-weight:bold",
+    `color:${palette[lvl] || "#999"};font-weight:bold`,
+    "color:inherit",
+  ];
+
+  function emit(lvl, msg, ...rest) {
+    if (!window.SUMIZY_DEBUG) return;
+    const parts = fmt(lvl, msg);
+    const fn =
+      lvl === "error"
+        ? console.error
+        : lvl === "warn"
+        ? console.warn
+        : lvl === "info"
+        ? console.info
+        : console.debug;
+    try {
+      fn.apply(console, [...parts, ...rest]);
+    } catch {}
+  }
+
+  window.__sumizyLog = {
+    debug: (m, ...r) => emit("debug", m, ...r),
+    info: (m, ...r) => emit("info", m, ...r),
+    warn: (m, ...r) => emit("warn", m, ...r),
+    error: (m, ...r) => emit("error", m, ...r),
+  };
+})();
+
+const log = window.__sumizyLog;
+
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
@@ -14,8 +59,10 @@ function getPaneIdsFromUrl() {
     const q = new URLSearchParams(location.search);
     const main = (q.get("chatid") || "").trim() || null;
     const ai = (q.get("ai-chat") || "").trim() || null;
+    log.debug("URL pane ids parsed", { main, ai });
     return { main, ai };
-  } catch {
+  } catch (err) {
+    log.error("Failed to parse pane ids from URL", err);
     return { main: null, ai: null };
   }
 }
@@ -33,9 +80,9 @@ function getRGForPane(paneRole) {
       return cm ? cm.closest('[id^="rg"]') : null;
     })();
 
-  if (!rgNode) return null;
-  const m = rgNode.id.match(/^rg(\d+)$/);
-  return m ? Number(m[1]) : null;
+  const rgNum = rgNode ? Number((rgNode.id.match(/^rg(\d+)$/) || [])[1]) : null;
+  log.debug("getRGForPane", { paneRole, rgNum, rgNode });
+  return Number.isFinite(rgNum) ? rgNum : null;
 }
 
 // PaneKey helpers
@@ -49,9 +96,15 @@ const keyParts = (paneKey) => {
 
 function clearPaneDom(paneRole) {
   const rg = getRGForPane(paneRole);
-  if (rg == null) return;
+  if (rg == null) {
+    log.warn("clearPaneDom skipped (no RG)", { paneRole });
+    return;
+  }
   const container = document.querySelector(`#rg${rg} .chat-messages`);
-  if (container) container.innerHTML = "";
+  if (container) {
+    container.innerHTML = "";
+    log.info("Cleared pane DOM", { paneRole, rg });
+  }
   if (typeof window.hideAITypingIndicator === "function") {
     try {
       window.hideAITypingIndicator();
@@ -192,6 +245,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 
     msgEl.dataset.message = isImg ? "" : name;
     updateReplyPreviewsForMessage(msg);
+    log.debug("updateMessageTextsInPlace:file", { id: msg.id, isImg, name });
     return;
   }
 
@@ -247,6 +301,12 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
   }
+
+  log.debug("updateMessageTextsInPlace:text", {
+    id: msg.id,
+    forDelete,
+    hasTranslations: !!translations.length,
+  });
 }
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
@@ -314,6 +374,11 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   }
 
   if (!rBox.querySelector(".reaction")) rBox.remove();
+
+  log.debug("updateReactionsInPlace", {
+    id: msg.id,
+    aggregatedCount: aggregated.length,
+  });
 }
 
 /* ─────────── Reply preview updater ─────────── */
@@ -393,6 +458,8 @@ function updateReplyPreviewsForMessage(msg) {
       node.classList.remove("is-deleted");
     }
   });
+
+  log.debug("updateReplyPreviewsForMessage", { id, nodes: nodes.length });
 }
 
 /* ─────────── In-place patcher ─────────── */
@@ -420,6 +487,7 @@ function patchMessageInPlace(rg, msg) {
   updateReactionsInPlace(el, msg, window.currentUserId);
   updateReplyPreviewsForMessage(msg);
 
+  log.info("Patched message in place", { rg, id: msg.id });
   return true;
 }
 
@@ -457,6 +525,7 @@ function resetStateForPane(paneRole, chatId) {
     joinRetryTid: 0,
     joinRetryCount: 0,
   };
+  log.info("Pane state reset", { paneRole, chatId });
   return window._paneState[key];
 }
 
@@ -489,6 +558,7 @@ function afterInjectUiRefresh(rg) {
       window.hideAITypingIndicator();
     } catch {}
   }
+  log.debug("afterInjectUiRefresh", { rg });
 }
 
 function injectBatchForPane(paneRole, chatId, batch) {
@@ -497,6 +567,7 @@ function injectBatchForPane(paneRole, chatId, batch) {
   if (rg == null) return;
   if (typeof window.injectMessages !== "function") return;
 
+  log.info("Inject batch", { paneRole, chatId, rg, count: batch.length });
   window.injectMessages(rg, batch, window.currentUserId);
 
   for (const m of batch) {
@@ -533,6 +604,14 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
   );
   const ordered = sortAscByTs(combined);
 
+  log.info("Inject history & go live", {
+    paneRole,
+    chatId,
+    incomingCount: (incomingHistory || []).length,
+    prebufferCount: st.prebuffer.length,
+    orderedCount: ordered.length,
+  });
+
   if (ordered.length) {
     clearPaneDom(paneRole);
     injectBatchForPane(paneRole, chatId, ordered);
@@ -549,6 +628,8 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     const channelName = `sumizy/${userId}`;
     if (!window.xano) return;
 
+    log.info("joinChannel: starting", { userId, channelName });
+
     window.xano.setAuthToken(authToken);
     window.xano.setRealtimeAuthToken(authToken);
     if (typeof window.xano.realtimeReconnect === "function") {
@@ -563,8 +644,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       : window.xano.channel(channelName, { ...channelOptions });
 
     if (!already) {
+      log.debug("joinChannel: wiring channel.on handler", { channelKey });
       channel.on((data) => {
         try {
+          log.debug("RT inbound", data);
+
           // Parse once
           let incoming = [];
           if (data?.action === "message") {
@@ -605,6 +689,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
               : [],
           };
 
+          log.debug("RT relevant per pane", {
+            main: byPane.main.length,
+            ai: byPane.ai.length,
+          });
+
           for (const paneRole of ["main", "ai"]) {
             const chatId = window._paneActive[paneRole];
             if (!chatId) continue;
@@ -635,7 +724,13 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                   }
                 }
               }
-              if (updatedIds.size > 0) afterInjectUiRefresh(rg);
+              if (updatedIds.size > 0) {
+                log.info("Patched existing messages", {
+                  paneRole,
+                  count: updatedIds.size,
+                });
+                afterInjectUiRefresh(rg);
+              }
             }
             relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
 
@@ -655,6 +750,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                     const ts = parseTime(m.created_at);
                     if (ts > st.lastTs) st.lastTs = ts;
                   }
+                  log.debug("Buffered live pre-join", {
+                    paneRole,
+                    added: fresh.length,
+                    prebufferSize: st.prebuffer.length,
+                  });
                 }
               }
               continue;
@@ -668,10 +768,16 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
               );
               if (!toAppend.length) continue;
 
+              log.info("Appending live", {
+                paneRole,
+                add: toAppend.length,
+              });
               injectBatchForPane(paneRole, chatId, toAppend);
             }
           }
-        } catch (err) {}
+        } catch (err) {
+          log.error("channel.on handler error", err);
+        }
       });
     }
 
@@ -700,10 +806,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       } catch {}
     }, 1000);
 
+    log.info("joinChannel: ready", { channelKey });
     return channel;
   } catch (error) {
     window.currentChannel = null;
     window.currentUserId = null;
+    log.error("joinChannel failed", error);
     throw error;
   }
 };
@@ -731,8 +839,10 @@ window.sendMessage = (messageData) => {
       return Promise.reject(new Error("Channel object not found"));
     }
     ch.message(messageData);
+    log.debug("sendMessage", messageData);
     return Promise.resolve();
   } catch (error) {
+    log.error("sendMessage failed", error);
     return Promise.reject(error);
   }
 };
@@ -764,6 +874,11 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     st.joinRetryCount = 0;
     st.phase = "idle";
     clearPaneDom(paneRole);
+    log.info("ensureJoinForPane: new gen reset", {
+      paneRole,
+      chatId,
+      currentGen,
+    });
   }
 
   if (force && st.joinPending) {
@@ -771,8 +886,17 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     st.joinRetryTid = 0;
     st.joinRetryCount = 0;
     st.joinPending = false;
+    log.debug("ensureJoinForPane: force breaks pending", { paneRole, chatId });
   }
-  if (!force && (st.joinDispatched || st.joinPending)) return;
+  if (!force && (st.joinDispatched || st.joinPending)) {
+    log.debug("ensureJoinForPane: noop (already dispatched/pending)", {
+      paneRole,
+      chatId,
+      joinDispatched: st.joinDispatched,
+      joinPending: st.joinPending,
+    });
+    return;
+  }
 
   const trySend = () => {
     const s = getStateForPane(paneRole, chatId);
@@ -791,10 +915,18 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       if (s.joinRetryCount < 80) {
         s.joinRetryCount++;
         s.joinRetryTid = setTimeout(trySend, 200);
+        log.debug("ensureJoin retry", {
+          paneRole,
+          chatId,
+          retry: s.joinRetryCount,
+          hasContainer: !!cNow,
+          channelReady: isChannelReady(),
+        });
       } else {
         s.joinPending = false;
         s.joinRetryTid = 0;
         s.joinRetryCount = 0;
+        log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
       }
       return;
     }
@@ -806,6 +938,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
 
     if (!canJoin) {
       s.joinPending = false;
+      log.debug("ensureJoin: blocked by phase", { paneRole, phase: s.phase });
       return;
     }
 
@@ -815,13 +948,15 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     s.joinRetryCount = 0;
     s.phase = "join_sent";
 
-    window.sendMessage({
+    const payload = {
       isReaction: false,
       isDelete: false,
       isJoin: true,
       conversation_id: chatId,
       message: "",
-    });
+    };
+    log.info("ensureJoin: sending join", { paneRole, chatId, payload });
+    window.sendMessage(payload);
   };
 
   const rg = getRGForPane(paneRole);
@@ -833,9 +968,16 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
       st.joinRetryTid = setTimeout(trySend, 0);
+      log.debug("ensureJoin: scheduled immediate retry", {
+        paneRole,
+        chatId,
+        hasContainer: !!container,
+        channelReady: isChannelReady(),
+      });
     } else if (force) {
       clearTimeout(st.joinRetryTid);
       st.joinRetryTid = setTimeout(trySend, 0);
+      log.debug("ensureJoin: forced immediate retry", { paneRole, chatId });
     }
     return;
   }
@@ -843,13 +985,15 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   // Immediate path
   st.joinDispatched = true;
   st.phase = "join_sent";
-  window.sendMessage({
+  const payload = {
     isReaction: false,
     isDelete: false,
     isJoin: true,
     conversation_id: chatId,
     message: "",
-  });
+  };
+  log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
+  window.sendMessage(payload);
 };
 
 /* ─────────── Route watcher: clear & (re)join per pane ─────────── */
@@ -863,6 +1007,15 @@ function handleChatRouteChangeDual() {
     String(prevMain || "") !== String(main || "") ||
     String(prevAI || "") !== String(ai || "");
   if (changed) window._chatGen = (window._chatGen || 0) + 1;
+
+  log.info("Route change", {
+    prevMain,
+    prevAI,
+    main,
+    ai,
+    chatGen: window._chatGen,
+    changed,
+  });
 
   // MAIN
   if (!main) {
@@ -925,6 +1078,8 @@ function handleChatRouteChangeDual() {
   } else {
     handleChatRouteChangeDual();
   }
+
+  log.info("Navigation watch wired");
 })();
 
 /* ─────────── Optional: Older messages API (no-op unless you wire data) ─────────── */
