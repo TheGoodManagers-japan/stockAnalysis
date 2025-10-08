@@ -239,6 +239,10 @@ async function clearVisibleChatDOMOnce() {
 
 /** Clear specific pane without touching the other */
 function clearChatByPane(pane /* "main"|"ai" */) {
+  if (pane === "ai") {
+    console.info("clearChatByPane skipped for AI (preserve)");
+    return;
+  }
   const rg = findRG(pane);
   if (rg == null) return;
   const g = document.getElementById(`rg${rg}`);
@@ -248,6 +252,7 @@ function clearChatByPane(pane /* "main"|"ai" */) {
   window.__sumizyInjectorCache?.delete?.(rg);
   console.info(`clearChatByPane: ${pane} (#rg${rg}) cleared`);
 }
+
 
 /* ─────────── EXPORTS ─────────── */
 Object.assign(window, {

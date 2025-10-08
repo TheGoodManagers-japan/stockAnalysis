@@ -573,6 +573,14 @@ window.addEventListener("beforeunload", () => {
  * @param {number} rg  The repeating-group number, e.g. `1` for #rg1
  * @param {('main'|'ai')?} paneRole Optional explicit role; if omitted, read from DOM
  */
+
+// Guard: never clear AI pane through generic clearChat()
+const role = getPaneRoleFromRG(rg);
+if (role === "ai") {
+  console.info(`clearChat skipped for AI pane (#rg${rg})`);
+  return;
+}
+
 window.clearChat = (rg, paneRole = null) => {
   if (typeof rg !== "number") {
     // dev guard

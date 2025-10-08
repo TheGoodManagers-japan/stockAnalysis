@@ -111,6 +111,11 @@ const keyParts = (paneKey) => {
 };
 
 function clearPaneDom(paneRole) {
+  if (paneRole === "ai") {
+    // Preserve AI pane by default
+    log.info("clearPaneDom skipped for AI pane (preserve)", { paneRole });
+    return;
+  }
   const rg = getRGForPane(paneRole);
   if (rg == null) {
     log.warn("clearPaneDom skipped (no RG)", { paneRole });
@@ -127,6 +132,7 @@ function clearPaneDom(paneRole) {
     } catch {}
   }
 }
+
 
 function safeSelId(id) {
   const s = String(id ?? "");
@@ -1081,19 +1087,23 @@ function handleChatRouteChangeDual() {
   }
 
   // AI
-  if (!ai) {
-    if (prevAI) clearPaneDom("ai");
-    window._paneActive.ai = null;
-  } else {
-    if (ai !== prevAI) {
-      window._paneActive.ai = ai;
-      resetStateForPane("ai", ai);
-      clearPaneDom("ai");
-      window.ensureJoinForPane("ai", true);
-    } else {
-      window.ensureJoinForPane("ai", false);
-    }
+  // AI
+if (!ai) {
+  // NEW: Preserve existing AI pane & state when ai-chat is absent from URL
+  if (prevAI) {
+    log.info("AI id missing in URL; preserving existing AI pane", { prevAI });
   }
+  // do NOT clearPaneDom("ai") and do NOT null _paneActive.ai
+} else {
+  if (ai !== prevAI) {
+    window._paneActive.ai = ai;
+    resetStateForPane("ai", ai);
+    clearPaneDom("ai");
+    window.ensureJoinForPane("ai", true);
+  } else {
+    window.ensureJoinForPane("ai", false);
+  }
+}
 }
 
 /* ─────────── Wire up basic SPA navigation hooks ─────────── */
