@@ -10,7 +10,10 @@
 //   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
-import { enrichForTechnicalScore } from "./main.js";
+import {
+  enrichForTechnicalScore,
+  getSentimentCombinationRank,
+} from "./main.js";
 import { allTickers } from "./tickers.js";
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 import { EXIT_PROFILES } from "./exit_profiles.js"; // external profiles
@@ -66,18 +69,30 @@ async function fetchHistory(ticker, fromISO, toISO) {
 }
 
 /* ---------------- sentiment gate (optional) ---------------- */
-function mkSentimentGate(allowedList) {
-  if (!Array.isArray(allowedList) || allowedList.length === 0) {
-    // default: allow all (parity with "no gate")
-    return () => true;
+function mkSentimentGate(allowedList, allowedRanks) {
+    // Default: rank gate 1..3 ON
+    const ranksDefault = [1, 2, 3];
+    const useList  = Array.isArray(allowedList) && allowedList.length > 0;
+    const ranksArg = Array.isArray(allowedRanks) ? allowedRanks : undefined;
+    // empty array => disable rank gate; undefined => default 1..3
+    const ranks = ranksArg === undefined ? ranksDefault : ranksArg;
+    const useRanks = Array.isArray(ranks) && ranks.length > 0;
+  
+    if (!useList && !useRanks) return () => true; // no gate at all
+  
+    const listSet = useList ? new Set(allowedList) : null;
+    const rankSet = useRanks ? new Set(ranks.map(Number)) : null;
+  
+    return (ST, LT) => {
+      const st = Number.isFinite(ST) ? ST : 4;
+      const lt = Number.isFinite(LT) ? LT : 4;
+      const key = `LT${lt}-ST${st}`;
+      const passList = !useList || listSet.has(key);
+      const rank = getSentimentCombinationRank(st, lt); // 1..5
+      const passRank = !useRanks || rankSet.has(rank);
+      return passList && passRank;
+    };
   }
-  const S = new Set(allowedList);
-  return (ST, LT) => {
-    const st = Number.isFinite(ST) ? ST : 4;
-    const lt = Number.isFinite(LT) ? LT : 4;
-    return S.has(`LT${lt}-ST${st}`);
-  };
-}
 
 /* ---------------- small helpers ---------------- */
 function inc(map, key, by = 1) {
@@ -306,8 +321,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     activeProfiles = [chosen];
   }
 
-  // optional sentiment gate
-  const allowBySentiment = mkSentimentGate(opts.allowedSentiments);
+   // optional sentiment gate: accepts explicit combos AND/OR rank list
+    const allowBySentiment = mkSentimentGate(
+       opts.allowedSentiments,
+       opts.allowedSentiRanks // undefined => defaults to [1,2,3]
+     );
 
   // diagnostics
   const byTicker = [];
