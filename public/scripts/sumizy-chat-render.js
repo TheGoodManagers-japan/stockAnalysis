@@ -38,7 +38,6 @@ function parseMarkdown(text) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Check for list items with various bullet types
       const bulletMatch = line.match(/^(\s*)([\*\-\+•])\s+(.*)$/);
       const numberedMatch = line.match(/^(\s*)(\d+\.)\s+(.*)$/);
 
@@ -47,10 +46,8 @@ function parseMarkdown(text) {
         const content = bulletMatch ? bulletMatch[3] : numberedMatch[3];
         const isNumbered = !!numberedMatch;
 
-        // Determine nesting level (every 2-4 spaces or a tab = 1 level)
         const level = Math.floor(indent / 2);
 
-        // Close lists that are deeper than current level
         while (
           listStack.length > 0 &&
           listStack[listStack.length - 1].level > level
@@ -59,7 +56,6 @@ function parseMarkdown(text) {
           result.push(`</${list.type}>`);
         }
 
-        // Check if we need to start a new list
         const needNewList =
           listStack.length === 0 ||
           listStack[listStack.length - 1].level < level ||
@@ -68,7 +64,6 @@ function parseMarkdown(text) {
               (isNumbered ? "ol" : "ul"));
 
         if (needNewList) {
-          // Close same-level list of different type if exists
           if (
             listStack.length > 0 &&
             listStack[listStack.length - 1].level === level &&
@@ -84,10 +79,8 @@ function parseMarkdown(text) {
           listStack.push({ type: listType, level: level });
         }
 
-        // Process the content for inline formatting
         let processedContent = content;
 
-        // Handle bold formatting (** or __)
         processedContent = processedContent.replace(
           /\*\*([^\*]+)\*\*/g,
           "<strong>$1</strong>"
@@ -97,7 +90,6 @@ function parseMarkdown(text) {
           "<strong>$1</strong>"
         );
 
-        // Handle italic formatting (* or _) - careful not to match list markers
         processedContent = processedContent.replace(
           /(?<!\*)\*([^\*\n]+)\*(?!\*)/g,
           "<em>$1</em>"
@@ -107,7 +99,6 @@ function parseMarkdown(text) {
           "<em>$1</em>"
         );
 
-        // Handle links
         processedContent = processedContent.replace(
           /\[([^\]]+)\]\(([^)]+)\)/g,
           '<a href="$2" target="_blank" rel="noopener">$1</a>'
@@ -115,17 +106,13 @@ function parseMarkdown(text) {
 
         result.push(`<li>${processedContent}</li>`);
       } else {
-        // Not a list item - close all open lists
         while (listStack.length > 0) {
           result.push(`</${listStack.pop().type}>`);
         }
-
-        // Add the non-list line
         result.push(line);
       }
     }
 
-    // Close any remaining open lists
     while (listStack.length > 0) {
       result.push(`</${listStack.pop().type}>`);
     }
@@ -133,13 +120,11 @@ function parseMarkdown(text) {
     return result.join("\n");
   };
 
-  // Apply list processing
   html = processLists(html);
 
   // Step 5: Process inline formatting for non-list content
   const lines = html.split("\n");
   const processedLines = lines.map((line) => {
-    // Skip if line is a list tag or list item
     if (
       line.match(/^<[uo]l/) ||
       line.match(/^<\/[uo]l>/) ||
@@ -148,15 +133,12 @@ function parseMarkdown(text) {
       return line;
     }
 
-    // Process bold
     line = line.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
     line = line.replace(/__([^_]+)__/g, "<strong>$1</strong>");
 
-    // Process italic
     line = line.replace(/(?<!\*)\*([^\*\n]+)\*(?!\*)/g, "<em>$1</em>");
     line = line.replace(/(?<!_)_([^_\n]+)_(?!_)/g, "<em>$1</em>");
 
-    // Process links
     line = line.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener">$1</a>'
@@ -167,12 +149,10 @@ function parseMarkdown(text) {
 
   html = processedLines.join("\n");
 
-  // Step 6: Handle paragraphs and line breaks
+  // Step 6: paragraphs / line breaks
   const blocks = html.split(/\n\n+/);
-
   html = blocks
     .map((block) => {
-      // Don't wrap lists, code blocks, or empty blocks
       if (
         block.trim() === "" ||
         block.includes("<ul") ||
@@ -181,24 +161,19 @@ function parseMarkdown(text) {
       ) {
         return block;
       }
-
-      // Already a full block tag?
       if (block.trim().match(/^<[^>]+>.*<\/[^>]+>$/s)) {
         return block;
       }
-
-      // Convert single newlines to <br> and wrap
       const withBreaks = block.trim().replace(/\n/g, "<br>");
       return `<p>${withBreaks}</p>`;
     })
     .filter((block) => block.trim() !== "")
     .join("\n\n");
 
-  // Step 7: Restore code blocks and inline code
+  // Step 7: Restore code
   codeBlocks.forEach((block, i) => {
     html = html.replace(`__CODE_BLOCK_${i}__`, block);
   });
-
   inlineCodes.forEach((code, i) => {
     html = html.replace(`__INLINE_CODE_${i}__`, code);
   });
@@ -208,125 +183,31 @@ function parseMarkdown(text) {
 
 window.parseMarkdown = parseMarkdown;
 
-/* ─────────── UPDATE RENDERMSG TO USE MARKDOWN PARSER ─────────── */
-const renderMsgWithMarkdown = (m, cuid) => {
-  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
-
-  // Prefer global helper if present (works with dual-pane), else fallback to URL sniff
-  const isAIChat =
-    (typeof window.isAIChat === "function" && window.isAIChat()) ||
-    window.location.pathname.includes("ai-chat") ||
-    window.location.search.includes("ai-chat");
-
-  const isAIMessage = m.user_id === AI_USER_ID;
-
-  const u = m._user ?? {};
-  const ts = parseTime(m.created_at);
-
-  // Avatar
-  let avatarStyle = "";
-  let avatarContent = "";
-
-  if (isAIChat && isAIMessage) {
-    avatarContent = "AI";
-  } else if (u.profilePicture) {
-    avatarStyle = `style="background-image:url('${u.profilePicture}')"`; // trusted path
-  } else {
-    const initial = (u.name || "U").charAt(0).toUpperCase();
-    avatarStyle =
-      'style="background:#3a81df;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;"';
-    avatarContent = initial;
+/* Small helpers used below */
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+function parseTime(t) {
+  return typeof t === "number" ? t : Date.parse(t) || 0;
+}
+function fmtTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString();
+  } catch {
+    return "";
   }
-
-  // Message body (markdown for AI in AI chat)
-  let messageContent = "";
-  if (m.message) {
-    messageContent =
-      isAIChat && isAIMessage ? parseMarkdown(m.message) : esc(m.message);
-  }
-
-  const body = m.isFile
-    ? renderFileAttachment(m)
-    : `<div class="message-text lang-original">${messageContent}</div>` +
-      (m._translations || [])
-        .map(
-          (tr) => `
-            <div class="message-text lang-${esc(
-              tr.language
-            )}" style="display:none;">
-              ${
-                isAIChat && isAIMessage
-                  ? parseMarkdown(tr.translated_text)
-                  : esc(tr.translated_text)
-              }
-            </div>`
-        )
-        .join("");
-
-  const reacts = agg(m._reactions)
-    .map((r) => {
-      const mine = cuid && r.userIds.includes(cuid);
-      return `<div class="reaction${mine ? " user-reacted" : ""}"
-                  data-emoji="${esc(r.e)}"
-                  data-users='${JSON.stringify(r.users)}'
-                  data-user-ids='${JSON.stringify(r.userIds)}'>
-                <span class="reaction-emoji">${r.e}</span>
-                <span class="reaction-count">${r.c}</span>
-              </div>`;
-    })
-    .join("");
-
-  // Hide message actions in AI chat (keeps UX consistent)
-  const actionTrigger = isAIChat
-    ? ""
-    : '<div class="message-actions-trigger">⋮</div>';
-
-  // Summary for data-message (blank for images)
-  const imageLike =
-    m.isFile &&
-    (String(m.file_type || "")
-      .toLowerCase()
-      .startsWith("image") ||
-      /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(m.message || "")));
-
-  return `<div class="message${m._reply ? " has-reply" : ""}${
-    isAIChat && isAIMessage ? " ai-message" : ""
-  }"
-                 data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
-                 data-username="${esc(u.name || "Unknown")}"
-                 data-message="${esc(
-                   imageLike ? "" : m.isFile ? m.file_name : m.message
-                 )}">
-              <div class="message-wrapper">
-                <div class="message-gutter">
-                  <div class="avatar" ${avatarStyle}>${avatarContent}</div>
-                </div>
-                <div class="message-content-wrapper">
-                  <div class="message-header">
-                    <span class="username">${esc(u.name || "Unknown")}</span>
-                    <span class="timestamp">${fmtTime(ts)}</span>
-                    ${actionTrigger}
-                  </div>
-                  ${
-                    m._reply && m._reply.id
-                      ? renderInlineReplyPreview(m._reply)
-                      : ""
-                  }
-                  ${body}
-                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
-                </div>
-              </div>
-            </div>`;
-};
-
-// Replace the existing renderMsg with this new version
-window.renderMsg = renderMsgWithMarkdown;
+}
 
 /* ─────────── FILE ATTACHMENT (message = URL) ─────────── */
 function renderFileAttachment(m) {
   const type = String(m.file_type || "").toLowerCase();
-  const rawUrl = String(m.message || ""); // unescaped for regex checks
-  const url = esc(rawUrl); // escaped for HTML
+  const rawUrl = String(m.message || "");
+  const url = esc(rawUrl);
   const name = esc(m.file_name || rawUrl.split("/").pop() || "download");
 
   const looksImage =
@@ -383,8 +264,137 @@ function renderInlineReplyPreview(r) {
     </div>`;
 }
 
-/* ─────────── REPLY HTML FOR BUBBLE ─────────── */
-function buildReplyHtml(msgEl) {
+/* ─────────── AGGREGATE REACTIONS (expect window.agg if present) ─────────── */
+function agg(raw) {
+  try {
+    if (typeof window.agg === "function") return window.agg(raw || []);
+  } catch {}
+  // tiny fallback
+  const map = new Map();
+  for (const r of raw || []) {
+    const e = r?.emoji || r?.e || r?.key || r?.symbol;
+    if (!e) continue;
+    const uid = r?.user_id;
+    const entry = map.get(e) || { e, c: 0, users: [], userIds: [] };
+    entry.c += 1;
+    if (uid) entry.userIds.push(uid);
+    map.set(e, entry);
+  }
+  return Array.from(map.values());
+}
+
+/* ─────────── UPDATE RENDERMSG TO BE PANE-AWARE ─────────── */
+const renderMsgWithMarkdown = (m, cuid) => {
+  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+
+  // Detect “AI chat mode”
+  let isAIChat =
+    typeof window.isAIChat === "function"
+      ? !!window.isAIChat() // dual-pane aware
+      : window.location.pathname.includes("ai-chat") ||
+        window.location.search.includes("ai-chat");
+
+  const isAIMessage = String(m.user_id) === AI_USER_ID;
+
+  const u = m._user ?? {};
+  const ts = parseTime(m.created_at);
+
+  // Avatar
+  let avatarStyle = "";
+  let avatarContent = "";
+  if (isAIChat && isAIMessage) {
+    avatarContent = "AI";
+  } else if (u.profilePicture) {
+    avatarStyle = `style="background-image:url('${u.profilePicture}')"`; // trusted path
+  } else {
+    const initial = (u.name || "U").charAt(0).toUpperCase();
+    avatarStyle = `style="background:#3a81df;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;"`;
+    avatarContent = initial;
+  }
+
+  // Body
+  let messageContent = "";
+  if (m.isFile) {
+    messageContent = renderFileAttachment(m);
+  } else if (m.message) {
+    messageContent =
+      isAIChat && isAIMessage
+        ? `<div class="message-text lang-original">${parseMarkdown(
+            m.message
+          )}</div>`
+        : `<div class="message-text lang-original">${esc(m.message)}</div>`;
+    // translations
+    if (Array.isArray(m._translations)) {
+      messageContent += m._translations
+        .map((tr) => {
+          const lang = esc(tr.language);
+          const txt = tr.translated_text || "";
+          const inner = isAIChat && isAIMessage ? parseMarkdown(txt) : esc(txt);
+          return `<div class="message-text lang-${lang}" style="display:none;">${inner}</div>`;
+        })
+        .join("");
+    }
+  }
+
+  const reacts = agg(m._reactions)
+    .map((r) => {
+      const mine = cuid && r.userIds.includes(cuid);
+      return `<div class="reaction${mine ? " user-reacted" : ""}"
+                  data-emoji="${esc(r.e)}"
+                  data-users='${JSON.stringify(r.users || [])}'
+                  data-user-ids='${JSON.stringify(r.userIds || [])}'>
+                <span class="reaction-emoji">${r.e}</span>
+                <span class="reaction-count">${r.c}</span>
+              </div>`;
+    })
+    .join("");
+
+  const actionTrigger = isAIChat
+    ? ""
+    : '<div class="message-actions-trigger">⋮</div>';
+
+  const imageLike =
+    m.isFile &&
+    (String(m.file_type || "")
+      .toLowerCase()
+      .startsWith("image") ||
+      /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(m.message || "")));
+
+  return `<div class="message${m._reply ? " has-reply" : ""}${
+    isAIChat && isAIMessage ? " ai-message" : ""
+  }"
+                 data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
+                 data-username="${esc(u.name || "Unknown")}"
+                 data-message="${esc(
+                   imageLike ? "" : m.isFile ? m.file_name : m.message || ""
+                 )}">
+              <div class="message-wrapper">
+                <div class="message-gutter">
+                  <div class="avatar" ${avatarStyle}>${avatarContent}</div>
+                </div>
+                <div class="message-content-wrapper">
+                  <div class="message-header">
+                    <span class="username">${esc(u.name || "Unknown")}</span>
+                    <span class="timestamp">${fmtTime(ts)}</span>
+                    ${actionTrigger}
+                  </div>
+                  ${
+                    m._reply && m._reply.id
+                      ? renderInlineReplyPreview(m._reply)
+                      : ""
+                  }
+                  ${messageContent}
+                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
+                </div>
+              </div>
+            </div>`;
+};
+
+// Replace the existing renderMsg with this new version
+window.renderMsg = renderMsgWithMarkdown;
+
+/* Keep exports used elsewhere */
+window.buildReplyHtml = function buildReplyHtml(msgEl) {
   const un = esc(msgEl.dataset.username);
   const file = msgEl.querySelector(".file-attachment");
   const body = file
@@ -396,6 +406,4 @@ function buildReplyHtml(msgEl) {
               <strong class="reply-name">${un}</strong>
               <div class="reply-body">${body}</div>
             </div>`;
-}
-
-window.buildReplyHtml = buildReplyHtml;
+};

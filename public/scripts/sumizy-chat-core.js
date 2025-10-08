@@ -18,6 +18,13 @@ function makeChatInjector(chatEl, cuid) {
         .createRange()
         .createContextualFragment(renderMsg(m, cuid));
       const el = frag.firstElementChild;
+      const pane = chatEl.closest('[id^="rg"]')?.dataset?.pane;
+      if (
+        pane === "ai" &&
+        String(m.user_id) === "5c82f501-a3da-4083-894c-4367dc2e01f3"
+      ) {
+        el.classList.add("ai-message");
+      }
 
       // Mark deleted so CSS can style it
       if (m.isDeleted) {
@@ -91,6 +98,13 @@ function makeChatInjector(chatEl, cuid) {
         .createRange()
         .createContextualFragment(renderMsg(m, cuid));
       const msgEl = msgFrag.firstElementChild;
+      const pane = chatEl.closest('[id^="rg"]')?.dataset?.pane;
+      if (
+        pane === "ai" &&
+        String(m.user_id) === "5c82f501-a3da-4083-894c-4367dc2e01f3"
+      ) {
+        msgEl.classList.add("ai-message");
+      }
 
       if (m.isDeleted) {
         msgEl.classList.add("is-deleted");
