@@ -85,6 +85,26 @@ function getRGForPane(paneRole) {
   return Number.isFinite(rgNum) ? rgNum : null;
 }
 
+// Pane-aware AI detection helpers
+function isNodeInAIPane(node) {
+  if (!node || !node.closest) return false;
+  return !!node.closest('[id^="rg"][data-pane="ai"]');
+}
+
+// Optional global so other modules can query as well.
+// If called with a node, checks DOM; otherwise falls back to URL param / presence of AI pane.
+window.isAIChat = function (node) {
+  if (node) return isNodeInAIPane(node);
+  try {
+    const q = new URLSearchParams(location.search);
+    return !!(
+      q.get("ai-chat") || document.querySelector('[id^="rg"][data-pane="ai"]')
+    );
+  } catch {
+    return false;
+  }
+};
+
 // PaneKey helpers
 const paneKeyOf = (paneRole, chatId) => `${paneRole}:${chatId}`;
 const keyParts = (paneKey) => {
@@ -272,14 +292,15 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  // Markdown for AI messages can remain driven by window.isAIChat (your renderer also handles this)
-  const isAIChat =
-    typeof window.isAIChat === "function" ? window.isAIChat() : false;
+  // Pane-aware AI markdown: AI messages rendered as markdown only inside AI pane
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
   const isAIMessage = String(msg.user_id) === AI_USER_ID;
+  const inAIPane =
+    isNodeInAIPane(msgEl) ||
+    (typeof window.isAIChat === "function" && window.isAIChat(msgEl));
   const renderTr = (txt) => {
     const s = String(txt || "");
-    if (isAIChat && isAIMessage && typeof window.parseMarkdown === "function") {
+    if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
       return window.parseMarkdown(s);
     }
     return _esc(s);
@@ -306,6 +327,8 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     id: msg.id,
     forDelete,
     hasTranslations: !!translations.length,
+    inAIPane,
+    isAIMessage,
   });
 }
 
@@ -576,6 +599,30 @@ function injectBatchForPane(paneRole, chatId, batch) {
       `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
     );
     sanitizeInjectedFileMessageNode(el, m);
+  }
+
+  // Ensure AI styling + markdown render immediately for AI pane
+  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+  if (paneRole === "ai") {
+    for (const m of batch) {
+      if (!m?.id) continue;
+      const el = document.querySelector(
+        `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
+      );
+      if (!el) continue;
+
+      // Tag for CSS (if you use .ai-message styles)
+      if (String(m.user_id) === AI_USER_ID) {
+        el.classList.add("ai-message");
+      }
+
+      // Force a pane-aware text update so markdown is applied right away
+      try {
+        updateMessageTextsInPlace(el, m, { forDelete: !!m.isDeleted });
+      } catch (e) {
+        log.warn("AI markdown re-render failed", { id: m.id, e });
+      }
+    }
   }
 
   const st = getStateForPane(paneRole, chatId);
@@ -938,7 +985,10 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
 
     if (!canJoin) {
       s.joinPending = false;
-      log.debug("ensureJoin: blocked by phase", { paneRole, phase: s.phase });
+      log.debug("ensureJoin: blocked by phase", {
+        paneRole: paneRole,
+        phase: s.phase,
+      });
       return;
     }
 
