@@ -69,10 +69,8 @@ function getPaneIdsFromUrl() {
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
-  // Prefer root RG element annotated with data-pane on the RG node itself
   const rgNode =
     document.querySelector(`[id^="rg"][data-pane="${paneRole}"]`) ||
-    // fallback: allow any ancestor of a .chat-messages to carry data-pane
     (function () {
       const cm = document.querySelector(
         `[data-pane="${paneRole}"] .chat-messages`
@@ -91,8 +89,6 @@ function isNodeInAIPane(node) {
   return !!node.closest('[id^="rg"][data-pane="ai"]');
 }
 
-// Optional global so other modules can query as well.
-// If called with a node, checks DOM; otherwise falls back to URL param / presence of AI pane.
 window.isAIChat = function (node) {
   if (node) return isNodeInAIPane(node);
   try {
@@ -288,16 +284,27 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       return d;
     })();
 
-  if (original) {
-    original.textContent = forDelete ? deleteText : msg.message ?? "";
-  }
-
-  // Pane-aware AI markdown: AI messages rendered as markdown only inside AI pane
+  // Pane-aware AI markdown for ORIGINAL text (fix)
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
   const isAIMessage = String(msg.user_id) === AI_USER_ID;
   const inAIPane =
     isNodeInAIPane(msgEl) ||
     (typeof window.isAIChat === "function" && window.isAIChat(msgEl));
+
+  if (original) {
+    const txt = forDelete ? deleteText : msg.message ?? "";
+    if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
+      original.innerHTML = window.parseMarkdown(txt);
+      log.debug("Rendered ORIGINAL with Markdown (AI pane)", {
+        id: msg.id,
+        len: txt.length,
+      });
+    } else {
+      original.textContent = txt;
+    }
+  }
+
+  // For translations we already render with Markdown in AI pane
   const renderTr = (txt) => {
     const s = String(txt || "");
     if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
@@ -611,12 +618,10 @@ function injectBatchForPane(paneRole, chatId, batch) {
       );
       if (!el) continue;
 
-      // Tag for CSS (if you use .ai-message styles)
       if (String(m.user_id) === AI_USER_ID) {
         el.classList.add("ai-message");
       }
 
-      // Force a pane-aware text update so markdown is applied right away
       try {
         updateMessageTextsInPlace(el, m, { forDelete: !!m.isDeleted });
       } catch (e) {
@@ -696,7 +701,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
         try {
           log.debug("RT inbound", data);
 
-          // Parse once
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -719,7 +723,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           }
           if (!incoming.length) return;
 
-          // Route to panes independently
           const activeMain = window._paneActive.main;
           const activeAI = window._paneActive.ai;
 
@@ -752,7 +755,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             const st = getStateForPane(paneRole, chatId);
             if (!st) continue;
 
-            // In-place patch for visible nodes
+            // In-place patch
             const updatedIds = new Set();
             if (rg != null) {
               for (const m of relevant) {
@@ -781,7 +784,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             }
             relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
 
-            // Phase routing
             if (
               st.phase === "join_sent" ||
               st.phase === "injecting_history" ||
@@ -846,7 +848,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           window.bubble_fn_joinedChannel(true);
         } catch {}
       }
-      // Force ensure-join for both panes in case we raced the channel
       try {
         window.ensureJoinForPane("main", true);
         window.ensureJoinForPane("ai", true);
@@ -909,7 +910,6 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   const st = getStateForPane(paneRole, chatId);
   const currentGen = window._chatGen || 0;
 
-  // Re-init on new navigation gen
   if (st.joinGen !== currentGen) {
     st.joinGen = currentGen;
     st.prebuffer = [];
@@ -948,7 +948,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   const trySend = () => {
     const s = getStateForPane(paneRole, chatId);
     if (!s) return;
-    if (s.joinGen !== currentGen) return; // stale timer
+    if (s.joinGen !== currentGen) return;
     if (s.joinDispatched) return;
 
     const rgNow = getRGForPane(paneRole);
@@ -957,7 +957,6 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
         ? document.querySelector(`#rg${rgNow} .chat-messages`)
         : null;
 
-    // Wait for BOTH container and channel
     if (!cNow || !isChannelReady()) {
       if (s.joinRetryCount < 80) {
         s.joinRetryCount++;
@@ -1052,7 +1051,6 @@ function handleChatRouteChangeDual() {
   const prevMain = window._paneActive.main;
   const prevAI = window._paneActive.ai;
 
-  // bump gen if anything changes
   const changed =
     String(prevMain || "") !== String(main || "") ||
     String(prevAI || "") !== String(ai || "");
