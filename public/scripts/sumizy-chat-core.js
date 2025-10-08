@@ -578,19 +578,23 @@ window.addEventListener("beforeunload", () => {
 const role = getPaneRoleFromRG(rg);
 if (role === "ai") {
   console.info(`clearChat skipped for AI pane (#rg${rg})`);
-  return;
 }
 
 window.clearChat = (rg, paneRole = null) => {
   if (typeof rg !== "number") {
-    // dev guard
     console.error("clearChat: first arg must be number");
+    return;
+  }
+
+  // ✅ If you really want to no-op clear for AI pane when called generically:
+  const role = paneRole || getPaneRoleFromRG(rg);
+  if (role === "ai") {
+    console.info(`clearChat skipped for AI pane (#rg${rg})`);
     return;
   }
 
   const paneKey = makePaneKey(rg, paneRole);
 
-  /* locate the chat pane */
   const g = document.getElementById(`rg${rg}`);
   if (!g) {
     console.warn(`#rg${rg} not found for ${paneKey}`);
@@ -602,20 +606,16 @@ window.clearChat = (rg, paneRole = null) => {
     return;
   }
 
-  /* remove every child node (faster than innerHTML = '' for large lists) */
   while (chat.firstChild) chat.firstChild.remove();
-
-  /* drop the cached injector for this pane so next injectMessages() call
-     rebuilds it with a clean "lastDate" state */
   cacheByPane.delete(paneKey);
 
-  /* optional: if you keep search state, purge hits that lived in this chat */
   g.querySelectorAll(".search-hit, .search-current").forEach((el) => {
     el.classList.remove("search-hit", "search-current");
   });
 
   console.info(`clearChat: ${paneKey} cleared`);
 };
+
 
 /* ─────────── SCROLL TO TOP LISTENER FOR PAGINATION ─────────── */
 /**
