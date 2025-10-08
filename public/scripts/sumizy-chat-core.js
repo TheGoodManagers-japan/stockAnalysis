@@ -574,19 +574,13 @@ window.addEventListener("beforeunload", () => {
  * @param {('main'|'ai')?} paneRole Optional explicit role; if omitted, read from DOM
  */
 
-// Guard: never clear AI pane through generic clearChat()
-const role = getPaneRoleFromRG(rg);
-if (role === "ai") {
-  console.info(`clearChat skipped for AI pane (#rg${rg})`);
-}
-
 window.clearChat = (rg, paneRole = null) => {
   if (typeof rg !== "number") {
     console.error("clearChat: first arg must be number");
     return;
   }
 
-  // ✅ If you really want to no-op clear for AI pane when called generically:
+  // Guard: skip generic clears for the AI pane
   const role = paneRole || getPaneRoleFromRG(rg);
   if (role === "ai") {
     console.info(`clearChat skipped for AI pane (#rg${rg})`);
@@ -600,6 +594,7 @@ window.clearChat = (rg, paneRole = null) => {
     console.warn(`#rg${rg} not found for ${paneKey}`);
     return;
   }
+
   const chat = g.querySelector(".chat-messages");
   if (!chat) {
     console.warn(`#rg${rg} missing .chat-messages for ${paneKey}`);
@@ -615,6 +610,7 @@ window.clearChat = (rg, paneRole = null) => {
 
   console.info(`clearChat: ${paneKey} cleared`);
 };
+
 
 
 /* ─────────── SCROLL TO TOP LISTENER FOR PAGINATION ─────────── */
