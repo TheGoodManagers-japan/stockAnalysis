@@ -932,16 +932,11 @@
 /* Remove bubble styling for AI messages - plain text appearance */
 /* AI bubble skin — must come AFTER the ai-chat-mode block above */
 [data-pane="ai"] .message.ai-message>.message-wrapper>.message-content-wrapper {
-    background: #0b1020 !important;
-    color: #e9ecf1 !important;
-    border-radius: 14px !important;
-    padding: 12px 14px !important;
-    box-shadow: 0 6px 20px rgba(6, 8, 20, .25) !important;
-    border: none !important;
-    width: auto !important;
-    max-width: 72ch !important;
-    /* keep AI text readable */
-}
+    background: transparent !important;
+        box-shadow: none !important;
+        border: none !important;
+        padding: 0 !important;
+        /* remove bubble padding */ }
 
 [data-pane="ai"] .message.ai-message .message-content-wrapper:hover {
     transform: none;
@@ -960,13 +955,8 @@
 
 /* AI message text - plain styling with full width */
 [data-pane="ai"] .message.ai-message .message-text {
-    color: #e9ecf1 !important;
-    background: transparent !important;
-    padding: 4px 0 !important;
-    line-height: 1.6;
-    max-width: none !important;
-    width: 100%;
-}
+    color: #1d1c1d !important;
+        -webkit-text-fill-color: #1d1c1d !important; }
 
 /* Headings and lists inside AI text */
 [data-pane="ai"] .message.ai-message .message-text h1,
@@ -1005,10 +995,10 @@
 
 [data-pane="ai"] .message.ai-message pre,
 [data-pane="ai"] .message.ai-message code {
-    background: #0f1a36 !important;
-    border: 1px solid #24345d !important;
-    border-radius: 10px !important;
-}
+    background: #f8f8f8 !important;
+        border: 1px solid #e8e8e8 !important;
+        color: #111827 !important;
+        border-radius: 6px !important; }
 
 [data-pane="ai"] .message.ai-message .timestamp {
     color: #9ca3af !important;
@@ -1089,9 +1079,8 @@
 }
 
 [data-pane="ai"] .message.ai-message .message-text a {
-    color: #9ecbff;
-    /* light blue for contrast */
-    text-decoration: underline; }
+    color: #1264a3 !important;
+        text-decoration: underline; }
 
 [data-pane="ai"] .message:not(.ai-message) .file-attachment .file-name {
     color: white;
