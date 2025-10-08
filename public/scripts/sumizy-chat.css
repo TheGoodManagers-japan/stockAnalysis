@@ -907,16 +907,17 @@ body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .mes
 }
 
 /* Remove bubble styling for AI messages - plain text appearance */
-body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .message-content-wrapper {
-    background: transparent !important;
-    color: #1f2937;
-    border-radius: 0 !important;
-    padding: 4px 0 !important;
-    box-shadow: none !important;
+/* AI bubble skin — must come AFTER the ai-chat-mode block above */
+body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"]>.message-wrapper>.message-content-wrapper {
+    background: #0b1020 !important;
+    color: #e9ecf1 !important;
+    border-radius: 14px !important;
+    padding: 12px 14px !important;
+    box-shadow: 0 6px 20px rgba(6, 8, 20, .25) !important;
     border: none !important;
-    max-width: 100% !important;
-    width: 100%;
-    transition: none;
+    width: auto !important;
+    max-width: 72ch !important;
+    /* keep AI text readable */
 }
 
 body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .message-content-wrapper:hover {
@@ -943,6 +944,19 @@ body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .mes
     max-width: none !important;
     width: 100%;
 }
+
+
+
+body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .message-text p {
+    margin: .5em 0;
+    
+}
+
+body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] pre,
+body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] code {
+    background: #0f1a36 !important;
+    border: 1px solid #24345d !important;
+    border-radius: 10px !important;  }
 
 body.ai-chat-mode .message[data-uid="5c82f501-a3da-4083-894c-4367dc2e01f3"] .timestamp {
     color: #9ca3af !important;
