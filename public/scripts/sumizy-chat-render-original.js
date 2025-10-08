@@ -137,6 +137,7 @@ function parseMarkdown(text) {
   html = processLists(html);
 
   // Step 5: Process inline formatting for non-list content
+  // Split by lines to avoid processing list items again
   const lines = html.split("\n");
   const processedLines = lines.map((line) => {
     // Skip if line is a list tag or list item
@@ -148,11 +149,11 @@ function parseMarkdown(text) {
       return line;
     }
 
-    // Process bold
+    // Process bold (not already in lists)
     line = line.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
     line = line.replace(/__([^_]+)__/g, "<strong>$1</strong>");
 
-    // Process italic
+    // Process italic (not already in lists)
     line = line.replace(/(?<!\*)\*([^\*\n]+)\*(?!\*)/g, "<em>$1</em>");
     line = line.replace(/(?<!_)_([^_\n]+)_(?!_)/g, "<em>$1</em>");
 
@@ -182,12 +183,12 @@ function parseMarkdown(text) {
         return block;
       }
 
-      // Already a full block tag?
+      // Check if the entire block is already wrapped in HTML tags
       if (block.trim().match(/^<[^>]+>.*<\/[^>]+>$/s)) {
         return block;
       }
 
-      // Convert single newlines to <br> and wrap
+      // Convert single newlines to <br> and wrap in paragraph
       const withBreaks = block.trim().replace(/\n/g, "<br>");
       return `<p>${withBreaks}</p>`;
     })
@@ -211,38 +212,34 @@ window.parseMarkdown = parseMarkdown;
 /* ─────────── UPDATE RENDERMSG TO USE MARKDOWN PARSER ─────────── */
 const renderMsgWithMarkdown = (m, cuid) => {
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
-
-  // Prefer global helper if present (works with dual-pane), else fallback to URL sniff
   const isAIChat =
-    (typeof window.isAIChat === "function" && window.isAIChat()) ||
     window.location.pathname.includes("ai-chat") ||
     window.location.search.includes("ai-chat");
-
   const isAIMessage = m.user_id === AI_USER_ID;
 
   const u = m._user ?? {};
   const ts = parseTime(m.created_at);
 
-  // Avatar
+  // Handle avatar for AI in AI chat mode
   let avatarStyle = "";
   let avatarContent = "";
 
   if (isAIChat && isAIMessage) {
     avatarContent = "AI";
   } else if (u.profilePicture) {
-    avatarStyle = `style="background-image:url('${u.profilePicture}')"`; // trusted path
+    avatarStyle = `style="background-image:url('${u.profilePicture}')"`; // already trusted path
   } else {
     const initial = (u.name || "U").charAt(0).toUpperCase();
-    avatarStyle =
-      'style="background:#3a81df;display:flex;align-items:center;justify-content:center;color:white;font-weight:600;"';
+    avatarStyle = `style="background: #3a81df; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600;"`;
     avatarContent = initial;
   }
 
-  // Message body (markdown for AI in AI chat)
-  let messageContent = "";
-  if (m.message) {
-    messageContent =
-      isAIChat && isAIMessage ? parseMarkdown(m.message) : esc(m.message);
+  // Parse markdown for AI messages in AI chat mode, otherwise use regular escaping
+  let messageContent;
+  if (isAIChat && isAIMessage && m.message) {
+    messageContent = parseMarkdown(m.message);
+  } else if (m.message) {
+    messageContent = esc(m.message);
   }
 
   const body = m.isFile
@@ -251,15 +248,15 @@ const renderMsgWithMarkdown = (m, cuid) => {
       (m._translations || [])
         .map(
           (tr) => `
-            <div class="message-text lang-${esc(
-              tr.language
-            )}" style="display:none;">
-              ${
-                isAIChat && isAIMessage
-                  ? parseMarkdown(tr.translated_text)
-                  : esc(tr.translated_text)
-              }
-            </div>`
+              <div class="message-text lang-${esc(
+                tr.language
+              )}" style="display:none;">
+                ${
+                  isAIChat && isAIMessage
+                    ? parseMarkdown(tr.translated_text)
+                    : esc(tr.translated_text)
+                }
+              </div>`
         )
         .join("");
 
@@ -267,21 +264,20 @@ const renderMsgWithMarkdown = (m, cuid) => {
     .map((r) => {
       const mine = cuid && r.userIds.includes(cuid);
       return `<div class="reaction${mine ? " user-reacted" : ""}"
-                  data-emoji="${esc(r.e)}"
-                  data-users='${JSON.stringify(r.users)}'
-                  data-user-ids='${JSON.stringify(r.userIds)}'>
-                <span class="reaction-emoji">${r.e}</span>
-                <span class="reaction-count">${r.c}</span>
-              </div>`;
+                    data-emoji="${esc(r.e)}"
+                    data-users='${JSON.stringify(r.users)}'
+                    data-user-ids='${JSON.stringify(r.userIds)}'>
+                  <span class="reaction-emoji">${r.e}</span>
+                  <span class="reaction-count">${r.c}</span>
+                </div>`;
     })
     .join("");
 
-  // Hide message actions in AI chat (keeps UX consistent)
   const actionTrigger = isAIChat
     ? ""
     : '<div class="message-actions-trigger">⋮</div>';
 
-  // Summary for data-message (blank for images)
+  // decide summary for data-message (blank for images)
   const imageLike =
     m.isFile &&
     (String(m.file_type || "")
@@ -292,31 +288,31 @@ const renderMsgWithMarkdown = (m, cuid) => {
   return `<div class="message${m._reply ? " has-reply" : ""}${
     isAIChat && isAIMessage ? " ai-message" : ""
   }"
-                 data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
-                 data-username="${esc(u.name || "Unknown")}"
-                 data-message="${esc(
-                   imageLike ? "" : m.isFile ? m.file_name : m.message
-                 )}">
-              <div class="message-wrapper">
-                <div class="message-gutter">
-                  <div class="avatar" ${avatarStyle}>${avatarContent}</div>
-                </div>
-                <div class="message-content-wrapper">
-                  <div class="message-header">
-                    <span class="username">${esc(u.name || "Unknown")}</span>
-                    <span class="timestamp">${fmtTime(ts)}</span>
-                    ${actionTrigger}
+                   data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
+                   data-username="${esc(u.name || "Unknown")}"
+                   data-message="${esc(
+                     imageLike ? "" : m.isFile ? m.file_name : m.message
+                   )}">
+                <div class="message-wrapper">
+                  <div class="message-gutter">
+                    <div class="avatar" ${avatarStyle}>${avatarContent}</div>
                   </div>
-                  ${
-                    m._reply && m._reply.id
-                      ? renderInlineReplyPreview(m._reply)
-                      : ""
-                  }
-                  ${body}
-                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
+                  <div class="message-content-wrapper">
+                    <div class="message-header">
+                      <span class="username">${esc(u.name || "Unknown")}</span>
+                      <span class="timestamp">${fmtTime(ts)}</span>
+                      ${actionTrigger}
+                    </div>
+                    ${
+                      m._reply && m._reply.id
+                        ? renderInlineReplyPreview(m._reply)
+                        : ""
+                    }
+                    ${body}
+                    ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
+                  </div>
                 </div>
-              </div>
-            </div>`;
+              </div>`;
 };
 
 // Replace the existing renderMsg with this new version
@@ -336,17 +332,17 @@ function renderFileAttachment(m) {
 
   return looksImage
     ? `
-      <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
-        <a href="#" class="file-open-trigger" tabindex="0">
-          <img src="${url}" alt="" class="file-image-preview">
-        </a>
-      </div>`
+        <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+          <a href="#" class="file-open-trigger" tabindex="0">
+            <img src="${url}" alt="" class="file-image-preview">
+          </a>
+        </div>`
     : `
-      <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
-        <a href="#" class="file-open-trigger" tabindex="0">
-          <span class="file-icon">📎</span><span class="file-name">${name}</span>
-        </a>
-      </div>`;
+        <div class="file-attachment ${cls}" data-url="${url}" data-name="${name}" data-type="${type}">
+          <a href="#" class="file-open-trigger" tabindex="0">
+            <span class="file-icon">📎</span><span class="file-name">${name}</span>
+          </a>
+        </div>`;
 }
 
 function renderInlineReplyPreview(r) {
@@ -362,11 +358,11 @@ function renderInlineReplyPreview(r) {
       (r._translations || [])
         .map(
           (tr) => `
-              <div class="message-text lang-${esc(
-                tr.language
-              )}" style="display:none;">
-                ${esc(tr.translated_text)}
-              </div>`
+                <div class="message-text lang-${esc(
+                  tr.language
+                )}" style="display:none;">
+                  ${esc(tr.translated_text)}
+                </div>`
         )
         .join("");
 
@@ -374,13 +370,13 @@ function renderInlineReplyPreview(r) {
     ? ' data-deleted="true" class="is-deleted"'
     : "";
   return `
-    <div class="reply-preview reply-scroll-target"${deletedAttrs} data-target-id="${esc(
+      <div class="reply-preview reply-scroll-target"${deletedAttrs} data-target-id="${esc(
     r.id
   )}">
-      <div class="reply-preview-header">
-        <span class="reply-to-name">${un}</span>
-      </div>${body}
-    </div>`;
+        <div class="reply-preview-header">
+          <span class="reply-to-name">${un}</span>
+        </div>${body}
+      </div>`;
 }
 
 /* ─────────── REPLY HTML FOR BUBBLE ─────────── */
@@ -393,9 +389,9 @@ function buildReplyHtml(msgEl) {
         .map((el) => el.outerHTML)
         .join("");
   return `<div class="reply-preview-custom">
-              <strong class="reply-name">${un}</strong>
-              <div class="reply-body">${body}</div>
-            </div>`;
+                <strong class="reply-name">${un}</strong>
+                <div class="reply-body">${body}</div>
+              </div>`;
 }
 
 window.buildReplyHtml = buildReplyHtml;

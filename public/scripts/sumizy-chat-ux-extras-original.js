@@ -21,21 +21,13 @@ window.buildReplyHtml =
     )}</div>`;
   };
 
-/* ─────────── AI TYPING INDICATOR (pane aware) ─────────── */
+/* ─────────── AI TYPING INDICATOR ─────────── */
 let typingIndicatorElement = null;
 let typingIndicatorTimeout = null;
 window.aiTypingActive = false;
 
-/**
- * Show AI typing indicator specifically inside the given RG.
- * Only renders when URL indicates we're in an AI chat context (ai-chat=...).
- */
 window.showAITypingIndicator = function (rgNum) {
-  const isAIContext =
-    (typeof window.isAIChat === "function" && window.isAIChat()) ||
-    (typeof window.isAIChatUrl === "function" && window.isAIChatUrl());
-  if (!isAIContext) return;
-
+  if (!window.isAIChat || !window.isAIChat()) return;
   const chatContainer = document.querySelector(`#rg${rgNum} .chat-messages`);
   if (!chatContainer) return;
 
@@ -45,7 +37,7 @@ window.showAITypingIndicator = function (rgNum) {
   const typingMessage = {
     id: "typing-indicator",
     created_at: Date.now(),
-    user_id: "5c82f501-a3da-4083-894c-4367dc2e01f3", // AI
+    user_id: "5c82f501-a3da-4083-894c-4367dc2e01f3",
     message: `<div style="display:flex;gap:4px;">
       <span style="width:8px;height:8px;border-radius:50%;background:#667eea;opacity:.4;animation:typingBounce 1.4s infinite ease-in-out;animation-delay:-.32s;"></span>
       <span style="width:8px;height:8px;border-radius:50%;background:#667eea;opacity:.4;animation:typingBounce 1.4s infinite ease-in-out;animation-delay:-.16s;"></span>
@@ -57,6 +49,7 @@ window.showAITypingIndicator = function (rgNum) {
     _translations: [],
   };
 
+  // renderMsg should exist from render file; if not, just inject the HTML wrapper
   let typingHTML = "";
   try {
     typingHTML =
@@ -94,7 +87,7 @@ window.hideAITypingIndicator = function () {
   window.aiTypingActive = false;
 };
 
-/* ─────────── STYLES scoped to AI pane presence ─────────── */
+/* ─────────── ADD STYLES (typing + file viewer + reaction pointer) ─────────── */
 if (!document.querySelector("#ai-chat-styles")) {
   const style = document.createElement("style");
   style.id = "ai-chat-styles";
@@ -102,10 +95,8 @@ if (!document.querySelector("#ai-chat-styles")) {
     @keyframes typingBounce { 0%,80%,100%{transform:scale(.8);opacity:.4;} 40%{transform:scale(1);opacity:1;} }
     .typing-indicator { animation: fadeInUp .3s ease-out; }
     @keyframes fadeInUp { from{opacity:0;transform:translateY(20px);} to{opacity:1;transform:translateY(0);} }
-
-    /* Only soften hover in AI pane's container */
-    [data-pane="ai"] .message:hover { background-color: transparent !important; }
-    [data-pane="ai"] .chat-messages { background: linear-gradient(180deg,#fff 0%,#f9fafb 100%); }
+    body.ai-chat-mode .message:hover { background-color: transparent !important; }
+    body.ai-chat-mode .chat-messages { background: linear-gradient(180deg,#fff 0%,#f9fafb 100%); }
 
     .file-viewer-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999;animation:fadeIn .2s ease;}
     .file-viewer-modal{background:#fff;border-radius:12px;max-width:min(92vw,960px);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(0,0,0,.2);animation:scaleIn .2s ease;}
@@ -124,7 +115,6 @@ if (!document.querySelector("#ai-chat-styles")) {
     @keyframes scaleIn{from{transform:translateY(8px) scale(.98);opacity:0} to{transform:none;opacity:1}}
     @keyframes fadeOut{from{opacity:1} to{opacity:0}}
     @keyframes scaleOut{from{transform:none;opacity:1} to{transform:translateY(8px) scale(.98);opacity:0}}
-
     .reply-quote{display:inline-block;padding:6px 8px;background:#f3f4f6;border-left:3px solid #9ca3af;border-radius:4px}
 
     /* Make reaction pills obviously clickable */
@@ -133,7 +123,7 @@ if (!document.querySelector("#ai-chat-styles")) {
   document.head.appendChild(style);
 }
 
-/* ─────────── FILE VIEWER (unchanged behavior, works in both panes) ─────────── */
+/* ─────────── IMPROVED FILE VIEWER ─────────── */
 function showFileViewer(url, name, isImage) {
   const ext = (name.split(".").pop() || "").toLowerCase();
   const fileSize = "";
@@ -194,7 +184,13 @@ function showFileViewer(url, name, isImage) {
           <div class="file-viewer-actions">
             <button class="file-viewer-download" data-url="${url}" data-filename="${esc(
     name
-  )}">Download</button>
+  )}">
+              <svg class="download-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg><span>Download</span>
+            </button>
           </div>
         </div>
       </div>`;
@@ -247,15 +243,15 @@ function showFileViewer(url, name, isImage) {
         document.body.removeChild(a);
         URL.revokeObjectURL(blobUrl);
         this.classList.add("download-success");
-        this.textContent = "Downloaded";
+        this.innerHTML = `<svg class="download-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Downloaded</span>`;
         setTimeout(() => {
           this.classList.remove("download-success");
-          this.textContent = "Download";
+          this.innerHTML = `<svg class="download-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg><span>Download</span>`;
         }, 2000);
       } catch (err) {
         console.error("Download failed:", err);
         this.classList.add("download-error");
-        this.textContent = "Failed";
+        this.innerHTML = `<svg class="download-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg><span>Failed</span>`;
       }
     }
   );
@@ -274,8 +270,7 @@ document.addEventListener("click", (e) => {
   );
 });
 
-/* ─────────── ACTION MENU (emoji | reply | delete) ───────────
-   Note: AI pane messages hide the ⋮ trigger via render; still guard here. */
+/* ─────────── ACTION MENU (emoji | reply | delete) ─────────── */
 let currentActionMenu = null;
 function hideActionMenu() {
   currentActionMenu?.remove();
@@ -285,18 +280,11 @@ function hideActionMenu() {
 document.addEventListener("click", (e) => {
   if (!e.target.classList.contains("message-actions-trigger")) return;
   e.stopPropagation();
-
   const msgEl = e.target.closest(".message");
-  const isInAIPane = !!e.target.closest('[data-pane="ai"]');
-  if (isInAIPane) return; // safety: no action menu in AI pane
-
-  const rgEl = e.target.closest('[id^="rg"]');
-  const rgNum = rgEl?.id?.replace("rg", "");
-  const msgId = msgEl?.dataset?.id;
-  const uid = msgEl?.dataset?.uid;
-  const ts = +(msgEl?.dataset?.ts || 0);
-  if (!rgNum || !msgId) return;
-
+  const msgId = msgEl.dataset.id;
+  const rgNum = msgEl.closest('[id^="rg"]').id.replace("rg", "");
+  const uid = msgEl.dataset.uid;
+  const ts = +msgEl.dataset.ts;
   const canDelete = window.currentUserId === uid && Date.now() - ts < 3600_000;
   const emojis = ["👍", "✅", "🙂", "👀", "👏"];
 
@@ -358,11 +346,13 @@ document.addEventListener("click", (e) => {
     if (ev.target.closest(".delete-action")) {
       const fn = `bubble_fn_deleteMessage${rgNum}`;
       if (typeof window[fn] === "function") {
-        msgEl.classList.add("is-deleting");
+        msgEl.classList.add("is-deleting"); // (optional) visual feedback
         Promise.resolve(window[fn]({ output1: msgId }))
-          .catch(() => {})
+          .catch(() => {
+            // you can surface an error toast here if you want
+          })
           .finally(() => {
-            msgEl.classList.remove("is-deleting");
+            msgEl.classList.remove("is-deleting"); // revert pending style
           });
       }
       hideActionMenu();
@@ -379,7 +369,7 @@ document.addEventListener("click", (e) => {
     hideActionMenu();
 });
 
-/* ─────────── REACTION PILL CLICK (works in both panes) ─────────── */
+/* ─────────── REACTION PILL CLICK (robust) ─────────── */
 document.addEventListener("click", (e) => {
   const pill = e.target.closest(".reaction, .reaction-pill, .reaction-count");
   if (!pill) return;
@@ -389,13 +379,15 @@ document.addEventListener("click", (e) => {
   const msgId = msg?.dataset?.id || "";
   if (!rgEl || !msgId) return;
 
+  // Try multiple ways to get the emoji value
   let emoji =
     pill.dataset?.emoji ||
     pill.getAttribute?.("data-emoji") ||
     pill.querySelector?.(".emoji")?.textContent ||
     pill.textContent ||
     "";
-  emoji = (emoji || "").trim().split(/\s+/)[0];
+
+  emoji = (emoji || "").trim().split(/\s+/)[0]; // if "👍 3", grab "👍"
   if (!emoji) return;
 
   e.preventDefault();
@@ -408,7 +400,7 @@ document.addEventListener("click", (e) => {
   }
 });
 
-/* ─────────── AI CHAT URL DETECTOR (kept; now matches ai-chat param) ─────────── */
+/* ─────────── AI CHAT MODE DETECTOR (robust + SPA-safe) ─────────── */
 (() => {
   function isAIChatUrl(href = location.href) {
     try {
@@ -428,16 +420,19 @@ document.addEventListener("click", (e) => {
     }
   }
 
+  // Expose a stable global early so other modules can call it at any time
   window.isAIChat = window.isAIChat || (() => isAIChatUrl());
 
   function applyAIChatMode() {
     const on = isAIChatUrl();
-    // NOTE: We no longer toggle body-wide style side effects; styles are pane-scoped above.
-    const b = document.body || document.documentElement;
-    if (b && b.dataset) {
+    const b = document.body || document.documentElement; // tolerate early runs
+    if (b && b.classList) {
+      b.classList.toggle("ai-chat-mode", on);
       b.dataset.aiChat = String(on);
     }
-    console.debug("[sumizy] applyAIChatMode:", { on, href: location.href });
+    if (typeof console !== "undefined") {
+      console.debug("[sumizy] applyAIChatMode:", { on, href: location.href });
+    }
   }
 
   if (document.readyState === "loading") {
@@ -445,7 +440,8 @@ document.addEventListener("click", (e) => {
       once: true,
     });
   } else {
-    applyAIChatMode();
+    if (document.body) applyAIChatMode();
+    else window.addEventListener("load", applyAIChatMode, { once: true });
   }
 
   const reapply = () => applyAIChatMode();
@@ -470,7 +466,7 @@ document.addEventListener("click", (e) => {
   window.applyAIChatMode = window.applyAIChatMode || applyAIChatMode;
 })();
 
-/* ─────────── REFRESH EVENTS (unchanged) ─────────── */
+/* ─────────── DYNAMIC REFRESH HANDLERS ─────────── */
 window.handleRefreshEvent = (data) => {
   try {
     if (data.action !== "event" || !data.payload || !data.payload.data)
@@ -555,12 +551,9 @@ window.handleRefreshEventWithRG = (data, rgOverride = null) => {
   }
 };
 
-/* ─────────── LAST 10 MESSAGES EXTRACTOR (works in both panes) ─────────── */
+/* ─────────── EXTRACT LAST 10 MESSAGES ─────────── */
 function extractLast10Messages() {
-  // Prefer the RG where the click originated (caller can scope), else fall back to first visible.
-  const container =
-    document.activeElement?.closest?.('[id^="rg"] .chat-messages') ||
-    document.querySelector(".chat-messages");
+  const container = document.querySelector(".chat-messages");
   if (!container) return [];
   const messageElements = Array.from(container.querySelectorAll(".message"));
   const last10 = messageElements.slice(-10);

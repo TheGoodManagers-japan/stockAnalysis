@@ -1,4 +1,4 @@
-//sumizy-chat-utils.js
+// sumizy-chat-utils.js
 
 /* ─────────────────── CONFIG & HELPERS ─────────────────── */
 const DATE_LOCALE = "en-US";
@@ -59,7 +59,7 @@ const renderDivider = (lbl) => `
  * Wait for an element to exist in the DOM with retry mechanism
  * @param {string} selector - CSS selector for the element
  * @param {number} maxRetries - Maximum number of retries (default: 50)
- * @param {number} retryDelay - Delay between retries in ms (default: 100)
+ * @param {number} retryDelay - Delay between retries in ms (default: 2000)
  * @returns {Promise<Element|null>} Promise that resolves with the element or null
  */
 function waitForElement(selector, maxRetries = 50, retryDelay = 2000) {
@@ -86,7 +86,108 @@ function waitForElement(selector, maxRetries = 50, retryDelay = 2000) {
     checkElement();
   });
 }
-window.waitForElement = waitForElement; // <- add this
+window.waitForElement = waitForElement;
+
+/* ─────────── URL HELPERS (pane-aware) ─────────── */
+function getUrlParams() {
+  try {
+    return new URLSearchParams(location.search);
+  } catch {
+    return new URLSearchParams("");
+  }
+}
+
+/** Returns { mainId: string|null, aiId: string|null } from the URL */
+function getPaneIdsFromUrl() {
+  const q = getUrlParams();
+  const mainId = q.get("chatid") || null;
+  const aiId = q.get("ai-chat") || null;
+  return { mainId, aiId };
+}
+
+/** Legacy: the primary chat id (main pane); prefer mainId */
+function getChatIdFromURL() {
+  const { mainId } = getPaneIdsFromUrl();
+  return mainId;
+}
+
+/** Quick boolean to tell if the AI pane is active via URL */
+function isAIChatUrl() {
+  const { aiId } = getPaneIdsFromUrl();
+  if (aiId) return true;
+  // accept other patterns used elsewhere
+  const q = getUrlParams();
+  return (
+    location.pathname.toLowerCase().includes("ai-chat") ||
+    q.get("mode") === "ai" ||
+    q.get("chat") === "ai" ||
+    (location.hash || "").toLowerCase().includes("ai-chat")
+  );
+}
+
+/* ─────────── PANE DISCOVERY ─────────── */
+/**
+ * Find the RG number for a given pane.
+ * @param {"main"|"ai"} pane
+ * @returns {number|null}
+ */
+function findRG(pane) {
+  const attr = pane === "ai" ? 'data-pane="ai"' : 'data-pane="main"';
+  const nodes = document.querySelectorAll(`.rg-reference[id^="rg"][${attr}]`);
+  for (const el of nodes) {
+    const style = window.getComputedStyle(el);
+    const visible =
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      el.offsetWidth > 0 &&
+      el.offsetHeight > 0;
+    if (visible) {
+      const m = el.id.match(/^rg(\d+)$/);
+      if (m) return parseInt(m[1], 10);
+    }
+  }
+  return null;
+}
+
+/**
+ * Back-compat: first visible RG (used by older code)
+ * NOTE: In dual-pane, this may return main OR ai, whichever matches first.
+ */
+function findVisibleRG() {
+  const rgElements = document.querySelectorAll('.rg-reference[id^="rg"]');
+  for (const el of rgElements) {
+    const style = window.getComputedStyle(el);
+    if (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      el.offsetWidth > 0 &&
+      el.offsetHeight > 0
+    ) {
+      const rgMatch = el.id.match(/^rg(\d+)$/);
+      if (rgMatch) return parseInt(rgMatch[1], 10);
+    }
+  }
+  return null;
+}
+
+/** Compose a stable paneKey like "main:rg1" or "ai:rg2" from an RG element or number */
+function getPaneKey(elOrRg) {
+  let rgNum = null;
+  let pane = "main";
+  if (typeof elOrRg === "number") {
+    rgNum = elOrRg;
+    const el = document.getElementById(`rg${rgNum}`);
+    if (el && el.dataset && el.dataset.pane === "ai") pane = "ai";
+  } else if (elOrRg && elOrRg.id) {
+    const m = elOrRg.id.match(/^rg(\d+)$/);
+    if (m) rgNum = parseInt(m[1], 10);
+    if (elOrRg.dataset && elOrRg.dataset.pane === "ai") pane = "ai";
+  }
+  if (rgNum == null) return null;
+  return `${pane}:rg${rgNum}`;
+}
 
 /* ─────────── LANGUAGE TOGGLE ─────────── */
 function switchLanguage(lang) {
@@ -116,51 +217,15 @@ document.addEventListener("click", (e) => {
   }
 });
 
-/* ─────────── HELPER FUNCTION TO FIND VISIBLE RG ─────────── */
-/**
- * Find the currently visible repeating group
- * @returns {number|null} The RG number or null if none found
- */
-window.findVisibleRG = () => {
-  const rgElements = document.querySelectorAll('.rg-reference[id^="rg"]');
-  for (const el of rgElements) {
-    const style = window.getComputedStyle(el);
-    if (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      style.opacity !== "0"
-    ) {
-      const rgMatch = el.id.match(/^rg(\d+)$/);
-      if (rgMatch) {
-        return parseInt(rgMatch[1]);
-      }
-    }
-  }
-  return null;
-};
+/* ─────────── BACK-COMP findVisibleRG EXPOSURE ─────────── */
+window.findVisibleRG = window.findVisibleRG || findVisibleRG;
 
-Object.assign(window, {
-  DATE_LOCALE,
-  parseTime,
-  fmtTime,
-  fmtDate,
-  esc,
-  agg,
-  renderDivider,
-  waitForElement,
-  switchLanguage,
-  scrollToMessage,
-  findVisibleRG,
-});
+/* Also expose pane-aware RG finder */
+window.findRG = findRG;
 
-
-
-function getChatIdFromURL() {
-  return new URLSearchParams(location.search).get("chatid") || null;
-}
-
+/* ─────────── CONVENIENCE: CLEAR CHAT BY PANE ─────────── */
 async function clearVisibleChatDOMOnce() {
-  const rg = window.findVisibleRG?.() ?? null;
+  const rg = findVisibleRG();
   if (rg === null) return;
   const g = document.getElementById(`rg${rg}`);
   const chat = g?.querySelector(".chat-messages");
@@ -171,3 +236,45 @@ async function clearVisibleChatDOMOnce() {
     window.__sumizyInjectorCache.delete?.(rg);
   }
 }
+
+/** Clear specific pane without touching the other */
+function clearChatByPane(pane /* "main"|"ai" */) {
+  const rg = findRG(pane);
+  if (rg == null) return;
+  const g = document.getElementById(`rg${rg}`);
+  const chat = g?.querySelector(".chat-messages");
+  if (!chat) return;
+  while (chat.firstChild) chat.firstChild.remove();
+  window.__sumizyInjectorCache?.delete?.(rg);
+  console.info(`clearChatByPane: ${pane} (#rg${rg}) cleared`);
+}
+
+/* ─────────── EXPORTS ─────────── */
+Object.assign(window, {
+  DATE_LOCALE,
+  parseTime,
+  fmtTime,
+  fmtDate,
+  esc,
+  agg,
+  renderDivider,
+  waitForElement,
+
+  // URL helpers
+  getPaneIdsFromUrl,
+  getChatIdFromURL,
+  isAIChatUrl,
+
+  // Pane helpers
+  findVisibleRG,
+  findRG,
+  getPaneKey,
+  clearChatByPane,
+
+  // Misc UI helpers
+  switchLanguage,
+  scrollToMessage,
+
+  // Kept for back-compat with earlier calls
+  clearVisibleChatDOMOnce,
+});

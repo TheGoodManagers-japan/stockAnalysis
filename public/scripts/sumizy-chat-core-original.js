@@ -1,3 +1,6 @@
+//sumizy-chat-core.js
+
+/* ─────────── INJECTOR FACTORY (FIXED) ─────────── */
 // sumizy-chat-core.js
 
 /* ─────────── INJECTOR FACTORY (FIXED: keep deleted messages) ─────────── */
@@ -117,56 +120,36 @@ function makeChatInjector(chatEl, cuid) {
   };
 }
 
-/* ─────────── paneKey helpers ─────────── */
-function getPaneRoleFromRG(rg) {
-  const el = document.getElementById(`rg${rg}`);
-  const role = (el?.getAttribute?.("data-pane") || "main").trim().toLowerCase();
-  return role === "ai" ? "ai" : "main";
-}
-function makePaneKey(rg, role) {
-  const r = (role || getPaneRoleFromRG(rg)).toLowerCase();
-  return `${r}:rg${rg}`;
-}
+/* ─────────── GLOBAL DISPATCHER WITH RETRY ─────────── */
+const cache = new Map();
+window.__sumizyInjectorCache = cache; // expose for cross-file reset
+const pendingMessages = new Map(); // Store messages that couldn't be injected yet
 
-/* ─────────── GLOBAL DISPATCHER WITH RETRY (paneKey-aware) ─────────── */
-const cacheByPane = new Map();
-window.__sumizyInjectorCache = cacheByPane; // expose for cross-file reset
-const pendingByPane = new Map(); // Store messages that couldn't be injected yet
-
-window.injectMessages = async (
-  rg,
-  payload,
-  cuid,
-  isOlderMessages = false,
-  paneRole = null
-) => {
+window.injectMessages = async (rg, payload, cuid, isOlderMessages = false) => {
   if (typeof rg !== "number") {
     console.error("injectMessages: first arg must be number");
     return;
   }
   window.currentUserId = cuid;
 
-  const paneKey = makePaneKey(rg, paneRole); // e.g., "main:rg1" or "ai:rg2"
-
   // Try to get or create injector with retry mechanism
-  let inj = cacheByPane.get(paneKey);
+  let inj = cache.get(rg);
   if (!inj) {
     // Wait for the RG element to exist
     const g = await waitForElement(`#rg${rg}`);
     if (!g) {
       console.error(
-        `#rg${rg} not found after retries. Storing messages for later.`,
-        { paneKey }
+        `#rg${rg} not found after retries. Storing messages for later.`
       );
 
       // Store messages to inject later
-      if (!pendingByPane.has(paneKey)) {
-        pendingByPane.set(paneKey, []);
+      if (!pendingMessages.has(rg)) {
+        pendingMessages.set(rg, []);
       }
-      pendingByPane.get(paneKey).push({ payload, cuid, isOlderMessages });
+      pendingMessages.get(rg).push({ payload, cuid, isOlderMessages });
 
       // Set up observer to watch for the element
-      setupRGObserver(rg, cuid, paneKey);
+      setupRGObserver(rg, cuid);
       return;
     }
 
@@ -175,34 +158,33 @@ window.injectMessages = async (
     const chat = await waitForElement(chatSelector);
     if (!chat) {
       console.error(
-        `${chatSelector} not found after retries. Storing messages for later.`,
-        { paneKey }
+        `${chatSelector} not found after retries. Storing messages for later.`
       );
 
       // Store messages to inject later
-      if (!pendingByPane.has(paneKey)) {
-        pendingByPane.set(paneKey, []);
+      if (!pendingMessages.has(rg)) {
+        pendingMessages.set(rg, []);
       }
-      pendingByPane.get(paneKey).push({ payload, cuid, isOlderMessages });
+      pendingMessages.get(rg).push({ payload, cuid, isOlderMessages });
 
       // Set up observer to watch for the element
-      setupRGObserver(rg, cuid, paneKey);
+      setupRGObserver(rg, cuid);
       return;
     }
 
     inj = makeChatInjector(chat, cuid);
-    cacheByPane.set(paneKey, inj);
-    console.log(`Created injector for #rg${rg} (${paneKey})`);
+    cache.set(rg, inj);
+    console.log(`Created injector for #rg${rg}`);
   }
 
   // Inject the current messages
   inj(payload, isOlderMessages);
 
-  // Check if there are pending messages for this pane
-  if (pendingByPane.has(paneKey)) {
-    const pending = pendingByPane.get(paneKey);
+  // Check if there are pending messages for this RG
+  if (pendingMessages.has(rg)) {
+    const pending = pendingMessages.get(rg);
     console.log(
-      `Injecting ${pending.length} pending message batches for ${paneKey}`
+      `Injecting ${pending.length} pending message batches for #rg${rg}`
     );
 
     // Inject all pending messages
@@ -214,40 +196,38 @@ window.injectMessages = async (
     }
 
     // Clear pending messages
-    pendingByPane.delete(paneKey);
+    pendingMessages.delete(rg);
   }
 };
 
-/* ─────────── MUTATION OBSERVER FOR DELAYED RG ELEMENTS (paneKey-aware) ─────────── */
-const rgObservers = new Map(); // key: paneKey
+/* ─────────── MUTATION OBSERVER FOR DELAYED RG ELEMENTS ─────────── */
+const rgObservers = new Map();
 
-function setupRGObserver(rg, cuid, paneKey = makePaneKey(rg, null)) {
-  // Don't set up multiple observers for the same paneKey
-  if (rgObservers.has(paneKey)) {
+function setupRGObserver(rg, cuid) {
+  // Don't set up multiple observers for the same RG
+  if (rgObservers.has(rg)) {
     return;
   }
 
-  console.log(`Setting up observer for ${paneKey}`);
+  console.log(`Setting up observer for #rg${rg}`);
 
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver((mutations) => {
     // Check if the RG element now exists
     const rgElement = document.getElementById(`rg${rg}`);
     const chatElement = rgElement?.querySelector(".chat-messages");
 
     if (rgElement && chatElement) {
-      console.log(
-        `#rg${rg} and .chat-messages found via observer for ${paneKey}`
-      );
+      console.log(`#rg${rg} and .chat-messages found via observer`);
 
       // Stop observing
       observer.disconnect();
-      rgObservers.delete(paneKey);
+      rgObservers.delete(rg);
 
       // Process any pending messages
-      if (pendingByPane.has(paneKey)) {
-        const pending = pendingByPane.get(paneKey);
+      if (pendingMessages.has(rg)) {
+        const pending = pendingMessages.get(rg);
         console.log(
-          `Processing ${pending.length} pending message batches for ${paneKey}`
+          `Processing ${pending.length} pending message batches for #rg${rg}`
         );
 
         // Re-inject all pending messages
@@ -269,7 +249,7 @@ function setupRGObserver(rg, cuid, paneKey = makePaneKey(rg, null)) {
     subtree: true,
   });
 
-  rgObservers.set(paneKey, observer);
+  rgObservers.set(rg, observer);
 }
 
 /* ─────────── CLEANUP OBSERVERS ON PAGE UNLOAD ─────────── */
@@ -551,48 +531,47 @@ window.addEventListener("beforeunload", () => {
   };
 })();
 
-/* ─────────── CLEAR CHAT (paneKey-aware) ─────────── */
+/* ─────────── CLEAR CHAT (single repeating group) ─────────── */
 /**
  * Clear all rendered messages (and date dividers) for a given repeating-group
  * and reset the injector cache so new inserts start "fresh".
  *
  * @param {number} rg  The repeating-group number, e.g. `1` for #rg1
- * @param {('main'|'ai')?} paneRole Optional explicit role; if omitted, read from DOM
  */
-window.clearChat = (rg, paneRole = null) => {
+window.clearChat = (rg) => {
   if (typeof rg !== "number") {
     // dev guard
     console.error("clearChat: first arg must be number");
     return;
   }
 
-  const paneKey = makePaneKey(rg, paneRole);
-
   /* locate the chat pane */
   const g = document.getElementById(`rg${rg}`);
   if (!g) {
-    console.warn(`#rg${rg} not found for ${paneKey}`);
+    console.warn(`#rg${rg} not found`);
     return;
   }
   const chat = g.querySelector(".chat-messages");
   if (!chat) {
-    console.warn(`#rg${rg} missing .chat-messages for ${paneKey}`);
+    console.warn(`#rg${rg} missing .chat-messages`);
     return;
   }
 
   /* remove every child node (faster than innerHTML = '' for large lists) */
   while (chat.firstChild) chat.firstChild.remove();
 
-  /* drop the cached injector for this pane so next injectMessages() call
-     rebuilds it with a clean "lastDate" state */
-  cacheByPane.delete(paneKey);
+  /* drop the cached injector so next injectMessages() call
+       rebuilds it with a clean "lastDate" state */
+  cache.delete(rg);
 
   /* optional: if you keep search state, purge hits that lived in this chat */
-  g.querySelectorAll(".search-hit, .search-current").forEach((el) => {
-    el.classList.remove("search-hit", "search-current");
-  });
+  document
+    .querySelectorAll(`#rg${rg} .search-hit, #rg${rg} .search-current`)
+    .forEach((el) => {
+      el.classList.remove("search-hit", "search-current");
+    });
 
-  console.info(`clearChat: ${paneKey} cleared`);
+  console.info(`clearChat: #rg${rg} cleared`);
 };
 
 /* ─────────── SCROLL TO TOP LISTENER FOR PAGINATION ─────────── */
@@ -672,10 +651,10 @@ window.setupScrollPagination = () => {
   console.log("Scroll pagination set up for chat containers");
 };
 
-/* ─────────── Auto-setup scroll pagination when messages are first injected ─────────── */
+// Auto-setup scroll pagination when messages are first injected
 const originalInjectMessages = window.injectMessages;
-window.injectMessages = function (...args) {
-  originalInjectMessages.apply(this, args);
+window.injectMessages = function (rg, payload, cuid, isOlderMessages = false) {
+  originalInjectMessages.call(this, rg, payload, cuid, isOlderMessages);
 
   // Set up scroll pagination after a short delay to ensure DOM is ready
   setTimeout(() => {

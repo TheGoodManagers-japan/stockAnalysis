@@ -1,55 +1,41 @@
 // sumizy-chat-realtime-ui.js
-// Dual-pane realtime UI: main(chatid) + ai(ai-chat). Join -> history -> live per pane.
-// History comes via {action:"message"} (while joining).
-// Live comes via {action:"event", payload.data:"[]"} or {action:"message"} after live.
+// Minimal, duplicate-safe realtime UI: join -> history -> live.
+// Handles server history via {action:"message"} (ONLY while joining)
+// and live updates via either {action:"event", payload.data:"[]"} or {action:"message"} after live.
 
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
-
-// Read both pane ids from URL
-function getPaneIdsFromUrl() {
+function getChatIdFromUrl() {
   try {
-    const q = new URLSearchParams(location.search);
-    const main = (q.get("chatid") || "").trim() || null;
-    const ai = (q.get("ai-chat") || "").trim() || null;
-    return { main, ai };
+    const v = new URLSearchParams(location.search).get("chatid");
+    return v && v.trim() ? v.trim() : null;
   } catch {
-    return { main: null, ai: null };
+    return null;
   }
 }
-
-// Find the RG number for a given pane role by [data-pane="<role>"]
-function getRGForPane(paneRole) {
-  // Prefer root RG element annotated with data-pane on the RG node itself
-  const rgNode =
-    document.querySelector(`[id^="rg"][data-pane="${paneRole}"]`) ||
-    // fallback: allow any ancestor of a .chat-messages to carry data-pane
-    (function () {
-      const cm = document.querySelector(
-        `[data-pane="${paneRole}"] .chat-messages`
-      );
-      return cm ? cm.closest('[id^="rg"]') : null;
-    })();
-
-  if (!rgNode) return null;
-  const m = rgNode.id.match(/^rg(\d+)$/);
-  return m ? Number(m[1]) : null;
-}
-
-// PaneKey helpers
-const paneKeyOf = (paneRole, chatId) => `${paneRole}:${chatId}`;
-const keyParts = (paneKey) => {
-  const i = String(paneKey).indexOf(":");
-  return i >= 0
-    ? { paneRole: paneKey.slice(0, i), chatId: paneKey.slice(i + 1) }
-    : { paneRole: "main", chatId: String(paneKey) };
+window.findVisibleRG ??= function () {
+  const containers = Array.from(
+    document.querySelectorAll('[id^="rg"] .chat-messages')
+  );
+  for (const el of containers) {
+    const rg = el.closest('[id^="rg"]');
+    if (!rg) continue;
+    const style = getComputedStyle(rg);
+    const visible =
+      rg.offsetParent !== null &&
+      style.visibility !== "hidden" &&
+      style.display !== "none" &&
+      el.offsetHeight > 0 &&
+      el.offsetWidth > 0;
+    if (visible) return Number(rg.id.replace("rg", ""));
+  }
+  return null;
 };
-
-function clearPaneDom(paneRole) {
-  const rg = getRGForPane(paneRole);
-  if (rg == null) return;
+function clearActiveChatDom() {
+  const rg = window.findVisibleRG?.() ?? null;
+  if (rg === null) return;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
   if (container) container.innerHTML = "";
   if (typeof window.hideAITypingIndicator === "function") {
@@ -58,7 +44,6 @@ function clearPaneDom(paneRole) {
     } catch {}
   }
 }
-
 function safeSelId(id) {
   const s = String(id ?? "");
   return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
@@ -96,7 +81,7 @@ function aggregateReactionsFallback(raw, currentUserId) {
   return Array.from(map.values());
 }
 
-// File message node sanitization (images)
+// put near other helpers
 function sanitizeInjectedFileMessageNode(el, msg) {
   if (!el || !msg?.isFile) return;
   const type = String(msg.file_type || "").toLowerCase();
@@ -105,9 +90,12 @@ function sanitizeInjectedFileMessageNode(el, msg) {
     type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(urlStr);
   if (!isImg) return;
 
+  // 1) remove any stray text blobs
   el.querySelectorAll(
     ":scope > .message-content-wrapper > .message-text"
   ).forEach((n) => n.remove());
+
+  // 2) ensure there's a file-attachment; if not, create minimal image block
   const wrap = el.querySelector(".message-content-wrapper") || el;
   let fa = wrap.querySelector(":scope > .file-attachment");
   const safeUrl = urlStr || "#";
@@ -117,17 +105,19 @@ function sanitizeInjectedFileMessageNode(el, msg) {
       `<div class="file-attachment image-attachment" data-url="${_esc(
         safeUrl
       )}" data-name="${_esc(msg.file_name || "")}" data-type="${_esc(type)}">
-         <a href="#" class="file-open-trigger" tabindex="0">
-           <img src="${_esc(safeUrl)}" alt="" class="file-image-preview">
-         </a>
-       </div>`
+           <a href="#" class="file-open-trigger" tabindex="0">
+             <img src="${_esc(safeUrl)}" alt="" class="file-image-preview">
+           </a>
+         </div>`
     );
   } else {
     fa.classList.add("image-attachment");
     fa.classList.remove("generic-attachment");
     const nm = fa.querySelector(".file-name");
-    if (nm) nm.remove();
+    if (nm) nm.remove(); // hide filename for images
   }
+
+  // 3) blank out the summary for menus/replies
   el.dataset.message = "";
 }
 
@@ -135,12 +125,14 @@ function sanitizeInjectedFileMessageNode(el, msg) {
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // File messages: keep attachment, no URL text
+  // --- File messages (incl. images): no URL text, ensure attachment block ---
+  // in sumizy-chat-realtime-ui.js (inside updateMessageTextsInPlace)
   if (msg?.isFile) {
-    const contentWrap2 =
+    const contentWrap =
       msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-    contentWrap2
+    // remove any stray text nodes
+    contentWrap
       .querySelectorAll(":scope > .message-text")
       .forEach((n) => n.remove());
 
@@ -150,8 +142,9 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     const isImg =
       type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
 
-    let fa = contentWrap2.querySelector(":scope > .file-attachment");
+    let fa = contentWrap.querySelector(":scope > .file-attachment");
     if (!fa) {
+      // render fresh (no filename for images)
       const html = isImg
         ? `<div class="file-attachment image-attachment" data-url="${_esc(
             url
@@ -165,15 +158,16 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
         : `<div class="file-attachment generic-attachment" data-url="${_esc(
             url
           )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
-               <a href="#" class="file-open-trigger" tabindex="0">
-                 <span class="file-icon">📎</span><span class="file-name">${_esc(
-                   name
-                 )}</span>
-               </a>
-             </div>`;
-      contentWrap2.insertAdjacentHTML("beforeend", html);
-      fa = contentWrap2.querySelector(":scope > .file-attachment");
+                 <a href="#" class="file-open-trigger" tabindex="0">
+                   <span class="file-icon">📎</span><span class="file-name">${_esc(
+                     name
+                   )}</span>
+                 </a>
+               </div>`;
+      contentWrap.insertAdjacentHTML("beforeend", html);
+      fa = contentWrap.querySelector(":scope > .file-attachment");
     } else {
+      // update existing
       fa.dataset.url = url;
       fa.dataset.name = name;
       fa.dataset.type = type;
@@ -190,10 +184,14 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       }
     }
 
+    // no text summary for images
     msgEl.dataset.message = isImg ? "" : name;
+
     updateReplyPreviewsForMessage(msg);
     return;
   }
+
+  // --- END file-safe branch -----------------------------------------------
 
   const translations = Array.isArray(msg._translations)
     ? msg._translations
@@ -204,13 +202,18 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const deleteText =
     (enTr && enTr.translated_text) || msg.message || "Message Unsent";
 
+  const contentWrap2 = contentWrap; // preserve name used below
+
+  // Ensure "original" node exists (for non-file messages)
   const original =
-    contentWrap.querySelector(":scope > .message-text.lang-original") ||
-    contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
+    contentWrap2.querySelector(":scope > .message-text.lang-original") ||
+    contentWrap2.querySelector(
+      ":scope > .message-text:not([class*='lang-'])"
+    ) ||
     (() => {
       const d = document.createElement("div");
       d.className = "message-text lang-original";
-      contentWrap.appendChild(d);
+      contentWrap2.appendChild(d);
       return d;
     })();
 
@@ -218,7 +221,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     original.textContent = forDelete ? deleteText : msg.message ?? "";
   }
 
-  // Markdown for AI messages can remain driven by window.isAIChat (your renderer also handles this)
+  // markdown-for-AI logic unchanged…
   const isAIChat =
     typeof window.isAIChat === "function" ? window.isAIChat() : false;
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
@@ -231,20 +234,25 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     return _esc(s);
   };
 
+  const langsIncoming = new Set();
   for (const t of translations) {
     const lang = String(t?.language || "").toLowerCase();
     if (!lang || lang === "original") continue;
-    let node = contentWrap.querySelector(`:scope > .message-text.lang-${lang}`);
+    langsIncoming.add(lang);
+    let node = contentWrap2.querySelector(
+      `:scope > .message-text.lang-${lang}`
+    );
     if (!node) {
       node = document.createElement("div");
       node.className = `message-text lang-${lang}`;
       node.style.display = "none";
-      contentWrap.appendChild(node);
+      contentWrap2.appendChild(node);
     }
     node.innerHTML = renderTr(t.translated_text || "");
   }
 
   if (typeof msg.message === "string") {
+    // For text messages, keep data-message in sync with the *text*, not URL
     msgEl.dataset.message = msg.message;
   }
 }
@@ -316,7 +324,8 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
   if (!rBox.querySelector(".reaction")) rBox.remove();
 }
 
-/* ─────────── Reply preview updater ─────────── */
+/* ─────────── Update any reply previews that reference a message ─────────── */
+/* ─────────── Update any reply previews that reference a message ─────────── */
 function updateReplyPreviewsForMessage(msg) {
   const id = String(msg?.id || "");
   if (!id) return;
@@ -334,6 +343,7 @@ function updateReplyPreviewsForMessage(msg) {
     "Unknown";
   const isDeleted = !!msg?.isDeleted;
 
+  // Choose the text to display: prefer msg.message, then EN translation, then first translation, then placeholder.
   const pickDisplayText = (m) => {
     const raw = (m?.message || "").trim();
     if (raw) return raw;
@@ -350,6 +360,7 @@ function updateReplyPreviewsForMessage(msg) {
 
   const displayText = pickDisplayText(msg);
 
+  // Build body: if it's a file and NOT deleted, show attachment; otherwise show text
   let bodyHTML = "";
   if (msg?.isFile && !isDeleted) {
     const url = _esc(msg.message || "#");
@@ -362,29 +373,35 @@ function updateReplyPreviewsForMessage(msg) {
       ? `<img src="${url}" alt="${fname}" class="file-image-preview">`
       : `<span class="file-icon">📎</span>`;
     bodyHTML = `
-      <div class="file-attachment ${cls}" data-url="${url}" data-name="${fname}" data-type="${_esc(
+        <div class="file-attachment ${cls}" data-url="${url}" data-name="${fname}" data-type="${_esc(
       type
     )}">
-        <a href="#" class="file-open-trigger" tabindex="0">
-          ${thumb}<span class="file-name">${fname}</span>
-        </a>
-      </div>`;
+          <a href="#" class="file-open-trigger" tabindex="0">
+            ${thumb}<span class="file-name">${fname}</span>
+          </a>
+        </div>`;
   } else {
+    // Text only; do not force our own placeholder when deleted—use server text.
     bodyHTML = `<div class="message-text lang-original">${_esc(
       displayText
     )}</div>`;
   }
 
   nodes.forEach((node) => {
+    // Update header name
     const header = node.querySelector(".reply-preview-header .reply-to-name");
     if (header) header.textContent = name;
 
+    // Clear existing body (keep the header as first child)
     const children = Array.from(node.children);
     children.forEach((c, i) => {
       if (i > 0) c.remove();
     });
 
+    // Insert body
     node.insertAdjacentHTML("beforeend", bodyHTML);
+
+    // Toggle deleted state for styling
     if (isDeleted) {
       node.dataset.deleted = "true";
       node.classList.add("is-deleted");
@@ -395,7 +412,7 @@ function updateReplyPreviewsForMessage(msg) {
   });
 }
 
-/* ─────────── In-place patcher ─────────── */
+/** In-place message patcher (no node removal). */
 function patchMessageInPlace(rg, msg) {
   if (!rg || !msg || !msg.id) return false;
   const container = document.querySelector(`#rg${rg} .chat-messages`);
@@ -423,19 +440,18 @@ function patchMessageInPlace(rg, msg) {
   return true;
 }
 
-/* ─────────── Per-pane chat state ─────────── */
-window._paneActive = window._paneActive || { main: null, ai: null }; // chatId per pane
-window._chatGen = window._chatGen || 0; // increments on route change
-window._paneState = window._paneState || {}; // keyed by paneKey: "main:<chatId>"
+/* ─────────── Minimal per-chat state ─────────── */
+window._activeChatId = window._activeChatId || null;
+window._chatGen = window._chatGen || 0; // increments on chat switch
+window._chatState = window._chatState || {};
 
-function getStateForPane(paneRole, chatId) {
-  if (!chatId) return null;
-  const key = paneKeyOf(paneRole, chatId);
-  return (window._paneState[key] ||= {
+function getState(chatId) {
+  return (window._chatState[chatId] ||= {
     phase: "idle", // idle -> join_sent -> injecting_history -> live
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
+    // Join guards (single-flight)
     joinGen: -1,
     joinDispatched: false,
     joinPending: false,
@@ -443,24 +459,17 @@ function getStateForPane(paneRole, chatId) {
     joinRetryCount: 0,
   });
 }
-function resetStateForPane(paneRole, chatId) {
-  if (!chatId) return;
-  const key = paneKeyOf(paneRole, chatId);
-  window._paneState[key] = {
+function resetState(chatId) {
+  window._chatState[chatId] = {
     phase: "idle",
     seen: new Set(),
     lastTs: 0,
     prebuffer: [],
-    joinGen: -1,
-    joinDispatched: false,
-    joinPending: false,
-    joinRetryTid: 0,
-    joinRetryCount: 0,
   };
-  return window._paneState[key];
+  return window._chatState[chatId];
 }
 
-/* ─────────── History + live injection (pane) ─────────── */
+/* ─────────── History + live injection ─────────── */
 function dedupeById(list, seenSet) {
   const out = [];
   const local = new Set();
@@ -490,15 +499,14 @@ function afterInjectUiRefresh(rg) {
     } catch {}
   }
 }
-
-function injectBatchForPane(paneRole, chatId, batch) {
-  if (!batch?.length) return;
-  const rg = getRGForPane(paneRole);
-  if (rg == null) return;
+// *** modify injectBatch ***
+function injectBatch(rg, chatId, batch) {
+  if (!batch.length) return;
   if (typeof window.injectMessages !== "function") return;
 
   window.injectMessages(rg, batch, window.currentUserId);
 
+  // ⬇ NEW: sanitize each newly injected node
   for (const m of batch) {
     if (!m?.id) continue;
     const el = document.querySelector(
@@ -507,8 +515,7 @@ function injectBatchForPane(paneRole, chatId, batch) {
     sanitizeInjectedFileMessageNode(el, m);
   }
 
-  const st = getStateForPane(paneRole, chatId);
-  if (!st) return;
+  const st = getState(chatId);
   for (const m of batch) {
     if (m?.id) st.seen.add(String(m.id));
     if (m?.created_at != null) {
@@ -519,12 +526,12 @@ function injectBatchForPane(paneRole, chatId, batch) {
   afterInjectUiRefresh(rg);
 }
 
-function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
-  const activeId = window._paneActive[paneRole];
-  if (!activeId || activeId !== chatId) return;
+function injectHistoryAndGoLive(chatId, incomingHistory) {
+  const rg = window.findVisibleRG?.() ?? null;
+  if (rg === null) return;
+  if (chatId !== window._activeChatId) return;
 
-  const st = getStateForPane(paneRole, chatId);
-  if (!st) return;
+  const st = getState(chatId);
   st.phase = "injecting_history";
 
   const combined = dedupeById(
@@ -534,15 +541,15 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
   const ordered = sortAscByTs(combined);
 
   if (ordered.length) {
-    clearPaneDom(paneRole);
-    injectBatchForPane(paneRole, chatId, ordered);
+    clearActiveChatDom();
+    injectBatch(rg, chatId, ordered);
   }
 
   st.prebuffer = [];
   st.phase = "live";
 }
 
-/* ─────────── Channel join/leave/send (unchanged) ─────────── */
+/* ─────────── Channel join/leave/send ─────────── */
 window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   if (!userId || !authToken || !realtimeHash) return;
   try {
@@ -565,7 +572,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       channel.on((data) => {
         try {
-          // Parse once
+          const active = window._activeChatId;
+          if (!active) return;
+
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
@@ -588,88 +597,68 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           }
           if (!incoming.length) return;
 
-          // Route to panes independently
-          const activeMain = window._paneActive.main;
-          const activeAI = window._paneActive.ai;
+          let relevant = incoming.filter(
+            (m) => String(m?.conversation_id ?? "") === String(active)
+          );
+          if (!relevant.length) return;
 
-          const byPane = {
-            main: activeMain
-              ? incoming.filter(
-                  (m) => String(m?.conversation_id ?? "") === String(activeMain)
-                )
-              : [],
-            ai: activeAI
-              ? incoming.filter(
-                  (m) => String(m?.conversation_id ?? "") === String(activeAI)
-                )
-              : [],
-          };
+          const st = getState(active);
 
-          for (const paneRole of ["main", "ai"]) {
-            const chatId = window._paneActive[paneRole];
-            if (!chatId) continue;
-
-            let relevant = byPane[paneRole];
-            if (!relevant?.length) continue;
-
-            const rg = getRGForPane(paneRole);
-            const st = getStateForPane(paneRole, chatId);
-            if (!st) continue;
-
-            // In-place patch for visible nodes
-            const updatedIds = new Set();
-            if (rg != null) {
-              for (const m of relevant) {
-                if (!m || !m.id) continue;
-                const exists = document.querySelector(
-                  `#rg${rg} .chat-messages .message[data-id="${safeSelId(
-                    m.id
-                  )}"]`
-                );
-                if (exists) {
-                  if (patchMessageInPlace(rg, m)) {
-                    st.seen.add(String(m.id));
-                    const ts = parseTime(m.created_at);
-                    if (ts > st.lastTs) st.lastTs = ts;
-                    updatedIds.add(String(m.id));
-                  }
-                }
-              }
-              if (updatedIds.size > 0) afterInjectUiRefresh(rg);
-            }
-            relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
-
-            // Phase routing
-            if (
-              st.phase === "join_sent" ||
-              st.phase === "injecting_history" ||
-              st.phase === "idle"
-            ) {
-              if (data.action === "message") {
-                injectHistoryAndGoLiveForPane(paneRole, chatId, relevant);
-              } else {
-                const fresh = dedupeById(relevant, st.seen);
-                if (fresh.length) {
-                  st.prebuffer.push(...fresh);
-                  for (const m of fresh) {
-                    const ts = parseTime(m.created_at);
-                    if (ts > st.lastTs) st.lastTs = ts;
-                  }
-                }
-              }
-              continue;
-            }
-
-            if (st.phase === "live") {
-              const fresh = dedupeById(relevant, st.seen);
-              if (!fresh.length) continue;
-              const toAppend = sortAscByTs(fresh).filter(
-                (m) => parseTime(m.created_at) >= st.lastTs
+          const rg = window.findVisibleRG?.() ?? null;
+          const updatedIds = new Set();
+          if (rg !== null) {
+            for (const m of relevant) {
+              if (!m || !m.id) continue;
+              const exists = document.querySelector(
+                `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
               );
-              if (!toAppend.length) continue;
-
-              injectBatchForPane(paneRole, chatId, toAppend);
+              if (exists) {
+                if (patchMessageInPlace(rg, m)) {
+                  st.seen.add(String(m.id));
+                  const ts = parseTime(m.created_at);
+                  if (ts > st.lastTs) st.lastTs = ts;
+                  updatedIds.add(String(m.id));
+                }
+              }
             }
+            if (updatedIds.size > 0) afterInjectUiRefresh(rg);
+          }
+          relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
+
+          if (
+            st.phase === "join_sent" ||
+            st.phase === "injecting_history" ||
+            st.phase === "idle"
+          ) {
+            if (data.action === "message") {
+              injectHistoryAndGoLive(active, relevant);
+            } else {
+              const fresh = dedupeById(relevant, st.seen);
+              if (fresh.length) {
+                st.prebuffer.push(...fresh);
+                for (const m of fresh) {
+                  const ts = parseTime(m.created_at);
+                  if (ts > st.lastTs) st.lastTs = ts;
+                }
+              }
+            }
+            return;
+          }
+
+          if (st.phase === "live") {
+            const fresh = dedupeById(relevant, st.seen);
+            if (!fresh.length) return;
+
+            const toAppend = sortAscByTs(fresh).filter(
+              (m) => parseTime(m.created_at) >= st.lastTs
+            );
+            if (!toAppend.length) return;
+
+            const rg2 = window.findVisibleRG?.() ?? null;
+            if (rg2 === null) return;
+            if (active !== window._activeChatId) return;
+            injectBatch(rg2, active, toAppend);
+            return;
           }
         } catch (err) {}
       });
@@ -693,11 +682,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
           window.bubble_fn_joinedChannel(true);
         } catch {}
       }
-      // Force ensure-join for both panes in case we raced the channel
-      try {
-        window.ensureJoinForPane("main", true);
-        window.ensureJoinForPane("ai", true);
-      } catch {}
+      // Nudge ensureJoin in case initial attempt happened before channel became ready
+      if (typeof window.ensureJoinForActiveChat === "function") {
+        try {
+          window.ensureJoinForActiveChat(true);
+        } catch {}
+      }
     }, 1000);
 
     return channel;
@@ -708,9 +698,36 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   }
 };
 
-window.getCurrentChannel = () => window.currentChannel || null;
+window.leaveChannel = (rg, userId) => {
+  if (typeof rg !== "number") return;
+  if (!userId) return;
 
-/* ─────────── Sending (unchanged) ─────────── */
+  const info = window.currentChannel;
+  if (!info || info.userId !== userId || info.rg !== rg) {
+    return;
+  }
+
+  try {
+    const channelKey = info.channelKey;
+    if (window.xanoRealtime && window.xanoRealtime[channelKey]) {
+      const channel = window.xanoRealtime[channelKey].channel;
+      if (channel && typeof channel.disconnect === "function")
+        channel.disconnect();
+      else if (channel && typeof channel.leave === "function") channel.leave();
+      delete window.xanoRealtime[channelKey];
+    }
+
+    window.currentChannel = null;
+    window.currentUserId = null;
+  } catch (error) {
+    throw error;
+  }
+};
+
+window.getCurrentChannel = () => window.currentChannel || null;
+window.isInChannel = (rg, userId) =>
+  window.currentChannel?.userId === userId && window.currentChannel?.rg === rg;
+
 window.sendMessage = (messageData) => {
   if (!messageData || typeof messageData !== "object") {
     return Promise.reject(
@@ -737,7 +754,7 @@ window.sendMessage = (messageData) => {
   }
 };
 
-/* ─────────── Ensure-join per pane (single-flight + channel-ready) ─────────── */
+/* ─────────── Ensure-join on visible container (single-flight + channel-ready) ─────────── */
 function isChannelReady() {
   const info = window.currentChannel;
   if (!info) return false;
@@ -745,11 +762,13 @@ function isChannelReady() {
   return !!(ch && typeof ch.message === "function");
 }
 
-window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
-  const chatId = window._paneActive[paneRole];
+window.ensureJoinForActiveChat = function ensureJoinForActiveChat(
+  force = false
+) {
+  const chatId = getChatIdFromUrl();
   if (!chatId) return;
 
-  const st = getStateForPane(paneRole, chatId);
+  const st = getState(chatId);
   const currentGen = window._chatGen || 0;
 
   // Re-init on new navigation gen
@@ -763,32 +782,35 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     st.joinRetryTid = 0;
     st.joinRetryCount = 0;
     st.phase = "idle";
-    clearPaneDom(paneRole);
+    clearActiveChatDom();
   }
 
+  // ⬇⬇⬇ CHANGE 1: allow force to break out of "pending" state
   if (force && st.joinPending) {
     if (st.joinRetryTid) clearTimeout(st.joinRetryTid);
     st.joinRetryTid = 0;
     st.joinRetryCount = 0;
     st.joinPending = false;
   }
+
+  // ⬇⬇⬇ CHANGE 2: only block when NOT forced
   if (!force && (st.joinDispatched || st.joinPending)) return;
 
   const trySend = () => {
-    const s = getStateForPane(paneRole, chatId);
-    if (!s) return;
+    const s = getState(chatId);
     if (s.joinGen !== currentGen) return; // stale timer
     if (s.joinDispatched) return;
 
-    const rgNow = getRGForPane(paneRole);
+    const rgNow = window.findVisibleRG?.() ?? null;
     const cNow =
-      rgNow != null
+      rgNow !== null
         ? document.querySelector(`#rg${rgNow} .chat-messages`)
         : null;
 
     // Wait for BOTH container and channel
     if (!cNow || !isChannelReady()) {
       if (s.joinRetryCount < 80) {
+        // ⬅ bump to ~16s @ 200ms
         s.joinRetryCount++;
         s.joinRetryTid = setTimeout(trySend, 200);
       } else {
@@ -799,6 +821,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       return;
     }
 
+    // ⬇⬇⬇ CHANGE 3: broaden when a join is allowed on force
     const canJoin =
       s.phase === "idle" ||
       s.phase === "injecting_history" ||
@@ -824,23 +847,25 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     });
   };
 
-  const rg = getRGForPane(paneRole);
+  const rg = window.findVisibleRG?.() ?? null;
   const container =
-    rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+    rg !== null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
+  // If container or channel not ready, start (or restart) single-flight retries
   if (!container || !isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
       st.joinRetryTid = setTimeout(trySend, 0);
     } else if (force) {
+      // If we forced our way here while a timer exists, kick it immediately
       clearTimeout(st.joinRetryTid);
       st.joinRetryTid = setTimeout(trySend, 0);
     }
     return;
   }
 
-  // Immediate path
+  // Immediate path (everything ready)
   st.joinDispatched = true;
   st.phase = "join_sent";
   window.sendMessage({
@@ -852,53 +877,33 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   });
 };
 
-/* ─────────── Route watcher: clear & (re)join per pane ─────────── */
-function handleChatRouteChangeDual() {
-  const { main, ai } = getPaneIdsFromUrl();
-  const prevMain = window._paneActive.main;
-  const prevAI = window._paneActive.ai;
+/* ─────────── Route watcher: clear & (re)join on chat change ─────────── */
+function handleChatRouteChange() {
+  const next = getChatIdFromUrl();
+  const prev = window._activeChatId || null;
 
-  // bump gen if anything changes
-  const changed =
-    String(prevMain || "") !== String(main || "") ||
-    String(prevAI || "") !== String(ai || "");
-  if (changed) window._chatGen = (window._chatGen || 0) + 1;
-
-  // MAIN
-  if (!main) {
-    if (prevMain) clearPaneDom("main");
-    window._paneActive.main = null;
-  } else {
-    if (main !== prevMain) {
-      window._paneActive.main = main;
-      resetStateForPane("main", main);
-      clearPaneDom("main");
-      window.ensureJoinForPane("main", true);
-    } else {
-      window.ensureJoinForPane("main", false);
-    }
+  if (!next) {
+    if (prev !== null) clearActiveChatDom();
+    window._activeChatId = null;
+    return;
   }
 
-  // AI
-  if (!ai) {
-    if (prevAI) clearPaneDom("ai");
-    window._paneActive.ai = null;
-  } else {
-    if (ai !== prevAI) {
-      window._paneActive.ai = ai;
-      resetStateForPane("ai", ai);
-      clearPaneDom("ai");
-      window.ensureJoinForPane("ai", true);
-    } else {
-      window.ensureJoinForPane("ai", false);
-    }
+  if (next !== prev) {
+    window._activeChatId = next;
+    window._chatGen = (window._chatGen || 0) + 1;
+    resetState(next);
+    clearActiveChatDom();
+    window.ensureJoinForActiveChat(true);
+    return;
   }
+
+  window.ensureJoinForActiveChat(false);
 }
 
 /* ─────────── Wire up basic SPA navigation hooks ─────────── */
 (function wireNavigationWatch() {
-  if (window.__sumizyRouteWatchWiredDual) return;
-  window.__sumizyRouteWatchWiredDual = true;
+  if (window.__sumizyRouteWatchWired) return;
+  window.__sumizyRouteWatchWired = true;
 
   const patchHistory = (method) => {
     const orig = history[method];
@@ -914,16 +919,16 @@ function handleChatRouteChangeDual() {
   patchHistory("pushState");
   patchHistory("replaceState");
 
-  window.addEventListener("popstate", handleChatRouteChangeDual);
-  window.addEventListener("hashchange", handleChatRouteChangeDual);
-  window.addEventListener("locationchange", handleChatRouteChangeDual);
+  window.addEventListener("popstate", handleChatRouteChange);
+  window.addEventListener("hashchange", handleChatRouteChange);
+  window.addEventListener("locationchange", handleChatRouteChange);
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", handleChatRouteChangeDual, {
+    document.addEventListener("DOMContentLoaded", handleChatRouteChange, {
       once: true,
     });
   } else {
-    handleChatRouteChangeDual();
+    handleChatRouteChange();
   }
 })();
 
@@ -931,12 +936,10 @@ function handleChatRouteChangeDual() {
 window.loadOlderMessages = () => false;
 window.getOlderMessagesCount = () => 0;
 
-// Expose a few helpers (optional)
+// (Optional) expose helpers if other modules need them
 Object.assign(window, {
   patchMessageInPlace,
   updateReplyPreviewsForMessage,
   updateMessageTextsInPlace,
   updateReactionsInPlace,
-  getRGForPane,
-  ensureJoinForPane: window.ensureJoinForPane,
 });
