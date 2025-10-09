@@ -1,55 +1,6 @@
 // sumizy-chat-utils.js
 
 
-  /* ─────────── Canonical pane id resolver (query + /tickets/:id | /tasks/:id) ─────────── */
-  (function () {
-    function deriveMainFromRoute(u) {
-      // 1) query param has priority
-      const qp = (u.searchParams.get("chatid") || "").trim();
-      if (qp) return qp;
-  
-      // 2) pathname: /tickets/:id or /tasks/:id
-      const m = (u.pathname || "").match(/\/(tickets|tasks)\/([^/?#]+)/i);
-      if (!m) return null;
-  
-      const entityType = m[1].toLowerCase(); // "tickets" | "tasks"
-      const entityId = m[2];
-  
-      // Optional hook: let app map entity → real conversation id (UUID)
-      if (typeof window.mapEntityToConversationId === "function") {
-        try {
-          const conv = window.mapEntityToConversationId(entityType, entityId);
-          if (conv) return String(conv);
-        } catch {}
-      }
-      // Fallback: composite id your backend can interpret
-      return `${entityType}:${entityId}`;
-    }
-  
-    function getPaneIdsFromUrlCanonical() {
-      let url;
-      try {
-        url = new URL(location.href);
-      } catch {
-        return { main: null, ai: null };
-      }
-      const ai = (url.searchParams.get("ai-chat") || "").trim() || null;
-      const main = deriveMainFromRoute(url);
-      return { main, ai };
-    }
-  
-    // Export canonical helper (idempotent; won’t clobber if already set)
-    if (typeof window.getPaneIdsFromUrl !== "function") {
-      window.getPaneIdsFromUrl = getPaneIdsFromUrlCanonical;
-    }
-  
-    // Optional default mapper (no-op passthrough). Replace in app boot if needed.
-    window.mapEntityToConversationId =
-      window.mapEntityToConversationId ||
-      function (type, id) {
-        return `${type}:${id}`; // or call your Bubble/Xano resolver here
-      };
-  })();
 
 /* ─────────────────── CONFIG & HELPERS ─────────────────── */
 const DATE_LOCALE = "en-US";
@@ -148,22 +99,25 @@ function getUrlParams() {
   }
 }
 
-/** Returns { mainId: string|null, aiId: string|null } via canonical resolver */
-function getPaneIdsFromUrl() {
-  const ids = (window.getPaneIdsFromUrl && window.getPaneIdsFromUrl()) || { main: null, ai: null };
-  return { mainId: ids.main, aiId: ids.ai };
-}
+
+ // Consume the router output without redefining it
+ function getPaneIdsFromUrlResolved() {
+   const ids = (typeof window.getPaneIdsFromUrl === "function"
+     ? window.getPaneIdsFromUrl()
+     : { main: null, ai: null });
+   return { mainId: ids.main, aiId: ids.ai };
+ }
 
 
 /** Legacy: the primary chat id (main pane); prefer mainId */
-function getChatIdFromURL() {
-  const { mainId } = getPaneIdsFromUrl();
+ function getChatIdFromURL() {
+     const { mainId } = getPaneIdsFromUrlResolved();
   return mainId;
 }
 
 /** Quick boolean to tell if the AI pane is active via URL */
-function isAIChatUrl() {
-  const { aiId } = getPaneIdsFromUrl();
+ function isAIChatUrl() {
+     const { aiId } = getPaneIdsFromUrlResolved();
   if (aiId) return true;
   // accept other patterns used elsewhere
   const q = getUrlParams();
@@ -316,7 +270,7 @@ Object.assign(window, {
   waitForElement,
 
   // URL helpers
-  getPaneIdsFromUrl,
+  getPaneIdsFromUrlResolved,
   getChatIdFromURL,
   isAIChatUrl,
 
