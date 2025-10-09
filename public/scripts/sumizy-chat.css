@@ -1166,7 +1166,7 @@
 }
 
 /* Hide action buttons in AI chat mode */
-[data-pane="ai"] .message-actions-trigger {
+[data-pane="ai"] .message.ai-message .message-actions-trigger {
     display: none !important;
 }
 

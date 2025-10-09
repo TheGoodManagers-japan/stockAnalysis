@@ -349,9 +349,8 @@ const renderMsgWithMarkdown = (m, cuid) => {
     })
     .join("");
 
-  const actionTrigger = isAIChat
-    ? ""
-    : '<div class="message-actions-trigger">⋮</div>';
+    const actionTrigger =
+      '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
 
   const imageLike =
     m.isFile &&
