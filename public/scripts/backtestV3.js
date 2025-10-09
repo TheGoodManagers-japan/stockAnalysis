@@ -1,10 +1,18 @@
-// /scripts/backtest.js — swing-period backtest (browser) — PARITY version + REGIME ADAPT (backtest-only)
-// Next-bar-open entries, optional time-based exit, single or multi profiles.
-// Adds regime-aware adaptation (STRONG_UP|UP|RANGE|DOWN) ONLY inside backtest via a wrapper.
+// /scripts/backtest.js — swing-period backtest (browser) — PARITY + REGIME
+// Next-bar-open entries, optional time-based exit, single-profile-by-default,
+// sentiment gates, and NEW: Nikkei-based market regime tagging & metrics.
 //
-// Options for window.backtest(..., opts) — unchanged + new:
-//   - useRegimeAdapt: true|false  (default true; set false to disable regime wrapper)
-//   - regimeConfig.map: optional overrides per regime { STRONG_UP:{tgtR,trailAtR,trailLockR}, ... }
+// Options you may pass to window.backtest(..., opts):
+//   - profileId: "no_progress_N5bars_creep_to_BE" (default; pick from EXIT_PROFILES)
+//   - profileIds: ["idA","idB"] (run multiple)
+//   - holdBars: 0 (default = disabled). Set >0 to enforce hard time exit.
+//   - allowedSentiments: ["LT7-ST4","LT1-ST3", ...]  (omit/empty => allow all)
+//   - allowedSentiRanks: [1,2,3] (default when omitted; [] disables rank gate)
+//   - maxConcurrent: 0 (default = unlimited global positions)
+//   - simulateRejectedBuys: true (unchanged)
+//   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
+//   - regimeTicker: "1321.T" (default Nikkei 225 ETF proxy)
+//   - allowedRegimes: ["UP","STRONG_UP"] to only trade in those regimes
 
 import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
 import {
@@ -88,176 +96,6 @@ function mkSentimentGate(allowedList, allowedRanks) {
     const rank = getSentimentCombinationRank(st, lt); // 1..5
     const passRank = !useRanks || rankSet.has(rank);
     return passList && passRank;
-  };
-}
-
-/* ===================== Regime helpers (backtest-only) ===================== */
-
-// Lightweight ATR14 for regime + trailing (close fallbacks)
-function btCalcATR14(data) {
-  if (!Array.isArray(data) || data.length < 16) return 0;
-  let sum = 0;
-  for (let i = data.length - 14; i < data.length; i++) {
-    const c = data[i],
-      p = data[i - 1];
-    const h = Number(c?.high ?? c?.close ?? 0);
-    const l = Number(c?.low ?? c?.close ?? 0);
-    const pc = Number(p?.close ?? 0);
-    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-    sum += tr;
-  }
-  return sum / 14;
-}
-function slope(a, b) {
-  return Number.isFinite(a) && Number.isFinite(b) ? a - b : 0;
-}
-
-/**
- * getBarRegime — uses analyzer hint if available, otherwise classifies with MAs.
- * Prefers sig.debug.ms.regime if present. Returns one of: STRONG_UP | UP | RANGE | DOWN
- */
-function getBarRegime(stock, hist, sig) {
-  const hinted = sig?.debug?.ms?.regime;
-  if (hinted && typeof hinted === "string") return hinted;
-
-  // Fallback classification
-  const closes = hist.map((d) => Number(d?.close || 0));
-  const smaN = (n) =>
-    closes.length >= n ? closes.slice(-n).reduce((a, b) => a + b, 0) / n : NaN;
-
-  const px = Number(stock.currentPrice);
-  const ma20 = Number.isFinite(stock.movingAverage20d)
-    ? stock.movingAverage20d
-    : smaN(20);
-  const ma25 = Number.isFinite(stock.movingAverage25d)
-    ? stock.movingAverage25d
-    : smaN(25);
-  const ma50 = Number.isFinite(stock.movingAverage50d)
-    ? stock.movingAverage50d
-    : smaN(50);
-
-  const atr = btCalcATR14(hist);
-  const upStacked = ma20 > ma25 && ma25 > ma50;
-  const pxAboveMids = Number.isFinite(px) && (px >= ma20 || px >= ma25);
-  const m20Up = slope(ma20, smaN(21)) > 0;
-  const m25Up = slope(ma25, smaN(26)) > 0;
-
-  if (upStacked && pxAboveMids && m20Up && m25Up) return "STRONG_UP";
-  if (pxAboveMids && (m20Up || m25Up)) return "UP";
-
-  // RANGE if price within ~1 ATR of MA20 or MA25, otherwise DOWN
-  const nearMid =
-    (Number.isFinite(ma20) && Math.abs(px - ma20) <= 1.0 * atr) ||
-    (Number.isFinite(ma25) && Math.abs(px - ma25) <= 1.0 * atr);
-  return nearMid ? "RANGE" : "DOWN";
-}
-
-/** structural stop (very light) for trailing */
-function structTrailStop(hist, ma25, atr) {
-  const lows = hist.slice(-20).map((b) => Number(b?.low ?? b?.close ?? 0));
-  const swing = lows.length
-    ? Math.min(...lows)
-    : Number(hist.at(-1)?.low ?? hist.at(-1)?.close ?? 0);
-  const bySwing = swing + 0.0;
-  const byMA = Number.isFinite(ma25) ? ma25 - 0.6 * atr : -Infinity;
-  return Math.max(bySwing, byMA);
-}
-function clampStop(px, atr, proposed, floorStop = 0) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-  const _px = n(px),
-    _atr = Math.max(n(atr), _px * 0.005, 1e-6);
-  const minBuffer = Math.max(_px * 0.002, 0.2 * _atr, 1); // ~0.2 ATR, ≥ ¥1
-  let s = Math.max(n(proposed), n(floorStop)); // never below current stop
-  s = Math.min(s, _px - minBuffer); // never at/above market
-  if (!Number.isFinite(s) || s <= 0) s = Math.max(1, n(floorStop));
-  return Math.round(s);
-}
-
-/**
- * mkRegimeWrappedProfile(base, cfg)
- * - Calls base.compute/advance first, then adapts target/stop trailing per regime
- * - Meta passed via state.meta to advance()
- */
-function mkRegimeWrappedProfile(base, cfg = {}) {
-  // defaults tuned from your observations: smaller, earlier locks in bull; larger/slower in bear/range
-  const K = {
-    STRONG_UP: { tgtR: 1.4, trailAtR: 1.0, trailLockR: 0.6 },
-    UP: { tgtR: 1.6, trailAtR: 1.0, trailLockR: 0.5 },
-    RANGE: { tgtR: 2.0, trailAtR: 1.5, trailLockR: 0.8 },
-    DOWN: { tgtR: 2.3, trailAtR: 1.5, trailLockR: 1.0 },
-    ...(cfg.map || {}),
-  };
-
-  return {
-    ...base,
-    id: `${base.id}__regime`,
-    label: `${base.label} (regime-adapted)`,
-
-    compute({ entry, stock, sig, today, hist }) {
-      const out =
-        typeof base.compute === "function"
-          ? base.compute({ entry, stock, sig, today, hist }) || {}
-          : {};
-
-      let stop = Number(out.stop);
-      let target = Number(out.target);
-      if (!Number.isFinite(stop) || stop >= entry) return out; // keep base guard
-
-      const risk = Math.max(0.01, entry - stop);
-      const regime = getBarRegime(stock, hist, sig);
-      const k = K[regime] || K.RANGE;
-
-      // Rebuild target with regime target-R (keep base stop as is)
-      target = entry + k.tgtR * risk;
-
-      return {
-        ...out,
-        stop,
-        target,
-        meta: {
-          ...(out.meta || {}),
-          regime,
-          risk,
-          trailAtR: k.trailAtR,
-          trailLockR: k.trailLockR,
-        },
-      };
-    },
-
-    advance(ctx) {
-      // Let base mutate first if it wants
-      if (typeof base.advance === "function") base.advance(ctx);
-
-      const { state, bar, hist, stock } = ctx;
-      if (
-        !state ||
-        !Number.isFinite(state.entry) ||
-        !Number.isFinite(state.stop)
-      )
-        return;
-
-      const px = Number(bar?.close ?? stock?.currentPrice ?? 0);
-      const risk = Number(state?.stopInit)
-        ? Math.max(0.01, state.entry - state.stopInit)
-        : Math.max(0.01, state.entry - state.stop);
-      const atr = btCalcATR14(hist);
-      const ma25 = Number(stock?.movingAverage25d ?? NaN);
-
-      const trailAtR = Number(state?.meta?.trailAtR ?? NaN);
-      const trailLockR = Number(state?.meta?.trailLockR ?? NaN);
-
-      if (Number.isFinite(trailAtR) && Number.isFinite(trailLockR)) {
-        const triggerPx = state.entry + trailAtR * risk;
-        if (px >= triggerPx) {
-          const desired = Math.max(
-            state.stop, // never lower
-            state.entry + trailLockR * risk, // lock in portion of R
-            structTrailStop(hist, ma25, atr) // structure/MA trailing
-          );
-          state.stop = clampStop(px, atr, desired, state.stop);
-        }
-      }
-    },
   };
 }
 
@@ -419,8 +257,121 @@ function sentiFinalize(agg) {
   };
 }
 
+/* ---------------------- REGIME HELPERS (Nikkei-based) ---------------------- */
+const DEFAULT_REGIME_TICKER = "1321.T"; // Nikkei 225 ETF (you can change via opts.regimeTicker)
+
+function smaArr(arr, p) {
+  if (arr.length < p) return Array(arr.length).fill(NaN);
+  const out = new Array(arr.length).fill(NaN);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= p) sum -= arr[i - p];
+    if (i >= p - 1) out[i] = sum / p;
+  }
+  return out;
+}
+
 /**
- * Backtest (swing period) — PARITY oriented with optional Regime Adapt.
+ * Compute simple daily regime labels from a Nikkei proxy candles array.
+ * Logic:
+ *  - STRONG_UP: px>MA25 & MA25 slope > +0.02%/bar & MA25>MA75
+ *  - UP:        px>MA25 & slope >= 0
+ *  - RANGE:     abs(slope) < 0.02%/bar (near-flat) OR |px-MA25| <= 1*ATR(14)
+ *  - DOWN:      otherwise
+ */
+function computeRegimeLabels(candles) {
+  if (!Array.isArray(candles) || candles.length < 30) {
+    return candles.map(() => "RANGE");
+  }
+
+  const closes = candles.map((c) => Number(c.close) || 0);
+  const ma25 = smaArr(closes, 25);
+  const ma75 = smaArr(closes, 75);
+
+  // ATR(14) for RANGE tie-break
+  const atr = (() => {
+    if (candles.length < 15) return candles.map(() => 0);
+    const out = new Array(candles.length).fill(0);
+    for (let i = 1; i < candles.length; i++) {
+      const h = Number(candles[i].high ?? candles[i].close ?? 0);
+      const l = Number(candles[i].low ?? candles[i].close ?? 0);
+      const pc = Number(candles[i - 1].close ?? 0);
+      const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+      if (i < 15) {
+        // warmup simple average
+        const start = Math.max(1, i - 14);
+        const w = candles.slice(start, i + 1);
+        const sum = w.reduce((s, _, k) => {
+          const idx = start + k;
+          const h2 = Number(candles[idx].high ?? candles[idx].close ?? 0);
+          const l2 = Number(candles[idx].low ?? candles[idx].close ?? 0);
+          const pc2 = Number(candles[idx - 1]?.close ?? 0);
+          const tr2 = Math.max(h2 - l2, Math.abs(h2 - pc2), Math.abs(l2 - pc2));
+          return s + tr2;
+        }, 0);
+        out[i] = sum / Math.min(14, i);
+      } else {
+        // Wilder smoothing-ish: reuse previous ATR for smoothness
+        out[i] = (out[i - 1] * 13 + tr) / 14;
+      }
+    }
+    return out;
+  })();
+
+  const labels = [];
+  for (let i = 0; i < candles.length; i++) {
+    const px = closes[i];
+    const m25 = ma25[i];
+    const m75 = ma75[i];
+    const a14 = atr[i] || 0;
+
+    // slope of MA25 over last 5 bars (% per bar relative to MA25)
+    let slope = 0;
+    if (i >= 5 && Number.isFinite(m25) && m25 > 0) {
+      const prev = ma25[i - 5];
+      if (Number.isFinite(prev) && prev > 0) {
+        slope = (m25 - prev) / prev / 5; // per bar
+      }
+    }
+
+    const aboveMA = Number.isFinite(m25) && px > m25;
+    const strong =
+      aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75; // > +0.02%/bar
+    const flatish =
+      Math.abs(slope) < 0.0002 ||
+      (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
+
+    if (strong) labels.push("STRONG_UP");
+    else if (aboveMA && slope >= 0) labels.push("UP");
+    else if (flatish) labels.push("RANGE");
+    else labels.push("DOWN");
+  }
+  return labels;
+}
+
+/** Build a { "YYYY-MM-DD": "REGIME" } map for quick lookup */
+function buildRegimeMap(candles) {
+  const labels = computeRegimeLabels(candles);
+  const map = Object.create(null);
+  for (let i = 0; i < candles.length; i++) {
+    map[toISO(candles[i].date)] = labels[i];
+  }
+  return map;
+}
+
+/* ------------------ MAIN: Backtest (swing-period) — PARITY ------------------ */
+/**
+ * Backtest (swing period) — PARITY oriented.
+ * opts:
+ *   { months=36, from, to, limit=0, warmupBars=60, holdBars=0 (disabled),
+ *     cooldownDays=2, appendTickers?: string[], profileId?: string,
+ *     profileIds?: string[], allowedSentiments?: string[], allowedSentiRanks?: number[],
+ *     maxConcurrent?: number, targetTradesPerDay?: number, countBlockedSignals?: boolean,
+ *     includeByTicker?: boolean, simulateRejectedBuys?: boolean,
+ *     topRejectedReasons?: number, examplesCap?: number,
+ *     regimeTicker?: string, allowedRegimes?: string[] // NEW
+ *   }
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -480,20 +431,51 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     activeProfiles = [chosen];
   }
 
-  // === Regime adaptation (backtest-only; opt-out with useRegimeAdapt=false)
-  const USE_REGIME_ADAPT = opts.useRegimeAdapt !== false; // default ON
-  if (USE_REGIME_ADAPT) {
-    const regimeCfg = opts.regimeConfig || {}; // optional { map: {STRONG_UP:{...}, ...} }
-    activeProfiles = activeProfiles.map((p) =>
-      mkRegimeWrappedProfile(p, regimeCfg)
-    );
-  }
-
   // optional sentiment gate: accepts explicit combos AND/OR rank list
   const allowBySentiment = mkSentimentGate(
     opts.allowedSentiments,
     opts.allowedSentiRanks // undefined => defaults to [1,2,3]
   );
+
+  // --- NEW: regime options ---
+  const REGIME_TICKER =
+    opts && typeof opts.regimeTicker === "string" && opts.regimeTicker.trim()
+      ? opts.regimeTicker.trim().toUpperCase()
+      : DEFAULT_REGIME_TICKER;
+
+  // Gate by regime labels if provided (["STRONG_UP","UP","RANGE","DOWN"])
+  const allowedRegimes =
+    Array.isArray(opts.allowedRegimes) && opts.allowedRegimes.length
+      ? new Set(opts.allowedRegimes.map(String))
+      : null;
+
+  // Fetch regime reference history once (same FROM/TO window)
+  let regimeMap = null;
+  try {
+    const nikkeiRef = await fetchHistory(REGIME_TICKER, FROM, TO);
+    if (nikkeiRef && nikkeiRef.length) {
+      regimeMap = buildRegimeMap(nikkeiRef);
+      console.log(
+        `[BT] Regime ready from ${REGIME_TICKER} with ${nikkeiRef.length} bars`
+      );
+    } else {
+      console.log(`[BT] Regime disabled: no candles for ${REGIME_TICKER}`);
+    }
+  } catch (e) {
+    console.log(
+      `[BT] Regime disabled: failed to load ${REGIME_TICKER} — ${String(
+        e?.message || e
+      )}`
+    );
+  }
+
+  // Aggregation per regime
+  const regimeAgg = {
+    STRONG_UP: [],
+    UP: [],
+    RANGE: [],
+    DOWN: [],
+  };
 
   // diagnostics
   const byTicker = [];
@@ -556,7 +538,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       HOLD_BARS || "off"
     } | warmup=${WARMUP} | cooldown=${COOLDOWN} | profiles=${activeProfiles
       .map((p) => p.id)
-      .join(",")} | regimeAdapt=${USE_REGIME_ADAPT ? "ON" : "OFF"}`
+      .join(",")}`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -595,6 +577,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         tradingDays.add(toISO(today.date));
         const hist = candles.slice(0, i + 1);
 
+        // --- NEW: regime tag for this day (based on reference map) ---
+        const dayISO = toISO(today.date);
+        const dayRegime = regimeMap ? regimeMap[dayISO] || "RANGE" : "RANGE";
+
         const stock = {
           ticker: code,
           currentPrice: today.close,
@@ -622,7 +608,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const st = openByProfile[p.id];
           if (!st) continue;
 
-          // dynamic rule hook (wrapped profiles also run here)
+          // dynamic rule hook
           if (typeof p.advance === "function") {
             p.advance({ bar: today, state: st, hist, stock });
             if (Number.isFinite(st.stop)) st.stop = toTick(st.stop, stock);
@@ -673,6 +659,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               returnPct: r2(pctRet),
               ST: st.ST,
               LT: st.LT,
+              regime: st.regime || "RANGE", // NEW
             };
 
             tradesByProfile[p.id].push(trade);
@@ -687,6 +674,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               returnPct: trade.returnPct,
               R: trade.R,
             });
+
+            // NEW: collect per-regime
+            if (trade.regime && regimeAgg[trade.regime]) {
+              regimeAgg[trade.regime].push(trade);
+            }
 
             openByProfile[p.id] = null;
             cooldownUntilByProfile[p.id] = i + COOLDOWN;
@@ -707,7 +699,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const sig = analyzeSwingTradeEntry(stock, hist, {
             debug: true,
             debugLevel: "verbose",
-            // cfg: { ...inject live analyzer config here if needed ... }
+            // cfg: { ...inject your live analyzer config here if needed ... }
           });
 
           // snapshot sentiment once
@@ -725,9 +717,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             signalsAfterWarmup++;
             signalsWhileFlat++;
 
-            // optional gate by sentiment
+            // optional sentiment gate
             if (!allowBySentiment(ST, LT)) {
               blockedBySentiment_DIP++;
+              continue;
+            }
+
+            // NEW: optional regime gate
+            if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
               continue;
             }
 
@@ -756,6 +753,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
                 break;
 
+              // compute plan using the entry we will actually use
               const plan =
                 p.compute({
                   entry,
@@ -788,11 +786,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 target: qTarget,
                 ST,
                 LT,
+                regime: dayRegime, // NEW
                 kind:
                   String(sig?.debug?.chosen || sig?.reason || "")
                     .split(":")[0]
                     .trim() || "UNKNOWN",
-                meta: { ...(plan.meta || {}) }, // << required for regime trailing
               };
               globalOpenCount++;
               signalsExecuted++;
@@ -834,7 +832,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
             // parallel: simulate rejected buys using candidate levels when available
             if (SIM_REJECTED) {
-              const entry = today.close; // keep same-bar for counterfactual simplicity
+              const entry = today.close; // same-bar for CF simplicity
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
               const simTarget = Number(
                 sig?.smartPriceTarget ?? sig?.priceTarget
@@ -875,7 +873,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   if (outcome.result === "WIN") {
                     if (!parallel.rejectedBuys.examples[key])
                       parallel.rejectedBuys.examples[key] = [];
-                    if (parallel.rejectedBuys.examples[key].length < EX_CAP) {
+                    if (
+                      parallel.rejectedBuys.examples[key].length < EXAMPLE_MAX
+                    ) {
                       parallel.rejectedBuys.examples[key].push({
                         ticker: code,
                         date: toISO(today.date),
@@ -1057,9 +1057,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // per-profile metrics (computed over all EXIT_PROFILES to keep UI stable)
   const profiles = {};
   for (const p of EXIT_PROFILES) {
-    const list = globalTrades.filter(
-      (t) => t.profile === p.id || t.profile === `${p.id}__regime`
-    );
+    const list = all.filter((t) => t.profile === p.id);
     profiles[p.id] = {
       label: p.label,
       metrics: computeMetrics(list),
@@ -1098,6 +1096,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const strategyBreakdown = Object.fromEntries(
     Object.entries(byKind).map(([k, v]) => [k, computeMetrics(v)])
   );
+
+  // --- NEW: per-regime metrics ---
+  const regimeMetrics = {};
+  for (const key of Object.keys(regimeAgg)) {
+    regimeMetrics[key] = computeMetrics(regimeAgg[key]);
+  }
+
+  // Console snapshot for regimes
+  console.log("[BT] REGIME STATS");
+  for (const k of ["STRONG_UP", "UP", "RANGE", "DOWN"]) {
+    const m = regimeMetrics[k];
+    console.log(
+      `[BT] ${k.padEnd(10)} | trades=${m.trades} | winRate=${
+        m.winRate
+      }% | avgRet=${m.avgReturnPct}% | PF=${m.profitFactor}`
+    );
+  }
 
   // logs
   console.log(
@@ -1149,9 +1164,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       allowedSentiments: Array.isArray(opts.allowedSentiments)
         ? opts.allowedSentiments
         : [],
+      allowedSentiRanks: Array.isArray(opts.allowedSentiRanks)
+        ? opts.allowedSentiRanks
+        : undefined,
       maxConcurrent: MAX_CONCURRENT,
-      useRegimeAdapt: USE_REGIME_ADAPT,
-      regimeConfig: opts.regimeConfig || null,
+      regimeTicker: REGIME_TICKER,
+      allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
     },
     totalTrades,
     winRate,
@@ -1199,6 +1217,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       byExpR: bestByExpR,
       byProfitFactor: bestByPF,
     },
+    regime: {
+      ticker: REGIME_TICKER,
+      metrics: regimeMetrics, // NEW
+    },
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
 }
@@ -1235,7 +1257,7 @@ function computeMetrics(trades) {
     ? Infinity
     : 0;
 
-  // ✅ count exits over ALL trades
+  // ✅ Count exits over ALL trades
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
@@ -1323,6 +1345,7 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         rejected: {},
         bestByWinRate: { actual: [], rejected: [] },
       },
+      regime: { ticker: "", metrics: {} },
       error: String(e?.message || e),
     };
   }
