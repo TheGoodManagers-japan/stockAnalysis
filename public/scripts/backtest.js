@@ -1,13 +1,11 @@
 // /scripts/backtest.js — swing-period backtest (browser) — PARITY + REGIME
-// Next-bar-open entries, optional time-based exit, single-profile-by-default,
-// sentiment gates, and NEW: Nikkei-based market regime tagging & metrics.
+// Next-bar-open entries, optional time-based exit, **inline exit rule only**,
+// sentiment *stats* (no gating), Nikkei-based market regime tagging & metrics.
 //
 // Options you may pass to window.backtest(..., opts):
-//   - profileId: "no_progress_N5bars_creep_to_BE" (default; pick from EXIT_PROFILES)
-//   - profileIds: ["idA","idB"] (run multiple)
+//   - profileId/profileIds: IGNORED for execution (inline rule forced)
 //   - holdBars: 0 (default = disabled). Set >0 to enforce hard time exit.
-//   - allowedSentiments: ["LT7-ST4","LT1-ST3", ...]  (omit/empty => allow all)
-//   - allowedSentiRanks: [1,2,3] (default when omitted; [] disables rank gate)
+//   - allowedSentiments / allowedSentiRanks: IGNORED for execution (no gate)
 //   - maxConcurrent: 0 (default = unlimited global positions)
 //   - simulateRejectedBuys: true (unchanged)
 //   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
@@ -21,7 +19,7 @@ import {
 } from "./main.js";
 import { allTickers } from "./tickers.js";
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
-import { EXIT_PROFILES } from "./exit_profiles.js"; // external profiles
+import { EXIT_PROFILES } from "./exit_profiles.js"; // kept for UI summary
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
@@ -73,30 +71,10 @@ async function fetchHistory(ticker, fromISO, toISO) {
     );
 }
 
-/* ---------------- sentiment gate (optional) ---------------- */
-function mkSentimentGate(allowedList, allowedRanks) {
-  // Default: rank gate 1..3 ON
-  const ranksDefault = [1, 2, 3];
-  const useList = Array.isArray(allowedList) && allowedList.length > 0;
-  const ranksArg = Array.isArray(allowedRanks) ? allowedRanks : undefined;
-  // empty array => disable rank gate; undefined => default 1..3
-  const ranks = ranksArg === undefined ? ranksDefault : ranksArg;
-  const useRanks = Array.isArray(ranks) && ranks.length > 0;
-
-  if (!useList && !useRanks) return () => true; // no gate at all
-
-  const listSet = useList ? new Set(allowedList) : null;
-  const rankSet = useRanks ? new Set(ranks.map(Number)) : null;
-
-  return (ST, LT) => {
-    const st = Number.isFinite(ST) ? ST : 4;
-    const lt = Number.isFinite(LT) ? LT : 4;
-    const key = `LT${lt}-ST${st}`;
-    const passList = !useList || listSet.has(key);
-    const rank = getSentimentCombinationRank(st, lt); // 1..5
-    const passRank = !useRanks || rankSet.has(rank);
-    return passList && passRank;
-  };
+/* ---------------- sentiment "gate" (DISABLED) ---------------- */
+function mkSentimentGate() {
+  // Always pass; we still compute and report sentiment stats elsewhere.
+  return () => true;
 }
 
 /* ---------------- small helpers ---------------- */
@@ -272,6 +250,33 @@ function smaArr(arr, p) {
   return out;
 }
 
+/* Minimal ATR for trailing */
+function atrArr(candles, p = 14) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  const out = new Array(candles.length).fill(0);
+  for (let i = 1; i < candles.length; i++) {
+    const h = Number(candles[i].high ?? candles[i].close ?? 0);
+    const l = Number(candles[i].low ?? candles[i].close ?? 0);
+    const pc = Number(candles[i - 1].close ?? 0);
+    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    if (i < p) {
+      let sum = 0,
+        cnt = 0;
+      for (let k = Math.max(1, i - (p - 1)); k <= i; k++) {
+        const hk = Number(candles[k].high ?? candles[k].close ?? 0);
+        const lk = Number(candles[k].low ?? candles[k].close ?? 0);
+        const pck = Number(candles[k - 1]?.close ?? 0);
+        sum += Math.max(hk - lk, Math.abs(hk - pck), Math.abs(lk - pck));
+        cnt++;
+      }
+      out[i] = cnt ? sum / cnt : tr;
+    } else {
+      out[i] = (out[i - 1] * (p - 1) + tr) / p; // Wilder-ish smoothing
+    }
+  }
+  return out;
+}
+
 /**
  * Compute simple daily regime labels from a Nikkei proxy candles array.
  * Logic:
@@ -299,7 +304,6 @@ function computeRegimeLabels(candles) {
       const pc = Number(candles[i - 1].close ?? 0);
       const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
       if (i < 15) {
-        // warmup simple average
         const start = Math.max(1, i - 14);
         const w = candles.slice(start, i + 1);
         const sum = w.reduce((s, _, k) => {
@@ -312,7 +316,6 @@ function computeRegimeLabels(candles) {
         }, 0);
         out[i] = sum / Math.min(14, i);
       } else {
-        // Wilder smoothing-ish: reuse previous ATR for smoothness
         out[i] = (out[i - 1] * 13 + tr) / 14;
       }
     }
@@ -326,7 +329,6 @@ function computeRegimeLabels(candles) {
     const m75 = ma75[i];
     const a14 = atr[i] || 0;
 
-    // slope of MA25 over last 5 bars (% per bar relative to MA25)
     let slope = 0;
     if (i >= 5 && Number.isFinite(m25) && m25 > 0) {
       const prev = ma25[i - 5];
@@ -337,7 +339,7 @@ function computeRegimeLabels(candles) {
 
     const aboveMA = Number.isFinite(m25) && px > m25;
     const strong =
-      aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75; // > +0.02%/bar
+      aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75;
     const flatish =
       Math.abs(slope) < 0.0002 ||
       (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
@@ -360,18 +362,61 @@ function buildRegimeMap(candles) {
   return map;
 }
 
+/* ---------------- Inline Exit Rule (forced) ---------------- */
+// ID used in trade.profile
+const INLINE_RULE_ID = "fixed_-8pct_then_trail_after_target";
+
+// Target chooser: prefer smart target, else signal target, fallback +10%
+function pickLockedTarget(entry, sig) {
+  const t = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+  if (Number.isFinite(t) && t > entry) return t;
+  return entry * 1.1;
+}
+
+// Trailing: Chandelier 2.5×ATR on CLOSE, only AFTER the first target touch
+function advanceInlineRule({ bar, state, hist }) {
+  if (!state.hitTarget) {
+    if (Number(bar.high) >= state.targetInit) {
+      state.hitTarget = true;
+      // initialize trail at first touch
+      const closes = hist.map((c) => Number(c.close) || 0);
+      const a = atrArr(hist, 14);
+      const lastClose =
+        closes[closes.length - 1] || Number(bar.close) || state.entry;
+      state.trail = lastClose - 2.5 * (a[a.length - 1] || 0);
+      // do NOT exit at target — just start trailing from now on
+    }
+  } else {
+    // tighten trail only upward
+    const closes = hist.map((c) => Number(c.close) || 0);
+    const a = atrArr(hist, 14);
+    const lastClose =
+      closes[closes.length - 1] || Number(bar.close) || state.entry;
+    const ch = lastClose - 2.5 * (a[a.length - 1] || 0);
+    state.trail = Number.isFinite(state.trail) ? Math.max(state.trail, ch) : ch;
+    // active stop becomes max(original stop, trail), but never above entry
+    const newStop = Math.min(Math.max(state.stop, state.trail), state.entry);
+    state.stop = newStop;
+  }
+}
+
+// A single forced profile object
+const INLINE_RULE = {
+  id: INLINE_RULE_ID,
+  label: "Fixed -8% then trail after locked target",
+  compute: ({ entry, sig }) => {
+    return {
+      stop: entry * 0.92, // -8% fixed initial stop
+      target: pickLockedTarget(entry, sig), // locked, used as trigger, not exit
+    };
+  },
+  advance: advanceInlineRule,
+};
+
 /* ------------------ MAIN: Backtest (swing-period) — PARITY ------------------ */
 /**
- * Backtest (swing period) — PARITY oriented.
- * opts:
- *   { months=36, from, to, limit=0, warmupBars=60, holdBars=0 (disabled),
- *     cooldownDays=2, appendTickers?: string[], profileId?: string,
- *     profileIds?: string[], allowedSentiments?: string[], allowedSentiRanks?: number[],
- *     maxConcurrent?: number, targetTradesPerDay?: number, countBlockedSignals?: boolean,
- *     includeByTicker?: boolean, simulateRejectedBuys?: boolean,
- *     topRejectedReasons?: number, examplesCap?: number,
- *     regimeTicker?: string, allowedRegimes?: string[] // NEW
- *   }
+ * Backtest (swing period).
+ * opts: (see header)
  */
 async function runBacktest(tickersOrOpts, maybeOpts) {
   let tickers = Array.isArray(tickersOrOpts) ? tickersOrOpts : [];
@@ -416,40 +461,24 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       : `${String(c).toUpperCase().replace(/\..*$/, "")}.T`
   );
 
-  // choose active profiles (single by default)
-  let activeProfiles = [];
-  if (Array.isArray(opts.profileIds) && opts.profileIds.length) {
-    activeProfiles = EXIT_PROFILES.filter((p) =>
-      opts.profileIds.includes(p.id)
-    );
-  } else {
-    const requested = opts.profileId || "no_progress_N5bars_creep_to_BE";
-    const chosen =
-      EXIT_PROFILES.find((p) => p.id === requested) ||
-      EXIT_PROFILES.find((p) => p.id === "no_progress_N5bars_creep_to_BE") ||
-      EXIT_PROFILES[0];
-    activeProfiles = [chosen];
-  }
+  // Force only the inline profile active for execution
+  const activeProfiles = [INLINE_RULE];
 
-  // optional sentiment gate: accepts explicit combos AND/OR rank list
-  const allowBySentiment = mkSentimentGate(
-    opts.allowedSentiments,
-    opts.allowedSentiRanks // undefined => defaults to [1,2,3]
-  );
+  // sentiment gate is disabled (always true)
+  const allowBySentiment = mkSentimentGate();
 
-  // --- NEW: regime options ---
+  // --- Regime options ---
   const REGIME_TICKER =
     opts && typeof opts.regimeTicker === "string" && opts.regimeTicker.trim()
       ? opts.regimeTicker.trim().toUpperCase()
       : DEFAULT_REGIME_TICKER;
 
-  // Gate by regime labels if provided (["STRONG_UP","UP","RANGE","DOWN"])
   const allowedRegimes =
     Array.isArray(opts.allowedRegimes) && opts.allowedRegimes.length
       ? new Set(opts.allowedRegimes.map(String))
       : null;
 
-  // Fetch regime reference history once (same FROM/TO window)
+  // Fetch regime reference once
   let regimeMap = null;
   try {
     const nikkeiRef = await fetchHistory(REGIME_TICKER, FROM, TO);
@@ -487,13 +516,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let signalsAfterWarmup = 0;
   let signalsWhileFlat = 0;
   let signalsInvalid = 0;
-  let signalsRiskBad = 0; // kept for telemetry compatibility (won't be used now)
+  let signalsRiskBad = 0; // telemetry placeholder
   let signalsExecuted = 0;
 
   let blockedInTrade = 0;
   let blockedCooldown = 0;
   let blockedWarmup = 0;
-  let blockedBySentiment_DIP = 0;
+  let blockedBySentiment_DIP = 0; // will remain zero (gate disabled)
 
   const COUNT_BLOCKED = !!opts.countBlockedSignals;
 
@@ -536,9 +565,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   console.log(
     `[BT] window ${FROM}→${TO} | holdBars=${
       HOLD_BARS || "off"
-    } | warmup=${WARMUP} | cooldown=${COOLDOWN} | profiles=${activeProfiles
-      .map((p) => p.id)
-      .join(",")}`
+    } | warmup=${WARMUP} | cooldown=${COOLDOWN} | profile=${INLINE_RULE_ID}`
   );
   console.log(`[BT] total stocks: ${codes.length}`);
 
@@ -564,12 +591,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       }
 
       const trades = [];
-      const tradesByProfile = Object.fromEntries(
-        activeProfiles.map((p) => [p.id, []])
-      );
+      const tradesByProfile = { [INLINE_RULE_ID]: [] };
       const openByProfile = Object.create(null); // id -> open state
       const cooldownUntilByProfile = Object.create(null);
-      for (const p of activeProfiles) cooldownUntilByProfile[p.id] = -1;
+      cooldownUntilByProfile[INLINE_RULE_ID] = -1;
 
       // per-ticker loop
       for (let i = 0; i < candles.length; i++) {
@@ -577,7 +602,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         tradingDays.add(toISO(today.date));
         const hist = candles.slice(0, i + 1);
 
-        // --- NEW: regime tag for this day (based on reference map) ---
+        // regime tag for this day (based on reference map)
         const dayISO = toISO(today.date);
         const dayRegime = regimeMap ? regimeMap[dayISO] || "RANGE" : "RANGE";
 
@@ -594,119 +619,115 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // blocked counters (optional, per profile)
+        // blocked counters
         if (COUNT_BLOCKED) {
-          for (const p of activeProfiles) {
-            if (openByProfile[p.id]) blockedInTrade++;
-            else if (i <= cooldownUntilByProfile[p.id]) blockedCooldown++;
-          }
+          if (openByProfile[INLINE_RULE_ID]) blockedInTrade++;
+          else if (i <= cooldownUntilByProfile[INLINE_RULE_ID])
+            blockedCooldown++;
           if (i < WARMUP) blockedWarmup++;
         }
 
-        // manage open positions per profile
-        for (const p of activeProfiles) {
-          const st = openByProfile[p.id];
-          if (!st) continue;
+        // --- manage open position (inline rule) ---
+        {
+          const st = openByProfile[INLINE_RULE_ID];
+          if (st) {
+            // advance inline rule
+            INLINE_RULE.advance({ bar: today, state: st, hist, stock });
 
-          // dynamic rule hook
-          if (typeof p.advance === "function") {
-            p.advance({ bar: today, state: st, hist, stock });
+            // while target may be stored/locked, we **do not** exit at target
+            // enforce tick rounding on dynamic fields
+            if (Number.isFinite(st.stop)) st.stop = toTick(st.stop, stock);
+            if (Number.isFinite(st.trail)) st.trail = toTick(st.trail, stock);
 
-            // ⛔ Never allow the stop to change — re-pin to initial fixed stop
-            st.stop = st.stopInit;
+            let exit = null;
 
-            // Target may still update; snap it to tick if present
-            if (Number.isFinite(st.target))
-              st.target = toTick(st.target, stock);
-          }
-
-          let exit = null;
-
-          // 1) price-based exits first (priority: stop/target)
-          if (today.low <= st.stop) {
-            exit = { type: "STOP", price: st.stop, result: "LOSS" };
-          } else if (today.high >= st.target) {
-            exit = { type: "TARGET", price: st.target, result: "WIN" };
-          }
-
-          // 2) optional hard time exit at HOLD_BARS
-          if (!exit && HOLD_BARS > 0) {
-            const ageBars = i - st.entryIdx;
-            if (ageBars >= HOLD_BARS) {
-              const rawPnL = today.close - st.entry;
+            // 1) price-based exit via stop/trail only
+            if (today.low <= st.stop) {
+              const wasTrail = st.hitTarget; // trailing only starts after TP touch
               exit = {
-                type: "TIME",
-                price: today.close,
-                result: rawPnL >= 0 ? "WIN" : "LOSS",
+                type: wasTrail ? "TRAIL" : "STOP",
+                price: st.stop,
+                result: wasTrail ? "WIN" : "LOSS",
               };
             }
-          }
 
-          if (exit) {
-            const pctRet =
-              ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
-            const risk = Math.max(0.01, st.entry - st.stopInit);
-            const trade = {
-              ticker: code,
-              profile: p.id,
-              strategy: st.kind || "DIP",
-              entryDate: toISO(candles[st.entryIdx].date),
-              exitDate: toISO(today.date),
-              holdingDays: i - st.entryIdx,
-              entry: r2(st.entry),
-              exit: r2(exit.price),
-              stop: st.stopInit,
-              target: st.target,
-              result: exit.result,
-              exitType: exit.type,
-              R: r2((exit.price - st.entry) / risk),
-              returnPct: r2(pctRet),
-              ST: st.ST,
-              LT: st.LT,
-              regime: st.regime || "RANGE", // NEW
-            };
-
-            tradesByProfile[p.id].push(trade);
-            trades.push(trade);
-            globalTrades.push(trade);
-
-            // sentiment (actual)
-            const k = sentiKey(st.ST, st.LT);
-            if (!sentiment.actual[k]) sentiment.actual[k] = sentiInit();
-            sentiUpdate(sentiment.actual[k], {
-              result: trade.result,
-              returnPct: trade.returnPct,
-              R: trade.R,
-            });
-
-            // NEW: collect per-regime
-            if (trade.regime && regimeAgg[trade.regime]) {
-              regimeAgg[trade.regime].push(trade);
+            // 2) optional time exit
+            if (!exit && HOLD_BARS > 0) {
+              const ageBars = i - st.entryIdx;
+              if (ageBars >= HOLD_BARS) {
+                const rawPnL = today.close - st.entry;
+                exit = {
+                  type: "TIME",
+                  price: today.close,
+                  result: rawPnL >= 0 ? "WIN" : "LOSS",
+                };
+              }
             }
 
-            openByProfile[p.id] = null;
-            cooldownUntilByProfile[p.id] = i + COOLDOWN;
-            globalOpenCount = Math.max(0, globalOpenCount - 1);
+            if (exit) {
+              const pctRet =
+                ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
+              const risk = Math.max(0.01, st.entry - st.stopInit);
+              const trade = {
+                ticker: code,
+                profile: INLINE_RULE_ID,
+                strategy: st.kind || "DIP",
+                entryDate: toISO(candles[st.entryIdx].date),
+                exitDate: toISO(today.date),
+                holdingDays: i - st.entryIdx,
+                entry: r2(st.entry),
+                exit: r2(exit.price),
+                stop: st.stopInit, // original fixed -8%
+                target: st.targetInit, // locked target (reporting only)
+                result: exit.result,
+                exitType: exit.type, // "STOP" | "TRAIL" | "TIME"
+                R: r2((exit.price - st.entry) / risk),
+                returnPct: r2(pctRet),
+                ST: st.ST,
+                LT: st.LT,
+                regime: st.regime || "RANGE",
+              };
+
+              tradesByProfile[INLINE_RULE_ID].push(trade);
+              trades.push(trade);
+              globalTrades.push(trade);
+
+              // sentiment (actual)
+              const k = sentiKey(st.ST, st.LT);
+              if (!sentiment.actual[k]) sentiment.actual[k] = sentiInit();
+              sentiUpdate(sentiment.actual[k], {
+                result: trade.result,
+                returnPct: trade.returnPct,
+                R: trade.R,
+              });
+
+              // per-regime
+              if (trade.regime && regimeAgg[trade.regime]) {
+                regimeAgg[trade.regime].push(trade);
+              }
+
+              openByProfile[INLINE_RULE_ID] = null;
+              cooldownUntilByProfile[INLINE_RULE_ID] = i + COOLDOWN;
+              globalOpenCount = Math.max(0, globalOpenCount - 1);
+            }
           }
         }
 
-        // try new entries if any profile is free and warmup passed
-        const anyProfileEligible =
+        // try new entry if free, warmup passed, and concurrency ok
+        const canEnter =
           i >= WARMUP &&
-          activeProfiles.some(
-            (p) => !openByProfile[p.id] && i > cooldownUntilByProfile[p.id]
-          ) &&
+          !openByProfile[INLINE_RULE_ID] &&
+          i > cooldownUntilByProfile[INLINE_RULE_ID] &&
           (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
 
-        if (anyProfileEligible) {
+        if (canEnter) {
           // evaluate signal on the current bar
           const sig = analyzeSwingTradeEntry(stock, hist, {
             debug: true,
             debugLevel: "verbose",
-            // cfg: { ...inject your live analyzer config here if needed ... }
           });
 
-          // snapshot sentiment once
+          // snapshot sentiment (for reporting)
           const senti = getComprehensiveMarketSentiment(stock, hist);
           const ST = senti?.shortTerm?.score ?? 4;
           const LT = senti?.longTerm?.score ?? 4;
@@ -721,18 +742,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             signalsAfterWarmup++;
             signalsWhileFlat++;
 
-            // optional sentiment gate
+            // sentiment gate disabled (always passes)
             if (!allowBySentiment(ST, LT)) {
               blockedBySentiment_DIP++;
               continue;
             }
 
-            // NEW: optional regime gate
+            // optional regime gate
             if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
               continue;
             }
 
-            // RR telemetry (ratio here is for diagnostics, we still accept/ignore)
+            // RR telemetry
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
             if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
@@ -744,58 +765,37 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               });
             }
 
-            // >>> ENTRY = next-bar open (fallback: today's close if no next bar)
+            // ENTRY = next-bar open (fallback: today close if no next bar)
             const hasNext = i + 1 < candles.length;
             const entryBarIdx = hasNext ? i + 1 : i;
             const entryBar = candles[entryBarIdx];
             const entry = hasNext ? entryBar.open : today.close;
 
-            // open per active profile
-            for (const p of activeProfiles) {
-              if (openByProfile[p.id]) continue;
-              if (i <= cooldownUntilByProfile[p.id]) continue;
-              if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
-                break;
+            // Compute locked target; stop fixed -8%
+            const target = pickLockedTarget(entry, sig);
+            const qTarget = toTick(target, stock);
+            const qStop = toTick(entry * 0.92, stock); // -8%
 
-              // compute plan (for TARGET etc.). We IGNORE any suggested stop here.
-              const plan =
-                p.compute({
-                  entry,
-                  stock: { ...stock, currentPrice: entry },
-                  sig,
-                  today: entryBar,
-                  hist: candles.slice(0, entryBarIdx + 1),
-                }) || {};
-              const target = Number(plan.target);
+            openByProfile[INLINE_RULE_ID] = {
+              entryIdx: entryBarIdx,
+              entry,
+              stop: qStop, // active stop (fixed until TP touch)
+              stopInit: qStop, // record initial stop
+              target: qTarget, // active target field (not used for exit)
+              targetInit: qTarget, // locked target for reporting & TP-touch trigger
+              ST,
+              LT,
+              regime: dayRegime,
+              kind:
+                String(sig?.debug?.chosen || sig?.reason || "")
+                  .split(":")[0]
+                  .trim() || "UNKNOWN",
+              hitTarget: false, // becomes true when price first touches target
+              trail: null, // becomes active after first touch
+            };
 
-              // must have a valid target; stop is fixed below
-              if (!Number.isFinite(target)) {
-                signalsInvalid++;
-                continue;
-              }
-
-              // ✅ Fixed stop: -10% from entry, snapped to tick — and locked forever
-              const fixedStop = entry * 0.9;
-              const qStop = toTick(fixedStop, stock);
-              const qTarget = toTick(target, stock);
-
-              openByProfile[p.id] = {
-                entryIdx: entryBarIdx,
-                entry,
-                stop: qStop, // always equals stopInit; never changes
-                stopInit: qStop, // used for risk and re-pinning later
-                target: qTarget,
-                ST,
-                LT,
-                regime: dayRegime, // NEW
-                kind:
-                  String(sig?.debug?.chosen || sig?.reason || "")
-                    .split(":")[0]
-                    .trim() || "UNKNOWN",
-              };
-              globalOpenCount++;
-              signalsExecuted++;
-            }
+            globalOpenCount++;
+            signalsExecuted++;
           } else {
             // why not buy? (telemetry)
             const dbg = sig?.debug || {};
@@ -831,7 +831,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
 
-            // parallel: simulate rejected buys using candidate levels when available
+            // parallel: simulate rejected buys when candidate levels exist
             if (SIM_REJECTED) {
               const entry = today.close; // same-bar for CF simplicity
               const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
@@ -910,22 +910,19 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       // per-ticker summary
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
-      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
+      const tTrails = trades.filter((x) => x.exitType === "TRAIL").length;
       const tTimes = trades.filter((x) => x.exitType === "TIME").length;
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
           ticker: code,
           trades,
-          counts: { target: tTargets, stop: tStops, time: tTimes },
-          openAtEnd: activeProfiles.some((p) => !!openByProfile[p.id]),
+          counts: { target: 0, trail: tTrails, stop: tStops, time: tTimes },
+          openAtEnd: !!openByProfile[INLINE_RULE_ID],
         });
       }
 
-      const stillOpenCount = activeProfiles.reduce(
-        (a, p) => a + (openByProfile[p.id] ? 1 : 0),
-        0
-      );
+      const stillOpenCount = openByProfile[INLINE_RULE_ID] ? 1 : 0;
       globalOpenPositions += stillOpenCount;
 
       const total = globalTrades.length;
@@ -938,7 +935,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | exits — target:${tTargets} stop:${tStops} time:${tTimes}`
+        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | exits — trail:${tTrails} stop:${tStops} time:${tTimes}`
       );
     } catch (e) {
       if (INCLUDE_BY_TICKER) {
@@ -970,7 +967,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? r2(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
     : 0;
 
-  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
+  const hitTargetCount = 0; // by design, we never exit at target
+  const hitTrailCount = all.filter((t) => t.exitType === "TRAIL").length;
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
   const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
   const timeWins = all.filter(
@@ -1055,7 +1053,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   sentiment.bestByWinRate.actual = sentiActual.bestByWinRate;
   sentiment.bestByWinRate.rejected = sentiRejected.bestByWinRate;
 
-  // per-profile metrics (computed over all EXIT_PROFILES to keep UI stable)
+  // per-profile metrics for UI: include external EXIT_PROFILES (zeros) + inline rule
   const profiles = {};
   for (const p of EXIT_PROFILES) {
     const list = all.filter((t) => t.profile === p.id);
@@ -1070,6 +1068,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
+  // add inline rule metrics
+  {
+    const id = INLINE_RULE_ID;
+    const list = all.filter((t) => t.profile === id);
+    profiles[id] = {
+      label: INLINE_RULE.label,
+      metrics: computeMetrics(list),
+      exits: {
+        target: 0,
+        stop: list.filter((t) => t.exitType === "STOP").length,
+        time: list.filter((t) => t.exitType === "TIME").length,
+        // "TRAIL" isn't in the classic triple; it’s included in metrics & trade list
+      },
+      ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
+    };
+  }
+
   function bestProfileKey(get) {
     let k = null,
       v = -Infinity;
@@ -1087,7 +1102,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const bestByExpR = bestProfileKey((m) => m.expR ?? -Infinity);
   const bestByPF = bestProfileKey((m) => m.profitFactor ?? -Infinity);
 
-  // optional: per-playbook breakdown (DIP/SPC/OXR/BPB/RRP)
+  // per-playbook breakdown (DIP/SPC/OXR/BPB/RRP) — strategy taken from sig.reason head
   const byKind = {};
   for (const t of all) {
     const k = t.strategy || "DIP";
@@ -1098,13 +1113,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     Object.entries(byKind).map(([k, v]) => [k, computeMetrics(v)])
   );
 
-  // --- NEW: per-regime metrics ---
+  // per-regime metrics
   const regimeMetrics = {};
   for (const key of Object.keys(regimeAgg)) {
     regimeMetrics[key] = computeMetrics(regimeAgg[key]);
   }
 
-  // Console snapshot for regimes
+  // logs
   console.log("[BT] REGIME STATS");
   for (const k of ["STRONG_UP", "UP", "RANGE", "DOWN"]) {
     const m = regimeMetrics[k];
@@ -1115,9 +1130,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     );
   }
 
-  // logs
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount}`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — trail:${hitTrailCount} stop:${hitStopCount} time:${timeExitCount}`
   );
   console.log(
     `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
@@ -1161,13 +1175,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       topRejectedReasons: TOP_K,
       examplesCap: EX_CAP,
       includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
-      profileIds: activeProfiles.map((p) => p.id),
-      allowedSentiments: Array.isArray(opts.allowedSentiments)
-        ? opts.allowedSentiments
-        : [],
-      allowedSentiRanks: Array.isArray(opts.allowedSentiRanks)
-        ? opts.allowedSentiRanks
-        : undefined,
+      // execution ignores these gates, kept for UI compatibility:
+      profileIds: [INLINE_RULE_ID],
+      allowedSentiments: [],
+      allowedSentiRanks: undefined,
       maxConcurrent: MAX_CONCURRENT,
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
@@ -1180,7 +1191,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     tradingDays: days,
     openAtEnd: globalOpenPositions,
     exitCounts: {
-      target: hitTargetCount,
+      target: hitTargetCount, // always 0 by design
+      trail: hitTrailCount,
       stop: hitStopCount,
       time: timeExitCount,
       timeWins,
@@ -1220,7 +1232,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
     regime: {
       ticker: REGIME_TICKER,
-      metrics: regimeMetrics, // NEW
+      metrics: regimeMetrics,
     },
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
@@ -1258,7 +1270,7 @@ function computeMetrics(trades) {
     ? Infinity
     : 0;
 
-  // ✅ Count exits over ALL trades
+  // Classic exits
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
@@ -1301,7 +1313,14 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       tradesPerDay: 0,
       tradingDays: 0,
       openAtEnd: 0,
-      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+      exitCounts: {
+        target: 0,
+        trail: 0,
+        stop: 0,
+        time: 0,
+        timeWins: 0,
+        timeLosses: 0,
+      },
       signals: {
         total: 0,
         afterWarmup: 0,
@@ -1347,6 +1366,8 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
         bestByWinRate: { actual: [], rejected: [] },
       },
       regime: { ticker: "", metrics: {} },
+      profiles: {},
+      bestProfiles: { byWinRate: "", byExpR: "", byProfitFactor: "" },
       error: String(e?.message || e),
     };
   }
