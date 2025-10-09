@@ -482,16 +482,22 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 4b) PROTECT — NO PROGRESS rule (profile: no_progress_N5bars_creep_to_BE)
-  // If last 5 bars never touched +0.5R and we're still below +0.5R, creep stop toward BE.
+    // --- 4b) PROTECT — NO PROGRESS rule (profile: no_progress_N5bars_creep_to_BE)
+    // Prefer checking since ENTRY if entryDate/barsSinceEntry are available; otherwise use last 5 bars.
   {
     const NP_BARS = 5;
     const NEED_TOUCH_R = 0.5;
     const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
-
-    const win = Array.isArray(historicalData)
-      ? historicalData.slice(-NP_BARS)
-      : [];
+        let win = Array.isArray(historicalData) ? historicalData.slice(-NP_BARS) : [];
+        if (ctx?.entryDate instanceof Date && Array.isArray(historicalData) && historicalData.length) {
+          // Build a window from the first bar strictly AFTER entryDate up to the last COMPLETED bar
+          const afterEntry = historicalData.filter(b => {
+            const d = b?.date instanceof Date ? b.date : new Date(b?.date);
+            return d > ctx.entryDate;
+          });
+          // Use up to the last NP_BARS bars since entry (but if there are more, we’ll analyze all for touch)
+          win = afterEntry.length ? afterEntry : win;
+        }
     const touchedHalfR = win.some((b) => n(b?.high ?? b?.close) >= halfRLevel);
 
     if (!touchedHalfR && progressR < NEED_TOUCH_R) {
@@ -503,8 +509,10 @@ export function getTradeManagementSignal_V3(
       if (newSL > stop) {
         return {
           status: "Protect Profit",
-          reason:
-            `No progress for ${NP_BARS} bars (no +${NEED_TOUCH_R}R touch). ` +
+                    reason:
+                      (ctx?.barsSinceEntry != null
+                        ? `No progress since entry (${ctx.barsSinceEntry} bars, no +${NEED_TOUCH_R}R touch). `
+                        : `No progress for ${NP_BARS} bars (no +${NEED_TOUCH_R}R touch). `) +
             `Creep stop toward breakeven to limit drift. New stop: ¥${newSL}.`,
           updatedStopLoss: newSL,
         };
@@ -1090,6 +1098,25 @@ export async function fetchStockAnalysis({
       if (portfolioEntry) {
         // Try to infer entry kind from your entry engine's reason text, if present
         const entryKind = extractEntryKindFromReason(finalSignal?.reason); // DIP / RETEST / RECLAIM / INSIDE / BREAKOUT
+                // --- NEW: safely parse purchase date (entryDate) if provided ---
+        // Expecting ISO string (e.g., "2025-10-07") or anything Date can parse.
+        let entryDate = null;
+        const rawED = portfolioEntry?.trade?.entryDate;
+        if (rawED) {
+          const d = new Date(rawED);
+          if (!Number.isNaN(d.getTime())) entryDate = d;
+        }
+
+        // --- NEW: compute barsSinceEntry on COMPLETED bars only (dataForGates) ---
+        // We count trading bars whose date > entryDate.
+        let barsSinceEntry = null;
+        if (entryDate && Array.isArray(dataForGates) && dataForGates.length) {
+          const lastCompleted = dataForGates;
+          barsSinceEntry = lastCompleted.reduce((acc, b) => {
+            const bd = b?.date instanceof Date ? b.date : new Date(b?.date);
+            return acc + (bd > entryDate ? 1 : 0);
+          }, 0);
+        }
 
         const mgmt = getTradeManagementSignal_V3(
           stock,
@@ -1103,6 +1130,8 @@ export async function fetchStockAnalysis({
           {
             entryKind, // optional but helpful
             sentimentScore: stock.shortTermScore, // your 1..7 short-term score
+                        entryDate,          // NEW: pass purchase date
+            barsSinceEntry,     // NEW: pass computed bars since entry (completed bars)
             // deep is optional; if your orchestrator exposes it, pass it:
             // deep: horizons.deep,
             // ADX is optional; V3 computes fallback if omitted
