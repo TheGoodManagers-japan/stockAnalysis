@@ -24,7 +24,7 @@ import { allTickers } from "./tickers.js";
    0) Constants + tiny logging helper
 ------------------------------------------- */
 const API_BASE =
-  "https://stock-analysis-amg6rng30-aymerics-projects-60f33831.vercel.app";
+  "https://stock-analysis-cedy9yxr8-aymerics-projects-60f33831.vercel.app";
 const DEBUG = true;
 
 const IS_BROWSER =
