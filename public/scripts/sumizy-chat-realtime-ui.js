@@ -68,19 +68,36 @@ function getPaneIdsFromUrl() {
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
-  const rgNode =
-    document.querySelector(`[id^="rg"][data-pane="${paneRole}"]`) ||
-    (function () {
-      const cm = document.querySelector(
-        `[data-pane="${paneRole}"] .chat-messages`
-      );
-      return cm ? cm.closest('[id^="rg"]') : null;
-    })();
+  // Prefer a VISIBLE RG that already contains .chat-messages
+  const nodes = Array.from(
+    document.querySelectorAll(`[id^="rg"][data-pane="${paneRole}"]`)
+  );
 
-  const rgNum = rgNode ? Number((rgNode.id.match(/^rg(\d+)$/) || [])[1]) : null;
-  log.debug("getRGForPane", { paneRole, rgNum, rgNode });
+  const pick =
+    nodes.find(
+      (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
+    ) ||
+    nodes.find((el) => el.querySelector(".chat-messages")) ||
+    nodes.find((el) => el.offsetParent !== null) ||
+    nodes[0] ||
+    null;
+
+  if (!pick) return null;
+
+  const m = String(pick.id).match(/\d+/); // tolerate any id like "rg12"
+  const rgNum = m ? parseInt(m[0], 10) : null;
+
+  // Optional warning if there are multiple mains—helps future debugging
+  if (paneRole === "main" && nodes.length > 1) {
+    console.warn(
+      '[sumizy] Multiple data-pane="main" in DOM:',
+      nodes.map((n) => n.id)
+    );
+  }
+
   return Number.isFinite(rgNum) ? rgNum : null;
 }
+
 
 // Pane-aware AI detection helpers
 function isNodeInAIPane(node) {
