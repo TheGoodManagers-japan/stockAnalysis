@@ -1,4 +1,4 @@
-// sumizy-shared-router.js
+// sumizy-chat-ux-extras.js
 
 /* ─────────── Canonical pane id resolver (query + /tickets/:id | /tasks/:id) ─────────── */
 (function () {
