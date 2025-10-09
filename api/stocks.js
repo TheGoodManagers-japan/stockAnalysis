@@ -1,18 +1,17 @@
 // /api/stocks.js
-// /api/stocks.js
 
 const yahooFinance = require("yahoo-finance2").default;
 
-/* ───────────────── helpers ───────────────── */
-function mkError(code, message, extra = {}) {
-  const err = new Error(message);
-  err.name = "DataIntegrityError";
-  err.code = code;
-  err.extra = extra;
-  return err;
+/* ---------- tiny error helper to match your fetch code ---------- */
+function mkError(code, message, details = {}) {
+  const e = new Error(message || code);
+  e.name = "DataIntegrityError";
+  e.code = code;
+  e.details = details;
+  return e;
 }
 
-/* ───────────────── your function (unchanged logic) ───────────────── */
+/* ---------- your function (enriched fundamentals + value metrics) ---------- */
 async function fetchYahooFinanceData(ticker, sector = "") {
   try {
     const now = new Date();
@@ -59,12 +58,14 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
     const toNumber = (val) => (isNaN(parseFloat(val)) ? 0 : parseFloat(val));
     const lastBar = historicalPrices[historicalPrices.length - 1] || {};
-    const prevBar = historicalPrices[histororicalPrices.length - 2] || {};
+    const prevBar = historicalPrices[historicalPrices.length - 2] || {};
     const safeDividendEvents = Array.isArray(dividendEvents) ? dividendEvents : [];
 
     // ---------- indicators ----------
     const calculateMA = (data, days) =>
-      data.length < days ? 0 : data.slice(-days).reduce((a, v) => a + (v.close || 0), 0) / days;
+      data.length < days
+        ? 0
+        : data.slice(-days).reduce((a, v) => a + (v.close || 0), 0) / days;
 
     const calculateEMA = (prices, p) => {
       if (prices.length < p) return [];
@@ -118,7 +119,11 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       let sum = 0;
       for (let i = 1; i < rel.length; i++) {
         const c = rel[i], p = rel[i - 1];
-        const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+        const tr = Math.max(
+          c.high - c.low,
+          Math.abs(c.high - p.close),
+          Math.abs(c.low - p.close)
+        );
         sum += tr;
       }
       return sum / period;
@@ -148,8 +153,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       let obv = 0;
       for (let i = 1; i < data.length; i++) {
         const cc = data[i].close, pc = data[i - 1].close, vol = data[i].volume || 0;
-        if (cc > pc) obv += vol;
-        else if (cc < pc) obv -= vol;
+        if (cc > pc) obv += vol; else if (cc < pc) obv -= vol;
       }
       return obv;
     };
@@ -166,14 +170,15 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const bb = calculateBollinger(closes);
     const stoch = calculateStochastic(historicalPrices);
     const obvRaw = calculateOBV(historicalPrices);
-
     // OBV series for MA20
     const obvSeries = [];
     if (historicalPrices.length >= 2) {
       let obvAcc = 0;
       obvSeries.push(0);
       for (let i = 1; i < historicalPrices.length; i++) {
-        const cc = historicalPrices[i].close, pc = historicalPrices[i - 1].close, vol = historicalPrices[i].volume || 0;
+        const cc = historicalPrices[i].close,
+          pc = historicalPrices[i - 1].close,
+          vol = historicalPrices[i].volume || 0;
         if (cc > pc) obvAcc += vol;
         else if (cc < pc) obvAcc -= vol;
         obvSeries.push(obvAcc);
@@ -204,14 +209,13 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const ebit = toNumber(isH?.ebit ?? isH?.operatingIncome);
 
     const sharesOutstanding = toNumber(ks?.sharesOutstanding ?? quote?.sharesOutstanding);
-    const totalAssets = toNumber(bsH?.totalAssets);
     const goodwill = toNumber(bsH?.goodWill) || 0;
     const intangibles = toNumber(bsH?.intangibleAssets) || 0;
     const equity = toNumber(bsH?.totalStockholderEquity);
     const tangibleBookValue = Math.max(0, equity - goodwill - intangibles);
 
     const repurchasesTTM = toNumber(cfH?.repurchaseOfStock);
-    // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid);
+    // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid); // not directly used in calc below
 
     // ---------- price/volume ----------
     const yahooData = {
@@ -289,19 +293,25 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       sharesOutstanding,
       tangibleBookValue,
 
-      evToEbit: (() => (ebit ? enterpriseValue / ebit : 0))(),
-      evToEbitda: (() => (ebitda ? enterpriseValue / ebitda : 0))(),
+      evToEbit: (() => {
+        const denom = ebit || 0;
+        return denom ? enterpriseValue / denom : 0;
+      })(),
+      evToEbitda: (() => {
+        const denom = ebitda || 0;
+        return denom ? enterpriseValue / denom : 0;
+      })(),
       fcfYieldPct: (() => {
         const mc = toNumber(quote.marketCap);
         return mc > 0 && freeCashflow ? (freeCashflow / mc) * 100 : 0;
       })(),
       buybackYieldPct: (() => {
         const mc = toNumber(quote.marketCap);
-        const buybacks = repurchasesTTM;
+        const buybacks = repurchasesTTM; // typically negative
         if (!mc || !buybacks) return 0;
         return (-buybacks / mc) * 100;
       })(),
-      shareholderYieldPct: 0,
+      shareholderYieldPct: 0, // fill below
       ptbv: (() => {
         const sh = sharesOutstanding || 0;
         if (!sh || !tangibleBookValue) return 0;
@@ -335,12 +345,11 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       return v === undefined || v === null || v === 0;
     });
     if (missing.length) {
-      throw mkError("MISSING_FIELDS", `Missing/zero fields: ${missing.join(", ")}`, {
-        ticker,
-        missingFields: missing,
-        snapshot: yahooData,
-        rawQuote: quote,
-      });
+      throw mkError(
+        "MISSING_FIELDS",
+        `Missing/zero fields: ${missing.join(", ")}`,
+        { ticker, missingFields: missing, snapshot: yahooData, rawQuote: quote }
+      );
     }
 
     return yahooData;
@@ -350,53 +359,55 @@ async function fetchYahooFinanceData(ticker, sector = "") {
   }
 }
 
-/* ───────────────── CORS + route handler (“router”) ───────────────── */
-// Only allow your public sites to call this API from the browser.
-// (Add preview or other origins here if needed.)
+/* --------------------------- Serverless handler --------------------------- */
+
 const allowedOrigins = [
   "https://thegoodmanagers.com",
   "https://www.thegoodmanagers.com",
+  // add your Bubble preview domain here if needed
 ];
 
 module.exports = async (req, res) => {
   const origin = req.headers.origin;
-
-  // Dynamic CORS: reflect only if it’s one of your allowed sites
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-  res.setHeader("Vary", "Origin"); // proper caching with dynamic CORS
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "600");
 
-  // Preflight
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
+  if (req.method !== "POST") {
+    return res.status(405).json({ success: false, message: "Method Not Allowed" });
+  }
 
   try {
-    if (req.method !== "GET") {
-      return res.status(405).json({ success: false, message: "Method Not Allowed" });
+    const body = req.body || {};
+    // Expect { ticker:{ code:"6758.T", sector:"Electronics" } }
+    const tickerObj = body.ticker || body || {};
+    const code = String(tickerObj.code || tickerObj.ticker || "").trim();
+    const sector = String(tickerObj.sector || "").trim();
+
+    if (!code) {
+      return res.status(400).json({ success: false, message: "ticker.code is required" });
     }
 
-    const { ticker, sector = "" } = req.query || {};
-    if (!ticker) {
-      return res.status(400).json({ success: false, message: "Ticker is required" });
-    }
+    const yahooData = await fetchYahooFinanceData(code, sector);
 
-    const data = await fetchYahooFinanceData(String(ticker), String(sector));
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data: { code, sector, yahooData },
+    });
   } catch (error) {
-    // Ensure CORS headers are present even on errors
-    if (allowedOrigins.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    }
     const status = error?.name === "DataIntegrityError" ? 422 : 500;
     return res.status(status).json({
       success: false,
-      error: error.message,
-      code: error.code || undefined,
-      extra: error.extra || undefined,
+      message: error?.message || "stocks handler error",
+      code: error?.code || undefined,
+      details: error?.details || undefined,
     });
   }
 };
