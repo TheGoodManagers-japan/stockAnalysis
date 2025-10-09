@@ -1,5 +1,5 @@
 // /scripts/backtest.js — swing-period backtest (browser)
-// Next-bar-open entries, optional time-based exit, **single inline trailing rule only**
+// Next-bar-open entries, exits ONLY at initial stop or initial target (no trailing, no time exit)
 // • Sentiment *stats* (no gating)
 // • Nikkei-based market regime tagging & metrics
 // • **No EXIT_PROFILES dependency**; no profile tables in output
@@ -238,33 +238,6 @@ function smaArr(arr, p) {
   return out;
 }
 
-/* Minimal ATR for trailing */
-function atrArr(candles, p = 14) {
-  if (!Array.isArray(candles) || candles.length === 0) return [];
-  const out = new Array(candles.length).fill(0);
-  for (let i = 1; i < candles.length; i++) {
-    const h = Number(candles[i].high ?? candles[i].close ?? 0);
-    const l = Number(candles[i].low ?? candles[i].close ?? 0);
-    const pc = Number(candles[i - 1].close ?? 0);
-    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-    if (i < p) {
-      let sum = 0,
-        cnt = 0;
-      for (let k = Math.max(1, i - (p - 1)); k <= i; k++) {
-        const hk = Number(candles[k].high ?? candles[k].close ?? 0);
-        const lk = Number(candles[k].low ?? candles[k].close ?? 0);
-        const pck = Number(candles[k - 1]?.close ?? 0);
-        sum += Math.max(hk - lk, Math.abs(hk - pck), Math.abs(lk - pck));
-        cnt++;
-      }
-      out[i] = cnt ? sum / cnt : tr;
-    } else {
-      out[i] = (out[i - 1] * (p - 1) + tr) / p; // Wilder smoothing
-    }
-  }
-  return out;
-}
-
 /**
  * Compute simple daily regime labels from a Nikkei proxy candles array.
  */
@@ -277,7 +250,7 @@ function computeRegimeLabels(candles) {
   const ma25 = smaArr(closes, 25);
   const ma75 = smaArr(closes, 75);
 
-  // ATR(14) for RANGE tie-break
+  // ATR(14) for RANGE tie-break (local calc, not exported)
   const atr = (() => {
     if (candles.length < 15) return candles.map(() => 0);
     const out = new Array(candles.length).fill(0);
@@ -346,36 +319,12 @@ function buildRegimeMap(candles) {
 }
 
 /* ---------------- Inline Exit Rule (forced) ---------------- */
-const INLINE_RULE_ID = "fixed_-8pct_then_trail_after_target"; // kept only for trade.profile string
+const INLINE_RULE_ID = "fixed_-8pct_or_locked_target";
 
 function pickLockedTarget(entry, sig) {
   const t = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
   if (Number.isFinite(t) && t > entry) return t;
   return entry * 1.1; // fallback +10%
-}
-
-// Trailing: Chandelier 2.5×ATR on CLOSE, only AFTER the first target touch
-function advanceInlineRule({ bar, state, hist }) {
-  if (!state.hitTarget) {
-    if (Number(bar.high) >= state.targetInit) {
-      state.hitTarget = true;
-      const closes = hist.map((c) => Number(c.close) || 0);
-      const a = atrArr(hist, 14);
-      const lastClose =
-        closes[closes.length - 1] || Number(bar.close) || state.entry;
-      state.trail = lastClose - 2.5 * (a[a.length - 1] || 0);
-      // do NOT exit at target — just start trailing from now on
-    }
-  } else {
-    const closes = hist.map((c) => Number(c.close) || 0);
-    const a = atrArr(hist, 14);
-    const lastClose =
-      closes[closes.length - 1] || Number(bar.close) || state.entry;
-    const ch = lastClose - 2.5 * (a[a.length - 1] || 0);
-    state.trail = Number.isFinite(state.trail) ? Math.max(state.trail, ch) : ch;
-    const newStop = Math.min(Math.max(state.stop, state.trail), state.entry);
-    state.stop = newStop;
-  }
 }
 
 /* ------------------ MAIN: Backtest (swing-period) ------------------ */
@@ -404,7 +353,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars)
     ? Math.max(0, opts.holdBars)
-    : 0; // default: off
+    : 0; // disabled for exit logic (kept for params echo)
   const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 2;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -541,7 +490,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       }
 
       const trades = [];
-      let openPos = null; // { entryIdx, entry, stopInit, stop, targetInit, hitTarget, trail, ST, LT, regime, kind }
+      let openPos = null; // { entryIdx, entry, stopInit, targetInit, ST, LT, regime, kind }
       let cooldownUntil = -1;
 
       // per-ticker loop
@@ -574,40 +523,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           if (i < WARMUP) blockedWarmup++;
         }
 
-        // --- manage open position (inline rule) ---
+        // --- manage open position (no trailing, no time exit) ---
         if (openPos) {
-          // advance inline rule
-          advanceInlineRule({ bar: today, state: openPos, hist, stock });
-
-          // enforce tick rounding on dynamic fields
-          if (Number.isFinite(openPos.stop))
-            openPos.stop = toTick(openPos.stop, stock);
-          if (Number.isFinite(openPos.trail))
-            openPos.trail = toTick(openPos.trail, stock);
-
           let exit = null;
 
-          // 1) price-based exit via stop/trail only
-          if (today.low <= openPos.stop) {
-            const wasTrail = openPos.hitTarget; // trailing only starts after TP touch
-            exit = {
-              type: wasTrail ? "TRAIL" : "STOP",
-              price: openPos.stop,
-              result: wasTrail ? "WIN" : "LOSS",
-            };
-          }
-
-          // 2) optional time exit
-          if (!exit && HOLD_BARS > 0) {
-            const ageBars = i - openPos.entryIdx;
-            if (ageBars >= HOLD_BARS) {
-              const rawPnL = today.close - openPos.entry;
-              exit = {
-                type: "TIME",
-                price: today.close,
-                result: rawPnL >= 0 ? "WIN" : "LOSS",
-              };
-            }
+          // Strictly exit at ORIGINAL fixed stop or ORIGINAL locked target
+          if (today.low <= openPos.stopInit) {
+            exit = { type: "STOP", price: openPos.stopInit, result: "LOSS" };
+          } else if (today.high >= openPos.targetInit) {
+            exit = { type: "TARGET", price: openPos.targetInit, result: "WIN" };
           }
 
           if (exit) {
@@ -625,9 +549,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               entry: r2(openPos.entry),
               exit: r2(exit.price),
               stop: openPos.stopInit, // original fixed -8%
-              target: openPos.targetInit, // locked target (reporting only)
+              target: openPos.targetInit, // original locked target
               result: exit.result,
-              exitType: exit.type, // "STOP" | "TRAIL" | "TIME"
+              exitType: exit.type, // "STOP" | "TARGET"
               R: r2((exit.price - openPos.entry) / risk),
               returnPct: r2(pctRet),
               ST: openPos.ST,
@@ -724,10 +648,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             openPos = {
               entryIdx: entryBarIdx,
               entry,
-              stop: qStop, // active stop (fixed until TP touch)
-              stopInit: qStop, // record initial stop
-              target: qTarget, // active target field (not used for exit)
-              targetInit: qTarget, // locked target for reporting & TP-touch trigger
+              stop: qStop, // reference only; not updated
+              stopInit: qStop, // ORIGINAL stop (exit uses this)
+              target: qTarget, // reference only; not updated
+              targetInit: qTarget, // ORIGINAL target (exit uses this)
               ST,
               LT,
               regime: dayRegime,
@@ -735,8 +659,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 String(sig?.debug?.chosen || sig?.reason || "")
                   .split(":")[0]
                   .trim() || "UNKNOWN",
-              hitTarget: false, // becomes true when price first touches target
-              trail: null, // becomes active after first touch
             };
 
             globalOpenCount++;
@@ -855,14 +777,20 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       // per-ticker summary
       const tStops = trades.filter((x) => x.exitType === "STOP").length;
-      const tTrails = trades.filter((x) => x.exitType === "TRAIL").length;
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length;
+      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
+      const tTrails = 0; // trailing removed
+      const tTimes = 0; // time exit disabled
 
       if (INCLUDE_BY_TICKER) {
         byTicker.push({
           ticker: code,
           trades,
-          counts: { target: 0, trail: tTrails, stop: tStops, time: tTimes },
+          counts: {
+            target: tTargets,
+            trail: tTrails,
+            stop: tStops,
+            time: tTimes,
+          },
           openAtEnd: !!openPos,
         });
       }
@@ -877,7 +805,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
           ti + 1
-        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | exits — trail:${tTrails} stop:${tStops} time:${tTimes}`
+        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | exits — target:${tTargets} stop:${tStops} trail:${tTrails} time:${tTimes}`
       );
     } catch (e) {
       if (INCLUDE_BY_TICKER) {
@@ -909,16 +837,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? r2(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
     : 0;
 
-  const hitTargetCount = 0; // by design, we never exit at target
-  const hitTrailCount = all.filter((t) => t.exitType === "TRAIL").length;
+  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
+  const hitTrailCount = 0; // trailing removed
   const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
-  const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
-  const timeWins = all.filter(
-    (t) => t.exitType === "TIME" && t.result === "WIN"
-  ).length;
-  const timeLosses = all.filter(
-    (t) => t.exitType === "TIME" && t.result === "LOSS"
-  ).length;
+  const timeExitCount = 0; // time exit disabled
+  const timeWins = 0;
+  const timeLosses = 0;
 
   const days = tradingDays.size;
   const tradesPerDay = days ? totalTrades / days : 0;
@@ -1023,7 +947,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   }
 
   console.log(
-    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — trail:${hitTrailCount} stop:${hitStopCount} time:${timeExitCount}`
+    `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} trail:0 time:0`
   );
   console.log(
     `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
@@ -1076,12 +1000,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
-    openAtEnd: 0, // not tracked across tickers (per-ticker open shown in byTicker)
+    openAtEnd: 0,
     exitCounts: {
       target: hitTargetCount,
-      trail: hitTrailCount,
+      trail: hitTrailCount, // 0
       stop: hitStopCount,
-      time: timeExitCount,
+      time: timeExitCount, // 0
       timeWins,
       timeLosses,
     },
@@ -1151,7 +1075,7 @@ function computeMetrics(trades) {
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
-    time: trades.filter((t) => t.exitType === "TIME").length,
+    time: 0, // time exit disabled globally
   };
 
   return {
