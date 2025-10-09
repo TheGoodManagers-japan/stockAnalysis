@@ -146,6 +146,23 @@ function _esc(s) {
     .replace(/"/g, "&quot;");
 }
 
+
+// sumizy-chat-realtime-ui.js (near other helpers)
+function waitForPaneContainer(paneRole, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tryNow = () => {
+      const rg = getRGForPane(paneRole);
+      const el = rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+      if (el) return resolve(true);
+      if (Date.now() - start > timeoutMs) return resolve(false);
+      requestAnimationFrame(tryNow);
+    };
+    tryNow();
+  });
+}
+
+
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
   const map = new Map();
@@ -856,6 +873,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       try {
         window.ensureJoinForPane("main", true);
         window.ensureJoinForPane("ai", true);
+           // Nudge any panes that were pending
+   if (window._paneActive?.main) window.ensureJoinForPane("main", true);
+   if (window._paneActive?.ai)   window.ensureJoinForPane("ai",   true);
       } catch {}
     }, 1000);
 
@@ -964,6 +984,14 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     return;
   }
 
+  function scheduleImmediateRetry() {
+    const s = getStateForPane(paneRole, chatId);
+    if (!s) return;
+    if (s.joinRetryTid) clearTimeout(s.joinRetryTid);
+    s.joinRetryTid = setTimeout(trySend, 0);
+  }
+  
+
   const trySend = () => {
     const s = getStateForPane(paneRole, chatId);
     if (!s) return;
@@ -987,12 +1015,19 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
           hasContainer: !!cNow,
           channelReady: isChannelReady(),
         });
-      } else {
-        s.joinPending = false;
-        s.joinRetryTid = 0;
-        s.joinRetryCount = 0;
-        log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
-      }
+              } else {
+                  // Instead of truly abandoning, keep it pending and re-arm when ready.
+                  s.joinPending = true;
+                  s.joinRetryTid = 0;
+                  s.joinRetryCount = 0;
+                  log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
+                  // Re-arm on container OR channel readiness
+                  waitForPaneContainer(paneRole, 20000).then(() => {
+                    const still = getStateForPane(paneRole, chatId);
+                    if (!still || still.joinGen !== currentGen) return;
+                    scheduleImmediateRetry();
+                  });
+                }
       return;
     }
 
