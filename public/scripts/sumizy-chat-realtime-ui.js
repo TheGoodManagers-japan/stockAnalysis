@@ -53,19 +53,18 @@ function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
 
-// Read both pane ids from URL
+// Delegate to the canonical resolver defined in shared router
 function getPaneIdsFromUrl() {
   try {
-    const q = new URLSearchParams(location.search);
-    const main = (q.get("chatid") || "").trim() || null;
-    const ai = (q.get("ai-chat") || "").trim() || null;
-    log.debug("URL pane ids parsed", { main, ai });
-    return { main, ai };
+    const ids = window.getPaneIdsFromUrl?.() || { main: null, ai: null };
+    log.debug("URL pane ids parsed", ids);
+    return ids;
   } catch (err) {
     log.error("Failed to parse pane ids from URL", err);
     return { main: null, ai: null };
   }
 }
+
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
@@ -910,7 +909,21 @@ function isChannelReady() {
 }
 
 window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
-  const chatId = window._paneActive[paneRole];
+  let chatId = window._paneActive[paneRole];
+
+  // If we have a composite like "tickets:123", try to map to a real conversation id.
+  if (
+    chatId &&
+    chatId.includes(":") &&
+    typeof window.mapEntityToConversationId === "function"
+  ) {
+    try {
+      const [type, id] = chatId.split(":");
+      const conv = window.mapEntityToConversationId(type, id);
+      if (conv) chatId = String(conv);
+    } catch {}
+  }
+
   if (!chatId) return;
 
   const st = getStateForPane(paneRole, chatId);

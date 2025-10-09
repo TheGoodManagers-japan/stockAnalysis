@@ -97,13 +97,12 @@ function getUrlParams() {
   }
 }
 
-/** Returns { mainId: string|null, aiId: string|null } from the URL */
+/** Returns { mainId: string|null, aiId: string|null } via canonical resolver */
 function getPaneIdsFromUrl() {
-  const q = getUrlParams();
-  const mainId = q.get("chatid") || null;
-  const aiId = q.get("ai-chat") || null;
-  return { mainId, aiId };
+  const ids = (window.getPaneIdsFromUrl && window.getPaneIdsFromUrl()) || { main: null, ai: null };
+  return { mainId: ids.main, aiId: ids.ai };
 }
+
 
 /** Legacy: the primary chat id (main pane); prefer mainId */
 function getChatIdFromURL() {
