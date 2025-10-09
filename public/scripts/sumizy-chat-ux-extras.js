@@ -301,9 +301,11 @@ document.addEventListener("click", (e) => {
   const emojis = ["👍", "✅", "🙂", "👀", "👏"];
 
   hideActionMenu();
-   menu.className = "message-actions-menu";
- menu.innerHTML = `
-   <div class="actions-row">
+  const menu = document.createElement("div");
+  menu.className = "message-actions-menu group-focus";
+  menu.innerHTML = `
+      <div class="actions-row" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;padding:8px 10px;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.08)">
+        <div class="reactions-list" style="display:flex;gap:6px;">
           ${emojis
             .map(
               (emo) =>
