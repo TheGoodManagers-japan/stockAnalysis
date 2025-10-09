@@ -1,3 +1,5 @@
+// /api/history.js
+
 const yahooFinance = require("yahoo-finance2").default;
 
 async function fetchHistoricalData(ticker, years = 3) {
