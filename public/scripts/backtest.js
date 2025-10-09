@@ -487,7 +487,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let signalsAfterWarmup = 0;
   let signalsWhileFlat = 0;
   let signalsInvalid = 0;
-  let signalsRiskBad = 0;
+  let signalsRiskBad = 0; // kept for telemetry compatibility (won't be used now)
   let signalsExecuted = 0;
 
   let blockedInTrade = 0;
@@ -609,17 +609,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           if (!st) continue;
 
           // dynamic rule hook
-          // dynamic rule hook
-if (typeof p.advance === "function") {
-  p.advance({ bar: today, state: st, hist, stock });
+          if (typeof p.advance === "function") {
+            p.advance({ bar: today, state: st, hist, stock });
 
-  // ⛔ Never allow the stop to change — re-pin to initial fixed stop
-  st.stop = st.stopInit;
+            // ⛔ Never allow the stop to change — re-pin to initial fixed stop
+            st.stop = st.stopInit;
 
-  // Target may still update; snap it to tick if present
-  if (Number.isFinite(st.target)) st.target = toTick(st.target, stock);
-}
-
+            // Target may still update; snap it to tick if present
+            if (Number.isFinite(st.target))
+              st.target = toTick(st.target, stock);
+          }
 
           let exit = null;
 
@@ -733,7 +732,7 @@ if (typeof p.advance === "function") {
               continue;
             }
 
-            // RR telemetry
+            // RR telemetry (ratio here is for diagnostics, we still accept/ignore)
             const rRatio = Number(sig?.debug?.rr?.ratio);
             inc(telemetry.rr.accepted, bucketize(rRatio));
             if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
@@ -745,53 +744,58 @@ if (typeof p.advance === "function") {
               });
             }
 
-// open per active profile
-for (const p of activeProfiles) {
-  if (openByProfile[p.id]) continue;
-  if (i <= cooldownUntilByProfile[p.id]) continue;
-  if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT) break;
+            // >>> ENTRY = next-bar open (fallback: today's close if no next bar)
+            const hasNext = i + 1 < candles.length;
+            const entryBarIdx = hasNext ? i + 1 : i;
+            const entryBar = candles[entryBarIdx];
+            const entry = hasNext ? entryBar.open : today.close;
 
-  // compute plan (for TARGET etc.). We IGNORE any suggested stop.
-  const plan =
-    p.compute({
-      entry,
-      stock: { ...stock, currentPrice: entry },
-      sig,
-      today: entryBar,
-      hist: candles.slice(0, entryBarIdx + 1),
-    }) || {};
+            // open per active profile
+            for (const p of activeProfiles) {
+              if (openByProfile[p.id]) continue;
+              if (i <= cooldownUntilByProfile[p.id]) continue;
+              if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
+                break;
 
-  const target = Number(plan.target);
+              // compute plan (for TARGET etc.). We IGNORE any suggested stop here.
+              const plan =
+                p.compute({
+                  entry,
+                  stock: { ...stock, currentPrice: entry },
+                  sig,
+                  today: entryBar,
+                  hist: candles.slice(0, entryBarIdx + 1),
+                }) || {};
+              const target = Number(plan.target);
 
-  // must have a valid target; stop will be fixed below
-  if (!Number.isFinite(target)) {
-    signalsInvalid++;
-    continue;
-  }
+              // must have a valid target; stop is fixed below
+              if (!Number.isFinite(target)) {
+                signalsInvalid++;
+                continue;
+              }
 
-  // ✅ Fixed stop: -10% from entry, snapped to tick
-  const fixedStop = entry * 0.9;
-  const qStop = toTick(fixedStop, stock);
-  const qTarget = toTick(target, stock);
+              // ✅ Fixed stop: -10% from entry, snapped to tick — and locked forever
+              const fixedStop = entry * 0.9;
+              const qStop = toTick(fixedStop, stock);
+              const qTarget = toTick(target, stock);
 
-  openByProfile[p.id] = {
-    entryIdx: entryBarIdx,
-    entry,
-    stop: qStop,       // always equals stopInit; never changes
-    stopInit: qStop,   // used for risk and re-pinning later
-    target: qTarget,
-    ST,
-    LT,
-    regime: dayRegime,
-    kind:
-      String(sig?.debug?.chosen || sig?.reason || "")
-        .split(":")[0]
-        .trim() || "UNKNOWN",
-  };
-  globalOpenCount++;
-  signalsExecuted++;
-}
-
+              openByProfile[p.id] = {
+                entryIdx: entryBarIdx,
+                entry,
+                stop: qStop, // always equals stopInit; never changes
+                stopInit: qStop, // used for risk and re-pinning later
+                target: qTarget,
+                ST,
+                LT,
+                regime: dayRegime, // NEW
+                kind:
+                  String(sig?.debug?.chosen || sig?.reason || "")
+                    .split(":")[0]
+                    .trim() || "UNKNOWN",
+              };
+              globalOpenCount++;
+              signalsExecuted++;
+            }
           } else {
             // why not buy? (telemetry)
             const dbg = sig?.debug || {};
