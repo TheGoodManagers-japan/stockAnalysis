@@ -859,7 +859,14 @@ export async function fetchStockAnalysis({
     },
   };
 
-  const filteredTickers = resolveTickers(tickers);
+    // Merge requested tickers + any tickers present in the portfolio
+  const mergedRawTickers = [
+    ...tickers,
+    ...myPortfolio.map((p) => p?.ticker).filter(Boolean),
+  ];
+  // Dedup + normalize via resolveTickers (keeps unknowns as {code, sector:"Unknown"})
+  const filteredTickers = resolveTickers(mergedRawTickers);
+  log("Resolved merged tickers:", filteredTickers.map(t => t.code));
   let count = 0;
 
   for (const tickerObj of filteredTickers) {
