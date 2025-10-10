@@ -390,7 +390,7 @@ export function getTradeManagementSignal_V3(
 ) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
-  // local helper so function is self-contained
+  // local helper so this function never proposes an invalid stop
   function clampStopLoss(px, atr, proposed, floorStop = 0) {
     const _px = n(px);
     const _atr = Math.max(n(atr), _px * 0.005, 1e-6);
@@ -459,7 +459,6 @@ export function getTradeManagementSignal_V3(
   const ma25AtEntry = Number.isFinite(entryIdx)
     ? maAtIndex(historicalData, 25, entryIdx)
     : 0;
-
   const entryCloseApprox = Number.isFinite(entryIdx)
     ? n(historicalData[entryIdx]?.close) || entry
     : entry;
@@ -477,13 +476,14 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 2) SELL — structural breakdown ----------------------------------------
+  // --- 2) SELL — structural breakdown (completed bars) -----------------------
   const brokeMA25 = nowBelowMA25;
   const bearishContext =
     sentiment >= 6 ||
     ml <= -1.5 ||
     (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
       ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
+
   if (brokeMA25 && madeLowerLow(historicalData) && bearishContext) {
     return {
       status: "Sell Now",
@@ -513,18 +513,16 @@ export function getTradeManagementSignal_V3(
         updatedStopLoss: newSL,
         suggest: { takeProfitPct: 50 },
       };
-    } else {
-      return {
-        status: "Sell Now",
-        reason: `Take profit at target (¥${Math.round(
-          target
-        )}). Context not strong enough to extend.`,
-      };
     }
+    return {
+      status: "Sell Now",
+      reason: `Take profit at target (¥${Math.round(
+        target
+      )}). Context not strong enough to extend.`,
+    };
   }
 
   // --- 4) PROTECT — R milestones ---------------------------------------------
-  // +2R → trail using max(entry + 1.2R, structure/MA stop)
   if (progressR >= 2) {
     const proposed = Math.max(
       stop,
@@ -538,7 +536,7 @@ export function getTradeManagementSignal_V3(
       updatedStopLoss: newSL,
     };
   }
-  // +1R → raise stop to breakeven
+
   if (progressR >= 1) {
     const proposed = Math.max(stop, entry);
     const newSL = clampStopLoss(px, atr, proposed, stop);
@@ -549,7 +547,7 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 4b) PROTECT — NO PROGRESS rule (safer: wait 5 bars, wider buffer) -----
+  // --- 4b) PROTECT — NO PROGRESS (completed bars, entry-aware) ---------------
   {
     const NP_BARS = 5;
     const NEED_TOUCH_R = 0.5;
@@ -562,14 +560,14 @@ export function getTradeManagementSignal_V3(
       ctx?.entryDate instanceof Date &&
       Array.isArray(historicalData)
     ) {
-      const completed = historicalData.slice(0, -1); // completed bars only
+      const completed = historicalData.slice(0, -1);
       barsSinceEntry = completed.reduce((acc, b) => {
         const d = b?.date instanceof Date ? b.date : new Date(b?.date);
         return acc + (d > ctx.entryDate ? 1 : 0);
       }, 0);
     }
 
-    // Build a window of completed bars since entry for the "touch" test; fallback to last NP_BARS
+    // Window of completed bars after entry (fallback to last NP_BARS)
     let win = Array.isArray(historicalData)
       ? historicalData.slice(-NP_BARS - 1, -1)
       : [];
@@ -578,19 +576,14 @@ export function getTradeManagementSignal_V3(
         const d = b?.date instanceof Date ? b.date : new Date(b?.date);
         return d > ctx.entryDate;
       });
-      if (afterEntry.length) {
-        // exclude the current bar if it's "today" / incomplete
-        win = afterEntry.slice(0, -1);
-      }
+      if (afterEntry.length) win = afterEntry.slice(0, -1); // exclude today
     }
 
     const touchedHalfR = (win || []).some(
       (b) => n(b?.high ?? b?.close) >= halfRLevel
     );
-
-    // GUARDS: need enough bars, no 0.5R touch, and don't creep while clearly red
     const enoughBars = (barsSinceEntry ?? 0) >= NP_BARS;
-    const clearlyRed = progressR < -0.1; // down >0.1R → skip creep for now
+    const clearlyRed = progressR < -0.1;
 
     if (
       enoughBars &&
@@ -598,20 +591,17 @@ export function getTradeManagementSignal_V3(
       progressR < NEED_TOUCH_R &&
       !clearlyRed
     ) {
-      // Prefer structure, but bias toward (entry - 0.2R); never above breakeven
       const structural = trailingStructStop(historicalData, ma25, atr);
       const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01); // ≤ breakeven
       let proposed = Math.max(stop, structural, creepTarget);
 
-      // For creep moves, use a wider live buffer (0.5 ATR) so we don't hug price
-      const _px = px;
-      const _atr = Math.max(atr, _px * 0.005, 1e-6);
-      const creepBuffer = Math.max(_px * 0.003, 0.5 * _atr, 1); // ≥ ~0.5 ATR, ≥ ¥1
+      // Wider live buffer for creep so we don't hug price
+      const _atr = Math.max(atr, px * 0.005, 1e-6);
+      const creepBuffer = Math.max(px * 0.003, 0.5 * _atr, 1);
       let newSL = Math.max(proposed, stop);
-      newSL = Math.min(newSL, _px - creepBuffer);
+      newSL = Math.min(newSL, px - creepBuffer);
       if (!Number.isFinite(newSL) || newSL <= 0) newSL = stop;
 
-      // Only emit if actually tightening
       if (newSL > stop) {
         return {
           status: "Protect Profit",
