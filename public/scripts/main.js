@@ -484,40 +484,69 @@ export function getTradeManagementSignal_V3(
 
     // --- 4b) PROTECT — NO PROGRESS rule (profile: no_progress_N5bars_creep_to_BE)
     // Prefer checking since ENTRY if entryDate/barsSinceEntry are available; otherwise use last 5 bars.
-  {
-    const NP_BARS = 5;
-    const NEED_TOUCH_R = 0.5;
-    const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
-        let win = Array.isArray(historicalData) ? historicalData.slice(-NP_BARS) : [];
-        if (ctx?.entryDate instanceof Date && Array.isArray(historicalData) && historicalData.length) {
-          // Build a window from the first bar strictly AFTER entryDate up to the last COMPLETED bar
-          const afterEntry = historicalData.filter(b => {
-            const d = b?.date instanceof Date ? b.date : new Date(b?.date);
-            return d > ctx.entryDate;
-          });
-          // Use up to the last NP_BARS bars since entry (but if there are more, we’ll analyze all for touch)
-          win = afterEntry.length ? afterEntry : win;
-        }
-    const touchedHalfR = win.some((b) => n(b?.high ?? b?.close) >= halfRLevel);
+  // --- 4b) PROTECT — NO PROGRESS rule (safer: wait 5 bars, wider buffer, don't creep while red)
+{
+  const NP_BARS = 5;
+  const NEED_TOUCH_R = 0.5;
+  const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
 
-    if (!touchedHalfR && progressR < NEED_TOUCH_R) {
-      // creep: favor structure/MA stop, but also pull up toward (entry - 0.2R)
-      const structural = trailingStructStop(historicalData, ma25, atr);
-      const creepTarget = entry - 0.2 * riskPerShare; // keep some air below BE
-      const proposed = Math.max(stop, structural, creepTarget);
-      const newSL = clampStopLoss(px, atr, proposed, stop);
-      if (newSL > stop) {
-        return {
-          status: "Protect Profit",
-                    reason:
-                      (ctx?.barsSinceEntry != null
-                        ? `No progress since entry (${ctx.barsSinceEntry} bars, no +${NEED_TOUCH_R}R touch). `
-                        : `No progress for ${NP_BARS} bars (no +${NEED_TOUCH_R}R touch). `) +
-            `Creep stop toward breakeven to limit drift. New stop: ¥${newSL}.`,
-          updatedStopLoss: newSL,
-        };
-      }
+  // Count completed bars since entry
+  let barsSinceEntry = ctx?.barsSinceEntry ?? null;
+  if (barsSinceEntry == null && ctx?.entryDate instanceof Date && Array.isArray(historicalData)) {
+    const completed = historicalData.slice(0, -1); // completed bars only
+    barsSinceEntry = completed.reduce((acc, b) => {
+      const d = b?.date instanceof Date ? b.date : new Date(b?.date);
+      return acc + (d > ctx.entryDate ? 1 : 0);
+    }, 0);
+  }
+
+  // Build a window of completed bars since entry for the "touch" test; fallback to last NP_BARS
+  let win = Array.isArray(historicalData) ? historicalData.slice(-NP_BARS-1, -1) : [];
+  if (ctx?.entryDate instanceof Date && Array.isArray(historicalData)) {
+    const afterEntry = historicalData.filter(b => {
+      const d = b?.date instanceof Date ? b.date : new Date(b?.date);
+      return d > ctx.entryDate;
+    });
+    if (afterEntry.length) {
+      // exclude the current bar if it's "today" / incomplete
+      win = afterEntry.slice(0, -1);
     }
+  }
+
+  const touchedHalfR = (win || []).some(b => n(b?.high ?? b?.close) >= halfRLevel);
+
+  // GUARDS: need enough bars, no 0.5R touch, and don't creep while clearly red
+  const enoughBars = (barsSinceEntry ?? 0) >= NP_BARS;
+  const clearlyRed = progressR < -0.1; // down >0.1R → skip creep for now
+
+  if (enoughBars && !touchedHalfR && progressR < NEED_TOUCH_R && !clearlyRed) {
+    // Prefer structure, but bias toward (entry - 0.2R); never above breakeven
+    const structural = trailingStructStop(historicalData, ma25, atr);
+    const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01); // ≤ breakeven
+    let proposed = Math.max(stop, structural, creepTarget);
+
+    // For creep moves, use a wider live buffer (0.5 ATR) so we don't hug price
+    const _px = px;
+    const _atr = Math.max(atr, _px * 0.005, 1e-6);
+    const creepBuffer = Math.max(_px * 0.003, 0.5 * _atr, 1); // ≥ ~0.5 ATR, ≥ ¥1
+    let newSL = Math.max(proposed, stop);
+    newSL = Math.min(newSL, _px - creepBuffer);
+    if (!Number.isFinite(newSL) || newSL <= 0) newSL = stop;
+
+    // Only emit if actually tightening
+    if (newSL > stop) {
+      return {
+        status: "Protect Profit",
+        reason:
+          (barsSinceEntry != null
+            ? `No progress since entry (${barsSinceEntry} bars, no +${NEED_TOUCH_R}R touch). `
+            : `No progress for ${NP_BARS}+ bars (no +${NEED_TOUCH_R}R touch). `) +
+          `Creep stop toward breakeven conservatively. New stop: ¥${Math.round(newSL)}.`,
+        updatedStopLoss: Math.round(newSL),
+      };
+    }
+  }
+
   }
 
   // --- 5) HOLD — entry-kind aware keeps --------------------------------------
@@ -859,14 +888,23 @@ export async function fetchStockAnalysis({
     },
   };
 
-    // Merge requested tickers + any tickers present in the portfolio
+  // Merge requested tickers + any tickers present in the portfolio
+  // AFTER:
+  const baseTickers =
+    Array.isArray(tickers) && tickers.length > 0
+      ? tickers
+      : allTickers.map((t) => t.code); // seed with full universe when none were passed
+
   const mergedRawTickers = [
-    ...tickers,
+    ...baseTickers,
     ...myPortfolio.map((p) => p?.ticker).filter(Boolean),
   ];
   // Dedup + normalize via resolveTickers (keeps unknowns as {code, sector:"Unknown"})
   const filteredTickers = resolveTickers(mergedRawTickers);
-  log("Resolved merged tickers:", filteredTickers.map(t => t.code));
+  log(
+    "Resolved merged tickers:",
+    filteredTickers.map((t) => t.code)
+  );
   let count = 0;
 
   for (const tickerObj of filteredTickers) {
@@ -1105,7 +1143,7 @@ export async function fetchStockAnalysis({
       if (portfolioEntry) {
         // Try to infer entry kind from your entry engine's reason text, if present
         const entryKind = extractEntryKindFromReason(finalSignal?.reason); // DIP / RETEST / RECLAIM / INSIDE / BREAKOUT
-                // --- NEW: safely parse purchase date (entryDate) if provided ---
+        // --- NEW: safely parse purchase date (entryDate) if provided ---
         // Expecting ISO string (e.g., "2025-10-07") or anything Date can parse.
         let entryDate = null;
         const rawED = portfolioEntry?.trade?.entryDate;
@@ -1137,8 +1175,8 @@ export async function fetchStockAnalysis({
           {
             entryKind, // optional but helpful
             sentimentScore: stock.shortTermScore, // your 1..7 short-term score
-                        entryDate,          // NEW: pass purchase date
-            barsSinceEntry,     // NEW: pass computed bars since entry (completed bars)
+            entryDate, // NEW: pass purchase date
+            barsSinceEntry, // NEW: pass computed bars since entry (completed bars)
             // deep is optional; if your orchestrator exposes it, pass it:
             // deep: horizons.deep,
             // ADX is optional; V3 computes fallback if omitted
@@ -1263,15 +1301,22 @@ export async function fetchStockAnalysis({
       .slice(0, k);
   }
 
-   // session-level block breakdowns & histograms
- const blocksTop = summarizeBlocks(teleList); // [{code,count,examples,ctxSample}]
- // optional: RR shortfall binning for a quick “how far off” view
- const rrShortBins = histo.rrShortfall.reduce((m, r) => {
-   const s = Number(r.short) || 0;
-   const key = s <= 0.05 ? "≤0.05" : s <= 0.10 ? "0.05..0.10" : s <= 0.25 ? "0.10..0.25" : ">0.25";
-   m[key] = (m[key] || 0) + 1;
-   return m;
- }, {});
+  // session-level block breakdowns & histograms
+  const blocksTop = summarizeBlocks(teleList); // [{code,count,examples,ctxSample}]
+  // optional: RR shortfall binning for a quick “how far off” view
+  const rrShortBins = histo.rrShortfall.reduce((m, r) => {
+    const s = Number(r.short) || 0;
+    const key =
+      s <= 0.05
+        ? "≤0.05"
+        : s <= 0.1
+        ? "0.05..0.10"
+        : s <= 0.25
+        ? "0.10..0.25"
+        : ">0.25";
+    m[key] = (m[key] || 0) + 1;
+    return m;
+  }, {});
 
   const summaryOut = {
     ...summary,
@@ -1298,7 +1343,6 @@ export async function fetchStockAnalysis({
     ? Math.round((summaryOut.totals.buyNow / summaryOut.totals.count) * 10000) /
       100
     : 0;
-  
 
   // console snapshot
   // single, complete object in console
