@@ -155,7 +155,7 @@ const SENTIMENT_COMBO_SCORE = {
   "LT1-ST6": 100, "LT1-ST7": 98,  "LT1-ST2": 96,  "LT1-ST4": 94,  "LT1-ST5": 92,
   "LT4-ST2": 90,  "LT4-ST6": 89,  "LT4-ST4": 88,  "LT2-ST7": 87,  "LT2-ST4": 86,
   "LT2-ST6": 85,  "LT4-ST1": 84,  "LT4-ST7": 83,  "LT4-ST5": 82,  "LT3-ST1": 80,
-  "LT3-ST4": 79,  "LT3-ST3": 78,  "LT3-ST5": 77,  "LT3-ST2": 76,  "LT3-ST6": 75,
+  "LT3-ST4": 79,  "LT3-ST3": 78,  "LT3-ST5": 77,  "LT3-ST2": 76, 
   "LT5-ST7": 74,  "LT6-ST6": 72,  "LT6-ST4": 71,  "LT6-ST5": 70,  "LT7-ST5": 68,
   "LT7-ST4": 67,  "LT7-ST6": 66,  "LT7-ST3": 65,  "LT7-ST2": 64,  "LT7-ST7": 63,
   "LT5-ST2": 62,  "LT1-ST1": 61,  "LT2-ST1": 60,  "LT5-ST3": 59,  "LT5-ST4": 58,
@@ -1124,22 +1124,56 @@ export async function fetchStockAnalysis({
       }
 
       // Normalize + mirror (handles both buyNow true/false)
-      const normSL = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
-      const normTP = finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
+      // Normalize suggested values from entry engine (for NEW entries)
+      const suggestedSL = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
+      const suggestedTP =
+        finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
 
-      // “Smart” fields
-      stock.smartStopLoss = normSL;
-      stock.smartPriceTarget = normTP;
+      // Always keep trigger for UI insight
       stock.trigger = finalSignal.trigger ?? null;
 
-      // Plain fields used by the API payload
-      stock.stopLoss = normSL;
-      stock.targetPrice = normTP; // NOTE: your payload uses targetPrice key
-      stock.priceTarget = normTP; // optional legacy alias (harmless)
+      // IMPORTANT: if the ticker is already in portfolio, do NOT loosen stop/target
+      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
+
+      if (portfolioEntry) {
+        const curStop = Number(portfolioEntry?.trade?.stopLoss);
+        const curTarget = Number(
+          portfolioEntry?.trade?.priceTarget ??
+            portfolioEntry?.trade?.targetPrice
+        );
+
+        // STOP: only tighten upward; if no suggestion, keep current
+        const tightenedStop = Number.isFinite(suggestedSL)
+          ? Math.max(curStop, Math.round(suggestedSL))
+          : curStop;
+
+        // TARGET: only keep or raise; never reduce
+        const keptOrRaisedTarget = Number.isFinite(suggestedTP)
+          ? Number.isFinite(curTarget)
+            ? Math.max(curTarget, Math.round(suggestedTP))
+            : Math.round(suggestedTP)
+          : curTarget;
+
+        stock.smartStopLoss = tightenedStop;
+        stock.stopLoss = tightenedStop;
+
+        stock.smartPriceTarget = keptOrRaisedTarget;
+        stock.targetPrice = keptOrRaisedTarget;
+        stock.priceTarget = keptOrRaisedTarget;
+      } else {
+        // Not held: free to use analyzer suggestions as-is
+        if (Number.isFinite(suggestedSL)) {
+          stock.smartStopLoss = Math.round(suggestedSL);
+          stock.stopLoss = stock.smartStopLoss;
+        }
+        if (Number.isFinite(suggestedTP)) {
+          stock.smartPriceTarget = Math.round(suggestedTP);
+          stock.targetPrice = stock.smartPriceTarget;
+          stock.priceTarget = stock.smartPriceTarget;
+        }
+      }
 
       // 7) trade management if held
-      // 7) trade management if held
-      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
       if (portfolioEntry) {
         // Try to infer entry kind from your entry engine's reason text, if present
         const entryKind = extractEntryKindFromReason(finalSignal?.reason); // DIP / RETEST / RECLAIM / INSIDE / BREAKOUT
@@ -1194,11 +1228,16 @@ export async function fetchStockAnalysis({
 
         // If V3 suggests a tighter stop, surface it (without overwriting your portfolio by force)
         if (Number.isFinite(mgmt.updatedStopLoss)) {
-          stock.managementUpdatedStop = Math.round(mgmt.updatedStopLoss);
-          // optionally reflect it in the "smart" fields shown in Bubble:
-          stock.smartStopLoss = stock.managementUpdatedStop;
-          stock.stopLoss = stock.managementUpdatedStop; // if you want UI to show the tightened stop
+          const proposed = Math.round(mgmt.updatedStopLoss);
+          const current = Number(stock.stopLoss) || 0;
+          // Only accept if it tightens (raises) versus current displayed stop
+          if (proposed > current) {
+            stock.managementUpdatedStop = proposed;
+            stock.smartStopLoss = proposed;
+            stock.stopLoss = proposed;
+          }
         }
+        // NOTE: do not lower target here; leave target untouched by management
       } else {
         stock.managementSignalStatus = null;
         stock.managementSignalReason = null;
