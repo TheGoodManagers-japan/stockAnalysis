@@ -338,23 +338,50 @@ function clampStopLoss(px, atr, proposed, floorStop = 0) {
 
 
 /**
- * getTradeManagementSignal_V3
+ * getTradeManagementSignal_V3 — entry-aware, completed-bars logic
+ *
+ * What this does:
+ * - Uses COMPLETED bars for structure checks (MA25, pivot, patterns). Today’s synthetic/incomplete bar is ignored.
+ * - Is ENTRY-AWARE for MA25: if price was already < MA25 at entry, we don’t “punish” later simply for still being < MA25.
+ * - Trails/tightens stops with a clamp that never sets stop ≥ market and never loosens below current stop.
+ * - Uses ATR/structure (swing low & MA25) for protective stops, with sensible live buffers to avoid hugging price.
  *
  * STATUS LEGEND
- * - "Hold"            → Keep the position unchanged (no stop update unless you choose to persist a suggested one).
- * - "Protect Profit"  → Tighten/raise the stop (we return `updatedStopLoss`); you continue holding unless the stop is hit.
+ * - "Hold"            → Keep position unchanged (you may persist a suggested stop if present).
+ * - "Protect Profit"  → Tighten/raise the stop (we return `updatedStopLoss`); keep holding unless stop is hit.
  * - "Sell Now"        → Exit immediately.
- * - "Scale Partial"   → Take partial profits (e.g., 50%) and keep trailing the remainder.
+ * - "Scale Partial"   → Take partial profits (e.g., 50%) and trail the remainder.
  *
  * DECISION SEQUENCE (top → bottom)
- *  1) SELL — stop-loss hit
- *  2) SELL — structural breakdown (close<MA25 + lower low + bearish context)
- *  3) SCALE/SELL — target reached (scale if context strong, else sell)
- *  4) PROTECT — R milestones: +1R (move to breakeven), +2R (start/continue trailing)
- *  5) HOLD — entry-kind aware holds (DIP/RETEST above MA25; BREAKOUT retest)
- *  6) PROTECT — bearish engulfing near resistance (tighten)
- *  7) HOLD/PROTECT — default structure-first (≥MA25 = HOLD; <MA25 = PROTECT)
+ *  1) SELL — hard stop hit (px <= stop).
+ *  2) SELL — structural breakdown on COMPLETED bars:
+ *       last completed close < MA25(completed) AND a new lower low AND bearish context (e.g., senti ≥6, ML weak, short-term downtrend).
+ *  3) SCALE/SELL — target reached:
+ *       If context strong (senti ≤3, trend OK, not extended, ADX>~25), "Scale Partial" (tighten stop via structure/MA).
+ *       Else "Sell Now".
+ *  4) PROTECT — R milestones (based on ORIGINAL risk: entry − initialStop):
+ *       • ≥ +2R → trail using max(entry + 1.2R, structure/MA stop).
+ *       • ≥ +1R → move stop to breakeven.
+ *  5) PROTECT — NO PROGRESS (entry-aware, completed bars):
+ *       After ≥5 completed bars since entry, if price has NOT touched +0.5R, and progress isn’t clearly negative,
+ *       creep stop toward breakeven conservatively using structure/MA with a wider live buffer.
+ *  6) HOLD — entry-kind aware (completed bars):
+ *       • DIP/RETEST and close ≥ MA25(completed) with non-bearish sentiment (≤4) → Hold.
+ *       • BREAKOUT retest holding prior pivot zone on completed bars → Hold.
+ *  7) PROTECT — bearish engulfing near resistance:
+ *       If near 52-week high and bearish engulfing on completed bars → tighten to structure/MA stop.
+ *  8) DEFAULT — structure-first on COMPLETED bars:
+ *       • If close ≥ MA25(completed) → Hold (allow normal volatility).
+ *       • Else (close < MA25(completed)):
+ *            - If price was already < MA25 at entry → Hold (don’t penalize post-entry).
+ *            - Otherwise → Protect Profit (tighten to structure/MA stop).
+ *
+ * Notes:
+ * - MA25(completed) = MA using completed bars only; live MA may differ slightly.
+ * - `updatedStopLoss` is only returned when tightening (never lowers your current stop).
+ * - ADX is computed if not provided; context signals (sentiment/ML/regime) are optional but improve decisions.
  */
+
 export function getTradeManagementSignal_V3(
   stock,
   trade,
@@ -381,13 +408,39 @@ export function getTradeManagementSignal_V3(
   const target = n(trade.priceTarget);
 
   // Use provided MA/ATR if present; otherwise compute from history.
-  const ma25 = n(stock.movingAverage25d) || sma(historicalData, 25);
+  // (We’ll compute entry-aware/“completed bars” MA25 below for structure decisions)
+  const ma25Live = n(stock.movingAverage25d) || sma(historicalData, 25);
   const atr = Math.max(
     n(stock.atr14),
     calcATR(historicalData, 14),
     px * 0.005,
     1e-6
   );
+
+  // Build a COMPLETED-bars view (ignore today's synthetic/incomplete bar)
+  const lastBar = historicalData?.at?.(-1);
+  const isToday =
+    lastBar?.date &&
+    new Date(lastBar.date).toDateString() === new Date().toDateString();
+
+  const completedBars = isToday ? historicalData.slice(0, -1) : historicalData;
+  const ma25Completed = sma(completedBars, 25); // structure MA on completed bars
+  const lastCompletedClose = lastClose(completedBars); // last completed close
+
+  // Infer MA25 state AT/AFTER ENTRY on completed bars (if entryDate provided)
+  let wasBelowMA25AtEntry = false;
+  if (ctx?.entryDate instanceof Date && completedBars.length >= 25) {
+    const afterEntry = completedBars.filter(
+      (b) => new Date(b.date) > ctx.entryDate
+    );
+    if (afterEntry.length) {
+      const idxInAll = completedBars.indexOf(afterEntry[0]);
+      const upto = completedBars.slice(0, idxInAll + 1); // data available at that time
+      const maAtEntry = sma(upto, 25) || 0;
+      const closeAtEntry = lastClose(upto);
+      wasBelowMA25AtEntry = maAtEntry > 0 && closeAtEntry < maAtEntry;
+    }
+  }
 
   // Context (short-term sentiment 1..7; lower = more bullish)
   const sentiment = n(ctx.sentimentScore) || 4;
@@ -410,17 +463,19 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 2) SELL — structural breakdown ----------------------------------------
-  const brokeMA25 = lastClose(historicalData) < ma25 && ma25 > 0;
+  // --- 2) SELL — structural breakdown (use COMPLETED bars) -------------------
+  const brokeMA25 = lastCompletedClose < ma25Completed && ma25Completed > 0; // structure-only
   const bearishContext =
     sentiment >= 6 ||
     ml <= -1.5 ||
     (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
       ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
-  if (brokeMA25 && madeLowerLow(historicalData) && bearishContext) {
+
+  if (brokeMA25 && madeLowerLow(completedBars) && bearishContext) {
     return {
       status: "Sell Now",
-      reason: "Trend break: close < MA25 with lower low and bearish context.",
+      reason:
+        "Trend break: close < MA25 (completed) with lower low and bearish context.",
     };
   }
 
@@ -435,7 +490,7 @@ export function getTradeManagementSignal_V3(
     if (strengthOK) {
       const proposed = Math.max(
         stop,
-        trailingStructStop(historicalData, ma25, atr)
+        trailingStructStop(historicalData, ma25Completed || ma25Live, atr)
       );
       const newSL = clampStopLoss(px, atr, proposed, stop);
       return {
@@ -462,7 +517,7 @@ export function getTradeManagementSignal_V3(
     const proposed = Math.max(
       stop,
       entry + 1.2 * riskPerShare,
-      trailingStructStop(historicalData, ma25, atr)
+      trailingStructStop(historicalData, ma25Completed || ma25Live, atr)
     );
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
@@ -482,116 +537,130 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-    // --- 4b) PROTECT — NO PROGRESS rule (profile: no_progress_N5bars_creep_to_BE)
-    // Prefer checking since ENTRY if entryDate/barsSinceEntry are available; otherwise use last 5 bars.
-  // --- 4b) PROTECT — NO PROGRESS rule (safer: wait 5 bars, wider buffer, don't creep while red)
-{
-  const NP_BARS = 5;
-  const NEED_TOUCH_R = 0.5;
-  const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
+  // --- 4b) PROTECT — NO PROGRESS (entry-aware; completed bars) ---------------
+  {
+    const NP_BARS = 5;
+    const NEED_TOUCH_R = 0.5;
+    const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
 
-  // Count completed bars since entry
-  let barsSinceEntry = ctx?.barsSinceEntry ?? null;
-  if (barsSinceEntry == null && ctx?.entryDate instanceof Date && Array.isArray(historicalData)) {
-    const completed = historicalData.slice(0, -1); // completed bars only
-    barsSinceEntry = completed.reduce((acc, b) => {
-      const d = b?.date instanceof Date ? b.date : new Date(b?.date);
-      return acc + (d > ctx.entryDate ? 1 : 0);
-    }, 0);
-  }
+    // Count completed bars since entry
+    let barsSinceEntry = ctx?.barsSinceEntry ?? null;
+    if (
+      barsSinceEntry == null &&
+      ctx?.entryDate instanceof Date &&
+      Array.isArray(historicalData)
+    ) {
+      const completed = completedBars; // already excludes today's bar
+      barsSinceEntry = completed.reduce((acc, b) => {
+        const d = b?.date instanceof Date ? b.date : new Date(b?.date);
+        return acc + (d > ctx.entryDate ? 1 : 0);
+      }, 0);
+    }
 
-  // Build a window of completed bars since entry for the "touch" test; fallback to last NP_BARS
-  let win = Array.isArray(historicalData) ? historicalData.slice(-NP_BARS-1, -1) : [];
-  if (ctx?.entryDate instanceof Date && Array.isArray(historicalData)) {
-    const afterEntry = historicalData.filter(b => {
-      const d = b?.date instanceof Date ? b.date : new Date(b?.date);
-      return d > ctx.entryDate;
-    });
-    if (afterEntry.length) {
-      // exclude the current bar if it's "today" / incomplete
-      win = afterEntry.slice(0, -1);
+    // Window of completed bars since entry for the "touch" test; fallback to last NP_BARS
+    let win = Array.isArray(completedBars) ? completedBars.slice(-NP_BARS) : [];
+    if (ctx?.entryDate instanceof Date && Array.isArray(completedBars)) {
+      const afterEntry = completedBars.filter(
+        (b) => new Date(b?.date) > ctx.entryDate
+      );
+      if (afterEntry.length) {
+        win = afterEntry.slice(-NP_BARS);
+      }
+    }
+
+    const touchedHalfR = (win || []).some(
+      (b) => n(b?.high ?? b?.close) >= halfRLevel
+    );
+
+    // GUARDS: need enough bars, no 0.5R touch, and don't creep while clearly red
+    const enoughBars = (barsSinceEntry ?? 0) >= NP_BARS;
+    const clearlyRed = progressR < -0.1; // down >0.1R → skip creep for now
+
+    if (
+      enoughBars &&
+      !touchedHalfR &&
+      progressR < NEED_TOUCH_R &&
+      !clearlyRed
+    ) {
+      // Prefer structure, but bias toward (entry - 0.2R); never above breakeven
+      const structural = trailingStructStop(
+        historicalData,
+        ma25Completed || ma25Live,
+        atr
+      );
+      const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01); // ≤ breakeven
+      let proposed = Math.max(stop, structural, creepTarget);
+
+      // For creep moves, use a wider live buffer (0.5 ATR) so we don't hug price
+      const _px = px;
+      const _atr = Math.max(atr, _px * 0.005, 1e-6);
+      const creepBuffer = Math.max(_px * 0.003, 0.5 * _atr, 1); // ≥ ~0.5 ATR, ≥ ¥1
+      let newSL = Math.max(proposed, stop);
+      newSL = Math.min(newSL, _px - creepBuffer);
+      if (!Number.isFinite(newSL) || newSL <= 0) newSL = stop;
+
+      // Only emit if actually tightening
+      if (newSL > stop) {
+        return {
+          status: "Protect Profit",
+          reason:
+            (barsSinceEntry != null
+              ? `No progress since entry (${barsSinceEntry} bars, no +${NEED_TOUCH_R}R touch). `
+              : `No progress for ${NP_BARS}+ bars (no +${NEED_TOUCH_R}R touch). `) +
+            `Creep stop toward breakeven conservatively. New stop: ¥${Math.round(
+              newSL
+            )}.`,
+          updatedStopLoss: Math.round(newSL),
+        };
+      }
     }
   }
 
-  const touchedHalfR = (win || []).some(b => n(b?.high ?? b?.close) >= halfRLevel);
-
-  // GUARDS: need enough bars, no 0.5R touch, and don't creep while clearly red
-  const enoughBars = (barsSinceEntry ?? 0) >= NP_BARS;
-  const clearlyRed = progressR < -0.1; // down >0.1R → skip creep for now
-
-  if (enoughBars && !touchedHalfR && progressR < NEED_TOUCH_R && !clearlyRed) {
-    // Prefer structure, but bias toward (entry - 0.2R); never above breakeven
-    const structural = trailingStructStop(historicalData, ma25, atr);
-    const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01); // ≤ breakeven
-    let proposed = Math.max(stop, structural, creepTarget);
-
-    // For creep moves, use a wider live buffer (0.5 ATR) so we don't hug price
-    const _px = px;
-    const _atr = Math.max(atr, _px * 0.005, 1e-6);
-    const creepBuffer = Math.max(_px * 0.003, 0.5 * _atr, 1); // ≥ ~0.5 ATR, ≥ ¥1
-    let newSL = Math.max(proposed, stop);
-    newSL = Math.min(newSL, _px - creepBuffer);
-    if (!Number.isFinite(newSL) || newSL <= 0) newSL = stop;
-
-    // Only emit if actually tightening
-    if (newSL > stop) {
-      return {
-        status: "Protect Profit",
-        reason:
-          (barsSinceEntry != null
-            ? `No progress since entry (${barsSinceEntry} bars, no +${NEED_TOUCH_R}R touch). `
-            : `No progress for ${NP_BARS}+ bars (no +${NEED_TOUCH_R}R touch). `) +
-          `Creep stop toward breakeven conservatively. New stop: ¥${Math.round(newSL)}.`,
-        updatedStopLoss: Math.round(newSL),
-      };
-    }
-  }
-
-  }
-
-  // --- 5) HOLD — entry-kind aware keeps --------------------------------------
+  // --- 5) HOLD — entry-kind aware keeps (structure from COMPLETED bars) ------
   const entryKind = (ctx.entryKind || "").toUpperCase();
-  const aboveMA25 = px >= ma25 || ma25 === 0;
+  const aboveMA25Completed =
+    lastCompletedClose >= ma25Completed || ma25Completed === 0;
 
   if (
     (entryKind === "DIP" || entryKind === "RETEST") &&
-    aboveMA25 &&
+    aboveMA25Completed &&
     sentiment <= 4
   ) {
     return {
       status: "Hold",
       reason:
-        "Healthy pullback above MA25 after DIP/RETEST entry; sentiment not bearish.",
+        "Healthy pullback above MA25 (completed) after DIP/RETEST entry; sentiment not bearish.",
     };
   }
 
   if (entryKind === "BREAKOUT") {
-    const pivot = recentPivotHigh(historicalData);
-    const nearPivot = pivot > 0 && Math.abs(px - pivot) <= 1.3 * atr;
+    const pivot = recentPivotHigh(completedBars);
+    const nearPivot =
+      pivot > 0 && Math.abs(lastCompletedClose - pivot) <= 1.3 * atr;
     const heldZone =
-      pivot > 0 && n(historicalData.at(-1)?.low) >= pivot - 0.6 * atr;
+      pivot > 0 && n(completedBars.at?.(-1)?.low) >= pivot - 0.6 * atr;
     if (pivot && nearPivot && heldZone) {
       return {
         status: "Hold",
-        reason: "Breakout retest holding prior pivot zone.",
+        reason: "Breakout retest holding prior pivot zone (completed bars).",
       };
     }
   }
 
-  // --- 6) PROTECT — bearish engulf near resistance ---------------------------
-  const last = historicalData?.at?.(-1) || {};
-  const prev = historicalData?.at?.(-2) || {};
+  // --- 6) PROTECT — bearish engulf near resistance (use last completed) ------
+  const lastC = completedBars?.at?.(-1) || {};
+  const prevC = completedBars?.at?.(-2) || {};
   const bearishEngulf =
-    n(last.close) < n(last.open) &&
-    n(prev.close) > n(prev.open) &&
-    n(last.close) < n(prev.open) &&
-    n(last.open) > n(prev.close);
+    n(lastC.close) < n(lastC.open) &&
+    n(prevC.close) > n(prevC.open) &&
+    n(lastC.close) < n(prevC.open) &&
+    n(lastC.open) > n(prevC.close);
   const near52wHigh = near(px, n(stock.fiftyTwoWeekHigh), 0.02);
 
   if (near52wHigh && bearishEngulf) {
     const proposed = Math.max(
       stop,
-      trailingStructStop(historicalData, ma25, atr)
+      trailingStructStop(historicalData, ma25Completed || ma25Live, atr)
     );
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
@@ -601,25 +670,36 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 7) DEFAULT — structure-first ------------------------------------------
-  if (aboveMA25) {
+  // --- 7) DEFAULT — structure-first (ENTRY-AWARE, completed bars) ------------
+  if (aboveMA25Completed) {
     return {
       status: "Hold",
-      reason: "Uptrend structure intact (≥ MA25). Allow normal volatility.",
+      reason:
+        "Uptrend structure intact (≥ MA25 on completed bars). Allow normal volatility.",
     };
   } else {
+    // If we were already below MA25 at entry, don't "punish" just for remaining below
+    if (wasBelowMA25AtEntry) {
+      return {
+        status: "Hold",
+        reason:
+          "Below MA25 since entry; no new cross-down. Keep existing structure stop.",
+      };
+    }
+    // Otherwise it's a post-entry loss of MA25 → tighten
     const proposed = Math.max(
       stop,
-      trailingStructStop(historicalData, ma25, atr)
+      trailingStructStop(historicalData, ma25Completed || ma25Live, atr)
     );
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
       status: "Protect Profit",
-      reason: `Lost MA25 but no full breakdown — tighten to structure/MA stop at ¥${newSL}.`,
+      reason: `Lost MA25 post-entry — tighten to structure/MA stop at ¥${newSL}.`,
       updatedStopLoss: newSL,
     };
   }
 }
+
 
 
 
