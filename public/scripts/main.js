@@ -390,24 +390,21 @@ export function getTradeManagementSignal_V3(
 ) {
   const n = (v) => (Number.isFinite(v) ? v : 0);
 
-  // local helper so this function never proposes an invalid stop
   function clampStopLoss(px, atr, proposed, floorStop = 0) {
     const _px = n(px);
     const _atr = Math.max(n(atr), _px * 0.005, 1e-6);
-    const minBuffer = Math.max(_px * 0.002, 0.2 * _atr, 1); // ~0.2 ATR, ≥ ¥1
-    let s = Math.max(n(proposed), n(floorStop)); // never below current stop
-    s = Math.min(s, _px - minBuffer); // never at/above market
+    const minBuffer = Math.max(_px * 0.002, 0.2 * _atr, 1);
+    let s = Math.max(n(proposed), n(floorStop));
+    s = Math.min(s, _px - minBuffer);
     if (!Number.isFinite(s) || s <= 0) s = Math.max(1, n(floorStop));
     return Math.round(s);
   }
 
-  // --- Inputs & fallbacks -----------------------------------------------------
   const px = n(stock.currentPrice);
   const entry = n(trade.entryPrice);
   const stop = n(trade.stopLoss);
   const target = n(trade.priceTarget);
 
-  // Use provided MA/ATR if present; otherwise compute from history.
   const ma25 = n(stock.movingAverage25d) || sma(historicalData, 25);
   const atr = Math.max(
     n(stock.atr14),
@@ -416,20 +413,17 @@ export function getTradeManagementSignal_V3(
     1e-6
   );
 
-  // Context (short-term sentiment 1..7; lower = more bullish)
   const sentiment = n(ctx.sentimentScore) || 4;
-  const ml = n(ctx.deep?.mlScore); // optional
-  const adx = Number.isFinite(ctx.adx) ? ctx.adx : calcADX14(historicalData); // fallback compute
+  const ml = n(ctx.deep?.mlScore);
+  const adx = Number.isFinite(ctx.adx) ? ctx.adx : calcADX14(historicalData);
   const isExtended = !!ctx.isExtended;
 
-  // R progress uses ORIGINAL risk (initialStop). If missing, fall back to current stop.
   const initialStop = Number.isFinite(trade.initialStop)
     ? trade.initialStop
     : stop;
   const riskPerShare = Math.max(0.01, entry - initialStop);
   const progressR = (px - entry) / riskPerShare;
 
-  // --- Entry vs MA25 context (avoid false "Lost MA25" messages) --------------
   function maAtIndex(data, p, idx) {
     if (!Array.isArray(data) || idx == null) return 0;
     if (idx + 1 < p) return 0;
@@ -438,7 +432,6 @@ export function getTradeManagementSignal_V3(
     return s / p;
   }
 
-  // Find the bar index at/just before entry for completed bars
   let entryIdx = null;
   if (ctx?.entryDate instanceof Date && Array.isArray(historicalData)) {
     for (let i = historicalData.length - 1; i >= 0; i--) {
@@ -452,7 +445,6 @@ export function getTradeManagementSignal_V3(
       }
     }
   } else if (Number.isFinite(ctx?.barsSinceEntry)) {
-    // completed bars only: last completed = length - 2; walk back barsSinceEntry
     entryIdx = Math.max(0, historicalData.length - 2 - ctx.barsSinceEntry);
   }
 
@@ -468,30 +460,28 @@ export function getTradeManagementSignal_V3(
   const crossedDownPostEntry = entryWasAbove && nowBelowMA25;
   const belowSinceEntry = !entryWasAbove && nowBelowMA25;
 
-  // --- 1) SELL — hard exit: stop-loss hit ------------------------------------
-  if (px <= stop) {
+  // 1) Hard stop
+  if (px <= stop)
     return {
       status: "Sell Now",
       reason: `Stop-loss hit at ¥${Math.round(stop)}.`,
     };
-  }
 
-  // --- 2) SELL — structural breakdown (completed bars) -----------------------
-  const brokeMA25 = nowBelowMA25;
+  // 2) Structural breakdown
   const bearishContext =
     sentiment >= 6 ||
     ml <= -1.5 ||
     (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
       ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
 
-  if (brokeMA25 && madeLowerLow(historicalData) && bearishContext) {
+  if (nowBelowMA25 && madeLowerLow(historicalData) && bearishContext) {
     return {
       status: "Sell Now",
       reason: "Trend break: close < MA25 with lower low and bearish context.",
     };
   }
 
-  // --- 3) SCALE/SELL — reached target ----------------------------------------
+  // 3) Target reached
   const strengthOK =
     sentiment <= 3 &&
     (ml >= 1 || ctx.deep?.longTermRegime?.type === "TRENDING") &&
@@ -522,7 +512,7 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 4) PROTECT — R milestones ---------------------------------------------
+  // 4) R milestones
   if (progressR >= 2) {
     const proposed = Math.max(
       stop,
@@ -532,13 +522,12 @@ export function getTradeManagementSignal_V3(
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
       status: "Protect Profit",
-      reason: `Up ≥ +2R. Trail with structure/MA25 to lock gains. New stop: ¥${newSL}.`,
+      reason: `Up ≥ +2R. Trail with structure/MA25. New stop: ¥${newSL}.`,
       updatedStopLoss: newSL,
     };
   }
-
   if (progressR >= 1) {
-    const proposed = Math.max(stop, entry);
+    const proposed = Math.max(stop, entry); // to breakeven
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
       status: "Protect Profit",
@@ -547,13 +536,12 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 4b) PROTECT — NO PROGRESS (completed bars, entry-aware) ---------------
+  // 4b) No-progress creep (unchanged from prior)
   {
     const NP_BARS = 5;
     const NEED_TOUCH_R = 0.5;
     const halfRLevel = entry + NEED_TOUCH_R * riskPerShare;
 
-    // Count completed bars since entry
     let barsSinceEntry = ctx?.barsSinceEntry ?? null;
     if (
       barsSinceEntry == null &&
@@ -567,7 +555,6 @@ export function getTradeManagementSignal_V3(
       }, 0);
     }
 
-    // Window of completed bars after entry (fallback to last NP_BARS)
     let win = Array.isArray(historicalData)
       ? historicalData.slice(-NP_BARS - 1, -1)
       : [];
@@ -576,7 +563,7 @@ export function getTradeManagementSignal_V3(
         const d = b?.date instanceof Date ? b.date : new Date(b?.date);
         return d > ctx.entryDate;
       });
-      if (afterEntry.length) win = afterEntry.slice(0, -1); // exclude today
+      if (afterEntry.length) win = afterEntry.slice(0, -1);
     }
 
     const touchedHalfR = (win || []).some(
@@ -595,7 +582,6 @@ export function getTradeManagementSignal_V3(
       const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01); // ≤ breakeven
       let proposed = Math.max(stop, structural, creepTarget);
 
-      // Wider live buffer for creep so we don't hug price
       const _atr = Math.max(atr, px * 0.005, 1e-6);
       const creepBuffer = Math.max(px * 0.003, 0.5 * _atr, 1);
       let newSL = Math.max(proposed, stop);
@@ -618,7 +604,7 @@ export function getTradeManagementSignal_V3(
     }
   }
 
-  // --- 5) HOLD — entry-kind aware keeps --------------------------------------
+  // 5) Entry-kind aware holds
   const entryKind = (ctx.entryKind || "").toUpperCase();
   const aboveMA25 = px >= ma25 || ma25 === 0;
 
@@ -633,7 +619,6 @@ export function getTradeManagementSignal_V3(
         "Healthy pullback above MA25 after DIP/RETEST entry; sentiment not bearish.",
     };
   }
-
   if (entryKind === "BREAKOUT") {
     const pivot = recentPivotHigh(historicalData);
     const nearPivot = pivot > 0 && Math.abs(px - pivot) <= 1.3 * atr;
@@ -647,7 +632,7 @@ export function getTradeManagementSignal_V3(
     }
   }
 
-  // --- 6) PROTECT — bearish engulf near resistance ---------------------------
+  // 6) Bearish engulf near resistance
   const last = historicalData?.at?.(-1) || {};
   const prev = historicalData?.at?.(-2) || {};
   const bearishEngulf =
@@ -670,32 +655,66 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // --- 7) DEFAULT — structure-first with MA25-aware wording ------------------
+  // 7) DEFAULT — structure-first, now *conservative* for entries below MA25
   if (px >= ma25 || ma25 === 0) {
     return {
       status: "Hold",
       reason: "Uptrend structure intact (≥ MA25). Allow normal volatility.",
     };
   } else {
+    // Cap: before +1R we never raise stop to/above breakeven.
+    const allowedMaxStop = progressR >= 1 ? Infinity : entry - 0.01;
+
+    // If we were ABOVE MA25 at entry and crossed down → protect.
+    if (crossedDownPostEntry) {
+      const proposed = Math.max(
+        stop,
+        trailingStructStop(historicalData, ma25, atr)
+      );
+      let newSL = clampStopLoss(px, atr, proposed, stop);
+      newSL = Math.min(newSL, allowedMaxStop);
+      if (newSL > stop) {
+        return {
+          status: "Protect Profit",
+          reason: `Lost MA25 post-entry — tighten to structure/MA stop at ¥${newSL}.`,
+          updatedStopLoss: newSL,
+        };
+      }
+      return {
+        status: "Hold",
+        reason:
+          "Lost MA25 post-entry, but structural stop ≤ current stop. Hold.",
+      };
+    }
+
+    // If we were already BELOW MA25 at entry → be conservative:
+    // Only tighten if (a) progress ≥ +0.5R OR (b) a completed-bar reclaim has occurred.
+    const completedReclaim = !nowBelowMA25; // means last completed close ≥ MA25
+    if (!completedReclaim && progressR < 0.5) {
+      return {
+        status: "Hold",
+        reason:
+          "Below MA25 since entry — no tighten until +0.5R progress or a completed MA25 reclaim.",
+      };
+    }
+
     const proposed = Math.max(
       stop,
       trailingStructStop(historicalData, ma25, atr)
     );
-    const newSL = clampStopLoss(px, atr, proposed, stop);
-
-    if (crossedDownPostEntry) {
+    let newSL = clampStopLoss(px, atr, proposed, stop);
+    newSL = Math.min(newSL, allowedMaxStop); // don’t creep to breakeven before +1R
+    if (newSL > stop) {
       return {
         status: "Protect Profit",
-        reason: `Lost MA25 post-entry — tighten to structure/MA stop at ¥${newSL}.`,
+        reason: `Below MA25 since entry but conditions met (progress/reclaim) — tighten to structure/MA stop at ¥${newSL}.`,
         updatedStopLoss: newSL,
       };
     }
-
-    // Was already under MA25 at entry → don’t claim “lost”; still structure-first tighten
     return {
-      status: "Protect Profit",
-      reason: `Below MA25 since entry — use structure/MA stop at ¥${newSL}.`,
-      updatedStopLoss: newSL,
+      status: "Hold",
+      reason:
+        "Below MA25 since entry — conditions not met to tighten yet. Hold.",
     };
   }
 }
