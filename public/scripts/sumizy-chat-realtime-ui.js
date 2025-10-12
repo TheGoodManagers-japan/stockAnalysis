@@ -740,6 +740,22 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
         try {
           log.debug("RT inbound", data);
 
+          // --- FAST PATH: handle refresh events (e.g., {"refresh":"thing"}) ---
+          try {
+            if (data?.action === "event") {
+              // Prefer RG-scoped Bubble function; fall back to global.
+              const handled =
+                (typeof window.handleRefreshEventWithRG === "function" &&
+                  window.handleRefreshEventWithRG(data)) ||
+                (typeof window.handleRefreshEvent === "function" &&
+                  window.handleRefreshEvent(data));
+
+              // If a refresh handler ran (e.g., bubble_fn_refreshThing()), stop here.
+              if (handled) return;
+            }
+          } catch {}
+          // --- end refresh fast path ---
+
           let incoming = [];
           if (data?.action === "message") {
             incoming = Array.isArray(data.payload) ? data.payload : [];
