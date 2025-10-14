@@ -38,6 +38,13 @@ function makeChatInjector(chatEl, cuid) {
       const old = chatEl.querySelector(`[data-id="${m.id}"]`);
       if (old) {
         old.replaceWith(el);
+        // PATCH: re-attach receipts after replace
+        if (typeof window.updateReadReceiptsInPlace === "function") {
+          try {
+            window.updateReadReceiptsInPlace(el, m);
+          } catch {}
+        }
+
         // don't auto-scroll when updating existing messages
       } else {
         // Date divider logic for a single message
@@ -57,6 +64,13 @@ function makeChatInjector(chatEl, cuid) {
         }
 
         chatEl.appendChild(el);
+
+        // PATCH: attach receipts on first append
+        if (typeof window.updateReadReceiptsInPlace === "function") {
+          try {
+            window.updateReadReceiptsInPlace(el, m);
+          } catch {}
+        }
 
         // Scroll only for messages from current user OR AI
         if (m.user_id === cuid || m.user_id === AI_USER_ID) {
@@ -112,6 +126,13 @@ function makeChatInjector(chatEl, cuid) {
       } else {
         msgEl.classList.remove("is-deleted");
         msgEl.dataset.deleted = "false";
+      }
+
+      // PATCH: add receipts before appending bulk fragment
+      if (typeof window.updateReadReceiptsInPlace === "function") {
+        try {
+          window.updateReadReceiptsInPlace(msgEl, m);
+        } catch {}
       }
 
       outFrag.appendChild(msgFrag);

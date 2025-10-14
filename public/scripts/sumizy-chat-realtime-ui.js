@@ -239,37 +239,26 @@ function sanitizeInjectedFileMessageNode(el, msg) {
   el.dataset.message = "";
 }
 
-/* >>> PATCH: Read receipts (normalizer + renderer + updater) <<< */
-// Accepts many shapes; assumes everything present is a reader.
+/* PATCH: Read receipts (normalizer + renderer + updater) */
+// Accepts various shapes; all entries mean "has read".
 window.getReaders = function getReaders(msg) {
-  const raw =
-    msg._read_by ?? msg.read_by ?? msg.readBy ?? msg.readers ?? msg.seen_by ?? [];
-
-  // Array of strings (user IDs)
+  const raw = msg._read_by ?? msg.read_by ?? msg.readBy ?? msg.readers ?? msg.seen_by ?? [];
   if (Array.isArray(raw) && (raw.length === 0 || typeof raw[0] === "string")) {
-    return raw.map((id) => ({ user_id: id, _user: null }));
+    return raw.map((id) => ({ user_id: String(id), _user: null }));
   }
-
-  // Array of objects with loose shapes
   if (Array.isArray(raw)) {
-    return raw
-      .map((r) => {
-        const uid = r?.user_id ?? r?.userId ?? r?.id ?? r?.user?.id ?? null;
-        const userObj = r?._user ?? r?.user ?? null;
-        return uid ? { user_id: String(uid), _user: userObj } : null;
-      })
-      .filter(Boolean);
+    return raw.map((r) => {
+      const uid = r?.user_id ?? r?.userId ?? r?.id ?? r?.user?.id ?? null;
+      const userObj = r?._user ?? r?.user ?? null;
+      return uid ? { user_id: String(uid), _user: userObj } : null;
+    }).filter(Boolean);
   }
-
-  // Object map { "<user_id>": {...} } or { "<user_id>": true }
   if (raw && typeof raw === "object") {
-    return Object.entries(raw)
-      .map(([uid, v]) => {
-        const userObj = v && typeof v === "object" ? (v._user ?? v.user ?? null) : null;
-        return { user_id: String(uid), _user: userObj };
-      });
+    return Object.entries(raw).map(([uid, v]) => {
+      const userObj = v && typeof v === "object" ? (v._user ?? v.user ?? null) : null;
+      return { user_id: String(uid), _user: userObj };
+    });
   }
-
   return [];
 };
 
@@ -280,10 +269,8 @@ window.renderReadReceipts = function renderReadReceipts(readers, currentUserId) 
   const list = Array.from(uniq.values());
 
   const labelNames =
-    list
-      .map((r) => (r?._user?.name || "Unknown"))
-      .slice(0, 3)
-      .join(", ") + (list.length > 3 ? ` +${list.length - 3}` : "");
+    list.map((r) => (r?._user?.name || "Unknown")).slice(0, 3).join(", ")
+    + (list.length > 3 ? ` +${list.length - 3}` : "");
 
   const avatar = (r) => {
     const name = r?._user?.name || "";
@@ -307,6 +294,7 @@ window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg
   const html = window.renderReadReceipts(readers, window.currentUserId);
   if (html) parent.insertAdjacentHTML("beforeend", html);
 };
+
 
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
@@ -518,6 +506,13 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     id: msg.id,
     aggregatedCount: aggregated.length,
   });
+
+  // PATCH: ensure receipts persist after reaction updates
+  if (typeof window.updateReadReceiptsInPlace === "function") {
+    try {
+      window.updateReadReceiptsInPlace(msgEl, msg);
+    } catch {}
+  }
 }
 
 /* ─────────── Reply preview updater ─────────── */
@@ -719,11 +714,11 @@ function injectBatchForPane(paneRole, chatId, batch) {
       `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
     );
     sanitizeInjectedFileMessageNode(el, m);
-    if (typeof window.updateReadReceiptsInPlace === "function") {
-      try {
-        window.updateReadReceiptsInPlace(el, m);
-      } catch {}
-    }
+        // PATCH: attach receipts during injection
+        if (typeof window.updateReadReceiptsInPlace === "function") {
+          try { window.updateReadReceiptsInPlace(el, m); } catch {}
+        }
+    
 
   }
 
