@@ -391,9 +391,7 @@ const renderMsgWithMarkdown = (m, cuid) => {
                       : ""
                   }
                   ${messageContent}
-                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}${
-    reacts ? `<div class="reactions">${reacts}</div>` : ""
-  }
+                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
                   ${readReceipts}
                   
                 </div>
