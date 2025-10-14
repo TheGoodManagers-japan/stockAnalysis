@@ -349,8 +349,16 @@ const renderMsgWithMarkdown = (m, cuid) => {
     })
     .join("");
 
-    const actionTrigger =
-      '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
+  // >>> PATCH: read receipts on first render <<<
+  const readers =
+    typeof window.getReaders === "function" ? window.getReaders(m) : [];
+  const readReceipts =
+    typeof window.renderReadReceipts === "function"
+      ? window.renderReadReceipts(readers, cuid)
+      : "";
+
+  const actionTrigger =
+    '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
 
   const imageLike =
     m.isFile &&
@@ -383,7 +391,11 @@ const renderMsgWithMarkdown = (m, cuid) => {
                       : ""
                   }
                   ${messageContent}
-                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
+                  ${reacts ? `<div class="reactions">${reacts}</div>` : ""}${
+    reacts ? `<div class="reactions">${reacts}</div>` : ""
+  }
+                  ${readReceipts}
+                  
                 </div>
               </div>
             </div>`;

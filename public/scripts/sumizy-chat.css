@@ -1289,7 +1289,9 @@
 .message.is-deleted .reactions,
 .message[data-deleted="true"] .reactions,
 .message.is-deleted .file-attachment,
-.message[data-deleted="true"] .file-attachment {
+.message[data-deleted="true"] .file-attachment,
+.message.is-deleted .read-receipts,
+.message[data-deleted="true"] .read-receipts {
     display: none !important;
     pointer-events: none !important;
 }
@@ -1346,4 +1348,47 @@
 .file-viewer-modal .file-viewer-download:not(.download-success):not(.download-error):active {
     background: #285FA8 !important;
     /* active shade */
+}
+
+/* ─────────── Read receipts (base) ─────────── */
+.read-receipts {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    /* space below message/reactions */
+    opacity: .75;
+    font-size: 12px;
+    color: #616061;
+    /* same tone as timestamp/reaction */
+}
+
+.read-receipts .read-avatar {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #e5e7eb;
+    /* light gray when no image */
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.read-receipts .read-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.read-receipts .read-count {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Space the receipts a bit from reactions if both render */
+.reactions+.read-receipts {
+    margin-top: 4px;
 }

@@ -239,6 +239,76 @@ function sanitizeInjectedFileMessageNode(el, msg) {
   el.dataset.message = "";
 }
 
+/* >>> PATCH: Read receipts (normalizer + renderer + updater) <<< */
+// Accepts many shapes; assumes everything present is a reader.
+window.getReaders = function getReaders(msg) {
+  const raw =
+    msg._read_by ?? msg.read_by ?? msg.readBy ?? msg.readers ?? msg.seen_by ?? [];
+
+  // Array of strings (user IDs)
+  if (Array.isArray(raw) && (raw.length === 0 || typeof raw[0] === "string")) {
+    return raw.map((id) => ({ user_id: id, _user: null }));
+  }
+
+  // Array of objects with loose shapes
+  if (Array.isArray(raw)) {
+    return raw
+      .map((r) => {
+        const uid = r?.user_id ?? r?.userId ?? r?.id ?? r?.user?.id ?? null;
+        const userObj = r?._user ?? r?.user ?? null;
+        return uid ? { user_id: String(uid), _user: userObj } : null;
+      })
+      .filter(Boolean);
+  }
+
+  // Object map { "<user_id>": {...} } or { "<user_id>": true }
+  if (raw && typeof raw === "object") {
+    return Object.entries(raw)
+      .map(([uid, v]) => {
+        const userObj = v && typeof v === "object" ? (v._user ?? v.user ?? null) : null;
+        return { user_id: String(uid), _user: userObj };
+      });
+  }
+
+  return [];
+};
+
+window.renderReadReceipts = function renderReadReceipts(readers, currentUserId) {
+  if (!Array.isArray(readers) || readers.length === 0) return "";
+  const uniq = new Map();
+  readers.forEach((r) => { if (r?.user_id) uniq.set(String(r.user_id), r); });
+  const list = Array.from(uniq.values());
+
+  const labelNames =
+    list
+      .map((r) => (r?._user?.name || "Unknown"))
+      .slice(0, 3)
+      .join(", ") + (list.length > 3 ? ` +${list.length - 3}` : "");
+
+  const avatar = (r) => {
+    const name = r?._user?.name || "";
+    const pic = r?._user?.profilePicture || "";
+    const initial = name ? name.charAt(0).toUpperCase() : "•";
+    if (pic) {
+      return `<span class="read-avatar" title="${_esc(name)}"><img src="${_esc(pic)}" alt="${_esc(name)}" onerror="this.replaceWith(document.createTextNode('${initial}'))"></span>`;
+    }
+    return `<span class="read-avatar initials" title="${_esc(name)}">${_esc(initial)}</span>`;
+  };
+
+  const avatars = list.slice(0, 5).map(avatar).join("");
+  return `<div class="read-receipts" aria-label="Seen by ${_esc(labelNames)}">${avatars}<span class="read-count">${list.length}</span></div>`;
+};
+
+window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg) {
+  if (!msgEl || !msg) return;
+  const parent = msgEl.querySelector(".message-content-wrapper") || msgEl;
+  parent.querySelectorAll(":scope > .read-receipts").forEach((n) => n.remove());
+  const readers = window.getReaders(msg);
+  const html = window.renderReadReceipts(readers, window.currentUserId);
+  if (html) parent.insertAdjacentHTML("beforeend", html);
+};
+
+
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
@@ -555,6 +625,10 @@ function patchMessageInPlace(rg, msg) {
   updateMessageTextsInPlace(el, msg, { forDelete: !!msg.isDeleted });
   updateReactionsInPlace(el, msg, window.currentUserId);
   updateReplyPreviewsForMessage(msg);
+  if (typeof window.updateReadReceiptsInPlace === "function") {
+    window.updateReadReceiptsInPlace(el, msg);
+  }
+
 
   log.info("Patched message in place", { rg, id: msg.id });
   return true;
@@ -645,6 +719,12 @@ function injectBatchForPane(paneRole, chatId, batch) {
       `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
     );
     sanitizeInjectedFileMessageNode(el, m);
+    if (typeof window.updateReadReceiptsInPlace === "function") {
+      try {
+        window.updateReadReceiptsInPlace(el, m);
+      } catch {}
+    }
+
   }
 
   // Ensure AI styling + markdown render immediately for AI pane
@@ -663,6 +743,12 @@ function injectBatchForPane(paneRole, chatId, batch) {
 
       try {
         updateMessageTextsInPlace(el, m, { forDelete: !!m.isDeleted });
+        if (typeof window.updateReadReceiptsInPlace === "function") {
+          try {
+            window.updateReadReceiptsInPlace(el, m);
+          } catch {}
+        }
+
       } catch (e) {
         log.warn("AI markdown re-render failed", { id: m.id, e });
       }
