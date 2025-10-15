@@ -299,6 +299,11 @@ window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
+    // Notification flag styling/data
+  if (typeof msg.is_notification === "boolean") {
+    msgEl.classList.toggle("is-notification", !!msg.is_notification);
+    msgEl.dataset.notification = String(!!msg.is_notification);
+  }
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
   // File messages: keep attachment, no URL text
@@ -433,10 +438,17 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     hasTranslations: !!translations.length,
     inAIPane,
     isAIMessage,
+    isNotification: !!msg.is_notification,
   });
 }
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
+    // Notifications have no reactions
+  if (msg?.is_notification) {
+    const rBox = msgEl.querySelector(".reactions");
+    if (rBox) rBox.remove();
+    return;
+  }
   const containerParent =
     msgEl.querySelector(".message-content-wrapper") || msgEl;
 
@@ -611,6 +623,11 @@ function patchMessageInPlace(rg, msg) {
     el.dataset.deleted = String(!!msg.isDeleted);
     el.classList.toggle("is-deleted", !!msg.isDeleted);
   }
+
+    if (typeof msg.is_notification === "boolean") {
+        el.dataset.notification = String(!!msg.is_notification);
+        el.classList.toggle("is-notification", !!msg.is_notification);
+      }
 
   if (msg.created_at != null) {
     const ts = parseTime(msg.created_at);

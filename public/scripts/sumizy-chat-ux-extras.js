@@ -288,6 +288,7 @@ document.addEventListener("click", (e) => {
   e.stopPropagation();
 
   const msgEl = e.target.closest(".message");
+  if (msgEl?.dataset?.notification === "true") return; // block for notifications
   const isInAIPane = !!e.target.closest('[data-pane="ai"]');
   if (isInAIPane) return; // safety: no action menu in AI pane
 
@@ -349,14 +350,24 @@ document.addEventListener("click", (e) => {
       hideActionMenu();
       return;
     }
-    if (ev.target.closest(".reply-action")) {
+        if (ev.target.closest(".reply-action")) {
+            // block replies on notifications
+            if (msgEl?.dataset?.notification === "true") {
+              hideActionMenu();
+              return;
+            }
       const fn = `bubble_fn_replyChat${rgNum}`;
       if (typeof window[fn] === "function")
         window[fn]({ output1: buildReplyHtml(msgEl), output2: msgId });
       hideActionMenu();
       return;
     }
-    if (ev.target.closest(".delete-action")) {
+       if (ev.target.closest(".delete-action")) {
+            // block deletes on notifications
+            if (msgEl?.dataset?.notification === "true") {
+              hideActionMenu();
+              return;
+            }
       const fn = `bubble_fn_deleteMessage${rgNum}`;
       if (typeof window[fn] === "function") {
         msgEl.classList.add("is-deleting");
@@ -386,6 +397,7 @@ document.addEventListener("click", (e) => {
   if (!pill) return;
 
   const msg = pill.closest(".message");
+  if (msg?.dataset?.notification === "true") return; // block emoji on notifications
   const rgEl = msg?.closest('[id^="rg"]');
   const msgId = msg?.dataset?.id || "";
   if (!rgEl || !msgId) return;

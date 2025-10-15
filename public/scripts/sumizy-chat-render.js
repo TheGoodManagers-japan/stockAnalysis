@@ -286,6 +286,7 @@ function agg(raw) {
 /* ─────────── UPDATE RENDERMSG TO BE PANE-AWARE ─────────── */
 const renderMsgWithMarkdown = (m, cuid) => {
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+  const isNotification = !!m.is_notification;
 
   // Detect “AI chat mode”
   let isAIChat =
@@ -336,18 +337,21 @@ const renderMsgWithMarkdown = (m, cuid) => {
     }
   }
 
-  const reacts = agg(m._reactions)
-    .map((r) => {
-      const mine = cuid && r.userIds.includes(cuid);
-      return `<div class="reaction${mine ? " user-reacted" : ""}"
+  
+  const reacts = isNotification
+    ? ""
+    : agg(m._reactions)
+        .map((r) => {
+          const mine = cuid && r.userIds.includes(cuid);
+          return `<div class="reaction${mine ? " user-reacted" : ""}"
                   data-emoji="${esc(r.e)}"
                   data-users='${JSON.stringify(r.users || [])}'
                   data-user-ids='${JSON.stringify(r.userIds || [])}'>
                 <span class="reaction-emoji">${r.e}</span>
                 <span class="reaction-count">${r.c}</span>
               </div>`;
-    })
-    .join("");
+        })
+        .join("");
 
   // >>> PATCH: read receipts on first render <<<
   const readers =
@@ -357,8 +361,9 @@ const renderMsgWithMarkdown = (m, cuid) => {
       ? window.renderReadReceipts(readers, cuid)
       : "";
 
-  const actionTrigger =
-    '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
+        const actionTrigger = isNotification
+          ? ''
+          : '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
 
   const imageLike =
     m.isFile &&
@@ -369,8 +374,9 @@ const renderMsgWithMarkdown = (m, cuid) => {
 
   return `<div class="message${m._reply ? " has-reply" : ""}${
     isAIChat && isAIMessage ? " ai-message" : ""
-  }"
-                 data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
+      }${isNotification ? " is-notification" : ""}"
+                     data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
+                     data-notification="${isNotification ? "true" : "false"}"
                  data-username="${esc(u.name || "Unknown")}"
                  data-message="${esc(
                    imageLike ? "" : m.isFile ? m.file_name : m.message || ""

@@ -1296,6 +1296,48 @@
     pointer-events: none !important;
 }
 
+
+/* ─────────── Notification messages (non-interactive) ─────────── */
+.message.is-notification .message-content-wrapper,
+.message[data-notification="true"] .message-content-wrapper {
+    background: #eef6ff !important;
+    /* soft blue */
+    border: 1px solid #d6e8ff !important;
+    border-left-width: 4px !important;
+    border-left-color: #3A81DF !important;
+    /* brand blue accent */
+    border-radius: 8px !important;
+    box-shadow: none !important;
+    padding: 10px 12px !important;
+}
+
+.message.is-notification .username,
+.message[data-notification="true"] .username {
+    color: #1d4ed8 !important;
+}
+
+.message.is-notification .timestamp,
+.message[data-notification="true"] .timestamp {
+    color: #6b7280 !important;
+}
+
+/* Hide/disable interactions on notifications */
+.message.is-notification .message-actions-trigger,
+.message[data-notification="true"] .message-actions-trigger,
+.message.is-notification .reactions,
+.message[data-notification="true"] .reactions {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+/* Optional: subtle bell glyph via pseudo (keeps DOM unchanged) */
+.message.is-notification .message-header .username::before,
+.message[data-notification="true"] .message-header .username::before {
+    content: "🔔";
+    margin-right: 6px;
+    opacity: .8;
+}
+
 /* ─────────── DELETED REPLY PREVIEW (the “replied to” tile) ─────────── */
 .reply-preview.is-deleted,
 .reply-preview[data-deleted="true"] {

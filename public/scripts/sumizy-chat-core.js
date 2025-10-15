@@ -26,7 +26,7 @@ function makeChatInjector(chatEl, cuid) {
         el.classList.add("ai-message");
       }
 
-      // Mark deleted so CSS can style it
+      // Mark deleted / notification so CSS can style it
       if (m.isDeleted) {
         el.classList.add("is-deleted");
         el.dataset.deleted = "true";
@@ -34,6 +34,14 @@ function makeChatInjector(chatEl, cuid) {
         el.classList.remove("is-deleted");
         el.dataset.deleted = "false";
       }
+
+            if (m.is_notification) {
+                el.classList.add("is-notification");
+                el.dataset.notification = "true";
+              } else {
+                el.classList.remove("is-notification");
+                el.dataset.notification = "false";
+              }
 
       const old = chatEl.querySelector(`[data-id="${m.id}"]`);
       if (old) {
@@ -127,6 +135,14 @@ function makeChatInjector(chatEl, cuid) {
         msgEl.classList.remove("is-deleted");
         msgEl.dataset.deleted = "false";
       }
+
+            if (m.is_notification) {
+                msgEl.classList.add("is-notification");
+                msgEl.dataset.notification = "true";
+              } else {
+                msgEl.classList.remove("is-notification");
+                msgEl.dataset.notification = "false";
+              }
 
       // PATCH: add receipts before appending bulk fragment
       if (typeof window.updateReadReceiptsInPlace === "function") {
