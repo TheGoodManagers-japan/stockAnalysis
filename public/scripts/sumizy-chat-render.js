@@ -325,7 +325,7 @@ const renderMsgWithMarkdown = (m, cuid) => {
           )}</div>`
         : `<div class="message-text lang-original">${esc(m.message)}</div>`;
     // translations
-    if (Array.isArray(m._translations)) {
+    if (Array.isArray(m._translations) && m._translations.length > 0) {
       messageContent += m._translations
         .map((tr) => {
           const lang = esc(tr.language);
@@ -334,7 +334,20 @@ const renderMsgWithMarkdown = (m, cuid) => {
           return `<div class="message-text lang-${lang}" style="display:none;">${inner}</div>`;
         })
         .join("");
+    } else {
+      // No translations yet: add EN/JA placeholders (hidden by default)
+      const placeholders = [
+        { language: "en", text: "Translation not available yet" },
+        { language: "ja", text: "翻訳はまだありません" },
+      ];
+      messageContent += placeholders
+        .map((p) => {
+          const inner = isAIChat && isAIMessage ? parseMarkdown(p.text) : esc(p.text);
+          return `<div class="message-text lang-${esc(p.language)}" style="display:none;">${inner}</div>`;
+        })
+        .join("");
     }
+    
   }
 
   

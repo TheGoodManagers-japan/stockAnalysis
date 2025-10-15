@@ -179,6 +179,20 @@ function waitForPaneContainer(paneRole, timeoutMs = 20000) {
   });
 }
 
+// >>> PATCH: wait for realtime channel to be callable
+function waitForChannelReady(timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (typeof isChannelReady === "function" && isChannelReady()) return resolve(true);
+      if (Date.now() - start > timeoutMs) return resolve(false);
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+}
+
+
 
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
@@ -299,7 +313,7 @@ window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
-    // Notification flag styling/data
+  // Notification flag styling/data
   if (typeof msg.is_notification === "boolean") {
     msgEl.classList.toggle("is-notification", !!msg.is_notification);
     msgEl.dataset.notification = String(!!msg.is_notification);
@@ -426,6 +440,25 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       contentWrap.appendChild(node);
     }
     node.innerHTML = renderTr(t.translated_text || "");
+  }
+  // If there are no translations yet, inject EN/JA placeholders (hidden by default)
+  if (!msg?.isFile && translations.length === 0) {
+    const placeholders = [
+      { language: "en", text: "Translation not available yet" },
+      { language: "ja", text: "翻訳はまだありません" },
+    ];
+    for (const p of placeholders) {
+      let node = contentWrap.querySelector(
+        `:scope > .message-text.lang-${p.language}`
+      );
+      if (!node) {
+        node = document.createElement("div");
+        node.className = `message-text lang-${p.language}`;
+        node.style.display = "none"; // shown only when user toggles lang
+        contentWrap.appendChild(node);
+      }
+      node.innerHTML = renderTr(p.text);
+    }
   }
 
   if (typeof msg.message === "string") {
@@ -1020,6 +1053,52 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   }
 };
 
+// >>> PATCH: join watchdog to recover from silent misses / delays
+(function wireJoinWatchdog() {
+  if (window.__sumizyJoinWatchdogWired) return;
+  window.__sumizyJoinWatchdogWired = true;
+
+  const JOIN_STALE_MS = 5000;   // join_sent for >5s → resend join
+  const LIVE_STALE_MS = 12000;  // live but no newer ts for >12s → nudge
+
+  setInterval(() => {
+    const act = window._paneActive || {};
+    for (const paneRole of ["main", "ai"]) {
+      const chatId = act[paneRole];
+      if (!chatId) continue;
+      const st = getStateForPane(paneRole, chatId);
+      if (!st) continue;
+
+      const now = Date.now();
+
+      // Stuck in join_sent? Re-send (idempotent on backend).
+      if (st.phase === "join_sent" && st.lastJoinSentAt && (now - st.lastJoinSentAt) > JOIN_STALE_MS) {
+        log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
+        st.joinDispatched = false;
+        st.joinPending = false;
+        st.lastJoinSentAt = now;
+        window.ensureJoinForPane(paneRole, true);
+        continue;
+      }
+
+      // Live but nothing new for too long? Nudge join again.
+      const rg = getRGForPane(paneRole);
+      const hasContainer = rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+      const channelOk = (typeof isChannelReady === "function" && isChannelReady());
+      const staleLive = st.phase === "live" && (now - (st.lastTs || 0) > LIVE_STALE_MS);
+
+      if (staleLive && hasContainer && channelOk) {
+        log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
+        st.joinDispatched = false;
+        st.joinPending = false;
+        st.lastJoinSentAt = now;
+        window.ensureJoinForPane(paneRole, true);
+      }
+    }
+  }, 1500);
+})();
+
+
 window.getCurrentChannel = () => window.currentChannel || null;
 
 /* ─────────── Sending (unchanged) ─────────── */
@@ -1121,7 +1200,6 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     if (s.joinRetryTid) clearTimeout(s.joinRetryTid);
     s.joinRetryTid = setTimeout(trySend, 0);
   }
-  
 
   const trySend = () => {
     const s = getStateForPane(paneRole, chatId);
@@ -1146,19 +1224,23 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
           hasContainer: !!cNow,
           channelReady: isChannelReady(),
         });
-              } else {
-                  // Instead of truly abandoning, keep it pending and re-arm when ready.
-                  s.joinPending = true;
-                  s.joinRetryTid = 0;
-                  s.joinRetryCount = 0;
-                  log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
-                  // Re-arm on container OR channel readiness
-                  waitForPaneContainer(paneRole, 20000).then(() => {
-                    const still = getStateForPane(paneRole, chatId);
-                    if (!still || still.joinGen !== currentGen) return;
-                    scheduleImmediateRetry();
-                  });
-                }
+      } else {
+        // Instead of truly abandoning, keep it pending and re-arm when ready.
+        s.joinPending = true;
+        s.joinRetryTid = 0;
+        s.joinRetryCount = 0;
+        log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
+        // Re-arm on container OR channel readiness (whichever becomes ready first)
+        Promise.race([
+          waitForPaneContainer(paneRole, 20000),
+          waitForChannelReady(20000),
+        ]).then(() => {
+          const still = getStateForPane(paneRole, chatId);
+          if (!still || still.joinGen !== currentGen) return;
+          scheduleImmediateRetry();
+        });
+      }
+
       return;
     }
 
@@ -1181,6 +1263,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     s.joinRetryTid = 0;
     s.joinRetryCount = 0;
     s.phase = "join_sent";
+    s.lastJoinSentAt = Date.now();
 
     const payload = {
       isReaction: false,
@@ -1219,6 +1302,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   // Immediate path
   st.joinDispatched = true;
   st.phase = "join_sent";
+  st.lastJoinSentAt = Date.now(); // <<< PATCH
   const payload = {
     isReaction: false,
     isDelete: false,
@@ -1283,6 +1367,17 @@ if (!ai) {
     window.ensureJoinForPane("ai", false);
   }
 }
+// >>> PATCH: extra robustness — nudge after DOM settles & after channel wakes
+setTimeout(() => {
+  if (window._paneActive.main) window.ensureJoinForPane("main", true);
+  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
+}, 400);
+
+setTimeout(() => {
+  if (window._paneActive.main) window.ensureJoinForPane("main", true);
+  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
+}, 1800);
+
 }
 
 /* ─────────── Wire up basic SPA navigation hooks ─────────── */
