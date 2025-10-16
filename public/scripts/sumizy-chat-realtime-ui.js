@@ -65,6 +65,9 @@ function getPaneIdsFromUrl() {
   }
 }
 
+// warn only once per session for multiple mains
+let __warnedMultipleMain = false;
+
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
@@ -88,12 +91,13 @@ function getRGForPane(paneRole) {
   const rgNum = m ? parseInt(m[0], 10) : null;
 
   // Optional warning if there are multiple mains—helps future debugging
-  if (paneRole === "main" && nodes.length > 1) {
+  if (paneRole === "main" && nodes.length > 1 && !__warnedMultipleMain) {
     console.warn(
       '[sumizy] Multiple data-pane="main" in DOM:',
       nodes.map((n) => n.id)
     );
-  }
+    __warnedMultipleMain = true;
+  }  
 
   return Number.isFinite(rgNum) ? rgNum : null;
 }
@@ -657,10 +661,10 @@ function patchMessageInPlace(rg, msg) {
     el.classList.toggle("is-deleted", !!msg.isDeleted);
   }
 
-    if (typeof msg.is_notification === "boolean") {
-        el.dataset.notification = String(!!msg.is_notification);
-        el.classList.toggle("is-notification", !!msg.is_notification);
-      }
+  if (typeof msg.is_notification === "boolean") {
+    el.dataset.notification = String(!!msg.is_notification);
+    el.classList.toggle("is-notification", !!msg.is_notification);
+  }
 
   if (msg.created_at != null) {
     const ts = parseTime(msg.created_at);
@@ -674,8 +678,16 @@ function patchMessageInPlace(rg, msg) {
     window.updateReadReceiptsInPlace(el, msg);
   }
 
-
   log.info("Patched message in place", { rg, id: msg.id });
+  // record UI activity for the pane that owns this rg
+  try {
+    const rgEl = document.getElementById(`rg${rg}`);
+    const paneRole = rgEl?.dataset?.pane || "main";
+    const chatId = window._paneActive?.[paneRole] || null;
+    const st = getStateForPane(paneRole, chatId);
+    if (st) st.lastActivityAt = Date.now();
+  } catch {}
+
   return true;
 }
 
@@ -690,7 +702,10 @@ function getStateForPane(paneRole, chatId) {
   return (window._paneState[key] ||= {
     phase: "idle", // idle -> join_sent -> injecting_history -> live
     seen: new Set(),
-    lastTs: 0,
+    lastTs: 0, // latest message created_at we saw
+    lastActivityAt: 0, // last time we updated DOM for this pane
+    lastJoinSentAt: 0, // last time we sent a join
+    lastNudgeAt: 0, // last time watchdog nudged
     prebuffer: [],
     joinGen: -1,
     joinDispatched: false,
@@ -706,13 +721,16 @@ function resetStateForPane(paneRole, chatId) {
     phase: "idle",
     seen: new Set(),
     lastTs: 0,
+    lastActivityAt: 0,
+    lastJoinSentAt: 0,
+    lastNudgeAt: 0,
     prebuffer: [],
     joinGen: -1,
     joinDispatched: false,
     joinPending: false,
     joinRetryTid: 0,
     joinRetryCount: 0,
-  };
+  };  
   log.info("Pane state reset", { paneRole, chatId });
   return window._paneState[key];
 }
@@ -768,8 +786,6 @@ function injectBatchForPane(paneRole, chatId, batch) {
         if (typeof window.updateReadReceiptsInPlace === "function") {
           try { window.updateReadReceiptsInPlace(el, m); } catch {}
         }
-    
-
   }
 
   // Ensure AI styling + markdown render immediately for AI pane
@@ -809,6 +825,7 @@ function injectBatchForPane(paneRole, chatId, batch) {
       if (ts > st.lastTs) st.lastTs = ts;
     }
   }
+  st.lastActivityAt = Date.now();
   afterInjectUiRefresh(rg);
 }
 
@@ -841,6 +858,8 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
+  st.lastActivityAt = Date.now();
+  if (!st.lastTs) st.lastTs = st.lastActivityAt;
 }
 
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
@@ -1082,18 +1101,31 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       }
 
       // Live but nothing new for too long? Nudge join again.
-      const rg = getRGForPane(paneRole);
-      const hasContainer = rg != null && document.querySelector(`#rg${rg} .chat-messages`);
-      const channelOk = (typeof isChannelReady === "function" && isChannelReady());
-      const staleLive = st.phase === "live" && (now - (st.lastTs || 0) > LIVE_STALE_MS);
+// Live but nothing new for too long? Check freshness by activity/ts/join.
+const rg = getRGForPane(paneRole);
+const hasContainer = rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+const channelOk = (typeof isChannelReady === "function" && isChannelReady());
 
-      if (staleLive && hasContainer && channelOk) {
-        log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
-        st.joinDispatched = false;
-        st.joinPending = false;
-        st.lastJoinSentAt = now;
-        window.ensureJoinForPane(paneRole, true);
-      }
+const lastFresh = Math.max(
+  st.lastActivityAt || 0,
+  st.lastTs || 0,
+  st.lastJoinSentAt || 0
+);
+const staleLive = st.phase === "live" && (now - lastFresh > LIVE_STALE_MS);
+
+// small cooldown to avoid rapid re-joins
+const cooldownOk = now - (st.lastNudgeAt || 0) > 10000;
+
+// Only nudge if stale AND either channel not OK or container present (so the join makes sense)
+if (staleLive && cooldownOk && (!channelOk || hasContainer)) {
+  log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
+  st.lastNudgeAt = now;
+  st.joinDispatched = false;
+  st.joinPending = false;
+  st.lastJoinSentAt = now;
+  window.ensureJoinForPane(paneRole, true);
+}
+
     }
   }, 1500);
 })();
@@ -1229,7 +1261,9 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
         s.joinPending = true;
         s.joinRetryTid = 0;
         s.joinRetryCount = 0;
+        s.lastJoinSentAt = Date.now();
         log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
+        
         // Re-arm on container OR channel readiness (whichever becomes ready first)
         Promise.race([
           waitForPaneContainer(paneRole, 20000),
@@ -1244,10 +1278,16 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       return;
     }
 
+    const channelReadyNow = isChannelReady();
+    const containerReadyNow = !!cNow;
     const canJoin =
       s.phase === "idle" ||
       s.phase === "injecting_history" ||
-      (force && s.phase !== "join_sent");
+      // only allow a forced re-join when something is actually missing
+      (force &&
+        s.phase !== "join_sent" &&
+        (!channelReadyNow || !containerReadyNow));
+    
 
     if (!canJoin) {
       s.joinPending = false;
