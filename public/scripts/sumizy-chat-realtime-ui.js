@@ -109,39 +109,96 @@ window.hidePaneLoading = function hidePaneLoading(paneRole) {
   return true;
 };
 
+// >>> PATCH: cache a stable RG per pane + warn-once controls
+window.__rgForPaneCache = window.__rgForPaneCache || { main: null, ai: null };
+window.__rgWarnedMulti = window.__rgWarnedMulti || { main: false, ai: false };
+window.__rgWarnedGen = window.__rgWarnedGen || -1;
+
+function __isVisible(el) {
+  if (!el) return false;
+  if (el.offsetParent === null) return false;
+  const style = getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+  if (el.offsetWidth <= 0 || el.offsetHeight <= 0) return false;
+  return true;
+}
 
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
-  // Prefer a VISIBLE RG that already contains .chat-messages
+  // 1) Use cached pick if it still looks valid
+  const cached = window.__rgForPaneCache?.[paneRole];
+  if (Number.isFinite(cached)) {
+    const el = document.getElementById(`rg${cached}`);
+    const valid =
+      el &&
+      el.dataset &&
+      el.dataset.pane === paneRole &&
+      __isVisible(el) &&
+      !!el.querySelector(".chat-messages");
+    if (valid) return cached;
+  }
+
+  // 2) Gather candidates
   const nodes = Array.from(
     document.querySelectorAll(`[id^="rg"][data-pane="${paneRole}"]`)
   );
 
+  // 3) Choose a single stable candidate with a deterministic order:
+  //    (a) visible AND contains .chat-messages
+  //    (b) contains .chat-messages (even if offscreen)
+  //    (c) visible
+  //    (d) first
   const pick =
-    nodes.find(
-      (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
-    ) ||
+    nodes.find((el) => __isVisible(el) && el.querySelector(".chat-messages")) ||
     nodes.find((el) => el.querySelector(".chat-messages")) ||
-    nodes.find((el) => el.offsetParent !== null) ||
+    nodes.find((el) => __isVisible(el)) ||
     nodes[0] ||
     null;
 
   if (!pick) return null;
 
-  const m = String(pick.id).match(/\d+/); // tolerate any id like "rg12"
+  // 4) Parse rg number
+  const m = String(pick.id).match(/\d+/);
   const rgNum = m ? parseInt(m[0], 10) : null;
+  const rg = Number.isFinite(rgNum) ? rgNum : null;
 
-  // Optional warning if there are multiple mains—helps future debugging
+  // 5) Warn only once per route-change generation (no spam)
+  const gen = window._chatGen || 0;
   if (paneRole === "main" && nodes.length > 1) {
-    console.warn(
-      '[sumizy] Multiple data-pane="main" in DOM:',
-      nodes.map((n) => n.id)
-    );
+    if (window.__rgWarnedGen !== gen) {
+      window.__rgWarnedMulti = { main: false, ai: false };
+      window.__rgWarnedGen = gen;
+    }
+    if (!window.__rgWarnedMulti.main) {
+      console.warn(
+        '[sumizy] Multiple data-pane="main" in DOM:',
+        nodes.map((n) => n.id)
+      );
+      window.__rgWarnedMulti.main = true;
+    }
+  }
+  if (paneRole === "ai" && nodes.length > 1) {
+    if (window.__rgWarnedGen !== gen) {
+      window.__rgWarnedMulti = { main: false, ai: false };
+      window.__rgWarnedGen = gen;
+    }
+    if (!window.__rgWarnedMulti.ai) {
+      console.warn(
+        '[sumizy] Multiple data-pane="ai" in DOM:',
+        nodes.map((n) => n.id)
+      );
+      window.__rgWarnedMulti.ai = true;
+    }
   }
 
-  return Number.isFinite(rgNum) ? rgNum : null;
+  // 6) Cache and return
+  if (rg != null) {
+    window.__rgForPaneCache[paneRole] = rg;
+  }
+  return rg;
 }
+
 
 
 // Pane-aware AI detection helpers
@@ -1123,29 +1180,27 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
       const now = Date.now();
 
-      // Stuck in join_sent? Re-send (idempotent on backend).
-      if (st.phase === "join_sent" && st.lastJoinSentAt && (now - st.lastJoinSentAt) > JOIN_STALE_MS) {
-        log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
-        st.joinDispatched = false;
-        st.joinPending = false;
-        st.lastJoinSentAt = now;
-        window.ensureJoinForPane(paneRole, true);
-        continue;
-      }
+      // Stuck in join_sent? Re-send (idempotent on backend), but only if container + channel are ready.
+if (
+  st.phase === "join_sent" &&
+  st.lastJoinSentAt &&
+  (now - st.lastJoinSentAt) > JOIN_STALE_MS
+) {
+  const rg = getRGForPane(paneRole);
+  const hasContainer =
+    rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+  const channelOk =
+    typeof isChannelReady === "function" && isChannelReady();
 
-      // Live but nothing new for too long? Nudge join again.
-      const rg = getRGForPane(paneRole);
-      const hasContainer = rg != null && document.querySelector(`#rg${rg} .chat-messages`);
-      const channelOk = (typeof isChannelReady === "function" && isChannelReady());
-      const staleLive = st.phase === "live" && (now - (st.lastTs || 0) > LIVE_STALE_MS);
-
-      if (staleLive && hasContainer && channelOk) {
-        log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
-        st.joinDispatched = false;
-        st.joinPending = false;
-        st.lastJoinSentAt = now;
-        window.ensureJoinForPane(paneRole, true);
-      }
+  if (hasContainer && channelOk) {
+    log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
+    st.joinDispatched = false;
+    st.joinPending = false;
+    st.lastJoinSentAt = now;
+    window.ensureJoinForPane(paneRole, true);
+  }
+  continue;
+}
     }
   }, 1500);
 })();
@@ -1393,6 +1448,7 @@ function handleChatRouteChangeDual() {
   } else {
     if (main !== prevMain) {
       window._paneActive.main = main;
+      window.__rgForPaneCache.main = null; // <<< reset cached RG for main
       resetStateForPane("main", main);
       clearPaneDom("main");
       // >>> ADD: show loader for MAIN
@@ -1413,6 +1469,7 @@ function handleChatRouteChangeDual() {
   } else {
     if (ai !== prevAI) {
       window._paneActive.ai = ai;
+      window.__rgForPaneCache.ai = null;
       resetStateForPane("ai", ai);
       clearPaneDom("ai");
       // >>> ADD: show loader for AI
