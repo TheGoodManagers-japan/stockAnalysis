@@ -71,36 +71,46 @@ let __warnedMultipleMain = false;
 
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
-  // Prefer a VISIBLE RG that already contains .chat-messages
   const nodes = Array.from(
     document.querySelectorAll(`[id^="rg"][data-pane="${paneRole}"]`)
   );
 
+  // Sort newest first (rg12 before rg1)
+  nodes.sort((a, b) => {
+    const aNum = parseInt(String(a.id).match(/\d+/)?.[0] || "0", 10);
+    const bNum = parseInt(String(b.id).match(/\d+/)?.[0] || "0", 10);
+    return bNum - aNum;
+  });
+
   const pick =
+    // Prefer VISIBLE with a chat-messages container
     nodes.find(
       (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
     ) ||
-    nodes.find((el) => el.querySelector(".chat-messages")) ||
+    // Then any VISIBLE
     nodes.find((el) => el.offsetParent !== null) ||
+    // Then any with chat-messages (hidden fallback)
+    nodes.find((el) => el.querySelector(".chat-messages")) ||
+    // Finally anything
     nodes[0] ||
     null;
 
   if (!pick) return null;
 
-  const m = String(pick.id).match(/\d+/); // tolerate any id like "rg12"
+  const m = String(pick.id).match(/\d+/);
   const rgNum = m ? parseInt(m[0], 10) : null;
 
-  // Optional warning if there are multiple mains—helps future debugging
-  if (paneRole === "main" && nodes.length > 1 && !__warnedMultipleMain) {
+  if (paneRole === "main" && nodes.length > 1 && !window.__warnedMultipleMain) {
     console.warn(
       '[sumizy] Multiple data-pane="main" in DOM:',
       nodes.map((n) => n.id)
     );
-    __warnedMultipleMain = true;
-  }  
+    window.__warnedMultipleMain = true;
+  }
 
   return Number.isFinite(rgNum) ? rgNum : null;
 }
+
 
 
 // Pane-aware AI detection helpers
@@ -174,14 +184,16 @@ function waitForPaneContainer(paneRole, timeoutMs = 20000) {
     const start = Date.now();
     const tryNow = () => {
       const rg = getRGForPane(paneRole);
-      const el = rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
-      if (el) return resolve(true);
+      const el =
+        rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+      if (el && el.offsetParent !== null) return resolve(true); // require visible
       if (Date.now() - start > timeoutMs) return resolve(false);
       requestAnimationFrame(tryNow);
     };
     tryNow();
   });
 }
+
 
 // >>> PATCH: wait for realtime channel to be callable
 function waitForChannelReady(timeoutMs = 20000) {
@@ -1349,24 +1361,23 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   const container =
     rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
-  if (!container || !isChannelReady()) {
+  // If container missing or hidden, defer and retry
+  if (!container || container.offsetParent === null || !isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
       st.joinRetryTid = setTimeout(trySend, 0);
-      log.debug("ensureJoin: scheduled immediate retry", {
+      log.debug("ensureJoin: container not visible yet, retrying", {
         paneRole,
         chatId,
         hasContainer: !!container,
+        visible: !!(container && container.offsetParent !== null),
         channelReady: isChannelReady(),
       });
-    } else if (force) {
-      clearTimeout(st.joinRetryTid);
-      st.joinRetryTid = setTimeout(trySend, 0);
-      log.debug("ensureJoin: forced immediate retry", { paneRole, chatId });
     }
     return;
   }
+  
 
   // Immediate path
   st.joinDispatched = true;
