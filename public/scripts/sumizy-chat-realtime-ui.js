@@ -49,6 +49,90 @@
 const log = window.__sumizyLog;
 
 /* ─────────── Helpers ─────────── */
+
+
+/* ─────────── Pane loaders (minimal) ─────────── */
+// CSS once (safe to inject repeatedly)
+(function ensureLoaderCSS() {
+  if (document.getElementById("sumizy-loader-css")) return;
+  const css = document.createElement("style");
+  css.id = "sumizy-loader-css";
+  css.textContent = `
+  .sumizy-pane-loader {
+    display:flex; align-items:center; justify-content:center;
+    gap:.6rem; padding:.75rem; margin:.5rem auto;
+    width:fit-content; max-width:90%;
+    background: rgba(0,0,0,.06); border:1px solid rgba(0,0,0,.08);
+    border-radius: 999px; font-size:.875rem; line-height:1; user-select:none;
+  }
+  .sumizy-spinner {
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid transparent; border-top-color:#6b7280; border-right-color:#6b7280;
+    animation: sumizy-spin .8s linear infinite;
+  }
+  @keyframes sumizy-spin { to { transform: rotate(360deg); } }
+  `;
+  document.head.appendChild(css);
+})();
+
+window._paneLoaders = window._paneLoaders || {}; // { [paneRole]: { tid, obs } }
+
+function getMessagesContainerFor(paneRole) {
+  const rg = getRGForPane(paneRole);
+  return rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+}
+
+function ensureLoaderEl(container) {
+  let el = container.querySelector(":scope > .sumizy-pane-loader");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "sumizy-pane-loader";
+    el.innerHTML = `<span class="sumizy-spinner" aria-hidden="true"></span><span>Loading…</span>`;
+    container.appendChild(el);
+  }
+  return el;
+}
+
+function hidePaneLoader(paneRole) {
+  const st = window._paneLoaders[paneRole];
+  if (st?.tid) { clearTimeout(st.tid); st.tid = 0; }
+  if (st?.obs) { try { st.obs.disconnect(); } catch {} st.obs = null; }
+  const container = getMessagesContainerFor(paneRole);
+  if (container) {
+    const el = container.querySelector(":scope > .sumizy-pane-loader");
+    if (el) el.remove();
+  }
+}
+
+async function showPaneLoader(paneRole, { autoHideMs = 2000 } = {}) {
+  const key = paneRole === "ai" ? "ai" : "main";
+  // If messages already exist, don't show.
+  const ok = await waitForPaneContainer(key, 20000);
+  if (!ok) return;
+  const container = getMessagesContainerFor(key);
+  if (!container) return;
+  if (container.querySelector(":scope > .message")) return;
+
+  // Create loader
+  ensureLoaderEl(container);
+
+  // MutationObserver: hide as soon as a .message appears
+  const obs = new MutationObserver(() => {
+    if (container.querySelector(":scope > .message")) hidePaneLoader(key);
+  });
+  try { obs.observe(container, { childList: true }); } catch {}
+
+  // Failsafe: auto-hide after N ms
+  const tid = setTimeout(() => hidePaneLoader(key), autoHideMs);
+
+  // Store handles (clear any previous)
+  if (window._paneLoaders[key]?.tid) clearTimeout(window._paneLoaders[key].tid);
+  if (window._paneLoaders[key]?.obs) try { window._paneLoaders[key].obs.disconnect(); } catch {}
+  window._paneLoaders[key] = { tid, obs };
+}
+
+
+
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
 }
@@ -65,141 +149,37 @@ function getPaneIdsFromUrl() {
   }
 }
 
-
-/* ─────────── Pane loading overlay helpers ─────────── */
-// Where to mount the overlay (inside the pane's .chat-messages)
-function getPaneContainerEl(paneRole) {
-  const rg = getRGForPane(paneRole);
-  return rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
-}
-function paneOverlayId(paneRole) {
-  return `sumizy-loader-${paneRole}`; // unique per pane
-}
-
-window.showPaneLoading = async function showPaneLoading(paneRole, text = "Loading…") {
-  // wait until the pane container exists
-  const ok = await waitForPaneContainer(paneRole, 20000);
-  if (!ok) return false;
-  const container = getPaneContainerEl(paneRole);
-  if (!container) return false;
-
-  // avoid duplicates
-  if (container.querySelector(`#${paneOverlayId(paneRole)}`)) return true;
-
-  const overlay = document.createElement("div");
-  overlay.className = "chat-loading-overlay";
-  overlay.id = paneOverlayId(paneRole);
-  overlay.innerHTML = `
-    <div class="chat-loading-content">
-      <div class="chat-loading-spinner"></div>
-      <div class="chat-loading-text">${_esc(text)}</div>
-      <div class="chat-loading-subtext">Preparing messages…</div>
-    </div>`;
-  container.appendChild(overlay);
-  return true;
-};
-
-window.hidePaneLoading = function hidePaneLoading(paneRole) {
-  const container = getPaneContainerEl(paneRole);
-  if (!container) return false;
-  const el = container.querySelector(`#${paneOverlayId(paneRole)}`);
-  if (!el) return false;
-  el.classList.add("hiding"); // fade-out via CSS
-  setTimeout(() => el.remove(), 250);
-  return true;
-};
-
-// >>> PATCH: cache a stable RG per pane + warn-once controls
-window.__rgForPaneCache = window.__rgForPaneCache || { main: null, ai: null };
-window.__rgWarnedMulti = window.__rgWarnedMulti || { main: false, ai: false };
-window.__rgWarnedGen = window.__rgWarnedGen || -1;
-
-function __isVisible(el) {
-  if (!el) return false;
-  if (el.offsetParent === null) return false;
-  const style = getComputedStyle(el);
-  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
-  if (el.offsetWidth <= 0 || el.offsetHeight <= 0) return false;
-  return true;
-}
-
-
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
-  // 1) Use cached pick if it still looks valid
-  const cached = window.__rgForPaneCache?.[paneRole];
-  if (Number.isFinite(cached)) {
-    const el = document.getElementById(`rg${cached}`);
-    const valid =
-      el &&
-      el.dataset &&
-      el.dataset.pane === paneRole &&
-      __isVisible(el) &&
-      !!el.querySelector(".chat-messages");
-    if (valid) return cached;
-  }
-
-  // 2) Gather candidates
+  // Prefer a VISIBLE RG that already contains .chat-messages
   const nodes = Array.from(
     document.querySelectorAll(`[id^="rg"][data-pane="${paneRole}"]`)
   );
 
-  // 3) Choose a single stable candidate with a deterministic order:
-  //    (a) visible AND contains .chat-messages
-  //    (b) contains .chat-messages (even if offscreen)
-  //    (c) visible
-  //    (d) first
   const pick =
-    nodes.find((el) => __isVisible(el) && el.querySelector(".chat-messages")) ||
+    nodes.find(
+      (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
+    ) ||
     nodes.find((el) => el.querySelector(".chat-messages")) ||
-    nodes.find((el) => __isVisible(el)) ||
+    nodes.find((el) => el.offsetParent !== null) ||
     nodes[0] ||
     null;
 
   if (!pick) return null;
 
-  // 4) Parse rg number
-  const m = String(pick.id).match(/\d+/);
+  const m = String(pick.id).match(/\d+/); // tolerate any id like "rg12"
   const rgNum = m ? parseInt(m[0], 10) : null;
-  const rg = Number.isFinite(rgNum) ? rgNum : null;
 
-  // 5) Warn only once per route-change generation (no spam)
-  const gen = window._chatGen || 0;
+  // Optional warning if there are multiple mains—helps future debugging
   if (paneRole === "main" && nodes.length > 1) {
-    if (window.__rgWarnedGen !== gen) {
-      window.__rgWarnedMulti = { main: false, ai: false };
-      window.__rgWarnedGen = gen;
-    }
-    if (!window.__rgWarnedMulti.main) {
-      console.warn(
-        '[sumizy] Multiple data-pane="main" in DOM:',
-        nodes.map((n) => n.id)
-      );
-      window.__rgWarnedMulti.main = true;
-    }
-  }
-  if (paneRole === "ai" && nodes.length > 1) {
-    if (window.__rgWarnedGen !== gen) {
-      window.__rgWarnedMulti = { main: false, ai: false };
-      window.__rgWarnedGen = gen;
-    }
-    if (!window.__rgWarnedMulti.ai) {
-      console.warn(
-        '[sumizy] Multiple data-pane="ai" in DOM:',
-        nodes.map((n) => n.id)
-      );
-      window.__rgWarnedMulti.ai = true;
-    }
+    console.warn(
+      '[sumizy] Multiple data-pane="main" in DOM:',
+      nodes.map((n) => n.id)
+    );
   }
 
-  // 6) Cache and return
-  if (rg != null) {
-    window.__rgForPaneCache[paneRole] = rg;
-  }
-  return rg;
+  return Number.isFinite(rgNum) ? rgNum : null;
 }
-
-
 
 // Pane-aware AI detection helpers
 function isNodeInAIPane(node) {
@@ -229,6 +209,8 @@ const keyParts = (paneKey) => {
 };
 
 function clearPaneDom(paneRole) {
+  hidePaneLoader(paneRole);
+
   if (paneRole === "ai") {
     // Preserve AI pane by default
     log.info("clearPaneDom skipped for AI pane (preserve)", { paneRole });
@@ -251,7 +233,6 @@ function clearPaneDom(paneRole) {
   }
 }
 
-
 function safeSelId(id) {
   const s = String(id ?? "");
   return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/"/g, '\\"');
@@ -265,14 +246,14 @@ function _esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-
 // sumizy-chat-realtime-ui.js (near other helpers)
 function waitForPaneContainer(paneRole, timeoutMs = 20000) {
   return new Promise((resolve) => {
     const start = Date.now();
     const tryNow = () => {
       const rg = getRGForPane(paneRole);
-      const el = rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+      const el =
+        rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
       if (el) return resolve(true);
       if (Date.now() - start > timeoutMs) return resolve(false);
       requestAnimationFrame(tryNow);
@@ -286,15 +267,14 @@ function waitForChannelReady(timeoutMs = 20000) {
   return new Promise((resolve) => {
     const start = Date.now();
     const tick = () => {
-      if (typeof isChannelReady === "function" && isChannelReady()) return resolve(true);
+      if (typeof isChannelReady === "function" && isChannelReady())
+        return resolve(true);
       if (Date.now() - start > timeoutMs) return resolve(false);
       requestAnimationFrame(tick);
     };
     tick();
   });
 }
-
-
 
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
 function aggregateReactionsFallback(raw, currentUserId) {
@@ -358,51 +338,78 @@ function sanitizeInjectedFileMessageNode(el, msg) {
 /* PATCH: Read receipts (normalizer + renderer + updater) */
 // Accepts various shapes; all entries mean "has read".
 window.getReaders = function getReaders(msg) {
-  const raw = msg._read_by ?? msg.read_by ?? msg.readBy ?? msg.readers ?? msg.seen_by ?? [];
+  const raw =
+    msg._read_by ??
+    msg.read_by ??
+    msg.readBy ??
+    msg.readers ??
+    msg.seen_by ??
+    [];
   if (Array.isArray(raw) && (raw.length === 0 || typeof raw[0] === "string")) {
     return raw.map((id) => ({ user_id: String(id), _user: null }));
   }
   if (Array.isArray(raw)) {
-    return raw.map((r) => {
-      const uid = r?.user_id ?? r?.userId ?? r?.id ?? r?.user?.id ?? null;
-      const userObj = r?._user ?? r?.user ?? null;
-      return uid ? { user_id: String(uid), _user: userObj } : null;
-    }).filter(Boolean);
+    return raw
+      .map((r) => {
+        const uid = r?.user_id ?? r?.userId ?? r?.id ?? r?.user?.id ?? null;
+        const userObj = r?._user ?? r?.user ?? null;
+        return uid ? { user_id: String(uid), _user: userObj } : null;
+      })
+      .filter(Boolean);
   }
   if (raw && typeof raw === "object") {
     return Object.entries(raw).map(([uid, v]) => {
-      const userObj = v && typeof v === "object" ? (v._user ?? v.user ?? null) : null;
+      const userObj =
+        v && typeof v === "object" ? v._user ?? v.user ?? null : null;
       return { user_id: String(uid), _user: userObj };
     });
   }
   return [];
 };
 
-window.renderReadReceipts = function renderReadReceipts(readers, currentUserId) {
+window.renderReadReceipts = function renderReadReceipts(
+  readers,
+  currentUserId
+) {
   if (!Array.isArray(readers) || readers.length === 0) return "";
   const uniq = new Map();
-  readers.forEach((r) => { if (r?.user_id) uniq.set(String(r.user_id), r); });
+  readers.forEach((r) => {
+    if (r?.user_id) uniq.set(String(r.user_id), r);
+  });
   const list = Array.from(uniq.values());
 
   const labelNames =
-    list.map((r) => (r?._user?.name || "Unknown")).slice(0, 3).join(", ")
-    + (list.length > 3 ? ` +${list.length - 3}` : "");
+    list
+      .map((r) => r?._user?.name || "Unknown")
+      .slice(0, 3)
+      .join(", ") + (list.length > 3 ? ` +${list.length - 3}` : "");
 
   const avatar = (r) => {
     const name = r?._user?.name || "";
     const pic = r?._user?.profilePicture || "";
     const initial = name ? name.charAt(0).toUpperCase() : "•";
     if (pic) {
-      return `<span class="read-avatar" title="${_esc(name)}"><img src="${_esc(pic)}" alt="${_esc(name)}" onerror="this.replaceWith(document.createTextNode('${initial}'))"></span>`;
+      return `<span class="read-avatar" title="${_esc(name)}"><img src="${_esc(
+        pic
+      )}" alt="${_esc(
+        name
+      )}" onerror="this.replaceWith(document.createTextNode('${initial}'))"></span>`;
     }
-    return `<span class="read-avatar initials" title="${_esc(name)}">${_esc(initial)}</span>`;
+    return `<span class="read-avatar initials" title="${_esc(name)}">${_esc(
+      initial
+    )}</span>`;
   };
 
   const avatars = list.slice(0, 5).map(avatar).join("");
-  return `<div class="read-receipts" aria-label="Seen by ${_esc(labelNames)}">${avatars}<span class="read-count">${list.length}</span></div>`;
+  return `<div class="read-receipts" aria-label="Seen by ${_esc(
+    labelNames
+  )}">${avatars}<span class="read-count">${list.length}</span></div>`;
 };
 
-window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg) {
+window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(
+  msgEl,
+  msg
+) {
   if (!msgEl || !msg) return;
   const parent = msgEl.querySelector(".message-content-wrapper") || msgEl;
   parent.querySelectorAll(":scope > .read-receipts").forEach((n) => n.remove());
@@ -410,8 +417,6 @@ window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg
   const html = window.renderReadReceipts(readers, window.currentUserId);
   if (html) parent.insertAdjacentHTML("beforeend", html);
 };
-
-
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
 function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
@@ -578,7 +583,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
 }
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
-    // Notifications have no reactions
+  // Notifications have no reactions
   if (msg?.is_notification) {
     const rBox = msgEl.querySelector(".reactions");
     if (rBox) rBox.remove();
@@ -759,10 +764,10 @@ function patchMessageInPlace(rg, msg) {
     el.classList.toggle("is-deleted", !!msg.isDeleted);
   }
 
-    if (typeof msg.is_notification === "boolean") {
-        el.dataset.notification = String(!!msg.is_notification);
-        el.classList.toggle("is-notification", !!msg.is_notification);
-      }
+  if (typeof msg.is_notification === "boolean") {
+    el.dataset.notification = String(!!msg.is_notification);
+    el.classList.toggle("is-notification", !!msg.is_notification);
+  }
 
   if (msg.created_at != null) {
     const ts = parseTime(msg.created_at);
@@ -775,7 +780,6 @@ function patchMessageInPlace(rg, msg) {
   if (typeof window.updateReadReceiptsInPlace === "function") {
     window.updateReadReceiptsInPlace(el, msg);
   }
-
 
   log.info("Patched message in place", { rg, id: msg.id });
   return true;
@@ -852,13 +856,12 @@ function afterInjectUiRefresh(rg) {
 }
 
 function injectBatchForPane(paneRole, chatId, batch) {
+  hidePaneLoader(paneRole);
+
   if (!batch?.length) return;
   const rg = getRGForPane(paneRole);
   if (rg == null) return;
   if (typeof window.injectMessages !== "function") return;
-  try {
-    window.hidePaneLoading(paneRole);
-  } catch {}
 
   log.info("Inject batch", { paneRole, chatId, rg, count: batch.length });
   window.injectMessages(rg, batch, window.currentUserId);
@@ -869,12 +872,12 @@ function injectBatchForPane(paneRole, chatId, batch) {
       `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
     );
     sanitizeInjectedFileMessageNode(el, m);
-        // PATCH: attach receipts during injection
-        if (typeof window.updateReadReceiptsInPlace === "function") {
-          try { window.updateReadReceiptsInPlace(el, m); } catch {}
-        }
-    
-
+    // PATCH: attach receipts during injection
+    if (typeof window.updateReadReceiptsInPlace === "function") {
+      try {
+        window.updateReadReceiptsInPlace(el, m);
+      } catch {}
+    }
   }
 
   // Ensure AI styling + markdown render immediately for AI pane
@@ -898,7 +901,6 @@ function injectBatchForPane(paneRole, chatId, batch) {
             window.updateReadReceiptsInPlace(el, m);
           } catch {}
         }
-
       } catch (e) {
         log.warn("AI markdown re-render failed", { id: m.id, e });
       }
@@ -946,10 +948,6 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
-
-  try {
-    window.hidePaneLoading(paneRole);
-  } catch {}
 }
 
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
@@ -1146,9 +1144,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       try {
         window.ensureJoinForPane("main", true);
         window.ensureJoinForPane("ai", true);
-           // Nudge any panes that were pending
-   if (window._paneActive?.main) window.ensureJoinForPane("main", true);
-   if (window._paneActive?.ai)   window.ensureJoinForPane("ai",   true);
+        // Nudge any panes that were pending
+        if (window._paneActive?.main) window.ensureJoinForPane("main", true);
+        if (window._paneActive?.ai) window.ensureJoinForPane("ai", true);
       } catch {}
     }, 1000);
 
@@ -1167,8 +1165,8 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   if (window.__sumizyJoinWatchdogWired) return;
   window.__sumizyJoinWatchdogWired = true;
 
-  const JOIN_STALE_MS = 5000;   // join_sent for >5s → resend join
-  const LIVE_STALE_MS = 12000;  // live but no newer ts for >12s → nudge
+  const JOIN_STALE_MS = 5000; // join_sent for >5s → resend join
+  const LIVE_STALE_MS = 12000; // live but no newer ts for >12s → nudge
 
   setInterval(() => {
     const act = window._paneActive || {};
@@ -1180,31 +1178,42 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
       const now = Date.now();
 
-      // Stuck in join_sent? Re-send (idempotent on backend), but only if container + channel are ready.
-if (
-  st.phase === "join_sent" &&
-  st.lastJoinSentAt &&
-  (now - st.lastJoinSentAt) > JOIN_STALE_MS
-) {
-  const rg = getRGForPane(paneRole);
-  const hasContainer =
-    rg != null && document.querySelector(`#rg${rg} .chat-messages`);
-  const channelOk =
-    typeof isChannelReady === "function" && isChannelReady();
+      // Stuck in join_sent? Re-send (idempotent on backend).
+      if (
+        st.phase === "join_sent" &&
+        st.lastJoinSentAt &&
+        now - st.lastJoinSentAt > JOIN_STALE_MS
+      ) {
+        log.warn("Watchdog: re-sending join (stale join_sent)", {
+          paneRole,
+          chatId,
+        });
+        st.joinDispatched = false;
+        st.joinPending = false;
+        st.lastJoinSentAt = now;
+        window.ensureJoinForPane(paneRole, true);
+        continue;
+      }
 
-  if (hasContainer && channelOk) {
-    log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
-    st.joinDispatched = false;
-    st.joinPending = false;
-    st.lastJoinSentAt = now;
-    window.ensureJoinForPane(paneRole, true);
-  }
-  continue;
-}
+      // Live but nothing new for too long? Nudge join again.
+      const rg = getRGForPane(paneRole);
+      const hasContainer =
+        rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+      const channelOk =
+        typeof isChannelReady === "function" && isChannelReady();
+      const staleLive =
+        st.phase === "live" && now - (st.lastTs || 0) > LIVE_STALE_MS;
+
+      if (staleLive && hasContainer && channelOk) {
+        log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
+        st.joinDispatched = false;
+        st.joinPending = false;
+        st.lastJoinSentAt = now;
+        window.ensureJoinForPane(paneRole, true);
+      }
     }
   }, 1500);
 })();
-
 
 window.getCurrentChannel = () => window.currentChannel || null;
 
@@ -1247,6 +1256,9 @@ function isChannelReady() {
 
 window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   let chatId = window._paneActive[paneRole];
+
+  // right after we confirm we have a chatId and st:
+  showPaneLoader(paneRole, { autoHideMs: 2000 });
 
   // If we have a composite like "tickets:123", try to map to a real conversation id.
   if (
@@ -1448,11 +1460,8 @@ function handleChatRouteChangeDual() {
   } else {
     if (main !== prevMain) {
       window._paneActive.main = main;
-      window.__rgForPaneCache.main = null; // <<< reset cached RG for main
       resetStateForPane("main", main);
       clearPaneDom("main");
-      // >>> ADD: show loader for MAIN
-      window.showPaneLoading("main", "Loading conversation…");
       window.ensureJoinForPane("main", true);
     } else {
       window.ensureJoinForPane("main", false);
@@ -1460,26 +1469,23 @@ function handleChatRouteChangeDual() {
   }
 
   // AI
+  // AI
   if (!ai) {
-    // Preserve existing AI pane & state when ai-chat is absent from URL
+    // NEW: Preserve existing AI pane & state when ai-chat is absent from URL
     if (prevAI) {
       log.info("AI id missing in URL; preserving existing AI pane", { prevAI });
     }
-    // Do NOT clear AI
+    // do NOT clearPaneDom("ai") and do NOT null _paneActive.ai
   } else {
     if (ai !== prevAI) {
       window._paneActive.ai = ai;
-      window.__rgForPaneCache.ai = null;
       resetStateForPane("ai", ai);
       clearPaneDom("ai");
-      // >>> ADD: show loader for AI
-      window.showPaneLoading("ai", "Loading AI chat…");
       window.ensureJoinForPane("ai", true);
     } else {
       window.ensureJoinForPane("ai", false);
     }
   }
-
   // >>> PATCH: extra robustness — nudge after DOM settles & after channel wakes
   setTimeout(() => {
     if (window._paneActive.main) window.ensureJoinForPane("main", true);
