@@ -696,21 +696,26 @@ window._paneActive = window._paneActive || { main: null, ai: null }; // chatId p
 window._chatGen = window._chatGen || 0; // increments on route change
 window._paneState = window._paneState || {}; // keyed by paneKey: "main:<chatId>"
 
-return (window._paneState[key] ||= {
-  phase: "idle", // idle -> join_sent -> injecting_history -> live
-  seen: new Set(),
-  lastTs: 0, // last message ts seen
-  lastActivityAt: 0, // last time we updated DOM
-  lastJoinSentAt: 0, // last time we sent a join
-  lastNudgeAt: 0, // last time watchdog nudged
-  watchdogMuteUntil: 0, // mute watchdog until this time
-  prebuffer: [],
-  joinGen: -1,
-  joinDispatched: false,
-  joinPending: false,
-  joinRetryTid: 0,
-  joinRetryCount: 0,
-});
+function getStateForPane(paneRole, chatId) {
+  if (!chatId) return null;
+  const key = paneKeyOf(paneRole, chatId);
+  return (window._paneState[key] ||= {
+    phase: "idle", // idle -> join_sent -> injecting_history -> live
+    seen: new Set(),
+    lastTs: 0, // last message ts seen
+    lastActivityAt: 0, // last time we updated DOM
+    lastJoinSentAt: 0, // last time we sent a join
+    lastNudgeAt: 0, // last time watchdog nudged
+    watchdogMuteUntil: 0, // mute watchdog until this time
+    prebuffer: [],
+    joinGen: -1,
+    joinDispatched: false,
+    joinPending: false,
+    joinRetryTid: 0,
+    joinRetryCount: 0,
+  });
+}
+
 
 function resetStateForPane(paneRole, chatId) {
   if (!chatId) return;
@@ -1371,6 +1376,7 @@ function handleChatRouteChangeDual() {
   const { main, ai } = getPaneIdsFromUrl();
   const prevMain = window._paneActive.main;
   const prevAI = window._paneActive.ai;
+
 
   const changed =
     String(prevMain || "") !== String(main || "") ||
