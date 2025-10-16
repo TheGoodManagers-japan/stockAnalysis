@@ -66,6 +66,51 @@ function getPaneIdsFromUrl() {
 }
 
 
+/* ─────────── Pane loading overlay helpers ─────────── */
+// Where to mount the overlay (inside the pane's .chat-messages)
+function getPaneContainerEl(paneRole) {
+  const rg = getRGForPane(paneRole);
+  return rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+}
+function paneOverlayId(paneRole) {
+  return `sumizy-loader-${paneRole}`; // unique per pane
+}
+
+window.showPaneLoading = async function showPaneLoading(paneRole, text = "Loading…") {
+  // wait until the pane container exists
+  const ok = await waitForPaneContainer(paneRole, 20000);
+  if (!ok) return false;
+  const container = getPaneContainerEl(paneRole);
+  if (!container) return false;
+
+  // avoid duplicates
+  if (container.querySelector(`#${paneOverlayId(paneRole)}`)) return true;
+
+  const overlay = document.createElement("div");
+  overlay.className = "chat-loading-overlay";
+  overlay.id = paneOverlayId(paneRole);
+  overlay.innerHTML = `
+    <div class="chat-loading-content">
+      <div class="chat-loading-spinner"></div>
+      <div class="chat-loading-text">${_esc(text)}</div>
+      <div class="chat-loading-subtext">Preparing messages…</div>
+    </div>`;
+  container.appendChild(overlay);
+  return true;
+};
+
+window.hidePaneLoading = function hidePaneLoading(paneRole) {
+  const container = getPaneContainerEl(paneRole);
+  if (!container) return false;
+  const el = container.querySelector(`#${paneOverlayId(paneRole)}`);
+  if (!el) return false;
+  el.classList.add("hiding"); // fade-out via CSS
+  setTimeout(() => el.remove(), 250);
+  return true;
+};
+
+
+
 // Find the RG number for a given pane role by [data-pane="<role>"]
 function getRGForPane(paneRole) {
   // Prefer a VISIBLE RG that already contains .chat-messages
@@ -754,6 +799,9 @@ function injectBatchForPane(paneRole, chatId, batch) {
   const rg = getRGForPane(paneRole);
   if (rg == null) return;
   if (typeof window.injectMessages !== "function") return;
+  try {
+    window.hidePaneLoading(paneRole);
+  } catch {}
 
   log.info("Inject batch", { paneRole, chatId, rg, count: batch.length });
   window.injectMessages(rg, batch, window.currentUserId);
@@ -841,6 +889,10 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
+
+  try {
+    window.hidePaneLoading(paneRole);
+  } catch {}
 }
 
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
@@ -1343,6 +1395,8 @@ function handleChatRouteChangeDual() {
       window._paneActive.main = main;
       resetStateForPane("main", main);
       clearPaneDom("main");
+      // >>> ADD: show loader for MAIN
+      window.showPaneLoading("main", "Loading conversation…");
       window.ensureJoinForPane("main", true);
     } else {
       window.ensureJoinForPane("main", false);
@@ -1350,34 +1404,35 @@ function handleChatRouteChangeDual() {
   }
 
   // AI
-  // AI
-if (!ai) {
-  // NEW: Preserve existing AI pane & state when ai-chat is absent from URL
-  if (prevAI) {
-    log.info("AI id missing in URL; preserving existing AI pane", { prevAI });
-  }
-  // do NOT clearPaneDom("ai") and do NOT null _paneActive.ai
-} else {
-  if (ai !== prevAI) {
-    window._paneActive.ai = ai;
-    resetStateForPane("ai", ai);
-    clearPaneDom("ai");
-    window.ensureJoinForPane("ai", true);
+  if (!ai) {
+    // Preserve existing AI pane & state when ai-chat is absent from URL
+    if (prevAI) {
+      log.info("AI id missing in URL; preserving existing AI pane", { prevAI });
+    }
+    // Do NOT clear AI
   } else {
-    window.ensureJoinForPane("ai", false);
+    if (ai !== prevAI) {
+      window._paneActive.ai = ai;
+      resetStateForPane("ai", ai);
+      clearPaneDom("ai");
+      // >>> ADD: show loader for AI
+      window.showPaneLoading("ai", "Loading AI chat…");
+      window.ensureJoinForPane("ai", true);
+    } else {
+      window.ensureJoinForPane("ai", false);
+    }
   }
-}
-// >>> PATCH: extra robustness — nudge after DOM settles & after channel wakes
-setTimeout(() => {
-  if (window._paneActive.main) window.ensureJoinForPane("main", true);
-  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
-}, 400);
 
-setTimeout(() => {
-  if (window._paneActive.main) window.ensureJoinForPane("main", true);
-  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
-}, 1800);
+  // >>> PATCH: extra robustness — nudge after DOM settles & after channel wakes
+  setTimeout(() => {
+    if (window._paneActive.main) window.ensureJoinForPane("main", true);
+    if (window._paneActive.ai) window.ensureJoinForPane("ai", true);
+  }, 400);
 
+  setTimeout(() => {
+    if (window._paneActive.main) window.ensureJoinForPane("main", true);
+    if (window._paneActive.ai) window.ensureJoinForPane("ai", true);
+  }, 1800);
 }
 
 /* ─────────── Wire up basic SPA navigation hooks ─────────── */
