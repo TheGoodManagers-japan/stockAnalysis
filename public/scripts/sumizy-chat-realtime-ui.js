@@ -696,24 +696,22 @@ window._paneActive = window._paneActive || { main: null, ai: null }; // chatId p
 window._chatGen = window._chatGen || 0; // increments on route change
 window._paneState = window._paneState || {}; // keyed by paneKey: "main:<chatId>"
 
-function getStateForPane(paneRole, chatId) {
-  if (!chatId) return null;
-  const key = paneKeyOf(paneRole, chatId);
-  return (window._paneState[key] ||= {
-    phase: "idle", // idle -> join_sent -> injecting_history -> live
-    seen: new Set(),
-    lastTs: 0, // latest message created_at we saw
-    lastActivityAt: 0, // last time we updated DOM for this pane
-    lastJoinSentAt: 0, // last time we sent a join
-    lastNudgeAt: 0, // last time watchdog nudged
-    prebuffer: [],
-    joinGen: -1,
-    joinDispatched: false,
-    joinPending: false,
-    joinRetryTid: 0,
-    joinRetryCount: 0,
-  });
-}
+return (window._paneState[key] ||= {
+  phase: "idle", // idle -> join_sent -> injecting_history -> live
+  seen: new Set(),
+  lastTs: 0, // last message ts seen
+  lastActivityAt: 0, // last time we updated DOM
+  lastJoinSentAt: 0, // last time we sent a join
+  lastNudgeAt: 0, // last time watchdog nudged
+  watchdogMuteUntil: 0, // mute watchdog until this time
+  prebuffer: [],
+  joinGen: -1,
+  joinDispatched: false,
+  joinPending: false,
+  joinRetryTid: 0,
+  joinRetryCount: 0,
+});
+
 function resetStateForPane(paneRole, chatId) {
   if (!chatId) return;
   const key = paneKeyOf(paneRole, chatId);
@@ -724,13 +722,15 @@ function resetStateForPane(paneRole, chatId) {
     lastActivityAt: 0,
     lastJoinSentAt: 0,
     lastNudgeAt: 0,
+    watchdogMuteUntil: 0,
     prebuffer: [],
     joinGen: -1,
     joinDispatched: false,
     joinPending: false,
     joinRetryTid: 0,
     joinRetryCount: 0,
-  };  
+  };
+  
   log.info("Pane state reset", { paneRole, chatId });
   return window._paneState[key];
 }
@@ -858,8 +858,12 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
 
   st.prebuffer = [];
   st.phase = "live";
+  // prevent immediate “stale” detection on quiet rooms
   st.lastActivityAt = Date.now();
   if (!st.lastTs) st.lastTs = st.lastActivityAt;
+  // Also mute the watchdog right after going live to absorb late echoes
+  st.watchdogMuteUntil = Date.now() + 6000;
+  
 }
 
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
@@ -1100,31 +1104,37 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
         continue;
       }
 
-      // Live but nothing new for too long? Nudge join again.
-// Live but nothing new for too long? Check freshness by activity/ts/join.
-const rg = getRGForPane(paneRole);
-const hasContainer = rg != null && document.querySelector(`#rg${rg} .chat-messages`);
-const channelOk = (typeof isChannelReady === "function" && isChannelReady());
+      const rg = getRGForPane(paneRole);
+      const hasContainer =
+        rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+      const channelOk =
+        typeof isChannelReady === "function" && isChannelReady();
 
-const lastFresh = Math.max(
-  st.lastActivityAt || 0,
-  st.lastTs || 0,
-  st.lastJoinSentAt || 0
-);
-const staleLive = st.phase === "live" && (now - lastFresh > LIVE_STALE_MS);
+      const lastFresh = Math.max(
+        st.lastActivityAt || 0,
+        st.lastTs || 0,
+        st.lastJoinSentAt || 0
+      );
 
-// small cooldown to avoid rapid re-joins
-const cooldownOk = now - (st.lastNudgeAt || 0) > 10000;
+      const staleLive = st.phase === "live" && now - lastFresh > LIVE_STALE_MS;
+      const cooldownOk = now - (st.lastNudgeAt || 0) > 10000;
+      const muteActive = now < (st.watchdogMuteUntil || 0);
 
-// Only nudge if stale AND either channel not OK or container present (so the join makes sense)
-if (staleLive && cooldownOk && (!channelOk || hasContainer)) {
-  log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
-  st.lastNudgeAt = now;
-  st.joinDispatched = false;
-  st.joinPending = false;
-  st.lastJoinSentAt = now;
-  window.ensureJoinForPane(paneRole, true);
-}
+      // Only nudge if stale, no mute, within cooldown, and it actually makes sense
+      if (
+        !muteActive &&
+        staleLive &&
+        cooldownOk &&
+        (!channelOk || hasContainer)
+      ) {
+        log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
+        st.lastNudgeAt = now;
+        st.joinDispatched = false;
+        st.joinPending = false;
+        st.lastJoinSentAt = now;
+        window.ensureJoinForPane(paneRole, true);
+      }
+      
 
     }
   }, 1500);
@@ -1262,7 +1272,9 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
         s.joinRetryTid = 0;
         s.joinRetryCount = 0;
         s.lastJoinSentAt = Date.now();
+        s.lastActivityAt = Date.now();
         log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
+        
         
         // Re-arm on container OR channel readiness (whichever becomes ready first)
         Promise.race([
@@ -1381,12 +1393,14 @@ function handleChatRouteChangeDual() {
   } else {
     if (main !== prevMain) {
       window._paneActive.main = main;
-      resetStateForPane("main", main);
+      const st = resetStateForPane("main", main);
+      // Mute the watchdog while the route stabilizes
+      if (st) st.watchdogMuteUntil = Date.now() + 6000;
       clearPaneDom("main");
       window.ensureJoinForPane("main", true);
     } else {
       window.ensureJoinForPane("main", false);
-    }
+    }    
   }
 
   // AI
@@ -1400,23 +1414,42 @@ if (!ai) {
 } else {
   if (ai !== prevAI) {
     window._paneActive.ai = ai;
-    resetStateForPane("ai", ai);
+    const st = resetStateForPane("ai", ai);
+    if (st) st.watchdogMuteUntil = Date.now() + 6000;
     clearPaneDom("ai");
     window.ensureJoinForPane("ai", true);
   } else {
     window.ensureJoinForPane("ai", false);
   }
+  
 }
 // >>> PATCH: extra robustness — nudge after DOM settles & after channel wakes
 setTimeout(() => {
-  if (window._paneActive.main) window.ensureJoinForPane("main", true);
-  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
+  const mId = window._paneActive.main;
+  if (mId) {
+    const st = getStateForPane("main", mId);
+    if (!st || st.phase !== "live") window.ensureJoinForPane("main", true);
+  }
+  const aId = window._paneActive.ai;
+  if (aId) {
+    const st = getStateForPane("ai", aId);
+    if (!st || st.phase !== "live") window.ensureJoinForPane("ai", true);
+  }
 }, 400);
 
 setTimeout(() => {
-  if (window._paneActive.main) window.ensureJoinForPane("main", true);
-  if (window._paneActive.ai)   window.ensureJoinForPane("ai",   true);
+  const mId = window._paneActive.main;
+  if (mId) {
+    const st = getStateForPane("main", mId);
+    if (!st || st.phase !== "live") window.ensureJoinForPane("main", true);
+  }
+  const aId = window._paneActive.ai;
+  if (aId) {
+    const st = getStateForPane("ai", aId);
+    if (!st || st.phase !== "live") window.ensureJoinForPane("ai", true);
+  }
 }, 1800);
+
 
 }
 
