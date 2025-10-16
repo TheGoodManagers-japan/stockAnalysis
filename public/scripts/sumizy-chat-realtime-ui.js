@@ -48,6 +48,46 @@
 
 const log = window.__sumizyLog;
 
+/* ─────────── Entity→RG map + URL entity resolver ─────────── */
+const ENTITY_TO_RG = {
+  messaging: 1,
+  discussions: 2,
+  "main-chat": 3,
+  tasks: 4,
+  tickets: 5,
+};
+
+// Parse current URL to figure out the active entity for the MAIN pane.
+// We don't need the id here—only the entity keyword to pick the RG.
+function getCurrentEntityFromUrl() {
+  try {
+    const u = new URL(location.href);
+    const path = (u.pathname || "").toLowerCase();
+    // look for any of our entities as path segments
+    const hit = Object.keys(ENTITY_TO_RG).find((k) =>
+      path.split("/").includes(k)
+    );
+    if (hit) return hit;
+
+    // fallback: query keys like ?messaging=... or ?discussions=... etc.
+    const q = u.searchParams;
+    for (const k of Object.keys(ENTITY_TO_RG)) {
+      if (q.has(k)) return k;
+    }
+  } catch {}
+  return null;
+}
+
+// Prefer entity→RG (deterministic). If unknown, fall back to heuristic getRGForPane.
+function getRGForEntityOrPane(paneRole) {
+  if (paneRole === "main") {
+    const ent = getCurrentEntityFromUrl();
+    if (ent && ENTITY_TO_RG[ent]) return ENTITY_TO_RG[ent];
+  }
+  return getRGForPane(paneRole); // legacy heuristic fallback
+}
+
+
 /* ─────────── Helpers ─────────── */
 function parseTime(t) {
   return typeof t === "number" ? t : Date.parse(t) || 0;
@@ -146,7 +186,7 @@ function clearPaneDom(paneRole) {
     log.info("clearPaneDom skipped for AI pane (preserve)", { paneRole });
     return;
   }
-  const rg = getRGForPane(paneRole);
+  const rg = getRGForEntityOrPane(paneRole);
   if (rg == null) {
     log.warn("clearPaneDom skipped (no RG)", { paneRole });
     return;
@@ -183,7 +223,7 @@ function waitForPaneContainer(paneRole, timeoutMs = 20000) {
   return new Promise((resolve) => {
     const start = Date.now();
     const tryNow = () => {
-      const rg = getRGForPane(paneRole);
+      const rg = getRGForEntityOrPane(paneRole);
       const el =
         rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
       if (el && el.offsetParent !== null) return resolve(true); // require visible
@@ -798,7 +838,7 @@ function afterInjectUiRefresh(rg) {
 
 function injectBatchForPane(paneRole, chatId, batch) {
   if (!batch?.length) return;
-  const rg = getRGForPane(paneRole);
+  const rg = getRGForEntityOrPane(paneRole);
   if (rg == null) return;
   if (typeof window.injectMessages !== "function") return;
 
@@ -989,7 +1029,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             let relevant = byPane[paneRole];
             if (!relevant?.length) continue;
 
-            const rg = getRGForPane(paneRole);
+            const rg = getRGForEntityOrPane(paneRole);
             const st = getStateForPane(paneRole, chatId);
             if (!st) continue;
 
@@ -1133,7 +1173,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
         continue;
       }
 
-      const rg = getRGForPane(paneRole);
+      const rg = getRGForEntityOrPane(paneRole);
       const hasContainer =
         rg != null && document.querySelector(`#rg${rg} .chat-messages`);
       const channelOk =
@@ -1357,7 +1397,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     window.sendMessage(payload);
   };
 
-  const rg = getRGForPane(paneRole);
+  const rg = getRGForEntityOrPane(paneRole);
   const container =
     rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
@@ -1414,6 +1454,18 @@ function handleChatRouteChangeDual() {
     chatGen: window._chatGen,
     changed,
   });
+
+  const __entity = getCurrentEntityFromUrl();
+  if (__entity) {
+    const __rg = ENTITY_TO_RG[__entity];
+    log.info("Route entity→rg", { entity: __entity, rg: __rg });
+  } else {
+    log.info("Route entity→rg", {
+      entity: null,
+      rg: getRGForEntityOrPane("main"),
+    });
+  }
+
 
   // MAIN
   if (!main) {
