@@ -1174,10 +1174,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       }
 
       const rg = getRGForEntityOrPane(paneRole);
-      const hasContainer =
-        rg != null && document.querySelector(`#rg${rg} .chat-messages`);
+      const el =
+        rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+      const hasVisibleContainer = !!(el && el.offsetParent !== null);
       const channelOk =
         typeof isChannelReady === "function" && isChannelReady();
+      
 
       const lastFresh = Math.max(
         st.lastActivityAt || 0,
@@ -1194,7 +1196,7 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
         !muteActive &&
         staleLive &&
         cooldownOk &&
-        (!channelOk || hasContainer)
+        (!channelOk || hasVisibleContainer)
       ) {
         log.warn("Watchdog: live is stale, nudging join", { paneRole, chatId });
         st.lastNudgeAt = now;
