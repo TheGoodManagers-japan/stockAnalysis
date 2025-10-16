@@ -520,9 +520,20 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
 
   const seen = new Set();
   for (const r of aggregated) {
-    const emoji = r.e;
-    const count = Number(r.c) || 0;
-    const userIds = Array.isArray(r.userIds) ? r.userIds : [];
+    // Accept both shapes: {e,c,userIds,users} or {emoji,count,userIds,users}
+    const emoji = r.e ?? r.emoji ?? r.key ?? r.symbol;
+    if (!emoji) continue;
+
+    const count = Number(r.c ?? r.count ?? 0);
+
+    // Prefer explicit userIds; otherwise derive from users if available
+    let userIds = Array.isArray(r.userIds) ? r.userIds : [];
+    if (!userIds.length && Array.isArray(r.users)) {
+      userIds = r.users
+        .map((u) => u?.user_id ?? u?.id ?? u?.userId ?? null)
+        .filter(Boolean);
+    }
+
     const mine = currentUserId
       ? userIds.map(String).includes(String(currentUserId))
       : false;
@@ -544,6 +555,7 @@ function updateReactionsInPlace(msgEl, msg, currentUserId) {
     chip.dataset.users = JSON.stringify(r.users || []);
     chip.dataset.userIds = JSON.stringify(userIds);
   }
+  
 
   for (const [emoji, chip] of existing) {
     if (!seen.has(emoji)) chip.remove();
