@@ -150,9 +150,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   /* ----- Minimal structure check (DIP-friendly) ----- */
   // Allow WEAK_UP/UP/STRONG_UP, forbid clear DOWN unless cfg allows
-  const structureGateOk =
-    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
-    px >= (msFull.ma5 || 0) * 0.992; // tiny slack
+    const structureGateOk =
+      (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
+      px >= (msFull.ma5 || 0) * 0.988; // a touch more slack
   tele.gates.structure = {
     pass: !!structureGateOk,
     why: structureGateOk ? "" : "trend DOWN or price < MA5",
@@ -209,20 +209,19 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   let dipGatePass = true;
   let dipGateWhy = [];
 
-  if (cfg.requireWeeklyUpForDIP && !wkGate.pass) {
+  if (cfg.requireWeeklyUpForDIP && !wkGate.passRelaxed) {
     dipGatePass = false;
     dipGateWhy.push("not above 13/26/52-week MAs");
   }
-  if (cfg.requireDailyReclaim25and75ForDIP && !reclaimGate.pass) {
-    dipGatePass = false;
-    dipGateWhy.push(
-      `no 25/75 reclaim in last ${cfg.dailyReclaimLookback} bars`
-    );
-  }
-  if (cfg.requireMA25over75ForDIP && !maCrossGate.pass) {
-    dipGatePass = false;
-    dipGateWhy.push(`no 25d>75d cross in last ${cfg.maCrossMaxAgeBars} bars`);
-  }
+    // OR-logic: require (reclaim OR cross) if either DIP flag is enabled
+    if (cfg.requireDailyReclaim25and75ForDIP || cfg.requireMA25over75ForDIP) {
+      if (!(reclaimGate.pass || maCrossGate.pass)) {
+        dipGatePass = false;
+        dipGateWhy.push(
+          `no 25/75 reclaim (≤${cfg.dailyReclaimLookback}) OR 25>75 cross (≤${cfg.maCrossMaxAgeBars})`
+        );
+      }
+    }
 
   if (dip?.trigger && !dipGatePass) {
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
@@ -499,9 +498,10 @@ function getConfig(opts = {}) {
     // --- Weekly/Daily cross gating (DIP + new playbook) ---
     requireWeeklyUpForDIP: true, // require above 13/26/52wk for DIP lane
     requireDailyReclaim25and75ForDIP: true, // require recent price reclaim of both 25d & 75d
-    dailyReclaimLookback: 3, // "couple of days" = last 3 bars
-    requireMA25over75ForDIP: false, // optional: also require 25d>75d (off by default)
-    maCrossMaxAgeBars: 5, // recent 25d>75d cross window for plays
+        dailyReclaimLookback: 5, // slightly wider, helps valid names pass
+        // For DIP: we now require (reclaim OR cross), not both
+        requireMA25over75ForDIP: true,
+        maCrossMaxAgeBars: 10, // allow a recent cross within ~2 weeks
 
     // --- Cross+Volume playbook ---
     crossPlaybookEnabled: true,
@@ -515,8 +515,8 @@ function getConfig(opts = {}) {
     minRRweakUp: 1.55,
 
     // headroom & extension guards (align with dip.js headroomOK of ≥0.50 ATR / ≥1.00%)
-    nearResVetoATR: 0.5,
-    nearResVetoPct: 1.0,
+    nearResVetoATR: 0.4,
+    nearResVetoPct: 0.60,
     maxATRfromMA25: 2.4,
 
     // overbought guards
@@ -537,13 +537,13 @@ function getConfig(opts = {}) {
 
     // volume regime
     pullbackDryFactor: 1.2, // was 1.6 (<= means “dry”: require drier pullback)
-    bounceHotFactor: 1.08, // was 1.05 (>= means “hot”: bounce should be a bit hot)
+    bounceHotFactor: 1.00, // was 1.05 (>= means “hot”: bounce should be a bit hot)
 
     // DIP parameters (used by dip.js)
     dipMinPullbackPct: 4.8, // new: minimum pullback in %
     dipMinPullbackATR: 1.9, // was 0.6
     dipMaxBounceAgeBars: 7, // was 5
-    dipMinBounceStrengthATR: 0.72, // was 0.8 (other gates tightened; this stays reasonable)
+    dipMinBounceStrengthATR: 0.60, // was 0.8 (other gates tightened; this stays reasonable)
     dipMinRR: 1.55, // new: DIP-specific RR floor
 
     // allow DIPs even if broader regime softened
@@ -603,14 +603,23 @@ function smaSeries(arr, n) {
   return s / n;
 }
 function weeklyUptrendGate(data, px) {
-  const w = resampleToWeeks(data);
-  const w13 = smaSeries(w, 13);
-  const w26 = smaSeries(w, 26);
-  const w52 = smaSeries(w, 52);
-  const hasAll = [w13, w26, w52].every(v => v > 0);
-  const pass = hasAll && px > w13 && px > w26 && px > w52;
-  return { pass, hasAll, w13, w26, w52 };
-}
+    const w = resampleToWeeks(data);
+    const w13 = smaSeries(w, 13);
+    const w26 = smaSeries(w, 26);
+    const w52 = smaSeries(w, 52);
+    const hasAll = [w13, w26, w52].every(v => v > 0);
+    if (!hasAll) return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
+  
+    const slack = 0.01; // ≤1% slack allowed on the “third” avg
+    const above13 = px > w13 * (1 - slack * 0.0);
+    const above26 = px > w26 * (1 - slack * 0.0);
+    const above52 = px > w52 * (1 - slack);
+  
+    const passStrict = above13 && above26 && above52;
+    const pass2of3 = (above13 ? 1 : 0) + (above26 ? 1 : 0) + (above52 ? 1 : 0) >= 2;
+  
+    return { pass: passStrict, passRelaxed: pass2of3, hasAll, w13, w26, w52 };
+  }
 
 // ==== Daily reclaim / MA cross gates ====
 function crossesUp(prevA, nowA, prevB, nowB) {
@@ -670,7 +679,7 @@ function detectCrossVolumePlay(stock, data, cfg) {
 
   // gates
   const wk = weeklyUptrendGate(data, px);
-  if (!wk.pass)
+  if (!wk.passRelaxed)
     return { trigger: false, wait: "weekly uptrend not met", code: "X_WEEKLY" };
 
   const reclaim = cfg.crossUseReclaimNotJustMAcross
