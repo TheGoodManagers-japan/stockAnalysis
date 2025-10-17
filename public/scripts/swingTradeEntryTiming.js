@@ -200,6 +200,38 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     diagnostics: dip?.diagnostics || {},
   };
 
+  // ----- Weekly/Daily-cross DIP gate (strict) -----
+  const pxNow = px;
+  const wkGate = weeklyUptrendGate(data, pxNow);
+  const reclaimGate = recentPriceReclaim25and75(data, cfg.dailyReclaimLookback);
+  const maCrossGate = recentMA25Over75Cross(data, cfg.maCrossMaxAgeBars);
+
+  let dipGatePass = true;
+  let dipGateWhy = [];
+
+  if (cfg.requireWeeklyUpForDIP && !wkGate.pass) {
+    dipGatePass = false;
+    dipGateWhy.push("not above 13/26/52-week MAs");
+  }
+  if (cfg.requireDailyReclaim25and75ForDIP && !reclaimGate.pass) {
+    dipGatePass = false;
+    dipGateWhy.push(
+      `no 25/75 reclaim in last ${cfg.dailyReclaimLookback} bars`
+    );
+  }
+  if (cfg.requireMA25over75ForDIP && !maCrossGate.pass) {
+    dipGatePass = false;
+    dipGateWhy.push(`no 25d>75d cross in last ${cfg.maCrossMaxAgeBars} bars`);
+  }
+
+  if (dip?.trigger && !dipGatePass) {
+    pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
+      wkGate,
+      reclaimGate,
+      maCrossGate,
+    });
+  }
+
   // mirror selected numeric diagnostics into distros if present
   try {
     const d = dip?.diagnostics || {};
@@ -238,7 +270,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     });
   }
 
-  if (dip?.trigger && structureGateOk) {
+  if (dip?.trigger && structureGateOk && dipGatePass) {
     // RR uses DIP stop/target as-is; no structural reshaping for DIPs
     const rr = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
       kind: "DIP",
@@ -342,6 +374,73 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reasons.push("Structure gate failed for DIP.");
   }
 
+  /* ======================= Cross + Volume playbook ======================= */
+  if (cfg.crossPlaybookEnabled) {
+    const x = detectCrossVolumePlay(stock, data, cfg);
+    T(
+      "cross",
+      "detect",
+      !!x.trigger,
+      x.trigger ? "CROSS trigger" : x.wait || "no cross",
+      { diag: x.diag },
+      "verbose"
+    );
+
+    if (x.trigger && structureGateOk) {
+      const rrX = analyzeRR(
+        px,
+        x.stop,
+        x.target,
+        stock,
+        msFull,
+        { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
+        { kind: "CROSS", data }
+      );
+      // only overwrite telemetry.rr if DIP didn't set it
+      if (!tele.rr.checked) tele.rr = toTeleRR(rrX);
+
+      if (rrX.acceptable) {
+        const gvX = guardVeto(stock, data, px, rrX, msFull, cfg, null, "CROSS");
+        T(
+          "cross",
+          "guard",
+          !gvX.veto,
+          gvX.veto ? `VETO: ${gvX.reason}` : "No veto",
+          gvX.details,
+          "verbose"
+        );
+        if (!gvX.veto) {
+          candidates.push({
+            kind: "MA CROSS + VOLUME",
+            why: x.why,
+            stop: rrX.stop,
+            target: rrX.target,
+            rr: rrX,
+            guard: gvX.details,
+          });
+        } else {
+          pushBlock(tele, "X_VETO", "guard", gvX.reason, gvX.details);
+        }
+      } else {
+        pushBlock(
+          tele,
+          "X_RR_FAIL",
+          "rr",
+          `RR ${fmt(rrX.ratio)} < need ${fmt(rrX.need)}`,
+          { stop: rrX.stop, target: rrX.target }
+        );
+      }
+    } else if (!x.trigger) {
+      pushBlock(
+        tele,
+        `X_WAIT_${x.code || "GEN"}`,
+        "cross",
+        x.wait || "cross not ready",
+        {}
+      );
+    }
+  }
+
   /* attach global guard histos */
   tele.histos.headroom = tele.histos.headroom.concat(
     teleGlobal.histos.headroom
@@ -396,6 +495,19 @@ function getConfig(opts = {}) {
   return {
     // general
     perfectMode: false,
+
+    // --- Weekly/Daily cross gating (DIP + new playbook) ---
+    requireWeeklyUpForDIP: true, // require above 13/26/52wk for DIP lane
+    requireDailyReclaim25and75ForDIP: true, // require recent price reclaim of both 25d & 75d
+    dailyReclaimLookback: 3, // "couple of days" = last 3 bars
+    requireMA25over75ForDIP: false, // optional: also require 25d>75d (off by default)
+    maCrossMaxAgeBars: 5, // recent 25d>75d cross window for plays
+
+    // --- Cross+Volume playbook ---
+    crossPlaybookEnabled: true,
+    crossMinVolumeFactor: 1.5, // >= 1.5× 20d avg volume
+    crossMinRR: 1.45, // RR floor for cross play
+    crossUseReclaimNotJustMAcross: true, // price reclaimed both 25 & 75 within lookback
 
     // RR floors (slightly higher; DIP has its own floor too)
     minRRbase: 1.35,
@@ -455,6 +567,161 @@ function getConfig(opts = {}) {
     debug,
   };
 }
+
+// ==== Weekly helpers & gates ====
+function resampleToWeeks(daily) {
+  const out = [];
+  let curKey = "", agg = null;
+  for (const d of daily) {
+    const dt = new Date(d.date);
+    const y = dt.getUTCFullYear();
+    const w = isoWeek(dt);
+    const key = `${y}-W${w}`;
+    if (key !== curKey) {
+      if (agg) out.push(agg);
+      agg = { date: d.date, close: +d.close || 0 };
+      curKey = key;
+    } else {
+      agg.date = d.date;
+      agg.close = +d.close || agg.close;
+    }
+  }
+  if (agg) out.push(agg);
+  return out;
+}
+function isoWeek(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay()||7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(),0,1));
+  const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1)/7);
+  return weekNo;
+}
+function smaSeries(arr, n) {
+  if (arr.length < n) return 0;
+  let s = 0;
+  for (let i = arr.length - n; i < arr.length; i++) s += +arr[i].close || 0;
+  return s / n;
+}
+function weeklyUptrendGate(data, px) {
+  const w = resampleToWeeks(data);
+  const w13 = smaSeries(w, 13);
+  const w26 = smaSeries(w, 26);
+  const w52 = smaSeries(w, 52);
+  const hasAll = [w13, w26, w52].every(v => v > 0);
+  const pass = hasAll && px > w13 && px > w26 && px > w52;
+  return { pass, hasAll, w13, w26, w52 };
+}
+
+// ==== Daily reclaim / MA cross gates ====
+function crossesUp(prevA, nowA, prevB, nowB) {
+  return prevA <= prevB && nowA > nowB;
+}
+function dailyMA(data, n) {
+  return sma(data, n);
+}
+function recentPriceReclaim25and75(data, lookback = 3) {
+  const i = data.length - 1;
+  if (i < 1) return { pass: false };
+  const dNow = data[i], dPrev = data[i-1];
+  const ma25Now = dailyMA(data,25), ma75Now = dailyMA(data,75);
+  const ma25Prev = dailyMA(data.slice(0,-1),25), ma75Prev = dailyMA(data.slice(0,-1),75);
+  const priceNow = +dNow.close, pricePrev = +dPrev.close;
+
+  const cross25 = crossesUp(pricePrev, priceNow, ma25Prev, ma25Now);
+  const cross75 = crossesUp(pricePrev, priceNow, ma75Prev, ma75Now);
+
+  // also allow reclaim within last N bars
+  let windowCross25 = cross25, windowCross75 = cross75;
+  for (let k=2; k<=lookback && i-k>=0; k++){
+    const dK = data[i-k], dKp1 = data[i-k+1];
+    const ma25K = dailyMA(data.slice(0, i-k+1),25);
+    const ma75K = dailyMA(data.slice(0, i-k+1),75);
+    if (!windowCross25 && crossesUp(+dK.close, +dKp1.close, ma25K, ma25K)) windowCross25 = true;
+    if (!windowCross75 && crossesUp(+dK.close, +dKp1.close, ma75K, ma75K)) windowCross75 = true;
+  }
+  const pass = windowCross25 && windowCross75 && priceNow > ma25Now && priceNow > ma75Now;
+  return { pass, ma25Now, ma75Now };
+}
+function recentMA25Over75Cross(data, maxAge = 5) {
+  const i = data.length - 1;
+  if (i < 1) return { pass:false };
+  let lastCrossAge = Infinity;
+  let prevAbove = null;
+  for (let k = maxAge + 1; k >= 1; k--) {
+    const snap = data.slice(0, data.length - k + 1);
+    const m25 = dailyMA(snap,25), m75 = dailyMA(snap,75);
+    if (m25===0 || m75===0) continue;
+    const above = m25 > m75;
+    if (prevAbove === false && above === true) { lastCrossAge = k-1; break; }
+    prevAbove = above;
+  }
+  const m25Now = dailyMA(data,25), m75Now = dailyMA(data,75);
+  const pass = Number.isFinite(lastCrossAge) && lastCrossAge <= maxAge && m25Now > m75Now;
+  return { pass, lastCrossAge, m25Now, m75Now };
+}
+
+
+function detectCrossVolumePlay(stock, data, cfg) {
+  const i = data.length - 1;
+  const d0 = data[i],
+    d1 = data[i - 1] || d0;
+  const px = +d0.close || +stock.currentPrice || 0;
+  const atr = Math.max(+stock.atr14 || 0, px * 0.005, 1e-9);
+
+  // gates
+  const wk = weeklyUptrendGate(data, px);
+  if (!wk.pass)
+    return { trigger: false, wait: "weekly uptrend not met", code: "X_WEEKLY" };
+
+  const reclaim = cfg.crossUseReclaimNotJustMAcross
+    ? recentPriceReclaim25and75(data, cfg.dailyReclaimLookback)
+    : { pass: false };
+  const macross = recentMA25Over75Cross(data, cfg.maCrossMaxAgeBars);
+
+  if (!(reclaim.pass || macross.pass))
+    return {
+      trigger: false,
+      wait: "no recent 25/75 reclaim/cross",
+      code: "X_NOCROSS",
+    };
+
+  // volume
+  const avgVol20 = avg(data.slice(-20).map((b) => +b.volume || 0));
+  const volHot =
+    avgVol20 > 0 ? +d0.volume >= cfg.crossMinVolumeFactor * avgVol20 : true;
+  if (!volHot)
+    return { trigger: false, wait: "volume not hot", code: "X_NOVOL" };
+
+  // plan: stop under MA25 or last swing; target to clustered resistances
+  const ma25 = dailyMA(data, 25);
+  const supports = findSupportsBelow(data, px);
+  const swingStop = Number.isFinite(supports?.[0])
+    ? supports[0] - 0.5 * atr
+    : Infinity;
+  let stop = Math.min(
+    ma25 > 0 ? ma25 - 0.6 * atr : Infinity,
+    swingStop,
+    px - 1.2 * atr
+  );
+  if (!(stop < px)) stop = px - 1.2 * atr;
+
+  const resList = findResistancesAbove(data, px, stock);
+  let target = resList?.length
+    ? Math.max(resList[0], px + 2.4 * atr)
+    : px + 2.6 * atr;
+
+  const why = `Weekly up; ${
+    reclaim.pass ? "reclaimed 25/75" : "25>75 cross"
+  }; vol ≥ ${cfg.crossMinVolumeFactor}× 20d.`;
+  return {
+    trigger: true,
+    stop,
+    target,
+    why,
+    diag: { volHot, ma25, w13: wk.w13, w26: wk.w26, w52: wk.w52 },
+  };
+}
+
 
 
 /* ======================= Market Structure ======================= */
