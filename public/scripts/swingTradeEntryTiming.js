@@ -1410,28 +1410,10 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
     }
   }
 
-  // fallback: allow if already stacked within lookback even if not a fresh flip this bar
-  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
-    const m13 = smaW(13, i);
-    const m26 = smaW(26, i);
-    const m52 = smaW(52, i);
-    const stacked = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
-    if (stacked) {
-      return {
-        trigger: true,
-        weeksAgo: last - i,
-        index: i,
-        m13,
-        m26,
-        m52,
-        why: `Weekly MAs stacked (13 > 26 > 52) in last ${lookbackBars} bars`,
-      };
-    }
-  }
 
   return {
     trigger: false,
-    why: `No 13>26>52 weekly alignment in ≤${lookbackBars} bars`,
+    why: `No fresh weekly 13>26>52 cross in ≤${lookbackBars} bars`,
   };
 }
 
