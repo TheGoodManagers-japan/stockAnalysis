@@ -1360,43 +1360,66 @@ export { getConfig, summarizeTelemetryForLog };
 
 
 /* ========= 13/26/52 weekly MA “fresh flip” engine ========= */
+/* ========= Hardened 13/26/52 weekly “fresh flip” detector ========= */
 function detectWeeklyStackedCross(data, lookbackBars = 5) {
   const weeks = resampleToWeeks(data);
-  if (weeks.length < 52) {
+  // Treat the last aggregated ISO week as INCOMPLETE; drop it
+  const usable = weeks.slice(0, -1);
+  if (usable.length < 52) {
     return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
   }
-  // SMA of weeks up to index i (inclusive)
+
+  // weekly SMA at index i (inclusive) over usable[]
   const smaW = (n, i) => {
     if (i + 1 < n) return 0;
     let s = 0;
-    for (let k = i - n + 1; k <= i; k++) s += +weeks[k].close || 0;
+    for (let k = i - n + 1; k <= i; k++) s += +usable[k].close || 0;
     return s / n;
   };
-  const last = weeks.length - 1;
 
-  // REQUIRE a fresh flip within lookbackBars
-  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
-    const m13 = smaW(13, i), m26 = smaW(26, i), m52 = smaW(52, i);
-    const nowStacked = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
-
-    const pm13 = smaW(13, i - 1), pm26 = smaW(26, i - 1), pm52 = smaW(52, i - 1);
-    const prevStacked = (i - 1) >= 0 &&
-      pm13 > 0 && pm26 > 0 && pm52 > 0 &&
-      pm13 > pm26 && pm26 > pm52;
-
-    if (nowStacked && !prevStacked) {
-      return {
-        trigger: true,
-        weeksAgo: last - i,
-        index: i,
-        m13, m26, m52,
-        why: `Weekly MAs flipped to 13>26>52 within last ${lookbackBars} weeks`,
-      };
+  // helper: find most-recent cross age (bars ago) where SMA(a) crossed above SMA(b)
+  function lastCrossAge(shortN, longN, maxLookback) {
+    const last = usable.length - 1;
+    for (let i = last; i >= Math.max(1, last - maxLookback + 1); i--) {
+      const sPrev = smaW(shortN, i - 1), lPrev = smaW(longN, i - 1);
+      const sNow  = smaW(shortN, i),     lNow  = smaW(longN, i);
+      if (sPrev > 0 && lPrev > 0 && sNow > 0 && lNow > 0) {
+        const crossedUp = sPrev <= lPrev && sNow > lNow;
+        if (crossedUp) return last - i; // 0 = this week (but we already dropped current week)
+      }
     }
+    return Infinity;
   }
 
-  return { trigger: false, why: `No fresh weekly 13>26>52 cross in ≤${lookbackBars} weeks` };
+  const last = usable.length - 1;
+  const eps = 0.002; // 0.2% margin to avoid micro jitter
+
+  // Require BOTH crosses (13>26 and 26>52) to be fresh (≤ lookbackBars)
+  const age13_26 = lastCrossAge(13, 26, lookbackBars);
+  const age26_52 = lastCrossAge(26, 52, lookbackBars);
+
+  // Check that the stack is currently valid with margin
+  const m13 = smaW(13, last), m26 = smaW(26, last), m52 = smaW(52, last);
+  const stackedNow =
+    m13 > 0 && m26 > 0 && m52 > 0 &&
+    m13 >= m26 * (1 + eps) && m26 >= m52 * (1 + eps);
+
+  if (stackedNow && age13_26 <= lookbackBars && age26_52 <= lookbackBars) {
+    return {
+      trigger: true,
+      weeksAgo: Math.max(age13_26, age26_52), // the later of the two flips
+      index: last,
+      m13, m26, m52,
+      why: `Weekly MAs freshly flipped: 13>26 and 26>52 within last ${lookbackBars} weeks`,
+    };
+  }
+
+  return {
+    trigger: false,
+    why: `No fresh weekly dual-cross (13>26 & 26>52) in ≤${lookbackBars} weeks`,
+  };
 }
+
 
 /* ========= Daily 5/25/75 “fresh flip” engine (completed daily bars) ========= */
 function detectDailyStackedCross(data, lookbackBars = 5) {
