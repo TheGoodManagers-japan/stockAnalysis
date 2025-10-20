@@ -1357,39 +1357,35 @@ export function summarizeBlocks(teleList = []) {
 }
 
 export { getConfig, summarizeTelemetryForLog };
+/* ========= 13/26/52 weekly “fresh flip ONLY” detector ========= */
+function detectWeeklyStackedCross(data, lookbackBars = 5) {
+  // 1) Build weekly closes, and drop the last week ONLY if it's really incomplete
+  const weeksAll = resampleToWeeks(data);
 
+  // ISO week helpers
+  const isoKey = (d) => {
+    const dt = new Date(d);
+    const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+    const dayNum = t.getUTCDay() || 7;         // 1..7 (Mon..Sun)
+    t.setUTCDate(t.getUTCDate() + 4 - dayNum); // Thu of this week
+    const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+    return t.getUTCFullYear() + "-" + weekNo;  // e.g. "2025-42"
+  };
 
-/* ========= 13/26/52 weekly “fresh flip or recent stack” detector ========= */
-function detectWeeklyStackedCross(data, lookbackBars = 5, opts = {}) {
-  const { allowStackedWindow = true } = opts;
-
-    // 1) Build weekly closes, and drop the last week ONLY if it's really incomplete
-    const weeksAll = resampleToWeeks(data);
-  
-    // ISO week helpers
-    const isoKey = (d) => {
-      const dt = new Date(d);
-      const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
-      const dayNum = t.getUTCDay() || 7;         // 1..7 (Mon..Sun)
-      t.setUTCDate(t.getUTCDate() + 4 - dayNum); // Thu of this week
-      const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-      const weekNo = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
-      return t.getUTCFullYear() + "-" + weekNo;  // e.g. "2025-42"
-    };
-  
-    // How many daily bars do we actually have in the last daily week?
-    const lastDaily = data.at(-1);
-    const lastDailyWeek = lastDaily ? isoKey(lastDaily.date) : null;
-    let barsInLastDailyWeek = 0;
-    if (lastDailyWeek) {
-      for (let i = data.length - 1; i >= 0; i--) {
-        if (isoKey(data[i].date) !== lastDailyWeek) break;
-        barsInLastDailyWeek++;
-      }
+  // How many daily bars do we actually have in the last daily week?
+  const lastDaily = data.at(-1);
+  const lastDailyWeek = lastDaily ? isoKey(lastDaily.date) : null;
+  let barsInLastDailyWeek = 0;
+  if (lastDailyWeek) {
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (isoKey(data[i].date) !== lastDailyWeek) break;
+      barsInLastDailyWeek++;
     }
-    // Consider a week "complete" if we saw at least 4 trading days (holidays tolerated).
-    const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
-    const weeks = (weeksAll.length >= 1 && dropLastWeekly) ? weeksAll.slice(0, -1) : weeksAll;
+  }
+  // Consider a week "complete" if we saw at least 4 trading days (holidays tolerated).
+  const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
+  const weeks = (weeksAll.length >= 1 && dropLastWeekly) ? weeksAll.slice(0, -1) : weeksAll;
 
   if (weeks.length < 52) {
     return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
@@ -1415,7 +1411,7 @@ function detectWeeklyStackedCross(data, lookbackBars = 5, opts = {}) {
     return { m13, m26, m52, stacked };
   };
 
-  // 3) Fresh flip: first bar in the lookback where it becomes stacked
+  // Fresh flip ONLY: first bar in the lookback where it becomes stacked
   for (let i = last; i >= Math.max(1, last - lookbackBars + 1); i--) {
     const cur = getTriplet(i);
     const prev = getTriplet(i - 1);
@@ -1430,31 +1426,14 @@ function detectWeeklyStackedCross(data, lookbackBars = 5, opts = {}) {
     }
   }
 
-  // 4) Guarded fallback: stacked on any completed week within the window
-  if (allowStackedWindow) {
-    for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
-      const cur = getTriplet(i);
-      if (cur.stacked) {
-        return {
-          trigger: true,
-          weeksAgo: last - i,
-          index: i,
-          m13: cur.m13, m26: cur.m26, m52: cur.m52,
-          why: `Weekly MAs stacked (13>26>52) in last ${lookbackBars} completed weeks`,
-        };
-      }
-    }
-  }
-
   return {
     trigger: false,
-    why: `No weekly 13>26>52 flip/stack in ≤${lookbackBars} completed weeks`,
+    why: `No weekly fresh 13>26>52 flip in ≤${lookbackBars} completed weeks`,
   };
 }
 
 
-
-/* ========= Daily 5/25/75 “fresh flip” engine (completed daily bars) ========= */
+/* ========= Daily 5/25/75 “fresh flip ONLY” engine (completed daily bars) ========= */
 function detectDailyStackedCross(data, lookbackBars = 5) {
   // Use completed-daily bars only (caller passes them)
   const smaD = (n, i) => {
@@ -1466,14 +1445,12 @@ function detectDailyStackedCross(data, lookbackBars = 5) {
   const last = data.length - 1;
   if (last < 75) return { trigger: false, why: "Insufficient daily history (need ≥75 bars)" };
 
-  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
+  for (let i = last; i >= Math.max(1, last - lookbackBars + 1); i--) {
     const m5 = smaD(5, i), m25 = smaD(25, i), m75 = smaD(75, i);
     const nowStacked = m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
 
     const pm5 = smaD(5, i - 1), pm25 = smaD(25, i - 1), pm75 = smaD(75, i - 1);
-    const prevStacked = (i - 1) >= 0 &&
-      pm5 > 0 && pm25 > 0 && pm75 > 0 &&
-      pm5 > pm25 && pm25 > pm75;
+    const prevStacked = pm5 > 0 && pm25 > 0 && pm75 > 0 && pm5 > pm25 && pm25 > pm75;
 
     if (nowStacked && !prevStacked) {
       return {
@@ -1481,20 +1458,18 @@ function detectDailyStackedCross(data, lookbackBars = 5) {
         daysAgo: last - i,
         index: i,
         m5, m25, m75,
-        why: `Daily MAs flipped to 5>25>75 within last ${lookbackBars} days`,
+        why: `Daily MAs freshly flipped to 5>25>75 within last ${lookbackBars} days`,
       };
     }
   }
   return { trigger: false, why: `No fresh daily 5>25>75 cross in ≤${lookbackBars} days` };
 }
 
+
 /**
- * analyseCrossing — detects BOTH playbooks:
+ * analyseCrossing — detects BOTH playbooks (fresh-only):
  *  - Weekly 13/26/52 fresh flip (≤5 weeks)
  *  - Daily 5/25/75 fresh flip (≤5 days)
- *
- * Returns the SAME shape Bubble expects. If both trigger, we pick WEEKLY
- * as the main plan and include the other as telemetry.alternatives.daily.
  */
 export function analyseCrossing(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
@@ -1524,13 +1499,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const prevClose = Number(stock.prevClosePrice) || Number(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  // Completed-bars views
-  // Use completed daily bars: if we have ≥76, drop the live bar; else keep all so SMA(75) can compute.
+  // Completed-bars view (strict): always drop the potentially-live last daily bar
   const completedDaily = Array.isArray(opts?.dataForGates)
     ? opts.dataForGates
-    : (dataAll.length >= 76 ? dataAll.slice(0, -1) : dataAll);
+    : (dataAll.length > 0 ? dataAll.slice(0, -1) : dataAll);
 
-  // Context snapshot (same as DIP engine)
+  // Context snapshot
   const msFull = getMarketStructure(stock, dataAll);
   tele.context = {
     ticker: stock?.ticker,
@@ -1552,10 +1526,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   }
 
   /* ---------------- BOTH crossing conditions (completed bars) ---------------- */
-  const crossW = detectWeeklyStackedCross(completedDaily, 5);  // weekly flip check uses resampled weeks
-  const crossD = detectDailyStackedCross(completedDaily, 5);   // daily flip check on daily bars
-  T("crossing", "weekly", !!crossW.trigger, crossW.trigger ? crossW.why : crossW.why, { crossW }, "verbose");
-  T("crossing", "daily",  !!crossD.trigger, crossD.trigger ? crossD.why : crossD.why, { crossD }, "verbose");
+  const crossW = detectWeeklyStackedCross(completedDaily, 5);  // weekly fresh flip
+  const crossD = detectDailyStackedCross(completedDaily, 5);   // daily fresh flip
+  T("crossing", "weekly", !!crossW.trigger, crossW.why, { crossW }, "verbose");
+  T("crossing", "daily",  !!crossD.trigger, crossD.why, { crossD }, "verbose");
 
   tele.flags = { weeklyFlip: !!crossW.trigger, dailyFlip: !!crossD.trigger };
 
@@ -1591,11 +1565,9 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     return { label, rr };
   };
 
-  // weekly: conservative; daily: optional slight RR bump to simulate stricter early trigger
   const weeklyPlan = crossW.trigger ? planFor("WEEKLY", 0.00) : null;
   const dailyPlan  = crossD.trigger ? planFor("DAILY",  0.00) : null;
 
-  // If a plan exists but fails RR, record as veto-ish but keep evaluating the other
   const passedPlans = [];
   if (weeklyPlan && weeklyPlan.rr.acceptable) passedPlans.push(weeklyPlan);
   if (dailyPlan  && dailyPlan.rr.acceptable)  passedPlans.push(dailyPlan);
@@ -1603,9 +1575,8 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   if (passedPlans.length === 0) {
     const msgs = [];
     if (weeklyPlan) msgs.push(`Weekly RR ${fmt(weeklyPlan.rr.ratio)} < need ${fmt(weeklyPlan.rr.need)}`);
-    if (dailyPlan)  msgs.push(`Daily RR ${fmt(dailyPlan.rr.ratio)} < need ${fmt(dailyPlan.rr.need)}`);
+    if (dailyPlan)  msgs.push(`Daily  RR ${fmt(dailyPlan.rr.ratio)} < need ${fmt(dailyPlan.rr.need)}`);
     const r = msgs.join("; ");
-    // push RR shortfalls into histos
     for (const p of [weeklyPlan, dailyPlan].filter(Boolean)) {
       const rr = p.rr;
       const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
@@ -1638,18 +1609,36 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     return out;
   }
 
-  // Build result from primary; stash alternative in telemetry
-  const reason = `${primary.label} CROSS: ${primary.rr.ratio.toFixed(2)}:1. ${primary.label === "WEEKLY" ? crossW.why : crossD.why}`;
+  // Build result
+  const bothPassed = !!(passedPlans.find(p => p.label === "WEEKLY") &&
+                        passedPlans.find(p => p.label === "DAILY"));
+
+  let reason;
+  if (bothPassed) {
+    const w = passedPlans.find(p => p.label === "WEEKLY");
+    const d = passedPlans.find(p => p.label === "DAILY");
+    reason = `WEEKLY & DAILY CROSS: W ${w.rr.ratio.toFixed(2)}:1, D ${d.rr.ratio.toFixed(2)}:1. `
+           + `${crossW.why} | ${crossD.why}`;
+    tele.selectedPlaybook = "BOTH";
+  } else {
+    reason = `${primary.label} CROSS: ${primary.rr.ratio.toFixed(2)}:1. `
+           + `${primary.label === "WEEKLY" ? crossW.why : crossD.why}`;
+    tele.selectedPlaybook = primary.label;
+  }
+
   tele.outcome = { buyNow: true, reason };
   tele.alternatives = {};
-  if (alt) tele.alternatives[alt.label.toLowerCase()] = {
-    rr: alt.rr,
-    note: `${alt.label} also acceptable`,
+  if (alt && !bothPassed) {
+    tele.alternatives[alt.label.toLowerCase()] = { rr: alt.rr, note: `${alt.label} also acceptable` };
+  }
+
+  tele.playbooks = {
+    weekly: { triggered: !!crossW.trigger, rrOk: !!(weeklyPlan && weeklyPlan.rr.acceptable) },
+    daily:  { triggered: !!crossD.trigger, rrOk: !!(dailyPlan  && dailyPlan.rr.acceptable) },
   };
-  tele.selectedPlaybook = primary.label;
 
   // Project stop/target
-  const stop  = toTick(primary.rr.stop, stock);
+  const stop   = toTick(primary.rr.stop, stock);
   const target = toTick(primary.rr.target, stock);
 
   return {
