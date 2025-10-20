@@ -1156,7 +1156,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     : null;
 
                 if (!openByProfile[p.id]) openByProfile[p.id] = [];
+
                 const analytics = computeAnalytics(candles, entryBarIdx, entry);
+                const score = computeScore({
+                  analytics,
+                  regime: dayRegime,
+                  crossType: selected,
+                  crossLag: Number.isFinite(lag) ? lag : null,
+                  ST,
+                  LT,
+                });
 
                 openByProfile[p.id].push({
                   entryIdx: entryBarIdx,
@@ -1593,11 +1602,27 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     totalTrades,
     winRate,
     avgReturnPct,
+    scoring: {
+      schema: {
+        regime: { DOWN: 2, UP: 1 },
+        crossLag: { WEEKLY_ge2: 2, DAILY_ge4: 1 },
+        sentiment: { LT_3to5: 1, ST_6to7: 1 },
+        analytics: {
+          gapPos: 1,
+          rsiGe60: 1,
+          pxVsMA25Le4: 1,
+          pxVsMA25Gt6_penalty: -1,
+        },
+      },
+      byScore: scoreLevels, // from your computed `scoreLevels`
+      correlation: scoreCorr, // from your computed `scoreCorr`
+    },
+
     spotlight,
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
-    openAtEnd: globalOpenPositions,
+    openAtEnd: globalOpenCount,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
@@ -1732,8 +1757,8 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
             pxVsMA25Gt6_penalty: -1,
           },
         },
-        byScore: scoreLevels, // array sorted by score asc
-        correlation: scoreCorr, // { win, ret }
+        byScore: [], // <-- was scoreLevels
+        correlation: { win: null, ret: null }, // <-- was scoreCorr
       },
 
       exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
