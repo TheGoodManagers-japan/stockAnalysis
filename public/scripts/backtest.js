@@ -361,6 +361,146 @@ function smaArr(arr, p) {
   return out;
 }
 
+/* ---------------- Analytics helpers (for per-trade 'analytics' block) ---------------- */
+function emaArr(arr, p) {
+  if (!arr.length) return [];
+  const k = 2 / (p + 1);
+  const out = new Array(arr.length).fill(NaN);
+  let ema = arr[0];
+  out[0] = ema;
+  for (let i = 1; i < arr.length; i++) {
+    ema = arr[i] * k + ema * (1 - k);
+    out[i] = ema;
+  }
+  return out;
+}
+
+// Wilder-style RSI(14)
+function rsiArr(closes, p = 14) {
+  const out = new Array(closes.length).fill(NaN);
+  if (closes.length <= p) return out;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= p; i++) {
+    const ch = closes[i] - closes[i - 1];
+    if (ch >= 0) gain += ch; else loss -= ch;
+  }
+  gain /= p; loss /= p;
+  out[p] = 100 - 100 / (1 + (loss === 0 ? Infinity : gain / loss));
+  for (let i = p + 1; i < closes.length; i++) {
+    const ch = closes[i] - closes[i - 1];
+    const g = Math.max(ch, 0);
+    const l = Math.max(-ch, 0);
+    gain = (gain * (p - 1) + g) / p;
+    loss = (loss * (p - 1) + l) / p;
+    const rs = loss === 0 ? Infinity : gain / loss;
+    out[i] = 100 - 100 / (1 + rs);
+  }
+  return out;
+}
+
+// ATR(14) (Wilder's smoothing), returned in ABSOLUTE POINTS
+function atrArr(candles, p = 14) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  const out = new Array(candles.length).fill(NaN);
+  const tr = (i) => {
+    const h = Number(candles[i].high ?? candles[i].close ?? 0);
+    const l = Number(candles[i].low ?? candles[i].close ?? 0);
+    const pc = Number(candles[i - 1]?.close ?? h);
+    return Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+  };
+  if (candles.length <= p) return out;
+  // First TR average
+  let atr = 0;
+  for (let i = 1; i <= p; i++) atr += tr(i);
+  atr /= p;
+  out[p] = atr;
+  for (let i = p + 1; i < candles.length; i++) {
+    atr = (out[i - 1] * (p - 1) + tr(i)) / p;
+    out[i] = atr;
+  }
+  return out;
+}
+
+// rolling mean/std for Z-score (volume)
+function rollingMeanStd(arr, win = 20) {
+  const n = arr.length;
+  const mean = new Array(n).fill(NaN);
+  const stdev = new Array(n).fill(NaN);
+  if (n === 0) return { mean, stdev };
+  let sum = 0, sumsq = 0, q = [];
+  for (let i = 0; i < n; i++) {
+    const x = Number(arr[i]) || 0;
+    q.push(x);
+    sum += x;
+    sumsq += x * x;
+    if (q.length > win) {
+      const y = q.shift();
+      sum -= y; sumsq -= y * y;
+    }
+    const m = sum / q.length;
+    const v = Math.max(0, sumsq / q.length - m * m);
+    mean[i] = m;
+    stdev[i] = Math.sqrt(v);
+  }
+  return { mean, stdev };
+}
+
+/**
+ * Compute per-entry analytics at bar index `idx` using the price we actually enter (next open).
+ * Returns an object with the fields expected by the analyzer.
+ */
+function computeAnalytics(candles, idx, entry) {
+  const closes = candles.map(c => Number(c.close) || 0);
+  const vols   = candles.map(c => Number(c.volume) || 0);
+
+  const ma5  = smaArr(closes, 5);
+  const ma25 = smaArr(closes, 25);
+  const ma75 = smaArr(closes, 75);
+  const rsi14 = rsiArr(closes, 14);
+  const atr14 = atrArr(candles, 14);
+  const { mean: vMean, stdev: vStd } = rollingMeanStd(vols, 20);
+
+  const px    = Number(entry) || closes[idx];
+  const prevC = idx > 0 ? closes[idx - 1] : closes[idx];
+
+  const m25 = Number(ma25[idx]);
+  const m75 = Number(ma75[idx]);
+  const m5  = Number(ma5[idx]);
+  const atr = Number(atr14[idx]) || 0;
+
+  const rsi = Number(rsi14[idx]);
+  const atrPct = atr && px ? (atr / px) * 100 : 0;
+
+  const vmu = Number(vMean[idx]) || 0;
+  const vsd = Number(vStd[idx]) || 0;
+  const vol = Number(vols[idx]) || 0;
+  const volZ = vsd > 0 ? (vol - vmu) / vsd : 0;
+
+  const gapPct = prevC ? ((px - prevC) / prevC) * 100 : 0;
+  const pxVsMA25Pct = Number.isFinite(m25) && m25 !== 0 ? ((px - m25) / m25) * 100 : NaN;
+
+  // Simple stacking score: +1 if MA5>MA25, +1 if MA25>MA75, +1 if price>MA25
+  let maStackScore = 0;
+  if (Number.isFinite(m5) && Number.isFinite(m25) && m5 > m25) maStackScore += 1;
+  if (Number.isFinite(m25) && Number.isFinite(m75) && m25 > m75) maStackScore += 1;
+  if (Number.isFinite(m25) && px > m25) maStackScore += 1;
+
+  const pxAboveMA25 = Number.isFinite(m25) ? px > m25 : false;
+  const pxAboveMA75 = Number.isFinite(m75) ? px > m75 : false;
+
+  return {
+    rsi: Number.isFinite(rsi) ? +rsi.toFixed(2) : null,
+    atrPct: +atrPct.toFixed(2),
+    volZ: Number.isFinite(volZ) ? +volZ.toFixed(2) : null,
+    gapPct: +gapPct.toFixed(2),
+    pxVsMA25Pct: Number.isFinite(pxVsMA25Pct) ? +pxVsMA25Pct.toFixed(2) : null,
+    maStackScore,
+    pxAboveMA25,
+    pxAboveMA75
+  };
+}
+
+
 /**
  * Compute simple daily regime labels from a Nikkei proxy candles array.
  * Logic:
@@ -470,7 +610,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // default false if omitted
   const USE_LIVE_BAR = true;
 
-  const INCLUDE_BY_TICKER = !!opts.includeByTicker;
+  const INCLUDE_BY_TICKER = true;
   const INCLUDE_PROFILE_SAMPLES = !!opts.includeProfileSamples; // harmless, still supported
   const SIM_REJECTED = opts.simulateRejectedBuys ?? true;
   const TOP_K = Number.isFinite(opts.topRejectedReasons)
@@ -747,9 +887,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 ST: st.ST,
                 LT: st.LT,
                 regime: st.regime || "RANGE",
-                crossType: st.crossType || null, // "WEEKLY" | "DAILY" | "BOTH" | null
-                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null, // integer
-              };
+                crossType: st.crossType || null,
+                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+                analytics: st.analytics || null, // <<< adds RSI/ATR/VolumeZ/Gap/MA info
+              };              
 
               tradesByProfile[p.id].push(trade);
               trades.push(trade);
@@ -977,6 +1118,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     : null;
 
                 if (!openByProfile[p.id]) openByProfile[p.id] = [];
+                const analytics = computeAnalytics(candles, entryBarIdx, entry);
+
                 openByProfile[p.id].push({
                   entryIdx: entryBarIdx,
                   entry,
@@ -992,7 +1135,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                       .trim() || "UNKNOWN",
                   crossType: selected, // "WEEKLY" | "DAILY" | "BOTH" | null
                   crossLag: Number.isFinite(lag) ? lag : null, // integer bars ago
+                  analytics, // <<< store per-entry analytics for later
                 });
+
                 globalOpenCount++;
                 signalsExecuted++;
               }
