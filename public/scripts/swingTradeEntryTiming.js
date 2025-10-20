@@ -541,6 +541,9 @@ function getConfig(opts = {}) {
     requireFreshWeeklyFlipForDIP: true, // new
     freshWeeklyLookbackWeeks: 5, // reuse the same freshness window you like
     allowStaleCrossDip: false, // turn off stale DIP lane
+        // NEW: explicit stale windows for “old flip still valid”
+    staleDailyCrossMaxAgeBars: 20,   // <= your suggestion
+    staleWeeklyCrossMaxAgeWeeks: 10, // <= your suggestion
 
     // For DIP: we now require (reclaim OR cross), not both
     requireMA25over75ForDIP: true,
@@ -1460,6 +1463,76 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
     return t.getUTCFullYear() + "-" + weekNo;  // e.g. "2025-42"
   };
 
+  /* ========= Helpers to find the most recent flip AGE (no freshness cap) ========= */
+function lastDailyStackedCrossAge(data) {
+    const smaD = (n, i) => {
+      if (i + 1 < n) return 0;
+      let s = 0;
+      for (let k = i - n + 1; k <= i; k++) s += +data[k].close || 0;
+      return s / n;
+    };
+    const last = data.length - 1;
+    if (last < 75) return { found: false };
+    for (let i = last; i >= 1; i--) {
+      const m5 = smaD(5, i), m25 = smaD(25, i), m75 = smaD(75, i);
+      const pm5 = smaD(5, i - 1), pm25 = smaD(25, i - 1), pm75 = smaD(75, i - 1);
+      const nowStacked = m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
+      const prevStacked = pm5 > 0 && pm25 > 0 && pm75 > 0 && pm5 > pm25 && pm25 > pm75;
+      if (nowStacked && !prevStacked) {
+        return { found: true, barsAgo: last - i, index: i, m5, m25, m75 };
+      }
+    }
+    return { found: false };
+  }
+  
+  function lastWeeklyStackedCrossAge(data) {
+    // Resample weeks; drop incomplete last week (same logic as detectWeeklyStackedCross)
+    const weeksAll = resampleToWeeks(data);
+    const isoKey = (d) => {
+      const dt = new Date(d);
+      const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+      const dayNum = (t.getUTCDay() || 7);
+      t.setUTCDate(t.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+      return t.getUTCFullYear() + "-" + weekNo;
+    };
+    const lastDaily = data.at(-1);
+    const lastDailyWeek = lastDaily ? isoKey(lastDaily.date) : null;
+    let barsInLastDailyWeek = 0;
+    if (lastDailyWeek) {
+      for (let i = data.length - 1; i >= 0; i--) {
+        if (isoKey(data[i].date) !== lastDailyWeek) break;
+        barsInLastDailyWeek++;
+      }
+    }
+    const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
+    const weeks = (weeksAll.length >= 1 && dropLastWeekly) ? weeksAll.slice(0, -1) : weeksAll;
+    if (weeks.length < 52) return { found: false };
+  
+    const smaW = (n, i) => {
+      if (i + 1 < n) return 0;
+      let s = 0;
+      for (let k = i - n + 1; k <= i; k++) s += +weeks[k].close || 0;
+      return s / n;
+    };
+    const last = weeks.length - 1;
+    const eps = 0.0015;
+    const stackedAt = (i) => {
+      const m13 = smaW(13, i), m26 = smaW(26, i), m52 = smaW(52, i);
+      const stacked = m13 > 0 && m26 > 0 && m52 > 0 &&
+        m13 >= m26 * (1 + eps) && m26 >= m52 * (1 + eps);
+      return { stacked, m13, m26, m52 };
+    };
+    for (let i = last; i >= 1; i--) {
+      const cur = stackedAt(i), prev = stackedAt(i - 1);
+      if (cur.stacked && !prev.stacked) {
+        return { found: true, weeksAgo: last - i, index: i, m13: cur.m13, m26: cur.m26, m52: cur.m52 };
+      }
+    }
+    return { found: false };
+  }
+
   // How many daily bars do we actually have in the last daily week?
   const lastDaily = data.at(-1);
   const lastDailyWeek = lastDaily ? isoKey(lastDaily.date) : null;
@@ -1836,122 +1909,86 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     });
   }
 
-  /* -------- STALE CROSS + DIP bounce (reload) --------
-   When no fresh flip but MAs are already stacked now,
-   we allow DIP-bounce entries with reclaim/cross guard.
-*/
-  if (
-    cfg.allowStaleCrossDip &&
-    !crossW.trigger &&
-    !crossD.trigger &&
-    structureGateOk
-  ) {
-    const wNow = weeklyStackedNow(dataAll);
-    const dNow = dailyStackedNow(dataAll);
-    const stackedNow = wNow.stacked || dNow.stacked;
-
-    // Run BOTH DIP detectors
-    const Umtf = {
-      num,
-      avg,
-      near,
-      sma,
-      rsiFromData,
-      findResistancesAbove,
-      findSupportsBelow,
-      inferTickFromPrice,
-      tracer: T,
-    };
-    const dipDaily = dip; // already computed earlier on daily series
-    const dipWeekly = detectDipBounceWeekly(stock, dataAll, cfg, Umtf);
-
-    // Recency checks in their native units
-    const dailyRecent =
-      !!dipDaily?.trigger &&
-      (!Number.isFinite(dipDaily?.diagnostics?.bounceAgeBars) ||
-        dipDaily.diagnostics.bounceAgeBars <= (cfg.staleDipMaxAgeBars ?? 7));
-
-    const weeklyRecent =
-      !!dipWeekly?.trigger &&
-      (!Number.isFinite(dipWeekly?.diagnostics?.bounceAgeBars) ||
-        dipWeekly.diagnostics.bounceAgeBars <=
-          (cfg.staleDipMaxAgeWeeklyWeeks ?? 2));
-
-    // Choose DIP that matches the stacked timeframe
-    const chooseWeekly = wNow.stacked && weeklyRecent;
-    const chooseDaily = dNow.stacked && dailyRecent && !chooseWeekly; // prefer weekly if both
-
-    // Require reclaim/cross guard either way
-    const reclaimGate = recentPriceReclaim25and75(
-      dataAll,
-      cfg.dailyReclaimLookback
-    );
-    const maCrossGate = recentMA25Over75Cross(dataAll, cfg.maCrossMaxAgeBars);
-    const guardReclaim = cfg.staleCrossRequireReclaim
-      ? reclaimGate.pass || maCrossGate.pass
-      : true;
-
-    const chosenDip = chooseWeekly ? dipWeekly : chooseDaily ? dipDaily : null;
-
-    if (stackedNow && chosenDip && guardReclaim) {
-      const rrS = analyzeRR(
-        px,
-        chosenDip.stop,
-        chosenDip.target,
-        stock,
-        msFull,
-        cfg,
-        { kind: "DIP", data: dataAll }
-      );
-      if (rrS.acceptable) {
-        const gvS = guardVeto(
-          stock,
-          dataAll,
-          px,
-          rrS,
-          msFull,
-          cfg,
-          chosenDip.nearestRes,
-          "CROSS"
-        );
-        if (!gvS.veto) {
-          candidates.push({
-            kind: chooseWeekly ? "STALE WEEKLY + DIP" : "STALE DAILY + DIP",
-            why: `${wNow.stacked ? "Weekly" : "Daily"} stacked now; ${
-              chooseWeekly ? "WEEKLY" : "DAILY"
-            } DIP bounce & reclaim.`,
-            rr: rrS,
-            stop: rrS.stop,
-            target: rrS.target,
-          });
+    /* -------- NEW: precise “stale cross → now DIP” logic --------
+       If no fresh flips, look for older flips inside stale windows, then require a DIP now.
+    */
+    if (cfg.allowStaleCrossDip && !crossW.trigger && !crossD.trigger && structureGateOk) {
+      const Umtf = {
+        num, avg, near, sma, rsiFromData,
+        findResistancesAbove, findSupportsBelow, inferTickFromPrice,
+        tracer: T,
+      };
+      const dipDailyNow  = dip; // already computed (daily)
+      const dipWeeklyNow = detectDipBounceWeekly(stock, dataAll, cfg, Umtf);
+  
+      // Find last flips (no freshness cap)
+      const lastDailyFlip  = lastDailyStackedCrossAge(completedDaily);
+      const lastWeeklyFlip = lastWeeklyStackedCrossAge(completedDaily);
+  
+      const freshD = cfg.freshDailyLookbackDays ?? 5;
+      const freshW = cfg.freshWeeklyLookbackWeeks ?? 5;
+      const maxStaleD = cfg.staleDailyCrossMaxAgeBars ?? 20;
+      const maxStaleW = cfg.staleWeeklyCrossMaxAgeWeeks ?? 10;
+  
+      // DAILY stale window: (freshD, maxStaleD]
+      const dailyWindowOK =
+        !!lastDailyFlip.found &&
+        lastDailyFlip.barsAgo > freshD &&
+        lastDailyFlip.barsAgo <= maxStaleD;
+  
+      // WEEKLY stale window: (freshW, maxStaleW]
+      const weeklyWindowOK =
+        !!lastWeeklyFlip.found &&
+        lastWeeklyFlip.weeksAgo > freshW &&
+        lastWeeklyFlip.weeksAgo <= maxStaleW;
+  
+      // Require “now DIP”
+      const dailyDipOK =
+        !!dipDailyNow?.trigger &&
+        (!Number.isFinite(dipDailyNow?.diagnostics?.bounceAgeBars) ||
+          dipDailyNow.diagnostics.bounceAgeBars <= (cfg.staleDipMaxAgeBars ?? 7));
+  
+      const weeklyDipOK =
+        !!dipWeeklyNow?.trigger &&
+        (!Number.isFinite(dipWeeklyNow?.diagnostics?.bounceAgeBars) ||
+          dipWeeklyNow.diagnostics.bounceAgeBars <= (cfg.staleDipMaxAgeWeeklyWeeks ?? 2));
+  
+      // Prefer WEEKLY if both qualify; else DAILY
+      const doWeekly = weeklyWindowOK && weeklyDipOK;
+      const doDaily  = dailyWindowOK && dailyDipOK && !doWeekly;
+  
+      if (doWeekly || doDaily) {
+        const chosen = doWeekly ? dipWeeklyNow : dipDailyNow;
+        const rrS = analyzeRR(px, chosen.stop, chosen.target, stock, msFull, cfg, { kind: "DIP", data: dataAll });
+        if (rrS.acceptable) {
+          const gvS = guardVeto(stock, dataAll, px, rrS, msFull, cfg, chosen.nearestRes, "DIP");
+          if (!gvS.veto) {
+            candidates.push({
+              kind: doWeekly ? "STALE WEEKLY + DIP" : "STALE DAILY + DIP",
+             why: doWeekly
+                ? `Weekly flip was ${lastWeeklyFlip.weeksAgo}w ago (>${freshW} & ≤${maxStaleW}); DIP now.`
+                : `Daily flip was ${lastDailyFlip.barsAgo}d ago (>${freshD} & ≤${maxStaleD}); DIP now.`,
+              rr: rrS,
+              stop: rrS.stop,
+              target: rrS.target,
+            });
+          } else {
+            pushBlock(tele, "STALE_VETO", "guard", gvS.reason, gvS.details);
+          }
         } else {
-          pushBlock(tele, "STALE_VETO", "guard", gvS.reason, gvS.details);
+          pushBlock(tele, "STALE_RR_FAIL", "rr", `RR ${fmt(rrS.ratio)} < need ${fmt(rrS.need)}`, {
+            stop: rrS.stop, target: rrS.target,
+          });
         }
       } else {
-        pushBlock(
-          tele,
-          "STALE_RR_FAIL",
-          "rr",
-          `RR ${fmt(rrS.ratio)} < need ${fmt(rrS.need)}`,
-          { stop: rrS.stop, target: rrS.target }
-        );
+        pushBlock(tele, "STALE_SKIP", "cross",
+          "No acceptable stale-window flip or no DIP now", {
+            lastDailyFlip, lastWeeklyFlip, freshD, freshW, maxStaleD, maxStaleW,
+            dipDailyNow: { trigger: !!dipDailyNow?.trigger },
+            dipWeeklyNow: { trigger: !!dipWeeklyNow?.trigger },
+          });
       }
-    } else {
-      pushBlock(
-        tele,
-        "STALE_SKIP",
-        "cross",
-        "Not stacked now / DIP not recent / no reclaim",
-        {
-          wNow,
-          dNow,
-          dailyRecent,
-          weeklyRecent,
-          guardReclaim,
-        }
-      );
     }
-  }
 
   /* ------------------------ Decide & return ------------------------ */
   // attach global guard histos
