@@ -1,6 +1,5 @@
 {
   "name": "stockanalysis",
-  "type": "module" ,
   "version": "1.0.0",
   "description": "Stock analysis project using Yahoo Finance API",
   "main": "index.js",
