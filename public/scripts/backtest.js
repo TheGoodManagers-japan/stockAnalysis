@@ -1045,10 +1045,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             let exit = null;
 
             // 1) price-based exits first
+            // 1) price-based exits first
             if (today.low <= st.stop) {
-              exit = { type: "STOP", price: st.stop, result: "LOSS" };
+              // If the (possibly trailed) stop is at/above entry, the trade is profitable — count as WIN
+              const isProfit = st.stop >= st.entry; // use '>' if you want breakeven to be LOSS
+              exit = {
+                type: "STOP",
+                price: st.stop,
+                result: isProfit ? "WIN" : "LOSS",
+              };
             } else if (!st.skipTarget && today.high >= st.target) {
-              // Only take target if NOT a trailing profile (RAW will still exit here)
               exit = { type: "TARGET", price: st.target, result: "WIN" };
             }
 
