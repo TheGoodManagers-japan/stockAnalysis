@@ -337,6 +337,111 @@ function clampStopLoss(px, atr, proposed, floorStop = 0) {
   return Math.round(s);
 }
 
+// ---- Regime helpers (match backtest) ----
+const DEFAULT_REGIME_TICKER = "1306.T"; // Nikkei 225 ETF proxy
+const toISO = (d) => new Date(d).toISOString().slice(0, 10);
+
+function smaArr(arr, p) {
+  if (arr.length < p) return Array(arr.length).fill(NaN);
+  const out = new Array(arr.length).fill(NaN);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+    if (i >= p) sum -= arr[i - p];
+    if (i >= p - 1) out[i] = sum / p;
+  }
+  return out;
+}
+
+/**
+ * Compute daily regime labels from candles.
+ * - STRONG_UP: px>MA25 & MA25 slope > +0.02%/bar & MA25>MA75
+ * - UP:        px>MA25 & slope >= 0
+ * - RANGE:     |slope| < 0.02%/bar OR |px-MA25| <= ATR(14)
+ * - DOWN:      otherwise
+ */
+function computeRegimeLabels(candles) {
+  if (!Array.isArray(candles) || candles.length < 30) {
+    return candles.map(() => "RANGE");
+  }
+  const closes = candles.map(c => Number(c.close) || 0);
+  const ma25 = smaArr(closes, 25);
+  const ma75 = smaArr(closes, 75);
+
+  // ATR(14) (simple Wilder-like)
+  const atr = (() => {
+    if (candles.length < 15) return candles.map(() => 0);
+    const out = new Array(candles.length).fill(0);
+    for (let i = 1; i < candles.length; i++) {
+      const h = Number(candles[i].high ?? candles[i].close ?? 0);
+      const l = Number(candles[i].low  ?? candles[i].close ?? 0);
+      const pc = Number(candles[i - 1].close ?? 0);
+      const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+      if (i < 15) {
+        const start = Math.max(1, i - 14);
+        let sum = 0;
+        for (let k = start; k <= i; k++) {
+          const hk = Number(candles[k].high ?? candles[k].close ?? 0);
+          const lk = Number(candles[k].low  ?? candles[k].close ?? 0);
+          const pck= Number(candles[k - 1]?.close ?? 0);
+          const trk = Math.max(hk - lk, Math.abs(hk - pck), Math.abs(lk - pck));
+          sum += trk;
+        }
+        out[i] = sum / Math.min(14, i);
+      } else {
+        out[i] = (out[i - 1] * 13 + tr) / 14;
+      }
+    }
+    return out;
+  })();
+
+  const labels = [];
+  for (let i = 0; i < candles.length; i++) {
+    const px  = closes[i];
+    const m25 = ma25[i];
+    const m75 = ma75[i];
+    const a14 = atr[i] || 0;
+
+    // MA25 slope over last 5 bars (%/bar)
+    let slope = 0;
+    if (i >= 5 && Number.isFinite(m25) && m25 > 0) {
+      const prev = ma25[i - 5];
+      if (Number.isFinite(prev) && prev > 0) slope = (m25 - prev) / prev / 5;
+    }
+
+    const aboveMA = Number.isFinite(m25) && px > m25;
+    const strong  = aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75;
+    const flatish = Math.abs(slope) < 0.0002 || (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
+
+    if (strong) labels.push("STRONG_UP");
+    else if (aboveMA && slope >= 0) labels.push("UP");
+    else if (flatish) labels.push("RANGE");
+    else labels.push("DOWN");
+  }
+  return labels;
+}
+
+function buildRegimeMap(candles) {
+  const labels = computeRegimeLabels(candles);
+  const map = Object.create(null);
+  for (let i = 0; i < candles.length; i++) {
+    map[toISO(candles[i].date)] = labels[i];
+  }
+  return map;
+}
+
+function regimeForDate(regimeMap, date) {
+  // Try date, then walk back up to 5 days to find last known label
+  let d = new Date(date);
+  for (let k = 0; k < 6; k++) {
+    const key = toISO(d);
+    if (regimeMap[key]) return regimeMap[key];
+    d.setDate(d.getDate() - 1);
+  }
+  return "RANGE";
+}
+
+
 
 
 /**
@@ -383,6 +488,99 @@ function clampStopLoss(px, atr, proposed, floorStop = 0) {
  * - `updatedStopLoss` is only returned when tightening (never lowers your current stop).
  * - ADX is computed if not provided; context signals (sentiment/ML/regime) are optional but improve decisions.
  */
+
+// --- Simple scan-time analytics (mirror of backtest bits) ---
+function scanAnalytics(stock, historicalData) {
+  const data = Array.isArray(historicalData) ? historicalData : [];
+  const n = data.length;
+  if (!n) return { rsi: null, atrPct: null, volZ: null, gapPct: null, pxVsMA25Pct: null, maStackScore: 0, pxAboveMA25: false, pxAboveMA75: false };
+
+  const close = Number(stock.currentPrice) || Number(data.at(-1)?.close) || 0;
+  const prevC = n > 1 ? Number(data[n - 2]?.close) || close : close;
+  const ma = (arr, p) => (arr.length >= p ? arr.slice(-p).reduce((a,b)=>a+b,0)/p : NaN);
+
+  const closes = data.map(d=>Number(d.close)||0);
+  const vols   = data.map(d=>Number(d.volume)||0);
+
+  // RSI14 (use enriched if present)
+  const rsi = Number.isFinite(stock.rsi14) ? stock.rsi14 : (function rsi14(cs){
+    if (cs.length < 15) return NaN;
+    let g=0,l=0;
+    for (let i=cs.length-14;i<cs.length;i++){
+      const d=cs[i]-cs[i-1];
+      if (d>=0) g+=d; else l-=d;
+    }
+    const rs = l===0?Infinity:g/l;
+    return 100 - 100/(1+rs);
+  })(closes);
+
+  // ATR pct (use enriched if present)
+  const atrAbs = Number.isFinite(stock.atr14) ? stock.atr14 : calcATR(data,14);
+  const atrPct = close ? (atrAbs/close)*100 : 0;
+
+  // Volume Z over 20
+  const v20 = vols.slice(-20);
+  let volZ = null;
+  if (v20.length === 20) {
+    const m = v20.reduce((a,b)=>a+b,0)/20;
+    const sd = Math.sqrt(v20.reduce((a,b)=>a+(b-m)*(b-m),0)/20);
+    volZ = sd>0 ? (vols.at(-1)-m)/sd : 0;
+  }
+
+  const gapPct = prevC ? ((close - prevC)/prevC)*100 : 0;
+
+  const ma25 = Number.isFinite(stock.movingAverage25d) ? stock.movingAverage25d : sma(data,25);
+  const ma75 = Number.isFinite(stock.movingAverage75d) ? stock.movingAverage75d : sma(data,75);
+  const m5   = Number.isFinite(stock.movingAverage5d)  ? stock.movingAverage5d  : sma(data,5);
+
+  const pxVsMA25Pct = Number.isFinite(ma25) && ma25>0 ? ((close - ma25)/ma25)*100 : NaN;
+
+  let maStackScore = 0;
+  if (Number.isFinite(m5)  && Number.isFinite(ma25) && m5  > ma25) maStackScore+=1;
+  if (Number.isFinite(ma25)&& Number.isFinite(ma75) && ma25> ma75) maStackScore+=1;
+  if (Number.isFinite(ma25)&& close>ma25) maStackScore+=1;
+
+  return {
+    rsi: Number.isFinite(rsi) ? +rsi.toFixed(2) : null,
+    atrPct: Number.isFinite(atrPct) ? +atrPct.toFixed(2) : null,
+    volZ: Number.isFinite(volZ) ? +volZ.toFixed(2) : null,
+    gapPct: Number.isFinite(gapPct) ? +gapPct.toFixed(2) : null,
+    pxVsMA25Pct: Number.isFinite(pxVsMA25Pct) ? +pxVsMA25Pct.toFixed(2) : null,
+    maStackScore,
+    pxAboveMA25: Number.isFinite(ma25) ? close>ma25 : false,
+    pxAboveMA75: Number.isFinite(ma75) ? close>ma75 : false,
+  };
+}
+
+// --- Same scoring rules you used in backtest.computeScore ---
+function computeScanScore({ analytics, regime="RANGE", crossType, crossLag, ST, LT }) {
+  let s = 0;
+  // Regime: DOWN>UP (STRONG_UP/RANGE neutral) — if you don’t have regime here, this will usually add 0
+  if (regime === "DOWN") s += 2;
+  else if (regime === "UP") s += 1;
+
+  const lag = Number.isFinite(crossLag) ? crossLag : null;
+  if (crossType === "WEEKLY" || crossType === "BOTH") {
+    if (lag !== null && lag >= 2) s += 2;
+  } else if (crossType === "DAILY") {
+    if (lag !== null && lag >= 4) s += 1;
+  }
+
+  // Sentiment zones (LT 3–5 bullish; ST 6–7 pullback)
+  if (Number.isFinite(LT) && LT >= 3 && LT <= 5) s += 1;
+  if (Number.isFinite(ST) && ST >= 6 && ST <= 7) s += 1;
+
+  // Analytics
+  const a = analytics || {};
+  if (Number.isFinite(a.gapPct) && a.gapPct > 0) s += 1;
+  if (Number.isFinite(a.rsi) && a.rsi >= 60) s += 1;
+  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct <= 4) s += 1;
+  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6) s -= 1;
+
+  return s;
+}
+
+
 
 export function getTradeManagementSignal_V3(
   stock,
@@ -945,7 +1143,26 @@ export async function fetchStockAnalysis({
   tickers = [],
   myPortfolio = [],
   onItem,
+  regimeTicker = DEFAULT_REGIME_TICKER, // ← add this
 } = {}) {
+  // Fetch regime reference once
+  let regimeMap = null;
+  try {
+    const ref = await fetchHistoricalData(regimeTicker);
+    if (Array.isArray(ref) && ref.length) {
+      regimeMap = buildRegimeMap(ref);
+      log(`Regime ready from ${regimeTicker} (${ref.length} bars)`);
+    } else {
+      warn(`Regime disabled: no candles for ${regimeTicker}`);
+    }
+  } catch (e) {
+    warn(
+      `Regime disabled: failed to load ${regimeTicker} — ${String(
+        e?.message || e
+      )}`
+    );
+  }
+
   log("Starting scan", { IS_BROWSER, API_BASE });
   const emit = typeof onItem === "function" ? onItem : () => {};
   const errors = [];
@@ -1166,15 +1383,6 @@ export async function fetchStockAnalysis({
       stock.shortTermConf = horizons.shortTerm.confidence;
       stock.longTermConf = horizons.longTerm.confidence;
 
-      // 👇 NEW: combo key + rank (1..5; 1=really good, 5=avoid)
-      stock.sentimentComboKey = sentiKey(
-        stock.shortTermScore,
-        stock.longTermScore
-      );
-      stock.sentimentComboRank = getSentimentCombinationRank(
-        stock.shortTermScore,
-        stock.longTermScore
-      );
 
       // 6) entry timing
       log("Running swing entry timing…");
@@ -1183,6 +1391,57 @@ export async function fetchStockAnalysis({
         dataForLevels, // for RR/headroom etc.
         { debug: true, dataForGates } // hand the completed-bars view to the analyzer
       );
+
+      // --- score (same inputs you used in backtest) ---
+      // --- score (same inputs you used in backtest) ---
+const ST = stock.shortTermScore;
+const LT = stock.longTermScore;
+
+// derive crossType/lag from the analyzer if present
+let crossType = null, crossLag = null;
+const cm = finalSignal?.meta?.cross || {};
+if (cm?.selected) {
+  crossType = cm.selected; // "WEEKLY" | "DAILY" | "BOTH"
+  crossLag =
+    Number.isFinite(cm?.weekly?.barsAgo) && (crossType === "WEEKLY" || crossType === "BOTH")
+      ? cm.weekly.barsAgo
+      : Number.isFinite(cm?.daily?.barsAgo) && (crossType === "DAILY" || crossType === "BOTH")
+      ? cm.daily.barsAgo
+      : null;
+} else if (cm?.weekly || cm?.daily) {
+  crossType = cm.weekly && cm.daily ? "BOTH" : cm.weekly ? "WEEKLY" : "DAILY";
+  crossLag = Math.min(
+    Number.isFinite(cm.weekly?.barsAgo) ? cm.weekly.barsAgo : Infinity,
+    Number.isFinite(cm.daily?.barsAgo) ? cm.daily.barsAgo : Infinity
+  );
+  if (!Number.isFinite(crossLag)) crossLag = null;
+}
+
+const analytics = scanAnalytics(stock, dataForLevels);
+
+// Pick the date we want the regime for: last *completed* bar if available,
+// otherwise fall back to the latest bar we have.
+const regimeDate =
+  (dataForGates?.length ? dataForGates.at(-1)?.date : null) ||
+  stock.historicalData.at(-1)?.date;
+
+const dayRegime = regimeMap ? regimeForDate(regimeMap, regimeDate) : "RANGE";
+
+const score = computeScanScore({
+  analytics,
+  regime: dayRegime,
+  crossType,
+  crossLag,
+  ST,
+  LT,
+});
+
+// keep on the stock for Bubble/UI
+stock.sentimentComboRank = score;
+stock.marketRegime = dayRegime;
+stock._scoreAnalytics = analytics;
+stock._scoreCross = { crossType, crossLag };
+
       // keep detailed telemetry for session-level diagnostics
       if (finalSignal?.telemetry) {
         teleList.push(finalSignal.telemetry);
