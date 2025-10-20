@@ -58,12 +58,12 @@ function pushBlock(tele, code, gate, why, ctx = {}) {
 function mkTracer(opts = {}) {
   const level = opts.debugLevel || "normal"; // "off"|"normal"|"verbose"
   const logs = [];
-   const should = (lvl) => {
-        if (level === "off") return false;
-        if (level === "verbose") return true;
-        // "normal": allow info/warn/error but not debug/verbose
-        return lvl !== "debug" && lvl !== "verbose";
-      };
+  const should = (lvl) => {
+    if (level === "off") return false;
+    if (level === "verbose") return true;
+    // "normal": allow info/warn/error but not debug/verbose
+    return lvl !== "debug" && lvl !== "verbose";
+  };
   const emit = (e) => {
     logs.push(e);
     try {
@@ -93,7 +93,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   if (!Array.isArray(historicalData) || historicalData.length < 25) {
     const r = "Insufficient historical data (need ≥25 bars).";
-    const out = withNo(r, { stock, data: historicalData || [] });
+    const out = withNo(r, { stock, data: historicalData || [], cfg });
     out.telemetry = {
       ...tele,
       outcome: { buyNow: false, reason: r },
@@ -114,7 +114,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
   ) {
     const r = "Invalid last bar OHLCV.";
-    const out = withNo(r, { stock, data });
+    const out = withNo(r, { stock, data, cfg });
     out.telemetry = {
       ...tele,
       outcome: { buyNow: false, reason: r },
@@ -124,17 +124,16 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return out;
   }
 
-   // normalize volume to a finite number for downstream calcs
-   if (!Number.isFinite(last.volume)) last.volume = 0;
- 
+  // normalize volume to a finite number for downstream calcs
+  if (!Number.isFinite(last.volume)) last.volume = 0;
+
   // --- History sufficiency for enabled gates (avoid silent gating later) ---
-  const requiresDaily75 =
-    getConfig(opts).requireDailyReclaim25and75ForDIP ||
-    getConfig(opts).requireMA25over75ForDIP;
-  const requiresWeekly52 = getConfig(opts).requireWeeklyUpForDIP;
+    const requiresDaily75 = cfg.requireDailyReclaim25and75ForDIP || cfg.requireMA25over75ForDIP;
+    const requiresWeekly52 = cfg.requireWeeklyUpForDIP;
   if (requiresDaily75 && data.length < 75) {
-    const r = "Insufficient history for DIP gating (need ≥75 daily bars for MA25/MA75).";
-    const out = withNo(r, { stock, data, cfg: getConfig(opts) });
+    const r =
+      "Insufficient history for DIP gating (need ≥75 daily bars for MA25/MA75).";
+      const out = withNo(r, { stock, data, cfg });
     out.telemetry = {
       ...tele,
       outcome: { buyNow: false, reason: r },
@@ -146,8 +145,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
   if (requiresWeekly52) {
     const weeks = resampleToWeeks(data);
     if (weeks.length < 52) {
-      const r = "Insufficient history for DIP gating (need ≥52 weekly closes for 13/26/52-week MAs).";
-      const out = withNo(r, { stock, data, cfg: getConfig(opts) });
+      const r =
+        "Insufficient history for DIP gating (need ≥52 weekly closes for 13/26/52-week MAs).";
+        const out = withNo(r, { stock, data, cfg });
       out.telemetry = {
         ...tele,
         outcome: { buyNow: false, reason: r },
@@ -157,7 +157,6 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
       return out;
     }
   }
-
 
   const px = num(stock.currentPrice) || num(last.close);
   const openPx = num(stock.openPrice) || num(last.open) || px;
@@ -187,9 +186,9 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
 
   /* ----- Minimal structure check (DIP-friendly) ----- */
   // Allow WEAK_UP/UP/STRONG_UP, forbid clear DOWN unless cfg allows
-    const structureGateOk =
-      (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
-      px >= (msFull.ma5 || 0) * 0.988; // a touch more slack
+  const structureGateOk =
+    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
+    px >= (msFull.ma5 || 0) * 0.988; // a touch more slack
   tele.gates.structure = {
     pass: !!structureGateOk,
     why: structureGateOk ? "" : "trend DOWN or price < MA5",
@@ -250,15 +249,15 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     dipGatePass = false;
     dipGateWhy.push("not above 13/26/52-week MAs");
   }
-    // OR-logic: require (reclaim OR cross) if either DIP flag is enabled
-    if (cfg.requireDailyReclaim25and75ForDIP || cfg.requireMA25over75ForDIP) {
-      if (!(reclaimGate.pass || maCrossGate.pass)) {
-        dipGatePass = false;
-        dipGateWhy.push(
-          `no 25/75 reclaim (≤${cfg.dailyReclaimLookback}) OR 25>75 cross (≤${cfg.maCrossMaxAgeBars})`
-        );
-      }
+  // OR-logic: require (reclaim OR cross) if either DIP flag is enabled
+  if (cfg.requireDailyReclaim25and75ForDIP || cfg.requireMA25over75ForDIP) {
+    if (!(reclaimGate.pass || maCrossGate.pass)) {
+      dipGatePass = false;
+      dipGateWhy.push(
+        `no 25/75 reclaim (≤${cfg.dailyReclaimLookback}) OR 25>75 cross (≤${cfg.maCrossMaxAgeBars})`
+      );
     }
+  }
 
   if (dip?.trigger && !dipGatePass) {
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
@@ -516,10 +515,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
       best.why
     }`,
-        stopLoss: toTick(best.stop, stock),
-        priceTarget: toTick(best.target, stock),
-        smartStopLoss: toTick(best.stop, stock),
-        smartPriceTarget: toTick(best.target, stock),
+    stopLoss: toTick(best.stop, stock),
+    priceTarget: toTick(best.target, stock),
+    smartStopLoss: toTick(best.stop, stock),
+    smartPriceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull),
     telemetry: { ...tele, trace: T.logs },
   };
@@ -535,10 +534,10 @@ function getConfig(opts = {}) {
     // --- Weekly/Daily cross gating (DIP + new playbook) ---
     requireWeeklyUpForDIP: true, // require above 13/26/52wk for DIP lane
     requireDailyReclaim25and75ForDIP: true, // require recent price reclaim of both 25d & 75d
-        dailyReclaimLookback: 5, // slightly wider, helps valid names pass
-        // For DIP: we now require (reclaim OR cross), not both
-        requireMA25over75ForDIP: true,
-        maCrossMaxAgeBars: 10, // allow a recent cross within ~2 weeks
+    dailyReclaimLookback: 5, // slightly wider, helps valid names pass
+    // For DIP: we now require (reclaim OR cross), not both
+    requireMA25over75ForDIP: true,
+    maCrossMaxAgeBars: 10, // allow a recent cross within ~2 weeks
 
     // --- Cross+Volume playbook ---
     crossPlaybookEnabled: true,
@@ -553,7 +552,7 @@ function getConfig(opts = {}) {
 
     // headroom & extension guards (align with dip.js headroomOK of ≥0.50 ATR / ≥1.00%)
     nearResVetoATR: 0.4,
-    nearResVetoPct: 0.60,
+    nearResVetoPct: 0.6,
     maxATRfromMA25: 2.4,
 
     // overbought guards
@@ -574,13 +573,13 @@ function getConfig(opts = {}) {
 
     // volume regime
     pullbackDryFactor: 1.2, // was 1.6 (<= means “dry”: require drier pullback)
-    bounceHotFactor: 1.00, // was 1.05 (>= means “hot”: bounce should be a bit hot)
+    bounceHotFactor: 1.0, // was 1.05 (>= means “hot”: bounce should be a bit hot)
 
     // DIP parameters (used by dip.js)
     dipMinPullbackPct: 4.8, // new: minimum pullback in %
     dipMinPullbackATR: 1.9, // was 0.6
     dipMaxBounceAgeBars: 7, // was 5
-    dipMinBounceStrengthATR: 0.60, // was 0.8 (other gates tightened; this stays reasonable)
+    dipMinBounceStrengthATR: 0.6, // was 0.8 (other gates tightened; this stays reasonable)
     dipMinRR: 1.55, // new: DIP-specific RR floor
 
     // allow DIPs even if broader regime softened
@@ -608,7 +607,8 @@ function getConfig(opts = {}) {
 // ==== Weekly helpers & gates ====
 function resampleToWeeks(daily) {
   const out = [];
-  let curKey = "", agg = null;
+  let curKey = "",
+    agg = null;
   for (const d of daily) {
     const dt = new Date(d.date);
     const y = dt.getUTCFullYear();
@@ -627,10 +627,12 @@ function resampleToWeeks(daily) {
   return out;
 }
 function isoWeek(d) {
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay()||7));
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(),0,1));
-  const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1)/7);
+  const date = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  );
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
   return weekNo;
 }
 function smaSeries(arr, n) {
@@ -640,23 +642,25 @@ function smaSeries(arr, n) {
   return s / n;
 }
 function weeklyUptrendGate(data, px) {
-    const w = resampleToWeeks(data);
-    const w13 = smaSeries(w, 13);
-    const w26 = smaSeries(w, 26);
-    const w52 = smaSeries(w, 52);
-    const hasAll = [w13, w26, w52].every(v => v > 0);
-    if (!hasAll) return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
-  
-      const slack = 0.01; // ≤1% slack allowed consistently
-      const above13 = px > w13 * (1 - slack);
-      const above26 = px > w26 * (1 - slack);
-      const above52 = px > w52 * (1 - slack);
-  
-    const passStrict = above13 && above26 && above52;
-    const pass2of3 = (above13 ? 1 : 0) + (above26 ? 1 : 0) + (above52 ? 1 : 0) >= 2;
-  
-    return { pass: passStrict, passRelaxed: pass2of3, hasAll, w13, w26, w52 };
-  }
+  const w = resampleToWeeks(data);
+  const w13 = smaSeries(w, 13);
+  const w26 = smaSeries(w, 26);
+  const w52 = smaSeries(w, 52);
+  const hasAll = [w13, w26, w52].every((v) => v > 0);
+  if (!hasAll)
+    return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
+
+  const slack = 0.01; // ≤1% slack allowed consistently
+  const above13 = px > w13 * (1 - slack);
+  const above26 = px > w26 * (1 - slack);
+  const above52 = px > w52 * (1 - slack);
+
+  const passStrict = above13 && above26 && above52;
+  const pass2of3 =
+    (above13 ? 1 : 0) + (above26 ? 1 : 0) + (above52 ? 1 : 0) >= 2;
+
+  return { pass: passStrict, passRelaxed: pass2of3, hasAll, w13, w26, w52 };
+}
 
 // ==== Daily reclaim / MA cross gates ====
 function crossesUp(prevA, nowA, prevB, nowB) {
@@ -668,64 +672,76 @@ function dailyMA(data, n) {
 function recentPriceReclaim25and75(data, lookback = 3) {
   const i = data.length - 1;
   if (i < 1) return { pass: false };
-  const dNow = data[i], dPrev = data[i-1];
-  const ma25Now = dailyMA(data,25), ma75Now = dailyMA(data,75);
-  const ma25Prev = dailyMA(data.slice(0,-1),25), ma75Prev = dailyMA(data.slice(0,-1),75)
-    // Guard: if either MA is not computable yet (==0), we cannot validate a reclaim
+  const dNow = data[i],
+    dPrev = data[i - 1];
+  const ma25Now = dailyMA(data, 25),
+    ma75Now = dailyMA(data, 75);
+  const ma25Prev = dailyMA(data.slice(0, -1), 25),
+    ma75Prev = dailyMA(data.slice(0, -1), 75);
+  // Guard: if either MA is not computable yet (==0), we cannot validate a reclaim
   if (!(ma25Now > 0 && ma75Now > 0 && ma25Prev > 0 && ma75Prev > 0)) {
     return {
       pass: false,
-      ma25Now, ma75Now
+      ma25Now,
+      ma75Now,
     };
   }
-  const priceNow = +dNow.close, pricePrev = +dPrev.close;
+  const priceNow = +dNow.close,
+    pricePrev = +dPrev.close;
 
   const cross25 = crossesUp(pricePrev, priceNow, ma25Prev, ma25Now);
   const cross75 = crossesUp(pricePrev, priceNow, ma75Prev, ma75Now);
 
   // also allow reclaim within last N bars
-  let windowCross25 = cross25, windowCross75 = cross75;
-  for (let k=2; k<=lookback && i-k>=0; k++){
-        const dK   = data[i - k];
-        const dKp1 = data[i - k + 1];
-        const snapK   = data.slice(0, i - k + 1);   // up to K (inclusive)
-        const snapKp1 = data.slice(0, i - k + 2);   // up to K+1 (inclusive)
-        const ma25K   = dailyMA(snapK, 25);
-        const ma25Kp1 = dailyMA(snapKp1, 25);
-        const ma75K   = dailyMA(snapK, 75);
-        const ma75Kp1 = dailyMA(snapKp1, 75);
-        if (!(ma25K>0 && ma25Kp1>0 && ma75K>0 && ma75Kp1>0)) continue;
-        if (!windowCross25 && crossesUp(+dK.close, +dKp1.close, ma25K, ma25Kp1)) windowCross25 = true;
-        if (!windowCross75 && crossesUp(+dK.close, +dKp1.close, ma75K, ma75Kp1)) windowCross75 = true;
-       }
-  const pass = windowCross25 && windowCross75 && priceNow > ma25Now && priceNow > ma75Now;
+  let windowCross25 = cross25,
+    windowCross75 = cross75;
+  for (let k = 2; k <= lookback && i - k >= 0; k++) {
+    const dK = data[i - k];
+    const dKp1 = data[i - k + 1];
+    const snapK = data.slice(0, i - k + 1); // up to K (inclusive)
+    const snapKp1 = data.slice(0, i - k + 2); // up to K+1 (inclusive)
+    const ma25K = dailyMA(snapK, 25);
+    const ma25Kp1 = dailyMA(snapKp1, 25);
+    const ma75K = dailyMA(snapK, 75);
+    const ma75Kp1 = dailyMA(snapKp1, 75);
+    if (!(ma25K > 0 && ma25Kp1 > 0 && ma75K > 0 && ma75Kp1 > 0)) continue;
+    if (!windowCross25 && crossesUp(+dK.close, +dKp1.close, ma25K, ma25Kp1))
+      windowCross25 = true;
+    if (!windowCross75 && crossesUp(+dK.close, +dKp1.close, ma75K, ma75Kp1))
+      windowCross75 = true;
+  }
+  const pass =
+    windowCross25 && windowCross75 && priceNow > ma25Now && priceNow > ma75Now;
   return { pass, ma25Now, ma75Now };
 }
 function recentMA25Over75Cross(data, maxAge = 5) {
   const i = data.length - 1;
-  if (i < 1) return { pass:false };
-    // Find the most recent bar t (within maxAge) where MA25 crossed above MA75 between t-1 -> t
+  if (i < 1) return { pass: false };
+  // Find the most recent bar t (within maxAge) where MA25 crossed above MA75 between t-1 -> t
   // Age is (i - t). If the cross is on the latest bar, age = 0.
   let lastCrossAge = Infinity;
   for (let t = i; t >= Math.max(1, i - maxAge); t--) {
-    const snapPrev = data.slice(0, t);     // up to t-1 inclusive
-    const snapNow  = data.slice(0, t + 1); // up to t inclusive
-    const m25Prev = dailyMA(snapPrev, 25), m75Prev = dailyMA(snapPrev, 75);
-    const m25Now  = dailyMA(snapNow,  25), m75Now  = dailyMA(snapNow,  75);
-    if (!(m25Prev>0 && m75Prev>0 && m25Now>0 && m75Now>0)) continue;
+    const snapPrev = data.slice(0, t); // up to t-1 inclusive
+    const snapNow = data.slice(0, t + 1); // up to t inclusive
+    const m25Prev = dailyMA(snapPrev, 25),
+      m75Prev = dailyMA(snapPrev, 75);
+    const m25Now = dailyMA(snapNow, 25),
+      m75Now = dailyMA(snapNow, 75);
+    if (!(m25Prev > 0 && m75Prev > 0 && m25Now > 0 && m75Now > 0)) continue;
     const wasBelowOrEqual = m25Prev <= m75Prev;
-    const nowAbove        = m25Now  >  m75Now;
+    const nowAbove = m25Now > m75Now;
     if (wasBelowOrEqual && nowAbove) {
       lastCrossAge = i - t; // bars ago
       break;
     }
   }
-  const m25Now = dailyMA(data,25), m75Now = dailyMA(data,75);
-  const haveNow = (m25Now > 0 && m75Now > 0 && m25Now > m75Now);
-  const pass = Number.isFinite(lastCrossAge) && lastCrossAge <= maxAge && haveNow;
-   return { pass, lastCrossAge, m25Now, m75Now };
- }
-
+  const m25Now = dailyMA(data, 25),
+    m75Now = dailyMA(data, 75);
+  const haveNow = m25Now > 0 && m75Now > 0 && m25Now > m75Now;
+  const pass =
+    Number.isFinite(lastCrossAge) && lastCrossAge <= maxAge && haveNow;
+  return { pass, lastCrossAge, m25Now, m75Now };
+}
 
 function detectCrossVolumePlay(stock, data, cfg) {
   const i = data.length - 1;
@@ -786,8 +802,6 @@ function detectCrossVolumePlay(stock, data, cfg) {
     diag: { volHot, ma25, w13: wk.w13, w26: wk.w26, w52: wk.w52 },
   };
 }
-
-
 
 /* ======================= Market Structure ======================= */
 function getMarketStructure(stock, data) {
@@ -885,35 +899,38 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
   // 5) SCOOT: bounded target lifts to nearby clustered resistances
-    if (cfg.scootEnabled) {
-        const atrCap = ctx?.kind === "DIP" ? (cfg.scootATRCapDIP ?? 4.2) : (cfg.scootATRCapNonDIP ?? 3.5);
-    
-        // First hop: try resList[1]
-        if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
-          const nextRes = resList[1];
-          const lifted = Math.min(nextRes, entryPx + atrCap * atr);
-          if (lifted > target) {
-            target = lifted;
-            reward = Math.max(0, target - entryPx);
-            ratio = reward / risk;
-          }
-        }
-    
-        // Second hop: only if still within 0.25 of the floor and we have resList[2]
-        if (
-          ratio < need &&
-          need - ratio <= (cfg.scootNearMissBand ?? 0.25) &&
-          Array.isArray(resList) &&
-          resList.length >= 3
-        ) {
-          const next2 = Math.min(resList[2], entryPx + atrCap * atr);
-          if (next2 > target) {
-            target = next2;
-            reward = Math.max(0, target - entryPx);
-            ratio = reward / risk;
-          }
-        }
+  if (cfg.scootEnabled) {
+    const atrCap =
+      ctx?.kind === "DIP"
+        ? cfg.scootATRCapDIP ?? 4.2
+        : cfg.scootATRCapNonDIP ?? 3.5;
+
+    // First hop: try resList[1]
+    if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
+      const nextRes = resList[1];
+      const lifted = Math.min(nextRes, entryPx + atrCap * atr);
+      if (lifted > target) {
+        target = lifted;
+        reward = Math.max(0, target - entryPx);
+        ratio = reward / risk;
       }
+    }
+
+    // Second hop: only if still within 0.25 of the floor and we have resList[2]
+    if (
+      ratio < need &&
+      need - ratio <= (cfg.scootNearMissBand ?? 0.25) &&
+      Array.isArray(resList) &&
+      resList.length >= 3
+    ) {
+      const next2 = Math.min(resList[2], entryPx + atrCap * atr);
+      if (next2 > target) {
+        target = next2;
+        reward = Math.max(0, target - entryPx);
+        ratio = reward / risk;
+      }
+    }
+  }
 
   // 6) Acceptable / probation
   let acceptable = ratio >= need;
@@ -940,8 +957,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     probation,
   };
 }
-
-
 
 /* ============================ Guards ============================ */
 function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
@@ -1025,8 +1040,9 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   // streak guard
   const ups = countConsecutiveUpDays(data);
   details.consecUp = ups;
-  if (ups > 8)
-    return { veto: true, reason: `Consecutive up days ${ups} > 8`, details };
+// later:
+if (ups >= 8)
+    return { veto: true, reason: `Consecutive up days ${ups} ≥ 8`, details };
 
   return { veto: false, reason: "", details };
 }
@@ -1083,14 +1099,14 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
 }
 
 function fallbackPlan(stock, data, cfg) {
-    const ms = getMarketStructure(stock, data);
+  const ms = getMarketStructure(stock, data);
   const pxNow = num(stock.currentPrice) || num(data.at?.(-1)?.close) || 1;
   const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
   return {
-        stopLoss: toTick(prov.stop, stock),
-        priceTarget: toTick(prov.target, stock),
-        smartStopLoss: toTick(prov.stop, stock),
-        smartPriceTarget: toTick(prov.target, stock),
+    stopLoss: toTick(prov.stop, stock),
+    priceTarget: toTick(prov.target, stock),
+    smartStopLoss: toTick(prov.stop, stock),
+    smartPriceTarget: toTick(prov.target, stock),
   };
 }
 
@@ -1250,6 +1266,7 @@ function buildNoReason(top, list) {
 function withNo(reason, ctx = {}) {
   const stock = ctx.stock || {};
   const data = Array.isArray(ctx.data) ? ctx.data : [];
+  const cfg = ctx.cfg || getConfig({});
   const out = {
     buyNow: false,
     reason,
@@ -1340,3 +1357,320 @@ export function summarizeBlocks(teleList = []) {
 }
 
 export { getConfig, summarizeTelemetryForLog };
+
+
+
+/* ========= 13/26/52 weekly MA “stacked” crossing engine ========= */
+
+function detectWeeklyStackedCross(data, lookbackBars = 5) {
+  // use the same weekly resampler already present
+  const weeks = resampleToWeeks(data);
+  if (weeks.length < 52) {
+    return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
+  }
+
+  // helper: SMA for weeks up to index i (inclusive)
+  const smaW = (n, i) => {
+    if (i + 1 < n) return 0;
+    let s = 0;
+    for (let k = i - n + 1; k <= i; k++) s += +weeks[k].close || 0;
+    return s / n;
+  };
+
+  const last = weeks.length - 1;
+
+  // find most-recent week within lookback where stacked just became true
+  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
+    const m13 = smaW(13, i);
+    const m26 = smaW(26, i);
+    const m52 = smaW(52, i);
+    const stackedNow = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
+
+    const pm13 = smaW(13, i - 1);
+    const pm26 = smaW(26, i - 1);
+    const pm52 = smaW(52, i - 1);
+    const stackedPrev =
+      i - 1 >= 0 &&
+      pm13 > 0 &&
+      pm26 > 0 &&
+      pm52 > 0 &&
+      pm13 > pm26 &&
+      pm26 > pm52;
+
+    if (stackedNow && !stackedPrev) {
+      return {
+        trigger: true,
+        weeksAgo: last - i,
+        index: i,
+        m13,
+        m26,
+        m52,
+        why: `Weekly MAs aligned: 13 > 26 > 52 within last ${lookbackBars} bars`,
+      };
+    }
+  }
+
+  // fallback: allow if already stacked within lookback even if not a fresh flip this bar
+  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
+    const m13 = smaW(13, i);
+    const m26 = smaW(26, i);
+    const m52 = smaW(52, i);
+    const stacked = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
+    if (stacked) {
+      return {
+        trigger: true,
+        weeksAgo: last - i,
+        index: i,
+        m13,
+        m26,
+        m52,
+        why: `Weekly MAs stacked (13 > 26 > 52) in last ${lookbackBars} bars`,
+      };
+    }
+  }
+
+  return {
+    trigger: false,
+    why: `No 13>26>52 weekly alignment in ≤${lookbackBars} bars`,
+  };
+}
+
+/**
+ * analyseCrossing — MA(13/26/52) weekly stacked-cross strategy
+ * Signature & return shape intentionally identical to analyzeSwingTradeEntry.
+ */
+export function analyseCrossing(stock, historicalData, opts = {}) {
+  const cfg = getConfig(opts);
+  const reasons = [];
+  const tele = teleInit();
+  const T = mkTracer(opts);
+
+  if (!Array.isArray(historicalData) || historicalData.length < 75) {
+    const r = "Insufficient historical data (need ≥75 daily bars).";
+    const out = withNo(r, { stock, data: historicalData || [], cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    return out;
+  }
+
+  // sort and normalize like the DIP engine
+  const data = [...historicalData].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+  const last = data.at(-1) || {};
+  if (![last.open, last.high, last.low, last.close].every(Number.isFinite)) {
+    const r = "Invalid last bar OHLCV.";
+    const out = withNo(r, { stock, data, cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    return out;
+  }
+  if (!Number.isFinite(last.volume)) last.volume = 0;
+
+  const px = Number(stock.currentPrice) || Number(last.close) || 0;
+  const openPx = Number(stock.openPrice) || Number(last.open) || px;
+  const prevClose = Number(stock.prevClosePrice) || Number(last.close) || openPx;
+  const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
+
+  // context snapshot (mirrors your DIP telemetry shape)
+  const msFull = getMarketStructure(stock, data);
+  tele.context = {
+    ticker: stock?.ticker,
+    px,
+    openPx,
+    prevClose,
+    dayPct,
+    trend: msFull.trend,
+    ma: {
+      ma5: msFull.ma5,
+      ma20: msFull.ma20,
+      ma25: msFull.ma25,
+      ma50: msFull.ma50,
+      ma75: msFull.ma75,
+      ma200: msFull.ma200,
+    },
+    perfectMode: cfg.perfectMode,
+    gatesDataset: { bars: data.length, lastDate: data.at(-1)?.date },
+  };
+
+  /* --------- Minimal structure gate (same spirit as DIP) --------- */
+  const structureGateOk =
+    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
+    px >= (msFull.ma5 || 0) * 0.988;
+
+  tele.gates.structure = {
+    pass: !!structureGateOk,
+    why: structureGateOk ? "" : "trend DOWN or price < MA5",
+  };
+  if (!structureGateOk) {
+    const margin =
+      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
+    pushBlock(tele, "STRUCTURE", "structure", "trend DOWN or price < MA5", {
+      trend: msFull.trend,
+      px,
+      ma5: msFull.ma5,
+      marginPct: +margin.toFixed(3),
+    });
+  }
+
+  /* ---------------- Crossing condition (weekly) ---------------- */
+  const cross = detectWeeklyStackedCross(data, 5);
+  T(
+    "crossing",
+    "detect",
+    !!cross.trigger,
+    cross.trigger ? "13>26>52 weekly stacked" : cross.why,
+    { cross },
+    "verbose"
+  );
+
+  if (!cross.trigger) {
+    const r = cross.why || "No valid crossing.";
+    reasons.push(r);
+    const out = withNo(r, { stock, data, cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons,
+      trace: T.logs,
+    };
+    return out;
+  }
+
+  if (!structureGateOk) {
+    const r = "Structure gate failed for CROSS.";
+    reasons.push(r);
+    const out = withNo(r, { stock, data, cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons,
+      trace: T.logs,
+    };
+    return out;
+  }
+
+  /* -------------- RR planning (reuse your helpers) -------------- */
+  // Stop: similar hygiene to your cross play (MA25/swing/ATR floor)
+  const rr = analyzeRR(
+    px,
+    // provisional stop/target seed (will be adjusted by analyzeRR):
+    Math.max(1, px - 1.2 * (Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6))),
+    px + 2.4 * (Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6)),
+    stock,
+    msFull,
+    { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
+    { kind: "CROSS", data }
+  );
+
+  T(
+    "rr",
+    "calc",
+    rr.acceptable,
+    `RR ${fmt(rr.ratio)} need ${fmt(rr.need)} risk ${fmt(rr.risk)} reward ${fmt(
+      rr.reward
+    )}`,
+    { stop: rr.stop, target: rr.target, atr: rr.atr, probation: rr.probation },
+    "verbose"
+  );
+  tele.rr = toTeleRR(rr);
+
+  if (!rr.acceptable) {
+    const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
+    const short = +(rr.need - rr.ratio).toFixed(3);
+    tele.histos.rrShortfall.push({
+      need: +rr.need.toFixed(2),
+      have: +rr.ratio.toFixed(2),
+      short,
+      atrPct: +atrPct.toFixed(2),
+      trend: msFull.trend,
+      ticker: stock?.ticker,
+    });
+    pushBlock(tele, "RR_FAIL", "rr", `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`, {
+      stop: rr.stop,
+      target: rr.target,
+      atr: rr.atr,
+      px,
+    });
+    const r = `Cross RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`;
+    reasons.push(r);
+    const out = withNo(r, { stock, data, cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons,
+      trace: T.logs,
+    };
+    return out;
+  }
+
+  /* -------------------- Guard checks (reused) -------------------- */
+  const gv = guardVeto(stock, data, px, rr, msFull, cfg, null, "CROSS");
+  T(
+    "guard",
+    "veto",
+    !gv.veto,
+    gv.veto ? `VETO: ${gv.reason}` : "No veto",
+    gv.details,
+    "verbose"
+  );
+  tele.guard = {
+    checked: true,
+    veto: !!gv.veto,
+    reason: gv.reason || "",
+    details: gv.details || {},
+  };
+
+  if (gv.veto) {
+    reasons.push(`CROSS guard veto: ${gv.reason}`);
+    const code = gv.reason?.startsWith("Headroom")
+      ? "VETO_HEADROOM"
+      : gv.reason?.startsWith("RSI")
+      ? "VETO_RSI"
+      : gv.reason?.startsWith("Too far above MA25")
+      ? "VETO_MA25_EXT"
+      : "VETO_OTHER";
+    pushBlock(tele, code, "guard", gv.reason, gv.details);
+
+    const out = withNo(gv.reason, { stock, data, cfg });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: gv.reason },
+      reasons,
+      trace: T.logs,
+    };
+    return out;
+  }
+
+  /* ------------------ Construct the final plan ------------------ */
+  const reason = `MA 13>26>52 CROSS: ${rr.ratio.toFixed(2)}:1. ${cross.why}`;
+  tele.outcome = { buyNow: true, reason };
+
+  const best = {
+    kind: "MA 13/26/52 CROSS",
+    why: cross.why,
+    stop: rr.stop,
+    target: rr.target,
+    rr,
+    guard: gv.details,
+  };
+
+  return {
+    buyNow: true,
+    reason,
+    stopLoss: toTick(best.stop, stock),
+    priceTarget: toTick(best.target, stock),
+    smartStopLoss: toTick(best.stop, stock),
+    smartPriceTarget: toTick(best.target, stock),
+    timeline: buildSwingTimeline(px, best, rr, msFull),
+    telemetry: { ...tele, trace: T.logs },
+  };
+}

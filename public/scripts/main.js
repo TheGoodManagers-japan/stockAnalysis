@@ -7,9 +7,11 @@
 // NOTE: API base is fixed and DEBUG is always true per your request.
 
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
+
 import {
   analyzeSwingTradeEntry,
   summarizeBlocks,
+  analyseCrossing,
 } from "./swingTradeEntryTiming.js";
 import {
      getTechnicalScore,                 // noop (returns 0) in JP value-first file
@@ -1176,7 +1178,7 @@ export async function fetchStockAnalysis({
 
       // 6) entry timing
       log("Running swing entry timing…");
-      const finalSignal = analyzeSwingTradeEntry(
+      const finalSignal = analyseCrossing(
         { ...stock }, // live px
         dataForLevels, // for RR/headroom etc.
         { debug: true, dataForGates } // hand the completed-bars view to the analyzer
