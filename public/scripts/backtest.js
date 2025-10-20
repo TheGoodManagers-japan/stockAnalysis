@@ -33,6 +33,8 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+const USE_LIVE_BAR = !!opts.useLiveBarForSignals; // default false if omitted
+
 /* ---------------- tick helpers (match swingTradeEntryTiming ladder) ---------------- */
 function inferTickFromPrice(p) {
   const x = Number(p) || 0;
@@ -490,6 +492,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let signalsInvalid = 0;
   let signalsRiskBad = 0;
   let signalsExecuted = 0;
+  const signalsByDay = new Map(); // ISO date -> count of buyNow signals
 
   let blockedInTrade = 0;
   let blockedCooldown = 0;
@@ -691,9 +694,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         if (anyProfileEligible) {
           // evaluate signal on the current bar
+          const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1); // align with live vs completed-only
           const sig = analyseCrossing(stock, hist, {
             debug: true,
             debugLevel: "verbose",
+            dataForGates: gatesData, // prevents analyseCrossing from slicing
           });
 
           // snapshot sentiment once
@@ -710,6 +715,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             signalsTotal++;
             signalsAfterWarmup++;
             signalsWhileFlat++;
+                        // count raw signals per day (before sentiment/regime/concurrency)
+                        const dayISOforSig = toISO(today.date);
+                        signalsByDay.set(dayISOforSig, (signalsByDay.get(dayISOforSig) || 0) + 1);
+            
 
             // optional sentiment gate
             if (!allowBySentiment(ST, LT)) {
@@ -890,10 +899,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } else if (COUNT_BLOCKED) {
           // Count signals even when blocked by warmup/cooldown/in-trade (optional)
+          const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1); // align with live vs completed-only
           const sig = analyseCrossing(stock, hist, {
             debug: true,
             debugLevel: "verbose",
+            dataForGates: gatesData, // prevents analyseCrossing from slicing
           });
+
           if (sig?.buyNow) {
             signalsTotal++;
             if (i >= WARMUP) signalsAfterWarmup++;
@@ -1129,6 +1141,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // legacy "dip" key preserved if present
   const dipMetrics = strategyBreakdown.DIP || computeMetrics(all);
+  const signalsDayCount = signalsByDay.size || days || 1;
+  const signalsPerDayRaw = signalsDayCount
+    ? Array.from(signalsByDay.values()).reduce((a, b) => a + b, 0) /
+      signalsDayCount
+    : 0;
+
 
   return {
     from: FROM,
@@ -1177,6 +1195,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       executed: signalsExecuted,
       invalid: signalsInvalid,
       riskStopGtePx: signalsRiskBad,
+      perDay: +signalsPerDayRaw.toFixed(2),
       blocked: {
         inTrade: blockedInTrade,
         cooldown: blockedCooldown,
