@@ -103,6 +103,118 @@ function afterColon(s, head) {
     .trim();
 }
 
+/* ---------------- per-ticker analysis helpers ---------------- */
+function median(arr){ if(!arr.length) return NaN; const a=[...arr].sort((x,y)=>x-y); const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; }
+function pct(n,d){ return d? +(((n/d)*100).toFixed(2)) : 0; }
+
+function buildTickerAnalysis(ticker, trades){
+  if(!trades.length) return {summary:`No trades for ${ticker}.`, detail:{}};
+
+  const wins = trades.filter(t=>t.result==="WIN");
+  const losses = trades.filter(t=>t.result==="LOSS");
+  const n = trades.length;
+
+  // Regime breakdown
+  const regimes = ["STRONG_UP","UP","RANGE","DOWN"];
+  const regCount = (list)=>Object.fromEntries(regimes.map(r=>[r, list.filter(t=>t.regime===r).length]));
+  const regWins = regCount(wins);
+  const regLoss = regCount(losses);
+
+  // Exit breakdown
+  const exitCount = (list, type)=>list.filter(t=>t.exitType===type).length;
+
+  // Cross type/lag
+  const lagVals = (list, typ)=>list.filter(t=>t.crossType===typ && Number.isFinite(t.crossLag)).map(t=>t.crossLag);
+  const wLagW = median(lagVals(wins, "WEEKLY"));
+  const wLagD = median(lagVals(wins, "DAILY"));
+  const lLagW = median(lagVals(losses, "WEEKLY"));
+  const lLagD = median(lagVals(losses, "DAILY"));
+
+  // R & holding
+  const medRwin = median(wins.map(t=>t.R||0));
+  const medRloss = median(losses.map(t=>t.R||0));
+  const medHoldWin = median(wins.map(t=>t.holdingDays||0));
+  const medHoldLoss = median(losses.map(t=>t.holdingDays||0));
+
+  // Risk/target geometry at entry
+  const riskAtEntry = (t)=>Math.max(0.01, t.entry - t.stop);
+  const rrAtEntry   = (t)=> (t.target - t.entry) / Math.max(0.01, t.entry - t.stop);
+  const medRRwin = median(wins.map(rrAtEntry));
+  const medRRloss = median(losses.map(rrAtEntry));
+  const tightStopsLossPct = pct(losses.filter(t=>riskAtEntry(t) <= (t.entry*0.008)).length, losses.length); // ≤0.8% risk
+
+  // Sentiment combos
+  const key = (t)=>`LT${Number.isFinite(t.LT)?t.LT:4}-ST${Number.isFinite(t.ST)?t.ST:4}`;
+  const topSenti = (list)=>{
+    const m = new Map();
+    for(const t of list){ const k=key(t); m.set(k, (m.get(k)||0)+1); }
+    return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,c])=>`${k} (${c})`);
+  };
+
+  // Exit types
+  const stopL = exitCount(losses,"STOP"), tgtW = exitCount(wins,"TARGET");
+  const timeW = exitCount(wins,"TIME"), timeL = exitCount(losses,"TIME");
+
+  // Concise bullets (kept for UI if you want to show them)
+  const bullets = [];
+  const worstReg = regimes.sort((a,b)=> (regLoss[b]-regLoss[a]))[0];
+  const bestReg  = regimes.sort((a,b)=> (regWins[b]-regWins[a]))[0];
+  if(regWins[bestReg]) bullets.push(`Wins clustered in **${bestReg}** (wins ${regWins[bestReg]}/${wins.length}).`);
+  if(regLoss[worstReg]) bullets.push(`Losses clustered in **${worstReg}** (losses ${regLoss[worstReg]}/${losses.length}).`);
+
+  const lagBits = [];
+  if(Number.isFinite(wLagW)) lagBits.push(`weekly lag≈${wLagW}`);
+  if(Number.isFinite(wLagD)) lagBits.push(`daily lag≈${wLagD}`);
+  if(lagBits.length) bullets.push(`Winning entries tended to be **fresh**: ${lagBits.join(", ")}.`);
+  const lagLossBits = [];
+  if(Number.isFinite(lLagW)) lagLossBits.push(`weekly lag≈${lLagW}`);
+  if(Number.isFinite(lLagD)) lagLossBits.push(`daily lag≈${lLagD}`);
+  if(lagLossBits.length) bullets.push(`Losing entries were **late**: ${lagLossBits.join(", ")}.`);
+
+  if(Number.isFinite(medRRwin) && Number.isFinite(medRRloss)){
+    bullets.push(`Median RR at entry — wins **${medRRwin.toFixed(2)}:1**, losses **${medRRloss.toFixed(2)}:1**.`);
+  }
+  bullets.push(`Stops hit on **${pct(stopL, losses.length)}%** of losses; targets hit on **${pct(tgtW, wins.length)}%** of wins.`);
+  if(Number.isFinite(medHoldWin) && Number.isFinite(medHoldLoss)){
+    bullets.push(`Holding: wins median **${medHoldWin} bars**, losses **${medHoldLoss} bars**.`);
+  }
+  if(losses.length) bullets.push(`Atypical tight-risk losses: **${tightStopsLossPct}%** (risk ≤0.8% of entry).`);
+  const topW = topSenti(wins), topL = topSenti(losses);
+  if(topW.length) bullets.push(`Winning sentiment combos: ${topW.join(", ")}.`);
+  if(topL.length) bullets.push(`Losing sentiment combos: ${topL.join(", ")}.`);
+
+  const wr = pct(wins.length, n);
+  const pf = (()=>{
+    const gw = wins.reduce((a,t)=>a+(t.returnPct||0),0);
+    const gl = Math.abs(losses.reduce((a,t)=>a+(t.returnPct||0),0));
+    return gl? +(gw/gl).toFixed(2) : (wins.length? Infinity:0);
+  })();
+
+  const summary = `${ticker}: ${n} trades | winRate ${wr}% | PF ${pf}. ` +
+    `Wins concentrated in ${bestReg}; losses in ${worstReg}. ` +
+    (Number.isFinite(wLagD)||Number.isFinite(wLagW) ? `Fresh-cross lags helped winners; ` : ``) +
+    (Number.isFinite(lLagD)||Number.isFinite(lLagW) ? `late lags hurt losers. ` : ``) +
+    `Median RR (win vs loss): ${Number.isFinite(medRRwin)?medRRwin.toFixed(2):"?"}:${Number.isFinite(medRRloss)?medRRloss.toFixed(2):"?"}.`;
+
+  return {
+    summary,
+    detail: {
+      count: n,
+      wins: wins.length,
+      losses: losses.length,
+      regimes: { wins: regWins, losses: regLoss },
+      rr: { medianWin: medRRwin, medianLoss: medRRloss },
+      holdingDays: { medianWin: medHoldWin, medianLoss: medHoldLoss },
+      crossLag: { win: { weekly:wLagW, daily:wLagD }, loss: { weekly:lLagW, daily:lLagD } },
+      exits: { stopLosses: stopL, targetWins: tgtW, timeWins: timeW, timeLosses: timeL },
+      tightRiskLossPct: tightStopsLossPct,
+      topSentiment: { wins: topW, losses: topL },
+      bullets, // optional for UI
+    }
+  };
+}
+
+
 /* ---------------- counterfactual lane helpers ---------------- */
 function simulateTradeForward(candles, startIdx, entry, stop, target) {
   const risk = Math.max(0.01, entry - stop);
@@ -524,9 +636,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     try {
       const candles = await fetchHistory(code, FROM, TO);
       if (candles.length < WARMUP + 2) {
-        if (INCLUDE_BY_TICKER) {
-          byTicker.push({ ticker: code, trades: [], error: "not enough data" });
-        }
+        if (INCLUDE_BY_TICKER)
+          byTicker.push({
+            ticker: code,
+            trades: [],
+            error: String(e?.message || e),
+          });
+
         console.log(
           `[BT] finished ${ti + 1}/${codes.length}: ${code} (not enough data)`
         );
@@ -832,29 +948,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 const qTarget = toTick(target, stock);
 
                 // derive cross type & lag from analyseCrossing meta
-const cm = sig?.meta?.cross || {};
-const selected =
-  cm?.selected ||
-  (cm?.weekly && cm?.daily
-    ? "BOTH"
-    : cm?.weekly
-    ? "WEEKLY"
-    : cm?.daily
-    ? "DAILY"
-    : null);
+                const cm = sig?.meta?.cross || {};
+                const selected =
+                  cm?.selected ||
+                  (cm?.weekly && cm?.daily
+                    ? "BOTH"
+                    : cm?.weekly
+                    ? "WEEKLY"
+                    : cm?.daily
+                    ? "DAILY"
+                    : null);
 
-const lag =
-  selected === "WEEKLY" && cm.weekly
-    ? cm.weekly.barsAgo
-    : selected === "DAILY" && cm.daily
-    ? cm.daily.barsAgo
-    : selected === "BOTH"
-    ? Math.min(
-        cm.weekly ? cm.weekly.barsAgo : Infinity,
-        cm.daily ? cm.daily.barsAgo : Infinity
-      )
-    : null;
-
+                const lag =
+                  selected === "WEEKLY" && cm.weekly
+                    ? cm.weekly.barsAgo
+                    : selected === "DAILY" && cm.daily
+                    ? cm.daily.barsAgo
+                    : selected === "BOTH"
+                    ? Math.min(
+                        cm.weekly ? cm.weekly.barsAgo : Infinity,
+                        cm.daily ? cm.daily.barsAgo : Infinity
+                      )
+                    : null;
 
                 if (!openByProfile[p.id]) openByProfile[p.id] = [];
                 openByProfile[p.id].push({
@@ -894,14 +1009,26 @@ const lag =
           m.profitFactor
         }`
       );
+
+      const analysis = buildTickerAnalysis(code, trades);
+
+      if (INCLUDE_BY_TICKER) {
+        byTicker.push({ ticker: code, trades, metrics: m, analysis });
+      }
     } catch (e) {
       // <-- close the per-ticker try
-      if (INCLUDE_BY_TICKER)
+      if (INCLUDE_BY_TICKER) {
+        const emptyMetrics = computeMetrics([]);
+        const emptyAnalysis = buildTickerAnalysis(code, []);
         byTicker.push({
           ticker: code,
           trades: [],
+          metrics: emptyMetrics,
+          analysis: emptyAnalysis,
           error: String(e?.message || e),
         });
+      }
+
       console.log(
         `[BT] failed ${ti + 1}/${codes.length}: ${code} — ${String(
           e?.message || e
@@ -1097,7 +1224,6 @@ const lag =
     );
   }
 
-
   // Console snapshot for regimes
   console.log("[BT] REGIME STATS");
   for (const k of ["STRONG_UP", "UP", "RANGE", "DOWN"]) {
@@ -1146,6 +1272,41 @@ const lag =
       signalsDayCount
     : 0;
 
+  // Build a best/worst spotlight by profit factor (fall back to global trades if byTicker is not requested)
+  const spotlightRankBase = byTicker.length
+    ? byTicker.filter((r) => r.trades && r.trades.length)
+    : [
+        {
+          ticker: "ALL",
+          trades: globalTrades,
+          metrics: computeMetrics(globalTrades),
+          analysis: buildTickerAnalysis("ALL", globalTrades),
+        },
+      ];
+
+  const ranked = [...spotlightRankBase].sort(
+    (a, b) => b.metrics.profitFactor - a.metrics.profitFactor
+  );
+  const spotlight = {
+    best: ranked[0]
+      ? {
+          ticker: ranked[0].ticker,
+          pf: ranked[0].metrics.profitFactor,
+          winRate: ranked[0].metrics.winRate,
+          why: ranked[0].analysis.summary,
+        }
+      : null,
+    worst:
+      ranked.length > 1
+        ? {
+            ticker: ranked[ranked.length - 1].ticker,
+            pf: ranked[ranked.length - 1].metrics.profitFactor,
+            winRate: ranked[ranked.length - 1].metrics.winRate,
+            why: ranked[ranked.length - 1].analysis.summary,
+          }
+        : null,
+  };
+
   return {
     from: FROM,
     to: TO,
@@ -1169,6 +1330,7 @@ const lag =
     totalTrades,
     winRate,
     avgReturnPct,
+    spotlight,
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
