@@ -1359,67 +1359,86 @@ export function summarizeBlocks(teleList = []) {
 export { getConfig, summarizeTelemetryForLog };
 
 
-
-/* ========= 13/26/52 weekly MA “stacked” crossing engine ========= */
-
+/* ========= 13/26/52 weekly MA “fresh flip” engine ========= */
 function detectWeeklyStackedCross(data, lookbackBars = 5) {
-  // use the same weekly resampler already present
   const weeks = resampleToWeeks(data);
   if (weeks.length < 52) {
     return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
   }
-
-  // helper: SMA for weeks up to index i (inclusive)
+  // SMA of weeks up to index i (inclusive)
   const smaW = (n, i) => {
     if (i + 1 < n) return 0;
     let s = 0;
     for (let k = i - n + 1; k <= i; k++) s += +weeks[k].close || 0;
     return s / n;
   };
-
   const last = weeks.length - 1;
 
-  // find most-recent week within lookback where stacked just became true
+  // REQUIRE a fresh flip within lookbackBars
   for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
-    const m13 = smaW(13, i);
-    const m26 = smaW(26, i);
-    const m52 = smaW(52, i);
-    const stackedNow = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
+    const m13 = smaW(13, i), m26 = smaW(26, i), m52 = smaW(52, i);
+    const nowStacked = m13 > 0 && m26 > 0 && m52 > 0 && m13 > m26 && m26 > m52;
 
-    const pm13 = smaW(13, i - 1);
-    const pm26 = smaW(26, i - 1);
-    const pm52 = smaW(52, i - 1);
-    const stackedPrev =
-      i - 1 >= 0 &&
-      pm13 > 0 &&
-      pm26 > 0 &&
-      pm52 > 0 &&
-      pm13 > pm26 &&
-      pm26 > pm52;
+    const pm13 = smaW(13, i - 1), pm26 = smaW(26, i - 1), pm52 = smaW(52, i - 1);
+    const prevStacked = (i - 1) >= 0 &&
+      pm13 > 0 && pm26 > 0 && pm52 > 0 &&
+      pm13 > pm26 && pm26 > pm52;
 
-    if (stackedNow && !stackedPrev) {
+    if (nowStacked && !prevStacked) {
       return {
         trigger: true,
         weeksAgo: last - i,
         index: i,
-        m13,
-        m26,
-        m52,
-        why: `Weekly MAs aligned: 13 > 26 > 52 within last ${lookbackBars} bars`,
+        m13, m26, m52,
+        why: `Weekly MAs flipped to 13>26>52 within last ${lookbackBars} weeks`,
       };
     }
   }
 
+  return { trigger: false, why: `No fresh weekly 13>26>52 cross in ≤${lookbackBars} weeks` };
+}
 
-  return {
-    trigger: false,
-    why: `No fresh weekly 13>26>52 cross in ≤${lookbackBars} bars`,
+/* ========= Daily 5/25/75 “fresh flip” engine (completed daily bars) ========= */
+function detectDailyStackedCross(data, lookbackBars = 5) {
+  // Use completed-daily bars only (caller passes them)
+  const smaD = (n, i) => {
+    if (i + 1 < n) return 0;
+    let s = 0;
+    for (let k = i - n + 1; k <= i; k++) s += +data[k].close || 0;
+    return s / n;
   };
+  const last = data.length - 1;
+  if (last < 75) return { trigger: false, why: "Insufficient daily history (need ≥75 bars)" };
+
+  for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
+    const m5 = smaD(5, i), m25 = smaD(25, i), m75 = smaD(75, i);
+    const nowStacked = m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
+
+    const pm5 = smaD(5, i - 1), pm25 = smaD(25, i - 1), pm75 = smaD(75, i - 1);
+    const prevStacked = (i - 1) >= 0 &&
+      pm5 > 0 && pm25 > 0 && pm75 > 0 &&
+      pm5 > pm25 && pm25 > pm75;
+
+    if (nowStacked && !prevStacked) {
+      return {
+        trigger: true,
+        daysAgo: last - i,
+        index: i,
+        m5, m25, m75,
+        why: `Daily MAs flipped to 5>25>75 within last ${lookbackBars} days`,
+      };
+    }
+  }
+  return { trigger: false, why: `No fresh daily 5>25>75 cross in ≤${lookbackBars} days` };
 }
 
 /**
- * analyseCrossing — MA(13/26/52) weekly stacked-cross strategy
- * Signature & return shape intentionally identical to analyzeSwingTradeEntry.
+ * analyseCrossing — detects BOTH playbooks:
+ *  - Weekly 13/26/52 fresh flip (≤5 weeks)
+ *  - Daily 5/25/75 fresh flip (≤5 days)
+ *
+ * Returns the SAME shape Bubble expects. If both trigger, we pick WEEKLY
+ * as the main plan and include the other as telemetry.alternatives.daily.
  */
 export function analyseCrossing(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
@@ -1430,29 +1449,16 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   if (!Array.isArray(historicalData) || historicalData.length < 75) {
     const r = "Insufficient historical data (need ≥75 daily bars).";
     const out = withNo(r, { stock, data: historicalData || [], cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: r },
-      reasons: [r],
-      trace: T.logs,
-    };
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
     return out;
   }
 
-  // sort and normalize like the DIP engine
-  const data = [...historicalData].sort(
-    (a, b) => new Date(a.date) - new Date(b.date)
-  );
-  const last = data.at(-1) || {};
+  const dataAll = [...historicalData].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const last = dataAll.at(-1) || {};
   if (![last.open, last.high, last.low, last.close].every(Number.isFinite)) {
     const r = "Invalid last bar OHLCV.";
-    const out = withNo(r, { stock, data, cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: r },
-      reasons: [r],
-      trace: T.logs,
-    };
+    const out = withNo(r, { stock, data: dataAll, cfg });
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
     return out;
   }
   if (!Number.isFinite(last.volume)) last.volume = 0;
@@ -1462,197 +1468,146 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const prevClose = Number(stock.prevClosePrice) || Number(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
-  // context snapshot (mirrors your DIP telemetry shape)
-  const msFull = getMarketStructure(stock, data);
+  // Completed-bars views
+  const completedDaily = Array.isArray(opts?.dataForGates) ? opts.dataForGates : dataAll.slice(0, -1);
+
+  // Context snapshot (same as DIP engine)
+  const msFull = getMarketStructure(stock, dataAll);
   tele.context = {
     ticker: stock?.ticker,
-    px,
-    openPx,
-    prevClose,
-    dayPct,
+    px, openPx, prevClose, dayPct,
     trend: msFull.trend,
-    ma: {
-      ma5: msFull.ma5,
-      ma20: msFull.ma20,
-      ma25: msFull.ma25,
-      ma50: msFull.ma50,
-      ma75: msFull.ma75,
-      ma200: msFull.ma200,
-    },
+    ma: { ma5: msFull.ma5, ma20: msFull.ma20, ma25: msFull.ma25, ma50: msFull.ma50, ma75: msFull.ma75, ma200: msFull.ma200 },
     perfectMode: cfg.perfectMode,
-    gatesDataset: { bars: data.length, lastDate: data.at(-1)?.date },
+    gatesDataset: { bars: dataAll.length, lastDate: dataAll.at(-1)?.date },
   };
 
-  /* --------- Minimal structure gate (same spirit as DIP) --------- */
-  const structureGateOk =
-    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
-    px >= (msFull.ma5 || 0) * 0.988;
-
-  tele.gates.structure = {
-    pass: !!structureGateOk,
-    why: structureGateOk ? "" : "trend DOWN or price < MA5",
-  };
+  // Structure gate (minimal)
+  const structureGateOk = (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) && px >= (msFull.ma5 || 0) * 0.988;
+  tele.gates.structure = { pass: !!structureGateOk, why: structureGateOk ? "" : "trend DOWN or price < MA5" };
   if (!structureGateOk) {
-    const margin =
-      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
+    const margin = ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
     pushBlock(tele, "STRUCTURE", "structure", "trend DOWN or price < MA5", {
-      trend: msFull.trend,
-      px,
-      ma5: msFull.ma5,
-      marginPct: +margin.toFixed(3),
+      trend: msFull.trend, px, ma5: msFull.ma5, marginPct: +margin.toFixed(3),
     });
   }
 
-  /* ---------------- Crossing condition (weekly) ---------------- */
-  const cross = detectWeeklyStackedCross(data, 5);
-  T(
-    "crossing",
-    "detect",
-    !!cross.trigger,
-    cross.trigger ? "13>26>52 weekly stacked" : cross.why,
-    { cross },
-    "verbose"
-  );
+  /* ---------------- BOTH crossing conditions (completed bars) ---------------- */
+  const crossW = detectWeeklyStackedCross(completedDaily, 5);  // weekly flip check uses resampled weeks
+  const crossD = detectDailyStackedCross(completedDaily, 5);   // daily flip check on daily bars
+  T("crossing", "weekly", !!crossW.trigger, crossW.trigger ? crossW.why : crossW.why, { crossW }, "verbose");
+  T("crossing", "daily",  !!crossD.trigger, crossD.trigger ? crossD.why : crossD.why, { crossD }, "verbose");
 
-  if (!cross.trigger) {
-    const r = cross.why || "No valid crossing.";
+  tele.flags = { weeklyFlip: !!crossW.trigger, dailyFlip: !!crossD.trigger };
+
+  if (!crossW.trigger && !crossD.trigger) {
+    const r = `${crossW.why}; ${crossD.why}`;
     reasons.push(r);
-    const out = withNo(r, { stock, data, cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: r },
-      reasons,
-      trace: T.logs,
-    };
+    const out = withNo(r, { stock, data: dataAll, cfg });
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons, trace: T.logs };
     return out;
   }
 
   if (!structureGateOk) {
-    const r = "Structure gate failed for CROSS.";
+    const r = "Structure gate failed.";
     reasons.push(r);
-    const out = withNo(r, { stock, data, cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: r },
-      reasons,
-      trace: T.logs,
-    };
+    const out = withNo(r, { stock, data: dataAll, cfg });
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons, trace: T.logs };
     return out;
   }
 
-  /* -------------- RR planning (reuse your helpers) -------------- */
-  // Stop: similar hygiene to your cross play (MA25/swing/ATR floor)
-  const rr = analyzeRR(
-    px,
-    // provisional stop/target seed (will be adjusted by analyzeRR):
-    Math.max(1, px - 1.2 * (Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6))),
-    px + 2.4 * (Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6)),
-    stock,
-    msFull,
-    { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
-    { kind: "CROSS", data }
-  );
+  /* -------------- RR planning for each playbook -------------- */
+  const baseATR = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
 
-  T(
-    "rr",
-    "calc",
-    rr.acceptable,
-    `RR ${fmt(rr.ratio)} need ${fmt(rr.need)} risk ${fmt(rr.risk)} reward ${fmt(
-      rr.reward
-    )}`,
-    { stop: rr.stop, target: rr.target, atr: rr.atr, probation: rr.probation },
-    "verbose"
-  );
-  tele.rr = toTeleRR(rr);
-
-  if (!rr.acceptable) {
-    const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
-    const short = +(rr.need - rr.ratio).toFixed(3);
-    tele.histos.rrShortfall.push({
-      need: +rr.need.toFixed(2),
-      have: +rr.ratio.toFixed(2),
-      short,
-      atrPct: +atrPct.toFixed(2),
-      trend: msFull.trend,
-      ticker: stock?.ticker,
-    });
-    pushBlock(tele, "RR_FAIL", "rr", `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`, {
-      stop: rr.stop,
-      target: rr.target,
-      atr: rr.atr,
+  const planFor = (label, needBump = 0) => {
+    const rr = analyzeRR(
       px,
-    });
-    const r = `Cross RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`;
-    reasons.push(r);
-    const out = withNo(r, { stock, data, cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: r },
-      reasons,
-      trace: T.logs,
-    };
+      Math.max(1, px - 1.2 * baseATR),      // seed; analyzeRR will clean up
+      px + 2.4 * baseATR,
+      stock,
+      msFull,
+      { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR, (cfg.minRRbase || 1.45) + needBump) },
+      { kind: "CROSS", data: completedDaily }
+    );
+    return { label, rr };
+  };
+
+  // weekly: conservative; daily: optional slight RR bump to simulate stricter early trigger
+  const weeklyPlan = crossW.trigger ? planFor("WEEKLY", 0.00) : null;
+  const dailyPlan  = crossD.trigger ? planFor("DAILY",  0.00) : null;
+
+  // If a plan exists but fails RR, record as veto-ish but keep evaluating the other
+  const passedPlans = [];
+  if (weeklyPlan && weeklyPlan.rr.acceptable) passedPlans.push(weeklyPlan);
+  if (dailyPlan  && dailyPlan.rr.acceptable)  passedPlans.push(dailyPlan);
+
+  if (passedPlans.length === 0) {
+    const msgs = [];
+    if (weeklyPlan) msgs.push(`Weekly RR ${fmt(weeklyPlan.rr.ratio)} < need ${fmt(weeklyPlan.rr.need)}`);
+    if (dailyPlan)  msgs.push(`Daily RR ${fmt(dailyPlan.rr.ratio)} < need ${fmt(dailyPlan.rr.need)}`);
+    const r = msgs.join("; ");
+    // push RR shortfalls into histos
+    for (const p of [weeklyPlan, dailyPlan].filter(Boolean)) {
+      const rr = p.rr;
+      const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
+      const short = +(rr.need - rr.ratio).toFixed(3);
+      tele.histos.rrShortfall.push({
+        need: +rr.need.toFixed(2),
+        have: +rr.ratio.toFixed(2),
+        short,
+        atrPct: +atrPct.toFixed(2),
+        trend: msFull.trend,
+        ticker: stock?.ticker,
+      });
+    }
+    const out = withNo(r, { stock, data: dataAll, cfg });
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
     return out;
   }
 
-  /* -------------------- Guard checks (reused) -------------------- */
-  const gv = guardVeto(stock, data, px, rr, msFull, cfg, null, "CROSS");
-  T(
-    "guard",
-    "veto",
-    !gv.veto,
-    gv.veto ? `VETO: ${gv.reason}` : "No veto",
-    gv.details,
-    "verbose"
-  );
-  tele.guard = {
-    checked: true,
-    veto: !!gv.veto,
-    reason: gv.reason || "",
-    details: gv.details || {},
-  };
+  // Pick a main plan (prefer WEEKLY if available), but keep the other in telemetry
+  const primary = passedPlans.find(p => p.label === "WEEKLY") || passedPlans[0];
+  const alt     = passedPlans.find(p => p !== primary) || null;
 
+  // Guard check on the primary plan (reuse your guards)
+  const gv = guardVeto(stock, dataAll, px, primary.rr, msFull, cfg, null, "CROSS");
+  tele.guard = { checked: true, veto: !!gv.veto, reason: gv.reason || "", details: gv.details || {} };
   if (gv.veto) {
-    reasons.push(`CROSS guard veto: ${gv.reason}`);
-    const code = gv.reason?.startsWith("Headroom")
-      ? "VETO_HEADROOM"
-      : gv.reason?.startsWith("RSI")
-      ? "VETO_RSI"
-      : gv.reason?.startsWith("Too far above MA25")
-      ? "VETO_MA25_EXT"
-      : "VETO_OTHER";
-    pushBlock(tele, code, "guard", gv.reason, gv.details);
-
-    const out = withNo(gv.reason, { stock, data, cfg });
-    out.telemetry = {
-      ...tele,
-      outcome: { buyNow: false, reason: gv.reason },
-      reasons,
-      trace: T.logs,
-    };
+    const r = `${primary.label} guard veto: ${gv.reason}`;
+    const out = withNo(r, { stock, data: dataAll, cfg });
+    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
     return out;
   }
 
-  /* ------------------ Construct the final plan ------------------ */
-  const reason = `MA 13>26>52 CROSS: ${rr.ratio.toFixed(2)}:1. ${cross.why}`;
+  // Build result from primary; stash alternative in telemetry
+  const reason = `${primary.label} CROSS: ${primary.rr.ratio.toFixed(2)}:1. ${primary.label === "WEEKLY" ? crossW.why : crossD.why}`;
   tele.outcome = { buyNow: true, reason };
-
-  const best = {
-    kind: "MA 13/26/52 CROSS",
-    why: cross.why,
-    stop: rr.stop,
-    target: rr.target,
-    rr,
-    guard: gv.details,
+  tele.alternatives = {};
+  if (alt) tele.alternatives[alt.label.toLowerCase()] = {
+    rr: alt.rr,
+    note: `${alt.label} also acceptable`,
   };
+  tele.selectedPlaybook = primary.label;
+
+  // Project stop/target
+  const stop  = toTick(primary.rr.stop, stock);
+  const target = toTick(primary.rr.target, stock);
 
   return {
     buyNow: true,
     reason,
-    stopLoss: toTick(best.stop, stock),
-    priceTarget: toTick(best.target, stock),
-    smartStopLoss: toTick(best.stop, stock),
-    smartPriceTarget: toTick(best.target, stock),
-    timeline: buildSwingTimeline(px, best, rr, msFull),
+    stopLoss: stop,
+    priceTarget: target,
+    smartStopLoss: stop,
+    smartPriceTarget: target,
+    timeline: buildSwingTimeline(px, {
+      kind: `${primary.label} CROSS`,
+      why: primary.label === "WEEKLY" ? crossW.why : crossD.why,
+      stop: primary.rr.stop,
+      target: primary.rr.target,
+      rr: primary.rr,
+      guard: tele.guard?.details || {},
+    }, primary.rr, msFull),
     telemetry: { ...tele, trace: T.logs },
   };
 }
