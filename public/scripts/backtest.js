@@ -44,6 +44,8 @@ function inferTickFromPrice(p) {
   if (x >= 10) return 0.05;
   return 0.01;
 }
+
+
 function toTick(v, stock) {
   const tick = Number(stock?.tickSize) || inferTickFromPrice(v) || 0.1;
   const x = Number(v) || 0;
@@ -91,6 +93,14 @@ function bucketize(x, edges = [1.2, 1.4, 1.6, 2.0, 3.0, 5.0]) {
   }
   return `≥${edges[edges.length - 1]}`;
 }
+
+function highestHighSince(hist, startIdx) {
+  let hi = -Infinity;
+  for (let k = startIdx; k < hist.length; k++)
+    hi = Math.max(hi, Number(hist[k].high) || 0);
+  return hi;
+}
+
 function extractGuardReason(s) {
   if (!s) return "";
   const m = String(s).match(
@@ -719,42 +729,112 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const ATR_TRAIL_PROFILE = {
     id: "atr_trail",
-    label: "ATR trail (Chandelier)",
-    // Initial plan: same levels the signal suggested
+    label: "ATR trail (Chandelier, arm at target)",
+
+    // Seed with the signal's levels; we use the target only as the *arming* threshold.
     compute: ({ sig }) => ({
       stop: Number(sig?.smartStopLoss ?? sig?.stopLoss),
-      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget), // keep target for now; you can test "no target" later
+      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget), // used only to ARM trailing
     }),
-    // Advance trailing stop using ONLY completed data (hist up to i-1)
-    // Params: atrMult, startAfterBars, breakevenR
+
+    /**
+     * advance()
+     * - Before target is reached: do *nothing* (use original stop).
+     * - Once today's high crosses target: ARM the trailing stop = target - armBuffer.
+     * - After armed: ratchet stop = max(previous stop, (highestHighSinceArm - atrMult*ATR), armFloor)
+     *
+     * Options (from opts):
+     *   - atrMult:               how loose the chandelier trail is (default 3.5 is gentler)
+     *   - armUnderTargetAtrMult: how far below the initial target to drop the FIRST armed stop, in ATRs (default 1.0)
+     *   - armUnderTargetPct:     fallback % if ATR is missing (e.g., 1.5 means 1.5% of price)
+     */
     advance: ({
       state,
       hist,
       i,
-      atrMult = 3,
-      startAfterBars = 2,
-      breakevenR = 0.8,
+      atrMult = 3.5,
+      startAfterBars = 0, // ignored until armed
+      breakevenR = 1.0, // optional: jump to breakeven if big cushion before arming
+      armUnderTargetAtrMult = 1.0,
+      armUnderTargetPct = 1.5,
+      todayHigh, // <- pass today's high from caller
     }) => {
-      if (i <= state.entryIdx + startAfterBars) return; // don’t trail immediately
-      const lookHist = hist.slice(0, i); // up to yesterday to avoid peeking
-      const atr = lastATR(lookHist, 14);
-      if (!atr) return;
+      const lookHist = hist.slice(0, i + 1); // include today for arming check
+      if (!lookHist.length) return;
 
-      const hiClose = highestCloseSince(lookHist, state.entryIdx);
-      const trailCandidate = hiClose - atrMult * atr;
+      // Compute latest ATR on completed data (up to i-1)
+      const completed = hist.slice(0, Math.max(0, i));
+      const atr = lastATR(completed.length ? completed : lookHist, 14) || 0;
 
-      // Optional breakeven jump once unrealized R >= breakevenR
-      const lastClose = lookHist[lookHist.length - 1].close;
-      const risk = Math.max(0.01, state.entry - state.stopInit);
-      const unrealizedR = (lastClose - state.entry) / risk;
-      const breakevenStop = unrealizedR >= breakevenR ? state.entry : -Infinity;
+      // 1) Not armed yet: see if we should arm now (today hit or exceeded the target)
+      if (!state.trailArmed) {
+        // Optional: if move already >= breakevenR, lift floor to breakeven even before arming
+        if (breakevenR != null) {
+          const risk = Math.max(0.01, state.entry - state.stopInit);
+          const lastClose = completed.length
+            ? completed[completed.length - 1].close
+            : state.entry;
+          const unrealizedR = (lastClose - state.entry) / risk;
+          if (unrealizedR >= breakevenR)
+            state.stop = Math.max(state.stop, state.entry);
+        }
 
-      // Tighten but never loosen; quantize to tick ladder
-      const rawNewStop = Math.max(trailCandidate, breakevenStop, state.stop);
-      const tick = Number(state.tickSize) || inferTickFromPrice(state.entry);
-      state.stop = Math.round(rawNewStop / tick) * tick;
+        // Arm when today's high tags/passes the original target
+        if (
+          Number.isFinite(state.target) &&
+          Number.isFinite(todayHigh) &&
+          todayHigh >= state.target
+        ) {
+          const armBufAtr = atr ? armUnderTargetAtrMult * atr : 0;
+          const armBufPct = (armUnderTargetPct / 100) * state.entry;
+          const armBuffer = Math.max(armBufAtr, armBufPct); // choose the larger for safety
+
+          const armStop = state.target - armBuffer;
+          state.stop = quantizeToTick(
+            Math.max(state.stop, armStop),
+            state.entry
+          );
+
+          state.trailArmed = true;
+          state.armIdx = i;
+          // We trail off highs after arming
+          state.hiSinceArm = Math.max(
+            todayHigh || -Infinity,
+            highestHighSince(lookHist, state.entryIdx)
+          );
+          // No longer use the target for exiting once armed
+          state.skipTarget = true;
+        }
+        return; // nothing else until we are armed
+      }
+
+      // 2) Already armed: trail as chandelier off the highest *high* since arming
+      // Update hiSinceArm with today's high
+      if (Number.isFinite(todayHigh)) {
+        state.hiSinceArm = Math.max(state.hiSinceArm || -Infinity, todayHigh);
+      } else {
+        // fallback to completed highs if needed
+        const hi = highestHighSince(lookHist, state.armIdx ?? state.entryIdx);
+        state.hiSinceArm = Math.max(state.hiSinceArm || -Infinity, hi);
+      }
+
+      // Chandelier stop (loose leash)
+      if (atr) {
+        const trailCandidate = state.hiSinceArm - atrMult * atr;
+        // Never loosen; respect the initial armed floor near target
+        const armFloor = state.targetInit
+          ? Math.min(state.targetInit, state.hiSinceArm) -
+            Math.max(
+              armUnderTargetAtrMult * atr,
+              (armUnderTargetPct / 100) * state.entry
+            )
+          : -Infinity;
+        const rawNewStop = Math.max(trailCandidate, armFloor, state.stop);
+        state.stop = quantizeToTick(rawNewStop, state.entry);
+      }
     },
   };
+  
 
   const USE_TRAIL = true; // opts.useTrailing = true/false
   const activeProfiles = USE_TRAIL
@@ -947,11 +1027,12 @@ for (const p of activeProfiles) {
     if (typeof p.advance === "function") {
       p.advance({
         state: st,
-        hist: candles,              // p.advance will only use data up to i-1
+        hist: candles, // p.advance will only use data up to i-1
         i,
         atrMult: opts.atrMult ?? 3,
         startAfterBars: opts.trailStartAfterBars ?? 2,
-        breakevenR: opts.breakevenR ?? 0.8,
+        breakevenR: 1.0,
+        todayHigh: today.high, // <-- add this
       });
     }
 
@@ -961,18 +1042,24 @@ for (const p of activeProfiles) {
     // 1) price-based exits first
     if (today.low <= st.stop) {
       exit = { type: "STOP", price: st.stop, result: "LOSS" };
-    } else if (today.high >= st.target) {
+    } else if (!st.skipTarget && today.high >= st.target) {
+      // Only take target if NOT a trailing profile (RAW will still exit here)
       exit = { type: "TARGET", price: st.target, result: "WIN" };
     }
 
-    // 2) optional time exit
+    // 2) optional time exit (unchanged)
     if (!exit && HOLD_BARS > 0) {
       const ageBars = i - st.entryIdx;
       if (ageBars >= HOLD_BARS) {
         const rawPnL = today.close - st.entry;
-        exit = { type: "TIME", price: today.close, result: rawPnL >= 0 ? "WIN" : "LOSS" };
+        exit = {
+          type: "TIME",
+          price: today.close,
+          result: rawPnL >= 0 ? "WIN" : "LOSS",
+        };
       }
     }
+
 
     // (rest of your existing exit handling unchanged)
 
@@ -1241,14 +1328,22 @@ for (const p of activeProfiles) {
                   LT,
                 });
 
+                const entryATR =
+                  lastATR(candles.slice(0, entryBarIdx + 1), 14) || 0;
+
                 openByProfile[p.id].push({
                   entryIdx: entryBarIdx,
                   entry,
-                  tickSize:
-                    Number(stock?.tickSize) || inferTickFromPrice(entry),
                   stop: qStop,
                   stopInit: qStop,
                   target: qTarget,
+
+                  // NEW for trailing profile:
+                  targetInit: qTarget,
+                  entryATR,
+                  trailArmed: false,
+                  skipTarget: p.id === "atr_trail", // <— never take fixed target on the trailing profile
+
                   ST,
                   LT,
                   regime: dayRegime,
@@ -1256,10 +1351,10 @@ for (const p of activeProfiles) {
                     String(sig?.debug?.chosen || sig?.reason || "")
                       .split(":")[0]
                       .trim() || "UNKNOWN",
-                  crossType: selected, // "WEEKLY" | "DAILY" | "BOTH" | null
-                  crossLag: Number.isFinite(lag) ? lag : null, // integer bars ago
-                  analytics, // <<< store per-entry analytics for later
-                  score, // <<< NEW
+                  crossType: selected,
+                  crossLag: Number.isFinite(lag) ? lag : null,
+                  analytics,
+                  score,
                 });
 
                 globalOpenCount++;
@@ -1691,8 +1786,8 @@ for (const p of activeProfiles) {
       // Kept for UI compatibility; this build always uses the RAW profile only
       profileIds: activeProfiles.map((p) => p.id),
       useTrailing: USE_TRAIL,
-      atrMult: opts.atrMult ?? 3,
-      trailStartAfterBars: opts.trailStartAfterBars ?? 2,
+      atrMult: 3.5,
+      trailStartAfterBars: 0,
       breakevenR: opts.breakevenR ?? 0.8,
 
       maxConcurrent: MAX_CONCURRENT,

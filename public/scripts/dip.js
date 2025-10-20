@@ -131,12 +131,14 @@ export function detectDipBounce(stock, data, cfg, U) {
       waitReason: why,
       diagnostics: {
         lowBarIndex,
+        bounceAgeBars: lowBarIndex, // <— add this
         dipLow,
         passedPreBounce: false,
         code: "NOT_DIP_BOUNCE_OLD",
       },
       reasonTrace,
     };
+    
   }
 
   // --- Prepare bar refs & bounce strength early (shared) ---
@@ -658,6 +660,7 @@ export function detectDipBounce(stock, data, cfg, U) {
       pullbackATR,
       retracePct,
       lowBarIndex,
+      bounceAgeBars: lowBarIndex, // <— add this
       bounceStrengthATR,
       recoveryPct: recoveryPctCapped,
       nearSupport,
@@ -674,4 +677,105 @@ export function detectDipBounce(stock, data, cfg, U) {
     },
     reasonTrace,
   };
+}
+
+
+
+
+
+
+// Detect DIP on WEEKLY bars using weekly thresholds, but we still ENTER on daily.
+// We reuse detectDipBounce by building "weekly data" and a weekly-tuned cfg.
+export function detectDipBounceWeekly(stock, dailyData, cfg, U) {
+  const weeks = resampleToWeeks(dailyData);
+  if (weeks.length < 52) {
+    return {
+      trigger: false,
+      waitReason: "Not enough weekly data",
+      diagnostics: {},
+    };
+  }
+
+  // Build weekly "stock" snapshot
+  const lastW = weeks.at(-1);
+  const pxW = +lastW.close || 0;
+
+  // Weekly ATR: prefer a proxy from daily ATR (we don't have weekly OHLC)
+  const atrDaily = Math.max(
+    +stock.atr14 || 0,
+    (+dailyData.at(-1)?.close || 0) * 0.005,
+    1e-9
+  );
+  const atrWeekly = approxWeeklyATRFromDailyATR(atrDaily);
+
+  const stockW = {
+    ...stock,
+    currentPrice: pxW,
+    atr14: atrWeekly,
+  };
+
+  // Map weekly DIP knobs into the names expected by dip.js
+  const cfgW = {
+    ...cfg,
+    dipMinPullbackPct: cfg.dipWeekly?.minPullbackPct ?? 6.5,
+    dipMinPullbackATR: cfg.dipWeekly?.minPullbackATR ?? 2.6,
+    dipMaxBounceAgeBars: cfg.dipWeekly?.maxBounceAgeWeeks ?? 2, // "bars" == weeks here
+    dipMinBounceStrengthATR: cfg.dipWeekly?.minBounceStrengthATR ?? 0.5,
+    dipMinRR: cfg.dipWeekly?.minRR ?? cfg.dipMinRR ?? 1.55,
+  };
+
+  // Reuse primitives on weekly data (SMA still works on {close})
+  const Uw = U; // reuse as-is; weekly bars also have { close }
+
+  const dipW = detectDipBounce(stockW, weeks, cfgW, Uw);
+
+  // Normalize diagnostics so the caller can compare recency in WEEKS directly.
+  if (dipW && dipW.diagnostics) {
+    // If the weekly detector provided a "bounceAgeBars" in weeks, keep the name for symmetry.
+    dipW.diagnostics.bounceAgeBars = Number.isFinite(
+      dipW.diagnostics.bounceAgeBars
+    )
+      ? dipW.diagnostics.bounceAgeBars
+      : undefined;
+  }
+
+  if (dipW?.trigger) dipW.timeframe = "WEEKLY";
+  return dipW;
+}
+
+
+
+// --- helpers local to dip.js (weekly resample + ATR proxy) ---
+function isoWeek(d) {
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+  return weekNo;
+}
+
+function resampleToWeeks(daily) {
+  const out = [];
+  let curKey = "", agg = null;
+  for (const d of daily) {
+    const dt = new Date(d.date);
+    const y = dt.getUTCFullYear();
+    const w = isoWeek(dt);
+    const key = `${y}-W${w}`;
+    if (key !== curKey) {
+      if (agg) out.push(agg);
+      agg = { date: d.date, close: +d.close || 0 };
+      curKey = key;
+    } else {
+      agg.date = d.date;
+      agg.close = +d.close || agg.close;
+    }
+  }
+  if (agg) out.push(agg);
+  return out;
+}
+
+function approxWeeklyATRFromDailyATR(atrDaily) {
+  // rough proxy; good enough for gating & RR seeding
+  return Math.max(atrDaily || 0, 1e-9) * Math.sqrt(5);
 }
