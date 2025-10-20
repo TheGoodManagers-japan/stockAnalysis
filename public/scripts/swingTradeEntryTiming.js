@@ -1483,64 +1483,138 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   if (!Array.isArray(historicalData) || historicalData.length < 75) {
     const r = "Insufficient historical data (need ≥75 daily bars).";
     const out = withNo(r, { stock, data: historicalData || [], cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    out.meta = { cross: { selected: null, weekly: null, daily: null } };
+
     return out;
   }
 
-  const dataAll = [...historicalData].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const dataAll = [...historicalData].sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
   const last = dataAll.at(-1) || {};
   if (![last.open, last.high, last.low, last.close].every(Number.isFinite)) {
     const r = "Invalid last bar OHLCV.";
     const out = withNo(r, { stock, data: dataAll, cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    out.meta = { cross: { selected: null, weekly: null, daily: null } };
+
     return out;
   }
   if (!Number.isFinite(last.volume)) last.volume = 0;
 
   const px = Number(stock.currentPrice) || Number(last.close) || 0;
   const openPx = Number(stock.openPrice) || Number(last.open) || px;
-  const prevClose = Number(stock.prevClosePrice) || Number(last.close) || openPx;
+  const prevClose =
+    Number(stock.prevClosePrice) || Number(last.close) || openPx;
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
   // Completed-bars view (strict): always drop the potentially-live last daily bar
   const completedDaily = Array.isArray(opts?.dataForGates)
     ? opts.dataForGates
-    : (dataAll.length > 0 ? dataAll.slice(0, -1) : dataAll);
+    : dataAll.length > 0
+    ? dataAll.slice(0, -1)
+    : dataAll;
 
   // Context snapshot
   const msFull = getMarketStructure(stock, dataAll);
   tele.context = {
     ticker: stock?.ticker,
-    px, openPx, prevClose, dayPct,
+    px,
+    openPx,
+    prevClose,
+    dayPct,
     trend: msFull.trend,
-    ma: { ma5: msFull.ma5, ma20: msFull.ma20, ma25: msFull.ma25, ma50: msFull.ma50, ma75: msFull.ma75, ma200: msFull.ma200 },
+    ma: {
+      ma5: msFull.ma5,
+      ma20: msFull.ma20,
+      ma25: msFull.ma25,
+      ma50: msFull.ma50,
+      ma75: msFull.ma75,
+      ma200: msFull.ma200,
+    },
     perfectMode: cfg.perfectMode,
     gatesDataset: { bars: dataAll.length, lastDate: dataAll.at(-1)?.date },
   };
 
   // Structure gate (minimal)
-  const structureGateOk = (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) && px >= (msFull.ma5 || 0) * 0.988;
-  tele.gates.structure = { pass: !!structureGateOk, why: structureGateOk ? "" : "trend DOWN or price < MA5" };
+  const structureGateOk =
+    (msFull.trend !== "DOWN" || cfg.allowDipInDowntrend) &&
+    px >= (msFull.ma5 || 0) * 0.988;
+  tele.gates.structure = {
+    pass: !!structureGateOk,
+    why: structureGateOk ? "" : "trend DOWN or price < MA5",
+  };
   if (!structureGateOk) {
-    const margin = ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
+    const margin =
+      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
     pushBlock(tele, "STRUCTURE", "structure", "trend DOWN or price < MA5", {
-      trend: msFull.trend, px, ma5: msFull.ma5, marginPct: +margin.toFixed(3),
+      trend: msFull.trend,
+      px,
+      ma5: msFull.ma5,
+      marginPct: +margin.toFixed(3),
     });
   }
 
   /* ---------------- BOTH crossing conditions (completed bars) ---------------- */
-  const crossW = detectWeeklyStackedCross(completedDaily, 5);  // weekly fresh flip
-  const crossD = detectDailyStackedCross(completedDaily, 5);   // daily fresh flip
+  const crossW = detectWeeklyStackedCross(completedDaily, 5); // weekly fresh flip
+  const crossD = detectDailyStackedCross(completedDaily, 5); // daily fresh flip
   T("crossing", "weekly", !!crossW.trigger, crossW.why, { crossW }, "verbose");
-  T("crossing", "daily",  !!crossD.trigger, crossD.why, { crossD }, "verbose");
+  T("crossing", "daily", !!crossD.trigger, crossD.why, { crossD }, "verbose");
 
   tele.flags = { weeklyFlip: !!crossW.trigger, dailyFlip: !!crossD.trigger };
+  // ---- Expose lag meta for consumers (backtest) ----
+  const crossMeta = {
+    weekly: crossW.trigger ? { barsAgo: crossW.weeksAgo } : null,
+    daily: crossD.trigger ? { barsAgo: crossD.daysAgo } : null,
+  };
+  tele.crossMeta = { ...crossMeta }; // keep in telemetry too
+
+  // choose selected label for current state
+  const selectedCross =
+    crossMeta.weekly && crossMeta.daily
+      ? "BOTH"
+      : crossMeta.weekly
+      ? "WEEKLY"
+      : crossMeta.daily
+      ? "DAILY"
+      : null;
 
   if (!crossW.trigger && !crossD.trigger) {
     const r = `${crossW.why}; ${crossD.why}`;
     reasons.push(r);
     const out = withNo(r, { stock, data: dataAll, cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons, trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons,
+      trace: T.logs,
+    };
+    out.meta = {
+      cross: {
+        selected: selectedCross,
+        weekly: crossMeta.weekly,
+        daily: crossMeta.daily,
+      },
+    };
+    out.meta = {
+      cross: {
+        selected: selectedCross,
+        weekly: crossMeta.weekly,
+        daily: crossMeta.daily,
+      },
+    };
+    
     return out;
   }
 
@@ -1548,7 +1622,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     const r = "Structure gate failed.";
     reasons.push(r);
     const out = withNo(r, { stock, data: dataAll, cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons, trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons,
+      trace: T.logs,
+    };
     return out;
   }
 
@@ -1558,27 +1637,42 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const planFor = (label, needBump = 0) => {
     const rr = analyzeRR(
       px,
-      Math.max(1, px - 1.2 * baseATR),      // seed; analyzeRR will clean up
+      Math.max(1, px - 1.2 * baseATR), // seed; analyzeRR will clean up
       px + 2.4 * baseATR,
       stock,
       msFull,
-      { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR, (cfg.minRRbase || 1.45) + needBump) },
+      {
+        ...cfg,
+        minRRbase: Math.max(
+          cfg.minRRbase,
+          cfg.crossMinRR,
+          (cfg.minRRbase || 1.45) + needBump
+        ),
+      },
       { kind: "CROSS", data: completedDaily }
     );
     return { label, rr };
   };
 
-  const weeklyPlan = crossW.trigger ? planFor("WEEKLY", 0.00) : null;
-  const dailyPlan  = crossD.trigger ? planFor("DAILY",  0.00) : null;
+  const weeklyPlan = crossW.trigger ? planFor("WEEKLY", 0.0) : null;
+  const dailyPlan = crossD.trigger ? planFor("DAILY", 0.0) : null;
 
   const passedPlans = [];
   if (weeklyPlan && weeklyPlan.rr.acceptable) passedPlans.push(weeklyPlan);
-  if (dailyPlan  && dailyPlan.rr.acceptable)  passedPlans.push(dailyPlan);
+  if (dailyPlan && dailyPlan.rr.acceptable) passedPlans.push(dailyPlan);
 
   if (passedPlans.length === 0) {
     const msgs = [];
-    if (weeklyPlan) msgs.push(`Weekly RR ${fmt(weeklyPlan.rr.ratio)} < need ${fmt(weeklyPlan.rr.need)}`);
-    if (dailyPlan)  msgs.push(`Daily  RR ${fmt(dailyPlan.rr.ratio)} < need ${fmt(dailyPlan.rr.need)}`);
+    if (weeklyPlan)
+      msgs.push(
+        `Weekly RR ${fmt(weeklyPlan.rr.ratio)} < need ${fmt(
+          weeklyPlan.rr.need
+        )}`
+      );
+    if (dailyPlan)
+      msgs.push(
+        `Daily  RR ${fmt(dailyPlan.rr.ratio)} < need ${fmt(dailyPlan.rr.need)}`
+      );
     const r = msgs.join("; ");
     for (const p of [weeklyPlan, dailyPlan].filter(Boolean)) {
       const rr = p.rr;
@@ -1594,54 +1688,109 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       });
     }
     const out = withNo(r, { stock, data: dataAll, cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    out.meta = {
+      cross: {
+        selected: selectedCross,
+        weekly: crossMeta.weekly,
+        daily: crossMeta.daily,
+      },
+    };
+    
     return out;
   }
 
   // Pick a main plan (prefer WEEKLY if available), but keep the other in telemetry
-  const primary = passedPlans.find(p => p.label === "WEEKLY") || passedPlans[0];
-  const alt     = passedPlans.find(p => p !== primary) || null;
+  const primary =
+    passedPlans.find((p) => p.label === "WEEKLY") || passedPlans[0];
+  const alt = passedPlans.find((p) => p !== primary) || null;
 
   // Guard check on the primary plan (reuse your guards)
-  const gv = guardVeto(stock, dataAll, px, primary.rr, msFull, cfg, null, "CROSS");
-  tele.guard = { checked: true, veto: !!gv.veto, reason: gv.reason || "", details: gv.details || {} };
+  const gv = guardVeto(
+    stock,
+    dataAll,
+    px,
+    primary.rr,
+    msFull,
+    cfg,
+    null,
+    "CROSS"
+  );
+  tele.guard = {
+    checked: true,
+    veto: !!gv.veto,
+    reason: gv.reason || "",
+    details: gv.details || {},
+  };
   if (gv.veto) {
     const r = `${primary.label} guard veto: ${gv.reason}`;
     const out = withNo(r, { stock, data: dataAll, cfg });
-    out.telemetry = { ...tele, outcome: { buyNow: false, reason: r }, reasons: [r], trace: T.logs };
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    out.meta = {
+      cross: {
+        selected: selectedCross,
+        weekly: crossMeta.weekly,
+        daily: crossMeta.daily,
+      },
+    };
+    
     return out;
   }
 
   // Build result
-  const bothPassed = !!(passedPlans.find(p => p.label === "WEEKLY") &&
-                        passedPlans.find(p => p.label === "DAILY"));
+  const bothPassed = !!(
+    passedPlans.find((p) => p.label === "WEEKLY") &&
+    passedPlans.find((p) => p.label === "DAILY")
+  );
 
   let reason;
   if (bothPassed) {
-    const w = passedPlans.find(p => p.label === "WEEKLY");
-    const d = passedPlans.find(p => p.label === "DAILY");
-    reason = `WEEKLY & DAILY CROSS: W ${w.rr.ratio.toFixed(2)}:1, D ${d.rr.ratio.toFixed(2)}:1. `
-           + `${crossW.why} | ${crossD.why}`;
+    const w = passedPlans.find((p) => p.label === "WEEKLY");
+    const d = passedPlans.find((p) => p.label === "DAILY");
+    reason =
+      `WEEKLY & DAILY CROSS: W ${w.rr.ratio.toFixed(
+        2
+      )}:1, D ${d.rr.ratio.toFixed(2)}:1. ` + `${crossW.why} | ${crossD.why}`;
     tele.selectedPlaybook = "BOTH";
   } else {
-    reason = `${primary.label} CROSS: ${primary.rr.ratio.toFixed(2)}:1. `
-           + `${primary.label === "WEEKLY" ? crossW.why : crossD.why}`;
+    reason =
+      `${primary.label} CROSS: ${primary.rr.ratio.toFixed(2)}:1. ` +
+      `${primary.label === "WEEKLY" ? crossW.why : crossD.why}`;
     tele.selectedPlaybook = primary.label;
   }
 
   tele.outcome = { buyNow: true, reason };
   tele.alternatives = {};
   if (alt && !bothPassed) {
-    tele.alternatives[alt.label.toLowerCase()] = { rr: alt.rr, note: `${alt.label} also acceptable` };
+    tele.alternatives[alt.label.toLowerCase()] = {
+      rr: alt.rr,
+      note: `${alt.label} also acceptable`,
+    };
   }
 
   tele.playbooks = {
-    weekly: { triggered: !!crossW.trigger, rrOk: !!(weeklyPlan && weeklyPlan.rr.acceptable) },
-    daily:  { triggered: !!crossD.trigger, rrOk: !!(dailyPlan  && dailyPlan.rr.acceptable) },
+    weekly: {
+      triggered: !!crossW.trigger,
+      rrOk: !!(weeklyPlan && weeklyPlan.rr.acceptable),
+    },
+    daily: {
+      triggered: !!crossD.trigger,
+      rrOk: !!(dailyPlan && dailyPlan.rr.acceptable),
+    },
   };
 
   // Project stop/target
-  const stop   = toTick(primary.rr.stop, stock);
+  const stop = toTick(primary.rr.stop, stock);
   const target = toTick(primary.rr.target, stock);
 
   return {
@@ -1651,14 +1800,27 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     priceTarget: target,
     smartStopLoss: stop,
     smartPriceTarget: target,
-    timeline: buildSwingTimeline(px, {
-      kind: `${primary.label} CROSS`,
-      why: primary.label === "WEEKLY" ? crossW.why : crossD.why,
-      stop: primary.rr.stop,
-      target: primary.rr.target,
-      rr: primary.rr,
-      guard: tele.guard?.details || {},
-    }, primary.rr, msFull),
+    timeline: buildSwingTimeline(
+      px,
+      {
+        kind: `${primary.label} CROSS`,
+        why: primary.label === "WEEKLY" ? crossW.why : crossD.why,
+        stop: primary.rr.stop,
+        target: primary.rr.target,
+        rr: primary.rr,
+        guard: tele.guard?.details || {},
+      },
+      primary.rr,
+      msFull
+    ),
+    // NEW: compact machine-readable meta for the backtester
+    meta: {
+      cross: {
+        selected: bothPassed ? "BOTH" : primary.label, // "WEEKLY" | "DAILY" | "BOTH"
+        weekly: crossMeta.weekly, // {barsAgo} or null
+        daily: crossMeta.daily, // {barsAgo} or null
+      },
+    },
     telemetry: { ...tele, trace: T.logs },
   };
 }

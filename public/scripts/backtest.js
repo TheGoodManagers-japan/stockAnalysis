@@ -355,7 +355,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const opts = Array.isArray(tickersOrOpts)
     ? maybeOpts || {}
     : tickersOrOpts || {};
-      // default false if omitted
+  // default false if omitted
   const USE_LIVE_BAR = true;
 
   const INCLUDE_BY_TICKER = !!opts.includeByTicker;
@@ -406,7 +406,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     // no advance(): never modify stop/target after entry
   };
   const activeProfiles = [RAW_PROFILE];
-
 
   // --- NEW: regime options ---
   const REGIME_TICKER =
@@ -568,283 +567,348 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         // blocked counters (optional, per profile)
         if (COUNT_BLOCKED) {
           for (const p of activeProfiles) {
-            if (openByProfile[p.id]) blockedInTrade++;
-            else if (i <= cooldownUntilByProfile[p.id]) blockedCooldown++;
+            if (i <= cooldownUntilByProfile[p.id]) blockedCooldown++;
           }
           if (i < WARMUP) blockedWarmup++;
         }
 
         // manage open positions per profile (NO post-entry adjustment!)
         for (const p of activeProfiles) {
-          const st = openByProfile[p.id];
-          if (!st) continue;
+          const list = openByProfile[p.id] || [];
+          if (!list.length) continue;
 
-          // No p.advance(), no mutations of st.stop/st.target here
+          for (let k = list.length - 1; k >= 0; k--) {
+            const st = list[k];
 
-          let exit = null;
+            // No p.advance(), no mutations of st.stop/st.target here
 
-          // 1) price-based exits first (priority: stop/target)
-          if (today.low <= st.stop) {
-            exit = { type: "STOP", price: st.stop, result: "LOSS" };
-          } else if (today.high >= st.target) {
-            exit = { type: "TARGET", price: st.target, result: "WIN" };
-          }
+            let exit = null;
 
-          // 2) optional hard time exit at HOLD_BARS
-          if (!exit && HOLD_BARS > 0) {
-            const ageBars = i - st.entryIdx;
-            if (ageBars >= HOLD_BARS) {
-              const rawPnL = today.close - st.entry;
-              exit = {
-                type: "TIME",
-                price: today.close,
-                result: rawPnL >= 0 ? "WIN" : "LOSS",
+            // 1) price-based exits first (priority: stop/target)
+            if (today.low <= st.stop) {
+              exit = { type: "STOP", price: st.stop, result: "LOSS" };
+            } else if (today.high >= st.target) {
+              exit = { type: "TARGET", price: st.target, result: "WIN" };
+            }
+
+            // 2) optional hard time exit at HOLD_BARS
+            if (!exit && HOLD_BARS > 0) {
+              const ageBars = i - st.entryIdx;
+              if (ageBars >= HOLD_BARS) {
+                const rawPnL = today.close - st.entry;
+                exit = {
+                  type: "TIME",
+                  price: today.close,
+                  result: rawPnL >= 0 ? "WIN" : "LOSS",
+                };
+              }
+            }
+
+            if (exit) {
+              const pctRet =
+                ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
+              const risk = Math.max(0.01, st.entry - st.stopInit);
+              const trade = {
+                ticker: code,
+                profile: p.id,
+                strategy: st.kind || "DIP",
+                entryDate: toISO(candles[st.entryIdx].date),
+                exitDate: toISO(today.date),
+                holdingDays: i - st.entryIdx,
+                entry: r2(st.entry),
+                exit: r2(exit.price),
+                stop: st.stopInit,
+                target: st.target,
+                result: exit.result,
+                exitType: exit.type,
+                R: r2((exit.price - st.entry) / risk),
+                returnPct: r2(pctRet),
+                ST: st.ST,
+                LT: st.LT,
+                regime: st.regime || "RANGE",
+                crossType: st.crossType || null, // "WEEKLY" | "DAILY" | "BOTH" | null
+                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null, // integer
               };
+
+              tradesByProfile[p.id].push(trade);
+              trades.push(trade);
+              globalTrades.push(trade);
+
+              const kKey = sentiKey(st.ST, st.LT);
+              if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
+              sentiUpdate(sentiment.actual[kKey], {
+                result: trade.result,
+                returnPct: trade.returnPct,
+                R: trade.R,
+              });
+
+              if (trade.regime && regimeAgg[trade.regime]) {
+                regimeAgg[trade.regime].push(trade);
+              }
+
+              list.splice(k, 1);
+              cooldownUntilByProfile[p.id] = i + COOLDOWN;
+              globalOpenCount = Math.max(0, globalOpenCount - 1);
             }
           }
 
-          if (exit) {
-            const pctRet =
-              ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
-            const risk = Math.max(0.01, st.entry - st.stopInit);
-            const trade = {
-              ticker: code,
-              profile: p.id,
-              strategy: st.kind || "DIP",
-              entryDate: toISO(candles[st.entryIdx].date),
-              exitDate: toISO(today.date),
-              holdingDays: i - st.entryIdx,
-              entry: r2(st.entry),
-              exit: r2(exit.price),
-              stop: st.stopInit,
-              target: st.target,
-              result: exit.result,
-              exitType: exit.type,
-              R: r2((exit.price - st.entry) / risk),
-              returnPct: r2(pctRet),
-              ST: st.ST,
-              LT: st.LT,
-              regime: st.regime || "RANGE",
-            };
+          openByProfile[p.id] = list;
+        }
 
-            tradesByProfile[p.id].push(trade);
-            trades.push(trade);
-            globalTrades.push(trade);
+        // ---------------- ALWAYS detect first (parity with live scanner) ----------------
+        const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
+        const sig = analyseCrossing(stock, hist, {
+          debug: true,
+          debugLevel: "verbose",
+          dataForGates: gatesData, // prevents analyseCrossing from slicing
+        });
 
-            // sentiment (actual)
-            const k = sentiKey(st.ST, st.LT);
-            if (!sentiment.actual[k]) sentiment.actual[k] = sentiInit();
-            sentiUpdate(sentiment.actual[k], {
-              result: trade.result,
-              returnPct: trade.returnPct,
-              R: trade.R,
-            });
+        // 👇 Add this here (moved up from the else-branch)
+        const senti = getComprehensiveMarketSentiment(stock, hist);
+        const ST = senti?.shortTerm?.score ?? 4;
+        const LT = senti?.longTerm?.score ?? 4;
 
-            // per-regime collect
-            if (trade.regime && regimeAgg[trade.regime]) {
-              regimeAgg[trade.regime].push(trade);
-            }
+        // Count raw signals for the day exactly when they happen (regardless of eligibility/gates)
+        if (sig?.buyNow) {
+          signalsTotal++;
+          if (i >= WARMUP) signalsAfterWarmup++;
+          const dayISOforSig = toISO(today.date);
+          signalsByDay.set(
+            dayISOforSig,
+            (signalsByDay.get(dayISOforSig) || 0) + 1
+          );
+        }
 
-            openByProfile[p.id] = null;
-            cooldownUntilByProfile[p.id] = i + COOLDOWN;
-            globalOpenCount = Math.max(0, globalOpenCount - 1);
+        // Trend/telemetry bookkeeping (same as before)
+        const trend = sig?.debug?.ms?.trend;
+        if (trend && telemetry.trends.hasOwnProperty(trend))
+          telemetry.trends[trend]++;
+
+        if (!sig?.buyNow) {
+          // collect reasons for "no buy" (same as your old code)
+          const dbg = sig?.debug || {};
+          if (dbg && dbg.priceActionGate === false) {
+            telemetry.gates.priceActionGateFailed++;
           }
-        }
+          if (Array.isArray(dbg.reasons)) {
+            for (const r of dbg.reasons) {
+              if (typeof r === "string" && r.startsWith("DIP not ready:")) {
+                const why = afterColon(r, "DIP not ready:").replace(
+                  /^[:\s]+/,
+                  ""
+                );
+                inc(telemetry.dip.notReadyReasons, why || "unspecified");
+              }
+              if (r === "Structure gate: trend not up or price < MA5.") {
+                telemetry.gates.structureGateFailed++;
+              }
+              if (
+                r === "DIP blocked (Perfect gate): MAs not stacked bullishly."
+              ) {
+                telemetry.gates.stackedGateFailed++;
+              }
+              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
+                const reason = extractGuardReason(r);
+                inc(telemetry.dip.guardVetoReasons, reason || "guard");
+              }
+              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
+                const m = r.match(/need\s+([0-9.]+)/i);
+                const need = m ? parseFloat(m[1]) : NaN;
+                inc(telemetry.rr.rejected, bucketize(need));
+              }
+            }
+          }
 
-// ---------------- ALWAYS detect first (parity with live scanner) ----------------
-const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
-const sig = analyseCrossing(stock, hist, {
-  debug: true,
-  debugLevel: "verbose",
-  dataForGates: gatesData, // prevents analyseCrossing from slicing
-});
+          // parallel “rejected buys” simulation (unchanged)
+          if (SIM_REJECTED) {
+            const entry = today.close; // same-bar for CF simplicity
+            const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
+            const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+            if (
+              Number.isFinite(simStop) &&
+              Number.isFinite(simTarget) &&
+              simStop < entry
+            ) {
+              const outcome = simulateTradeForward(
+                candles,
+                i,
+                entry,
+                simStop,
+                simTarget
+              );
+              const k = sentiKey(ST, LT);
+              if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
+              if (outcome.result !== "OPEN") {
+                sentiUpdate(sentiment.rejected[k], outcome);
+                parallel.rejectedBuys.totalSimulated++;
+                if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+              }
+              const reasonsRaw = Array.isArray(sig?.debug?.reasons)
+                ? sig.debug.reasons.slice(0, 2)
+                : [sig?.reason || "unspecified"];
+              for (const rr of reasonsRaw) {
+                const key = normalizeRejectedReason(rr);
+                if (!parallel.rejectedBuys.byReasonRaw[key]) {
+                  parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
+                }
+                cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
+                if (outcome.result === "WIN") {
+                  if (!parallel.rejectedBuys.examples[key])
+                    parallel.rejectedBuys.examples[key] = [];
+                  if (
+                    parallel.rejectedBuys.examples[key].length < EXAMPLE_MAX
+                  ) {
+                    parallel.rejectedBuys.examples[key].push({
+                      ticker: code,
+                      date: toISO(today.date),
+                      entry: r2(entry),
+                      stop: r2(simStop),
+                      target: r2(simTarget),
+                      exitType: outcome.exitType,
+                      R: +(outcome.R || 0).toFixed(2),
+                      returnPct: +(outcome.returnPct || 0).toFixed(2),
+                      ST,
+                      LT,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // ---------------- After detection, decide if we can actually ENTER ----------------
+          const anyProfileEligible =
+            i >= WARMUP &&
+            activeProfiles.some((p) => i > cooldownUntilByProfile[p.id]) &&
+            (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
 
-// 👇 Add this here (moved up from the else-branch)
-const senti = getComprehensiveMarketSentiment(stock, hist);
-const ST = senti?.shortTerm?.score ?? 4;
-const LT = senti?.longTerm?.score ?? 4;
-
-// Count raw signals for the day exactly when they happen (regardless of eligibility/gates)
-if (sig?.buyNow) {
-  signalsTotal++;
-  if (i >= WARMUP) signalsAfterWarmup++;
-  const dayISOforSig = toISO(today.date);
-  signalsByDay.set(dayISOforSig, (signalsByDay.get(dayISOforSig) || 0) + 1);
-}
-
-// Trend/telemetry bookkeeping (same as before)
-const trend = sig?.debug?.ms?.trend;
-if (trend && telemetry.trends.hasOwnProperty(trend)) telemetry.trends[trend]++;
-
-if (!sig?.buyNow) {
-  // collect reasons for "no buy" (same as your old code)
-  const dbg = sig?.debug || {};
-  if (dbg && dbg.priceActionGate === false) {
-    telemetry.gates.priceActionGateFailed++;
-  }
-  if (Array.isArray(dbg.reasons)) {
-    for (const r of dbg.reasons) {
-      if (typeof r === "string" && r.startsWith("DIP not ready:")) {
-        const why = afterColon(r, "DIP not ready:").replace(/^[:\s]+/, "");
-        inc(telemetry.dip.notReadyReasons, why || "unspecified");
-      }
-      if (r === "Structure gate: trend not up or price < MA5.") {
-        telemetry.gates.structureGateFailed++;
-      }
-      if (r === "DIP blocked (Perfect gate): MAs not stacked bullishly.") {
-        telemetry.gates.stackedGateFailed++;
-      }
-      if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
-        const reason = extractGuardReason(r);
-        inc(telemetry.dip.guardVetoReasons, reason || "guard");
-      }
-      if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
-        const m = r.match(/need\s+([0-9.]+)/i);
-        const need = m ? parseFloat(m[1]) : NaN;
-        inc(telemetry.rr.rejected, bucketize(need));
-      }
-    }
-  }
-
-  // parallel “rejected buys” simulation (unchanged)
-  if (SIM_REJECTED) {
-    const entry = today.close; // same-bar for CF simplicity
-    const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
-    const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
-    if (Number.isFinite(simStop) && Number.isFinite(simTarget) && simStop < entry) {
-      const outcome = simulateTradeForward(candles, i, entry, simStop, simTarget);
-      const k = sentiKey(ST, LT);
-      if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
-      if (outcome.result !== "OPEN") {
-        sentiUpdate(sentiment.rejected[k], outcome);
-        parallel.rejectedBuys.totalSimulated++;
-        if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
-      }
-      const reasonsRaw = Array.isArray(sig?.debug?.reasons)
-        ? sig.debug.reasons.slice(0, 2)
-        : [sig?.reason || "unspecified"];
-      for (const rr of reasonsRaw) {
-        const key = normalizeRejectedReason(rr);
-        if (!parallel.rejectedBuys.byReasonRaw[key]) {
-          parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
-        }
-        cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
-        if (outcome.result === "WIN") {
-          if (!parallel.rejectedBuys.examples[key]) parallel.rejectedBuys.examples[key] = [];
-          if (parallel.rejectedBuys.examples[key].length < EXAMPLE_MAX) {
-            parallel.rejectedBuys.examples[key].push({
+          // RR telemetry bucket (same as before)
+          const rRatio = Number(sig?.debug?.rr?.ratio);
+          inc(telemetry.rr.accepted, bucketize(rRatio));
+          if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
+            telemetry.examples.buyNow.push({
               ticker: code,
               date: toISO(today.date),
-              entry: r2(entry),
-              stop: r2(simStop),
-              target: r2(simTarget),
-              exitType: outcome.exitType,
-              R: +(outcome.R || 0).toFixed(2),
-              returnPct: +(outcome.returnPct || 0).toFixed(2),
-              ST,
-              LT,
+              reason: sig?.reason || "",
+              rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
             });
           }
-        }
-      }
+
+          // optional sentiment gate (now disabled by default due to change #1)
+          if (anyProfileEligible) {
+            // optional regime gate ...
+            if (!allowedRegimes || allowedRegimes.has(dayRegime)) {
+              // ENTRY = next-bar open (fallback close)
+              const hasNext = i + 1 < candles.length;
+              const entryBarIdx = hasNext ? i + 1 : i;
+              const entryBar = candles[entryBarIdx];
+              const entry = hasNext ? entryBar.open : today.close;
+
+              for (const p of activeProfiles) {
+                if (i <= cooldownUntilByProfile[p.id]) continue;
+                if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
+                  break;
+
+                const plan =
+                  p.compute({
+                    entry,
+                    stock: { ...stock, currentPrice: entry },
+                    sig,
+                    today: entryBar,
+                    hist: candles.slice(0, entryBarIdx + 1),
+                  }) || {};
+                const stop = Number(plan.stop);
+                const target = Number(plan.target);
+                if (!Number.isFinite(stop) || !Number.isFinite(target)) {
+                  signalsInvalid++;
+                  continue;
+                }
+                if (stop >= entry) {
+                  signalsRiskBad++;
+                  continue;
+                }
+
+                const qStop = toTick(stop, stock);
+                const qTarget = toTick(target, stock);
+
+                // derive cross type & lag from analyseCrossing meta
+const cm = sig?.meta?.cross || {};
+const selected =
+  cm?.selected ||
+  (cm?.weekly && cm?.daily
+    ? "BOTH"
+    : cm?.weekly
+    ? "WEEKLY"
+    : cm?.daily
+    ? "DAILY"
+    : null);
+
+const lag =
+  selected === "WEEKLY" && cm.weekly
+    ? cm.weekly.barsAgo
+    : selected === "DAILY" && cm.daily
+    ? cm.daily.barsAgo
+    : selected === "BOTH"
+    ? Math.min(
+        cm.weekly ? cm.weekly.barsAgo : Infinity,
+        cm.daily ? cm.daily.barsAgo : Infinity
+      )
+    : null;
+
+
+                if (!openByProfile[p.id]) openByProfile[p.id] = [];
+                openByProfile[p.id].push({
+                  entryIdx: entryBarIdx,
+                  entry,
+                  stop: qStop,
+                  stopInit: qStop,
+                  target: qTarget,
+                  ST,
+                  LT,
+                  regime: dayRegime,
+                  kind:
+                    String(sig?.debug?.chosen || sig?.reason || "")
+                      .split(":")[0]
+                      .trim() || "UNKNOWN",
+                  crossType: selected, // "WEEKLY" | "DAILY" | "BOTH" | null
+                  crossLag: Number.isFinite(lag) ? lag : null, // integer bars ago
+                });
+                globalOpenCount++;
+                signalsExecuted++;
+              }
+            }
+          }
+        } // <-- end of if (!sig?.buyNow) { ... } else { ... }
+      } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
+
+      // keep per-ticker result if requested
+      // keep per-ticker result if requested
+      if (INCLUDE_BY_TICKER) byTicker.push({ ticker: code, trades });
+
+      // Per-ticker snapshot: win % and profit %
+      const m = computeMetrics(trades);
+      console.log(
+        `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${
+          trades.length
+        } | winRate=${m.winRate}% | avgRet=${m.avgReturnPct}% | PF=${
+          m.profitFactor
+        }`
+      );
+    } catch (e) {
+      // <-- close the per-ticker try
+      if (INCLUDE_BY_TICKER)
+        byTicker.push({
+          ticker: code,
+          trades: [],
+          error: String(e?.message || e),
+        });
+      console.log(
+        `[BT] failed ${ti + 1}/${codes.length}: ${code} — ${String(
+          e?.message || e
+        )}`
+      );
     }
-  }
-
-} else {
-  // ---------------- After detection, decide if we can actually ENTER ----------------
-  const anyProfileEligible =
-    i >= WARMUP &&
-    activeProfiles.some((p) => !openByProfile[p.id] && i > cooldownUntilByProfile[p.id]) &&
-    (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
-
-  // RR telemetry bucket (same as before)
-  const rRatio = Number(sig?.debug?.rr?.ratio);
-  inc(telemetry.rr.accepted, bucketize(rRatio));
-  if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
-    telemetry.examples.buyNow.push({
-      ticker: code,
-      date: toISO(today.date),
-      reason: sig?.reason || "",
-      rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
-    });
-  }
-
-
-  // optional sentiment gate (now disabled by default due to change #1)
-  if (anyProfileEligible) {
-    // optional regime gate ...
-    if (!allowedRegimes || allowedRegimes.has(dayRegime)) {
-      // ENTRY = next-bar open (fallback close)
-      const hasNext = i + 1 < candles.length;
-      const entryBarIdx = hasNext ? i + 1 : i;
-      const entryBar = candles[entryBarIdx];
-      const entry = hasNext ? entryBar.open : today.close;
-
-      for (const p of activeProfiles) {
-        if (openByProfile[p.id]) continue;
-        if (i <= cooldownUntilByProfile[p.id]) continue;
-        if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT) break;
-
-        const plan =
-          p.compute({
-            entry,
-            stock: { ...stock, currentPrice: entry },
-            sig,
-            today: entryBar,
-            hist: candles.slice(0, entryBarIdx + 1),
-          }) || {};
-        const stop = Number(plan.stop);
-        const target = Number(plan.target);
-        if (!Number.isFinite(stop) || !Number.isFinite(target)) {
-          signalsInvalid++;
-          continue;
-        }
-        if (stop >= entry) {
-          signalsRiskBad++;
-          continue;
-        }
-
-        const qStop = toTick(stop, stock);
-        const qTarget = toTick(target, stock);
-
-        openByProfile[p.id] = {
-          entryIdx: entryBarIdx,
-          entry,
-          stop: qStop,
-          stopInit: qStop,
-          target: qTarget,
-          ST,
-          LT,
-          regime: dayRegime,
-          kind:
-            String(sig?.debug?.chosen || sig?.reason || "")
-              .split(":")[0]
-              .trim() || "UNKNOWN",
-        };
-        globalOpenCount++;
-        signalsExecuted++;
-      }
-    }
-  }
-} // <-- end of if (!sig?.buyNow) { ... } else { ... }
-} // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
-
-// keep per-ticker result if requested
-if (INCLUDE_BY_TICKER) byTicker.push({ ticker: code, trades });
-
-console.log(
-  `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${trades.length}`
-);
-} catch (e) { // <-- close the per-ticker try
-if (INCLUDE_BY_TICKER)
-  byTicker.push({ ticker: code, trades: [], error: String(e?.message || e) });
-console.log(
-  `[BT] failed ${ti + 1}/${codes.length}: ${code} — ${String(e?.message || e)}`
-);
-}
-} // <-- end of per-ticker loop: for (let ti = 0; ti < codes.length; ti++)
-
-
+  } // <-- end of per-ticker loop: for (let ti = 0; ti < codes.length; ti++)
 
   // ---- final metrics ----
   const all = byTicker.length
@@ -983,6 +1047,56 @@ console.log(
   for (const key of Object.keys(regimeAgg)) {
     regimeMetrics[key] = computeMetrics(regimeAgg[key]);
   }
+  // --- NEW: CROSSING by-lag metrics (global) ---
+  // Buckets: WEEKLY and DAILY, each keyed by "lag" (# completed bars after flip)
+  const crossLagBuckets = { WEEKLY: {}, DAILY: {} };
+  for (const t of all) {
+    const typ = t.crossType;
+    if (typ === "WEEKLY" || typ === "DAILY") {
+      const lag = Number.isFinite(t.crossLag) ? t.crossLag : -1; // -1 = unknown
+      if (!crossLagBuckets[typ][lag]) crossLagBuckets[typ][lag] = [];
+      crossLagBuckets[typ][lag].push(t);
+    } else if (typ === "BOTH") {
+      // If BOTH, attribute to each bucket using the same lag
+      const lag = Number.isFinite(t.crossLag) ? t.crossLag : -1;
+      if (!crossLagBuckets.WEEKLY[lag]) crossLagBuckets.WEEKLY[lag] = [];
+      if (!crossLagBuckets.DAILY[lag]) crossLagBuckets.DAILY[lag] = [];
+      crossLagBuckets.WEEKLY[lag].push(t);
+      crossLagBuckets.DAILY[lag].push(t);
+    }
+  }
+
+  // Turn buckets into metrics
+  function toMetricsMap(buckets) {
+    const out = {};
+    for (const lagStr of Object.keys(buckets).sort(
+      (a, b) => Number(a) - Number(b)
+    )) {
+      const lag = +lagStr;
+      out[lag] = computeMetrics(buckets[lagStr]);
+    }
+    return out;
+  }
+  const crossingByLag = {
+    WEEKLY: toMetricsMap(crossLagBuckets.WEEKLY),
+    DAILY: toMetricsMap(crossLagBuckets.DAILY),
+  };
+
+  console.log("[BT] CROSS-LAG STATS (WEEKLY)");
+  for (const k of Object.keys(crossingByLag.WEEKLY)) {
+    const m = crossingByLag.WEEKLY[k];
+    console.log(
+      `[BT] WEEKLY lag=${k} | trades=${m.trades} | winRate=${m.winRate}% | avgRet=${m.avgReturnPct}% | PF=${m.profitFactor}`
+    );
+  }
+  console.log("[BT] CROSS-LAG STATS (DAILY)");
+  for (const k of Object.keys(crossingByLag.DAILY)) {
+    const m = crossingByLag.DAILY[k];
+    console.log(
+      `[BT] DAILY  lag=${k} | trades=${m.trades} | winRate=${m.winRate}% | avgRet=${m.avgReturnPct}% | PF=${m.profitFactor}`
+    );
+  }
+
 
   // Console snapshot for regimes
   console.log("[BT] REGIME STATS");
@@ -1031,7 +1145,6 @@ console.log(
     ? Array.from(signalsByDay.values()).reduce((a, b) => a + b, 0) /
       signalsDayCount
     : 0;
-
 
   return {
     from: FROM,
@@ -1099,6 +1212,10 @@ console.log(
       ticker: REGIME_TICKER,
       metrics: regimeMetrics,
     },
+    crossing: {
+      byLag: crossingByLag, // { WEEKLY: {lag: metrics}, DAILY: {lag: metrics} }
+    },
+
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
 }
