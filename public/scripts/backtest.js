@@ -636,18 +636,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     try {
       const candles = await fetchHistory(code, FROM, TO);
       if (candles.length < WARMUP + 2) {
-        if (INCLUDE_BY_TICKER)
+        if (INCLUDE_BY_TICKER) {
+          const emptyMetrics = computeMetrics([]);
+          const emptyAnalysis = buildTickerAnalysis(code, []);
           byTicker.push({
             ticker: code,
             trades: [],
-            error: String(e?.message || e),
+            metrics: emptyMetrics,
+            analysis: emptyAnalysis,
+            error: "not enough data",
           });
-
+        }
         console.log(
           `[BT] finished ${ti + 1}/${codes.length}: ${code} (not enough data)`
         );
         continue;
       }
+      
 
       const trades = [];
       const tradesByProfile = Object.fromEntries(
@@ -996,9 +1001,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
-      // keep per-ticker result if requested
-      // keep per-ticker result if requested
-      if (INCLUDE_BY_TICKER) byTicker.push({ ticker: code, trades });
+
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
