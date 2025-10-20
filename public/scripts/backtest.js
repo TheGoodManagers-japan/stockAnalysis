@@ -33,7 +33,6 @@ const API_BASE =
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
-const USE_LIVE_BAR = !!opts.useLiveBarForSignals; // default false if omitted
 
 /* ---------------- tick helpers (match swingTradeEntryTiming ladder) ---------------- */
 function inferTickFromPrice(p) {
@@ -384,6 +383,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const opts = Array.isArray(tickersOrOpts)
     ? maybeOpts || {}
     : tickersOrOpts || {};
+      // default false if omitted
+  const USE_LIVE_BAR = !!opts.useLiveBarForSignals;
 
   const INCLUDE_BY_TICKER = !!opts.includeByTicker;
   const INCLUDE_PROFILE_SAMPLES = !!opts.includeProfileSamples; // harmless, still supported
