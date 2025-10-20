@@ -233,6 +233,7 @@ const regime = raw?.regime?.metrics || {};
 
 // Cross-lag metrics
 const xlag = raw?.crossing?.byLag || { WEEKLY: {}, DAILY: {} };
+const dipAfter = raw?.dipAfterFreshCrossing || { WEEKLY: null, DAILY: null };
 
 // Overall
 const overall = summarizeMetrics(withAnalytics);
@@ -317,6 +318,16 @@ console.log("\n=== REGIME ===");
 regimeSummary.forEach((s) => console.log("- " + s));
 console.log("\n=== CROSS-LAG ===");
 lagSummary.forEach((s) => console.log("- " + s));
+console.log("\n=== DIP AFTER FRESH CROSS ===");
+function fmtDipAfter(label, m) {
+  if (!m || typeof m !== "object" || !("trades" in m)) {
+    return `- ${label}: n/a`;
+  }
+  return `- ${label}: trades ${m.trades} | WinRate ${m.winRate}% | PF ${m.profitFactor} | AvgRet ${m.avgReturnPct}%`;
+}
+console.log(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
+console.log(fmtDipAfter("DAILY", dipAfter.DAILY));
+
 
 // -------------------- Optional outputs --------------------
 const exportObj = {
@@ -328,7 +339,9 @@ const exportObj = {
   },
   regime: raw?.regime?.metrics || {},
   crossLag: xlag,
+  dipAfterFreshCross: dipAfter, // <-- NEW
 };
+  
 
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify(exportObj, null, 2), "utf8");
@@ -355,6 +368,11 @@ if (mdPath) {
   lines.push("");
   lines.push("## Cross-Lag");
   for (const s of lagSummary) lines.push(`- ${s}`);
+  lines.push("");
+  lines.push("## DIP After Fresh Cross");
+  lines.push(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
+  lines.push(fmtDipAfter("DAILY", dipAfter.DAILY));
+
   fs.writeFileSync(mdPath, lines.join("\n"), "utf8");
   console.log(`[write] Markdown report -> ${mdPath}`);
 }

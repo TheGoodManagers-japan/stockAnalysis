@@ -535,11 +535,17 @@ function getConfig(opts = {}) {
     requireWeeklyUpForDIP: true, // require above 13/26/52wk for DIP lane
     requireDailyReclaim25and75ForDIP: true, // require recent price reclaim of both 25d & 75d
     dailyReclaimLookback: 5, // slightly wider, helps valid names pass
+    freshDailyLookbackDays: 5,
+
+    // getConfig(...)
+    requireFreshWeeklyFlipForDIP: true, // new
+    freshWeeklyLookbackWeeks: 5, // reuse the same freshness window you like
+    allowStaleCrossDip: false, // turn off stale DIP lane
+
     // For DIP: we now require (reclaim OR cross), not both
     requireMA25over75ForDIP: true,
     maCrossMaxAgeBars: 10, // allow a recent cross within ~2 weeks
 
-    allowStaleCrossDip: true, // enable stale-cross + DIP-bounce playbook
     staleDipMaxAgeBars: 7, // DIP bounce must be recent
     staleDipMaxAgeWeeklyWeeks: 2, // optional: only used when weekly-stacked-now
     staleCrossRequireReclaim: true, // require recent price reclaim 25/75 for stale
@@ -1641,8 +1647,15 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   }
 
   /* ---------------- Fresh WEEKLY/DAILY crossing (completed bars) ---------------- */
-  const crossW = detectWeeklyStackedCross(completedDaily, 5);
-  const crossD = detectDailyStackedCross(completedDaily, 5);
+  const crossW = detectWeeklyStackedCross(
+    completedDaily,
+    cfg.freshWeeklyLookbackWeeks ?? 5
+  );
+  const crossD = detectDailyStackedCross(
+    completedDaily,
+    cfg.freshDailyLookbackDays ?? 5
+  );
+
   T("crossing", "weekly", !!crossW.trigger, crossW.why, { crossW }, "verbose");
   T("crossing", "daily", !!crossD.trigger, crossD.why, { crossD }, "verbose");
 
@@ -1762,12 +1775,20 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     }
   }
 
-  if (dip?.trigger && structureGateOk && dipGatePass) {
+  // fresh-weekly constraint (only if enabled)
+  // fresh-weekly constraint (only if enabled)
+  const freshWeeklyOk =
+    !cfg.requireFreshWeeklyFlipForDIP ||
+    (crossW.trigger &&
+      (crossW.weeksAgo ?? 0) <= (cfg.freshWeeklyLookbackWeeks ?? 5));
+
+  if (dip?.trigger && structureGateOk && dipGatePass && freshWeeklyOk) {
     const rrD = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
       kind: "DIP",
       data: dataAll,
     });
     tele.rr = tele.rr?.checked ? tele.rr : toTeleRR(rrD);
+
     if (rrD.acceptable) {
       const gv = guardVeto(
         stock,
@@ -1779,12 +1800,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         dip.nearestRes,
         "DIP"
       );
-      tele.guard = {
-        checked: true,
-        veto: !!gv.veto,
-        reason: gv.reason || "",
-        details: gv.details || {},
-      };
       if (!gv.veto) {
         candidates.push({
           kind: "DIP ENTRY",
@@ -1805,6 +1820,14 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         { stop: rrD.stop, target: rrD.target }
       );
     }
+  } else if (dip?.trigger && structureGateOk && dipGatePass && !freshWeeklyOk) {
+    pushBlock(
+      tele,
+      "DIP_REQ_WEEKLY_FRESH",
+      "dip",
+      `DIP gated: requires fresh weekly flip ≤${cfg.freshWeeklyLookbackWeeks}w`,
+      { weeklyFlip: { trigger: crossW.trigger, weeksAgo: crossW.weeksAgo } }
+    );
   } else if (dip?.trigger && !dipGatePass) {
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
       wkGate,

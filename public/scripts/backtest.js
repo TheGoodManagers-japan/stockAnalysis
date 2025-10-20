@@ -834,7 +834,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       }
     },
   };
-  
 
   const USE_TRAIL = true; // opts.useTrailing = true/false
   const activeProfiles = USE_TRAIL
@@ -879,6 +878,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     UP: [],
     RANGE: [],
     DOWN: [],
+  };
+
+  // Aggregation for DIP after fresh crosses
+  // We’ll count a trade here if its strategy is a DIP and crossType says which flip was fresh.
+  const dipAfterAgg = {
+    WEEKLY: [],
+    DAILY: [],
   };
 
   // diagnostics
@@ -1014,54 +1020,52 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           if (i < WARMUP) blockedWarmup++;
         }
 
+        // manage open positions per profile (trailing BEFORE exit checks)
+        for (const p of activeProfiles) {
+          const list = openByProfile[p.id] || [];
+          if (!list.length) continue;
 
-            // manage open positions per profile (trailing BEFORE exit checks)
-for (const p of activeProfiles) {
-  const list = openByProfile[p.id] || [];
-  if (!list.length) continue;
+          for (let k = list.length - 1; k >= 0; k--) {
+            const st = list[k];
 
-  for (let k = list.length - 1; k >= 0; k--) {
-    const st = list[k];
+            // NEW: update trailing stop using only completed data (up to i-1)
+            if (typeof p.advance === "function") {
+              p.advance({
+                state: st,
+                hist: candles, // p.advance will only use data up to i-1
+                i,
+                atrMult: opts.atrMult ?? 3,
+                startAfterBars: opts.trailStartAfterBars ?? 2,
+                breakevenR: 1.0,
+                todayHigh: today.high, // <-- add this
+              });
+            }
 
-    // NEW: update trailing stop using only completed data (up to i-1)
-    if (typeof p.advance === "function") {
-      p.advance({
-        state: st,
-        hist: candles, // p.advance will only use data up to i-1
-        i,
-        atrMult: opts.atrMult ?? 3,
-        startAfterBars: opts.trailStartAfterBars ?? 2,
-        breakevenR: 1.0,
-        todayHigh: today.high, // <-- add this
-      });
-    }
+            // now do your normal exit checks on today's bar i
+            let exit = null;
 
-    // now do your normal exit checks on today's bar i
-    let exit = null;
+            // 1) price-based exits first
+            if (today.low <= st.stop) {
+              exit = { type: "STOP", price: st.stop, result: "LOSS" };
+            } else if (!st.skipTarget && today.high >= st.target) {
+              // Only take target if NOT a trailing profile (RAW will still exit here)
+              exit = { type: "TARGET", price: st.target, result: "WIN" };
+            }
 
-    // 1) price-based exits first
-    if (today.low <= st.stop) {
-      exit = { type: "STOP", price: st.stop, result: "LOSS" };
-    } else if (!st.skipTarget && today.high >= st.target) {
-      // Only take target if NOT a trailing profile (RAW will still exit here)
-      exit = { type: "TARGET", price: st.target, result: "WIN" };
-    }
+            // 2) optional time exit (unchanged)
+            if (!exit && HOLD_BARS > 0) {
+              const ageBars = i - st.entryIdx;
+              if (ageBars >= HOLD_BARS) {
+                const rawPnL = today.close - st.entry;
+                exit = {
+                  type: "TIME",
+                  price: today.close,
+                  result: rawPnL >= 0 ? "WIN" : "LOSS",
+                };
+              }
+            }
 
-    // 2) optional time exit (unchanged)
-    if (!exit && HOLD_BARS > 0) {
-      const ageBars = i - st.entryIdx;
-      if (ageBars >= HOLD_BARS) {
-        const rawPnL = today.close - st.entry;
-        exit = {
-          type: "TIME",
-          price: today.close,
-          result: rawPnL >= 0 ? "WIN" : "LOSS",
-        };
-      }
-    }
-
-
-    // (rest of your existing exit handling unchanged)
+            // (rest of your existing exit handling unchanged)
 
             if (exit) {
               const pctRet =
@@ -1105,6 +1109,20 @@ for (const p of activeProfiles) {
 
               if (trade.regime && regimeAgg[trade.regime]) {
                 regimeAgg[trade.regime].push(trade);
+              }
+
+              // Bucket: DIP after fresh DAILY/WEEKLY flips
+              // We treat anything whose strategy contains "DIP" as a DIP lane trade.
+              if (trade.strategy && /DIP/i.test(trade.strategy)) {
+                if (trade.crossType === "WEEKLY") {
+                  dipAfterAgg.WEEKLY.push(trade);
+                } else if (trade.crossType === "DAILY") {
+                  dipAfterAgg.DAILY.push(trade);
+                } else if (trade.crossType === "BOTH") {
+                  // If analyseCrossing flagged BOTH, count it in both buckets.
+                  dipAfterAgg.WEEKLY.push(trade);
+                  dipAfterAgg.DAILY.push(trade);
+                }
               }
 
               list.splice(k, 1);
@@ -1540,7 +1558,6 @@ for (const p of activeProfiles) {
     byExpR: pickBest("expR"),
     byProfitFactor: pickBest("pf"),
   };
-  
 
   // optional: per-playbook breakdown (DIP/SPC/OXR/BPB/RRP)
   const byKind = {};
@@ -1558,6 +1575,13 @@ for (const p of activeProfiles) {
   for (const key of Object.keys(regimeAgg)) {
     regimeMetrics[key] = computeMetrics(regimeAgg[key]);
   }
+
+  // --- NEW: DIP-after-cross metrics ---
+  const dipAfterMetrics = {
+    WEEKLY: computeMetrics(dipAfterAgg.WEEKLY),
+    DAILY: computeMetrics(dipAfterAgg.DAILY),
+  };
+
   // --- NEW: CROSSING by-lag metrics (global) ---
   // Buckets: WEEKLY and DAILY, each keyed by "lag" (# completed bars after flip)
   const crossLagBuckets = { WEEKLY: {}, DAILY: {} };
@@ -1687,7 +1711,14 @@ for (const p of activeProfiles) {
   }
 
   // Console snapshot for regimes
-  console.log("[BT] REGIME STATS");
+  console.log("[BT] DIP AFTER FRESH CROSS STATS");
+  console.log(
+    `[BT] DIP@WEEKLY | trades=${dipAfterMetrics.WEEKLY.trades} | winRate=${dipAfterMetrics.WEEKLY.winRate}% | avgRet=${dipAfterMetrics.WEEKLY.avgReturnPct}% | PF=${dipAfterMetrics.WEEKLY.profitFactor}`
+  );
+  console.log(
+    `[BT] DIP@DAILY  | trades=${dipAfterMetrics.DAILY.trades} | winRate=${dipAfterMetrics.DAILY.winRate}% | avgRet=${dipAfterMetrics.DAILY.avgReturnPct}% | PF=${dipAfterMetrics.DAILY.profitFactor}`
+  );
+
   for (const k of ["STRONG_UP", "UP", "RANGE", "DOWN"]) {
     const m = regimeMetrics[k];
     console.log(
@@ -1859,6 +1890,10 @@ for (const p of activeProfiles) {
     },
     crossing: {
       byLag: crossingByLag, // { WEEKLY: {lag: metrics}, DAILY: {lag: metrics} }
+    },
+    dipAfterFreshCrossing: {
+      WEEKLY: dipAfterMetrics.WEEKLY, // DIP entries after fresh WEEKLY flip
+      DAILY: dipAfterMetrics.DAILY, // DIP entries after fresh DAILY flip
     },
 
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
