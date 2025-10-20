@@ -112,10 +112,10 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Bounce freshness ---
   let lowBarIndex = -1;
-  const ageWin = Math.min(
-    Math.max((cfg.dipMaxBounceAgeBars ?? 6) + 1, 9),
-    recentBars.length
-  );
+    const ageWin = Math.min(
+        (cfg.dipMaxBounceAgeBars ?? 6) + 1,
+        recentBars.length
+      );
   for (let i = 0; i < ageWin; i++) {
     const lowVal = num(recentBars.at(-(i + 1)).low);
     if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {

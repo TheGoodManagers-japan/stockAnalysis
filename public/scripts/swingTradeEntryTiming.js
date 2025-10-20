@@ -58,8 +58,12 @@ function pushBlock(tele, code, gate, why, ctx = {}) {
 function mkTracer(opts = {}) {
   const level = opts.debugLevel || "normal"; // "off"|"normal"|"verbose"
   const logs = [];
-  const should = (lvl) =>
-    level !== "off" && (level === "verbose" || lvl !== "debug");
+   const should = (lvl) => {
+        if (level === "off") return false;
+        if (level === "verbose") return true;
+        // "normal": allow info/warn/error but not debug/verbose
+        return lvl !== "debug" && lvl !== "verbose";
+      };
   const emit = (e) => {
     logs.push(e);
     try {
@@ -119,8 +123,41 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     };
     return out;
   }
-  // normalize volume to a finite number for downstream calcs
-  if (!Number.isFinite(last.volume)) last.volume = 0;
+
+   // normalize volume to a finite number for downstream calcs
+   if (!Number.isFinite(last.volume)) last.volume = 0;
+ 
+  // --- History sufficiency for enabled gates (avoid silent gating later) ---
+  const requiresDaily75 =
+    getConfig(opts).requireDailyReclaim25and75ForDIP ||
+    getConfig(opts).requireMA25over75ForDIP;
+  const requiresWeekly52 = getConfig(opts).requireWeeklyUpForDIP;
+  if (requiresDaily75 && data.length < 75) {
+    const r = "Insufficient history for DIP gating (need ≥75 daily bars for MA25/MA75).";
+    const out = withNo(r, { stock, data, cfg: getConfig(opts) });
+    out.telemetry = {
+      ...tele,
+      outcome: { buyNow: false, reason: r },
+      reasons: [r],
+      trace: T.logs,
+    };
+    return out;
+  }
+  if (requiresWeekly52) {
+    const weeks = resampleToWeeks(data);
+    if (weeks.length < 52) {
+      const r = "Insufficient history for DIP gating (need ≥52 weekly closes for 13/26/52-week MAs).";
+      const out = withNo(r, { stock, data, cfg: getConfig(opts) });
+      out.telemetry = {
+        ...tele,
+        outcome: { buyNow: false, reason: r },
+        reasons: [r],
+        trace: T.logs,
+      };
+      return out;
+    }
+  }
+
 
   const px = num(stock.currentPrice) || num(last.close);
   const openPx = num(stock.openPrice) || num(last.open) || px;
@@ -456,7 +493,7 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     return {
       buyNow: false,
       reason,
-      ...fallbackPlan(stock, data),
+      ...fallbackPlan(stock, data, cfg),
       timeline: [],
       telemetry: { ...tele, trace: T.logs },
     };
@@ -479,10 +516,10 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
       best.why
     }`,
-    stopLoss: toTick(deRound(round0(best.stop)), stock),
-    priceTarget: toTick(deRound(round0(best.target)), stock),
-    smartStopLoss: toTick(deRound(round0(best.stop)), stock),
-    smartPriceTarget: toTick(deRound(round0(best.target)), stock),
+        stopLoss: toTick(best.stop, stock),
+        priceTarget: toTick(best.target, stock),
+        smartStopLoss: toTick(best.stop, stock),
+        smartPriceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull),
     telemetry: { ...tele, trace: T.logs },
   };
@@ -610,10 +647,10 @@ function weeklyUptrendGate(data, px) {
     const hasAll = [w13, w26, w52].every(v => v > 0);
     if (!hasAll) return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
   
-    const slack = 0.01; // ≤1% slack allowed on the “third” avg
-    const above13 = px > w13 * (1 - slack * 0.0);
-    const above26 = px > w26 * (1 - slack * 0.0);
-    const above52 = px > w52 * (1 - slack);
+      const slack = 0.01; // ≤1% slack allowed consistently
+      const above13 = px > w13 * (1 - slack);
+      const above26 = px > w26 * (1 - slack);
+      const above52 = px > w52 * (1 - slack);
   
     const passStrict = above13 && above26 && above52;
     const pass2of3 = (above13 ? 1 : 0) + (above26 ? 1 : 0) + (above52 ? 1 : 0) >= 2;
@@ -633,7 +670,14 @@ function recentPriceReclaim25and75(data, lookback = 3) {
   if (i < 1) return { pass: false };
   const dNow = data[i], dPrev = data[i-1];
   const ma25Now = dailyMA(data,25), ma75Now = dailyMA(data,75);
-  const ma25Prev = dailyMA(data.slice(0,-1),25), ma75Prev = dailyMA(data.slice(0,-1),75);
+  const ma25Prev = dailyMA(data.slice(0,-1),25), ma75Prev = dailyMA(data.slice(0,-1),75)
+    // Guard: if either MA is not computable yet (==0), we cannot validate a reclaim
+  if (!(ma25Now > 0 && ma75Now > 0 && ma25Prev > 0 && ma75Prev > 0)) {
+    return {
+      pass: false,
+      ma25Now, ma75Now
+    };
+  }
   const priceNow = +dNow.close, pricePrev = +dPrev.close;
 
   const cross25 = crossesUp(pricePrev, priceNow, ma25Prev, ma25Now);
@@ -642,38 +686,50 @@ function recentPriceReclaim25and75(data, lookback = 3) {
   // also allow reclaim within last N bars
   let windowCross25 = cross25, windowCross75 = cross75;
   for (let k=2; k<=lookback && i-k>=0; k++){
-    const dK = data[i-k], dKp1 = data[i-k+1];
-    const ma25K = dailyMA(data.slice(0, i-k+1),25);
-    const ma75K = dailyMA(data.slice(0, i-k+1),75);
-    if (!windowCross25 && crossesUp(+dK.close, +dKp1.close, ma25K, ma25K)) windowCross25 = true;
-    if (!windowCross75 && crossesUp(+dK.close, +dKp1.close, ma75K, ma75K)) windowCross75 = true;
-  }
+        const dK   = data[i - k];
+        const dKp1 = data[i - k + 1];
+        const snapK   = data.slice(0, i - k + 1);   // up to K (inclusive)
+        const snapKp1 = data.slice(0, i - k + 2);   // up to K+1 (inclusive)
+        const ma25K   = dailyMA(snapK, 25);
+        const ma25Kp1 = dailyMA(snapKp1, 25);
+        const ma75K   = dailyMA(snapK, 75);
+        const ma75Kp1 = dailyMA(snapKp1, 75);
+        if (!(ma25K>0 && ma25Kp1>0 && ma75K>0 && ma75Kp1>0)) continue;
+        if (!windowCross25 && crossesUp(+dK.close, +dKp1.close, ma25K, ma25Kp1)) windowCross25 = true;
+        if (!windowCross75 && crossesUp(+dK.close, +dKp1.close, ma75K, ma75Kp1)) windowCross75 = true;
+       }
   const pass = windowCross25 && windowCross75 && priceNow > ma25Now && priceNow > ma75Now;
   return { pass, ma25Now, ma75Now };
 }
 function recentMA25Over75Cross(data, maxAge = 5) {
   const i = data.length - 1;
   if (i < 1) return { pass:false };
+    // Find the most recent bar t (within maxAge) where MA25 crossed above MA75 between t-1 -> t
+  // Age is (i - t). If the cross is on the latest bar, age = 0.
   let lastCrossAge = Infinity;
-  let prevAbove = null;
-  for (let k = maxAge + 1; k >= 1; k--) {
-    const snap = data.slice(0, data.length - k + 1);
-    const m25 = dailyMA(snap,25), m75 = dailyMA(snap,75);
-    if (m25===0 || m75===0) continue;
-    const above = m25 > m75;
-    if (prevAbove === false && above === true) { lastCrossAge = k-1; break; }
-    prevAbove = above;
+  for (let t = i; t >= Math.max(1, i - maxAge); t--) {
+    const snapPrev = data.slice(0, t);     // up to t-1 inclusive
+    const snapNow  = data.slice(0, t + 1); // up to t inclusive
+    const m25Prev = dailyMA(snapPrev, 25), m75Prev = dailyMA(snapPrev, 75);
+    const m25Now  = dailyMA(snapNow,  25), m75Now  = dailyMA(snapNow,  75);
+    if (!(m25Prev>0 && m75Prev>0 && m25Now>0 && m75Now>0)) continue;
+    const wasBelowOrEqual = m25Prev <= m75Prev;
+    const nowAbove        = m25Now  >  m75Now;
+    if (wasBelowOrEqual && nowAbove) {
+      lastCrossAge = i - t; // bars ago
+      break;
+    }
   }
   const m25Now = dailyMA(data,25), m75Now = dailyMA(data,75);
-  const pass = Number.isFinite(lastCrossAge) && lastCrossAge <= maxAge && m25Now > m75Now;
-  return { pass, lastCrossAge, m25Now, m75Now };
-}
+  const haveNow = (m25Now > 0 && m75Now > 0 && m25Now > m75Now);
+  const pass = Number.isFinite(lastCrossAge) && lastCrossAge <= maxAge && haveNow;
+   return { pass, lastCrossAge, m25Now, m75Now };
+ }
 
 
 function detectCrossVolumePlay(stock, data, cfg) {
   const i = data.length - 1;
-  const d0 = data[i],
-    d1 = data[i - 1] || d0;
+  const d0 = data[i];
   const px = +d0.close || +stock.currentPrice || 0;
   const atr = Math.max(+stock.atr14 || 0, px * 0.005, 1e-9);
 
@@ -829,33 +885,35 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
   // 5) SCOOT: bounded target lifts to nearby clustered resistances
-  const atrCap = ctx?.kind === "DIP" ? 4.2 : 3.5; // or make configurable
-
-  // First hop: try resList[1]
-  if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
-    const nextRes = resList[1];
-    const lifted = Math.min(nextRes, entryPx + atrCap * atr);
-    if (lifted > target) {
-      target = lifted;
-      reward = Math.max(0, target - entryPx);
-      ratio = reward / risk;
-    }
-  }
-
-  // Second hop: only if still within 0.25 of the floor and we have resList[2]
-  if (
-    ratio < need &&
-    need - ratio <= 0.25 &&
-    Array.isArray(resList) &&
-    resList.length >= 3
-  ) {
-    const next2 = Math.min(resList[2], entryPx + atrCap * atr);
-    if (next2 > target) {
-      target = next2;
-      reward = Math.max(0, target - entryPx);
-      ratio = reward / risk;
-    }
-  }
+    if (cfg.scootEnabled) {
+        const atrCap = ctx?.kind === "DIP" ? (cfg.scootATRCapDIP ?? 4.2) : (cfg.scootATRCapNonDIP ?? 3.5);
+    
+        // First hop: try resList[1]
+        if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
+          const nextRes = resList[1];
+          const lifted = Math.min(nextRes, entryPx + atrCap * atr);
+          if (lifted > target) {
+            target = lifted;
+            reward = Math.max(0, target - entryPx);
+            ratio = reward / risk;
+          }
+        }
+    
+        // Second hop: only if still within 0.25 of the floor and we have resList[2]
+        if (
+          ratio < need &&
+          need - ratio <= (cfg.scootNearMissBand ?? 0.25) &&
+          Array.isArray(resList) &&
+          resList.length >= 3
+        ) {
+          const next2 = Math.min(resList[2], entryPx + atrCap * atr);
+          if (next2 > target) {
+            target = next2;
+            reward = Math.max(0, target - entryPx);
+            ratio = reward / risk;
+          }
+        }
+      }
 
   // 6) Acceptable / probation
   let acceptable = ratio >= need;
@@ -1024,16 +1082,15 @@ function buildSwingTimeline(entryPx, candidate, rr, ms) {
   return steps;
 }
 
-function fallbackPlan(stock, data) {
-  const cfg = getConfig({});
-  const ms = getMarketStructure(stock, data);
+function fallbackPlan(stock, data, cfg) {
+    const ms = getMarketStructure(stock, data);
   const pxNow = num(stock.currentPrice) || num(data.at?.(-1)?.close) || 1;
   const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
   return {
-    stopLoss: deRound(toTick(round0(prov.stop), stock)),
-    priceTarget: deRound(toTick(round0(prov.target), stock)),
-    smartStopLoss: deRound(toTick(round0(prov.stop), stock)),
-    smartPriceTarget: deRound(toTick(round0(prov.target), stock)),
+        stopLoss: toTick(prov.stop, stock),
+        priceTarget: toTick(prov.target, stock),
+        smartStopLoss: toTick(prov.stop, stock),
+        smartPriceTarget: toTick(prov.target, stock),
   };
 }
 
@@ -1196,7 +1253,7 @@ function withNo(reason, ctx = {}) {
   const out = {
     buyNow: false,
     reason,
-    ...fallbackPlan(stock, data),
+    ...fallbackPlan(stock, data, cfg),
     timeline: [],
     debug: ctx,
   };
