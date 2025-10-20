@@ -16,7 +16,10 @@
 // the signal's raw suggested levels (smartStopLoss/smartPriceTarget if present,
 // otherwise stopLoss/priceTarget). No trailing; no dynamic adjustments.
 
-import { analyzeSwingTradeEntry } from "./swingTradeEntryTiming.js";
+import {
+  analyzeSwingTradeEntry,
+  analyseCrossing,
+} from "./swingTradeEntryTiming.js";
 import {
   enrichForTechnicalScore,
   getSentimentCombinationRank,
@@ -688,7 +691,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         if (anyProfileEligible) {
           // evaluate signal on the current bar
-          const sig = analyzeSwingTradeEntry(stock, hist, {
+          const sig = analyseCrossing(stock, hist, {
             debug: true,
             debugLevel: "verbose",
           });
@@ -887,7 +890,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } else if (COUNT_BLOCKED) {
           // Count signals even when blocked by warmup/cooldown/in-trade (optional)
-          const sig = analyzeSwingTradeEntry(stock, hist, {
+          const sig = analyseCrossing(stock, hist, {
             debug: true,
             debugLevel: "verbose",
           });
