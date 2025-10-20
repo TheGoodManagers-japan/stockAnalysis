@@ -379,7 +379,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const HOLD_BARS = Number.isFinite(opts.holdBars)
     ? Math.max(0, opts.holdBars)
     : 0; // default: off
-  const COOLDOWN = Number.isFinite(opts.cooldownDays) ? opts.cooldownDays : 2;
+  const COOLDOWN = 0;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
     : 0; // 0 = unlimited
@@ -466,7 +466,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let blockedCooldown = 0;
   let blockedWarmup = 0;
 
-  const COUNT_BLOCKED = !!opts.countBlockedSignals;
+  const COUNT_BLOCKED = true;
 
   // telemetry
   const telemetry = {
