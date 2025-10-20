@@ -1,6 +1,6 @@
 // /api/stocks.js
 
-const yahooFinance = require("yahoo-finance2").default;
+import yahooFinance from "yahoo-finance2";
 
 /* ---------- tiny error helper to match your fetch code ---------- */
 function mkError(code, message, details = {}) {
@@ -19,7 +19,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       const d = new Date();
       d.setFullYear(d.getFullYear() - years);
       return d;
-    };
+    };odule.exports = async (req, res)
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
@@ -367,7 +367,7 @@ const allowedOrigins = [
   // add your Bubble preview domain here if needed
 ];
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
@@ -381,7 +381,9 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
   if (req.method !== "POST") {
-    return res.status(405).json({ success: false, message: "Method Not Allowed" });
+    return res
+      .status(405)
+      .json({ success: false, message: "Method Not Allowed" });
   }
 
   try {
@@ -392,7 +394,9 @@ module.exports = async (req, res) => {
     const sector = String(tickerObj.sector || "").trim();
 
     if (!code) {
-      return res.status(400).json({ success: false, message: "ticker.code is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "ticker.code is required" });
     }
 
     const yahooData = await fetchYahooFinanceData(code, sector);

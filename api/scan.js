@@ -1,7 +1,7 @@
 // /api/scan.js
-const path = require("path");
-const fs = require("fs");
-const { pathToFileURL } = require("url");
+ import path from "node:path";
+ import fs from "node:fs";
+ import { pathToFileURL, fileURLToPath } from "node:url";
 
 async function readJsonBody(req) {
   // If a platform (e.g., Vercel) already parsed JSON, use it
@@ -25,7 +25,7 @@ const allowedOrigins = [
   // "https://app.bubble.io"
 ];
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   // CORS (align with /api/stocks)
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {

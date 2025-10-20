@@ -8,7 +8,7 @@
  */
 
 // Use CommonJS module exports to match your working example
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   // --- CORS HEADERS ---
   // Use the exact same CORS logic from your working file
   const allowedOrigins = [
@@ -51,13 +51,11 @@ module.exports = async (req, res) => {
     return res.status(200).json(analysis);
   } catch (error) {
     console.error(`[API Error] Failed to analyze news for ${ticker}:`, error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error: "Failed to perform news analysis.",
-        details: error.message,
-      });
+    return res.status(500).json({
+      success: false,
+      error: "Failed to perform news analysis.",
+      details: error.message,
+    });
   }
 };
 

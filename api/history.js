@@ -1,6 +1,6 @@
 // /api/history.js
 
-const yahooFinance = require("yahoo-finance2").default;
+import yahooFinance from "yahoo-finance2";
 
 async function fetchHistoricalData(ticker, years = 3) {
   try {
@@ -62,7 +62,7 @@ const allowedOrigins = [
   "https://www.thegoodmanagers.com",
 ];
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   // 1) Grab the incoming request’s origin
   const origin = req.headers.origin;
 
