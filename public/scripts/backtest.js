@@ -4,8 +4,6 @@
 //
 // Options you may pass to window.backtest(..., opts):
 //   - holdBars: 0 (default = disabled). Set >0 to enforce hard time exit.
-//   - allowedSentiments: ["LT7-ST4","LT1-ST3", ...]  (omit/empty => allow all)
-//   - allowedSentiRanks: [1,2,3] (default when omitted; [] disables rank gate)
 //   - maxConcurrent: 0 (default = unlimited global positions)
 //   - simulateRejectedBuys: true
 //   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
@@ -76,32 +74,6 @@ async function fetchHistory(ticker, fromISO, toISO) {
         (!fromISO || d.date >= new Date(fromISO)) &&
         (!toISO || d.date <= new Date(toISO))
     );
-}
-
-/* ---------------- sentiment gate (optional) ---------------- */
-function mkSentimentGate(allowedList, allowedRanks) {
-  // Default: rank gate 1..3 ON
-  const ranksDefault = [1, 2, 3];
-  const useList = Array.isArray(allowedList) && allowedList.length > 0;
-  const ranksArg = Array.isArray(allowedRanks) ? allowedRanks : undefined;
-  // empty array => disable rank gate; undefined => default 1..3
-  const ranks = ranksArg === undefined ? ranksDefault : ranksArg;
-  const useRanks = Array.isArray(ranks) && ranks.length > 0;
-
-  if (!useList && !useRanks) return () => true; // no gate at all
-
-  const listSet = useList ? new Set(allowedList) : null;
-  const rankSet = useRanks ? new Set(ranks.map(Number)) : null;
-
-  return (ST, LT) => {
-    const st = Number.isFinite(ST) ? ST : 4;
-    const lt = Number.isFinite(LT) ? LT : 4;
-    const key = `LT${lt}-ST${st}`;
-    const passList = !useList || listSet.has(key);
-    const rank = getSentimentCombinationRank(st, lt); // 1..5
-    const passRank = !useRanks || rankSet.has(rank);
-    return passList && passRank;
-  };
 }
 
 /* ---------------- small helpers ---------------- */
@@ -384,7 +356,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? maybeOpts || {}
     : tickersOrOpts || {};
       // default false if omitted
-  const USE_LIVE_BAR = !!opts.useLiveBarForSignals;
+  const USE_LIVE_BAR = true;
 
   const INCLUDE_BY_TICKER = !!opts.includeByTicker;
   const INCLUDE_PROFILE_SAMPLES = !!opts.includeProfileSamples; // harmless, still supported
@@ -435,11 +407,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   };
   const activeProfiles = [RAW_PROFILE];
 
-  // optional sentiment gate: accepts explicit combos AND/OR rank list
-  const allowBySentiment = mkSentimentGate(
-    opts.allowedSentiments,
-    opts.allowedSentiRanks // undefined => defaults to [1,2,3]
-  );
 
   // --- NEW: regime options ---
   const REGIME_TICKER =
@@ -498,7 +465,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let blockedInTrade = 0;
   let blockedCooldown = 0;
   let blockedWarmup = 0;
-  let blockedBySentiment_DIP = 0;
 
   const COUNT_BLOCKED = !!opts.countBlockedSignals;
 
@@ -685,282 +651,200 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // try new entries if any profile is free and warmup passed
-        const anyProfileEligible =
-          i >= WARMUP &&
-          activeProfiles.some(
-            (p) => !openByProfile[p.id] && i > cooldownUntilByProfile[p.id]
-          ) &&
-          (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
+// ---------------- ALWAYS detect first (parity with live scanner) ----------------
+const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
+const sig = analyseCrossing(stock, hist, {
+  debug: true,
+  debugLevel: "verbose",
+  dataForGates: gatesData, // prevents analyseCrossing from slicing
+});
 
-        if (anyProfileEligible) {
-          // evaluate signal on the current bar
-          const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1); // align with live vs completed-only
-          const sig = analyseCrossing(stock, hist, {
-            debug: true,
-            debugLevel: "verbose",
-            dataForGates: gatesData, // prevents analyseCrossing from slicing
-          });
+// 👇 Add this here (moved up from the else-branch)
+const senti = getComprehensiveMarketSentiment(stock, hist);
+const ST = senti?.shortTerm?.score ?? 4;
+const LT = senti?.longTerm?.score ?? 4;
 
-          // snapshot sentiment once
-          const senti = getComprehensiveMarketSentiment(stock, hist);
-          const ST = senti?.shortTerm?.score ?? 4;
-          const LT = senti?.longTerm?.score ?? 4;
+// Count raw signals for the day exactly when they happen (regardless of eligibility/gates)
+if (sig?.buyNow) {
+  signalsTotal++;
+  if (i >= WARMUP) signalsAfterWarmup++;
+  const dayISOforSig = toISO(today.date);
+  signalsByDay.set(dayISOforSig, (signalsByDay.get(dayISOforSig) || 0) + 1);
+}
 
-          // trend telemetry
-          const trend = sig?.debug?.ms?.trend;
-          if (trend && telemetry.trends.hasOwnProperty(trend))
-            telemetry.trends[trend]++;
+// Trend/telemetry bookkeeping (same as before)
+const trend = sig?.debug?.ms?.trend;
+if (trend && telemetry.trends.hasOwnProperty(trend)) telemetry.trends[trend]++;
 
-          if (sig?.buyNow) {
-            signalsTotal++;
-            signalsAfterWarmup++;
-            signalsWhileFlat++;
-                        // count raw signals per day (before sentiment/regime/concurrency)
-                        const dayISOforSig = toISO(today.date);
-                        signalsByDay.set(dayISOforSig, (signalsByDay.get(dayISOforSig) || 0) + 1);
-            
-
-            // optional sentiment gate
-            if (!allowBySentiment(ST, LT)) {
-              blockedBySentiment_DIP++;
-              continue;
-            }
-
-            // optional regime gate
-            if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
-              continue;
-            }
-
-            // RR telemetry
-            const rRatio = Number(sig?.debug?.rr?.ratio);
-            inc(telemetry.rr.accepted, bucketize(rRatio));
-            if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
-              telemetry.examples.buyNow.push({
-                ticker: code,
-                date: toISO(today.date),
-                reason: sig?.reason || "",
-                rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
-              });
-            }
-
-            // ENTRY = next-bar open (fallback: today's close if no next bar)
-            const hasNext = i + 1 < candles.length;
-            const entryBarIdx = hasNext ? i + 1 : i;
-            const entryBar = candles[entryBarIdx];
-            const entry = hasNext ? entryBar.open : today.close;
-
-            // open per active profile (just one RAW profile)
-            for (const p of activeProfiles) {
-              if (openByProfile[p.id]) continue;
-              if (i <= cooldownUntilByProfile[p.id]) continue;
-              if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
-                break;
-
-              // compute plan using exactly the signal bar levels
-              const plan =
-                p.compute({
-                  entry,
-                  stock: { ...stock, currentPrice: entry },
-                  sig,
-                  today: entryBar,
-                  hist: candles.slice(0, entryBarIdx + 1),
-                }) || {};
-              const stop = Number(plan.stop);
-              const target = Number(plan.target);
-
-              if (!Number.isFinite(stop) || !Number.isFinite(target)) {
-                signalsInvalid++;
-                continue;
-              }
-              if (stop >= entry) {
-                signalsRiskBad++;
-                continue;
-              }
-
-              // snap execution levels to tick grid ONCE (at entry)
-              const qStop = toTick(stop, stock);
-              const qTarget = toTick(target, stock);
-
-              openByProfile[p.id] = {
-                entryIdx: entryBarIdx,
-                entry,
-                stop: qStop,
-                stopInit: qStop,
-                target: qTarget,
-                ST,
-                LT,
-                regime: dayRegime,
-                kind:
-                  String(sig?.debug?.chosen || sig?.reason || "")
-                    .split(":")[0]
-                    .trim() || "UNKNOWN",
-              };
-              globalOpenCount++;
-              signalsExecuted++;
-            }
-          } else {
-            // why not buy? (telemetry)
-            const dbg = sig?.debug || {};
-            if (dbg && dbg.priceActionGate === false) {
-              telemetry.gates.priceActionGateFailed++;
-            }
-            if (Array.isArray(dbg.reasons)) {
-              for (const r of dbg.reasons) {
-                if (typeof r === "string" && r.startsWith("DIP not ready:")) {
-                  const why = afterColon(r, "DIP not ready:").replace(
-                    /^[:\s]+/,
-                    ""
-                  );
-                  inc(telemetry.dip.notReadyReasons, why || "unspecified");
-                }
-                if (r === "Structure gate: trend not up or price < MA5.") {
-                  telemetry.gates.structureGateFailed++;
-                }
-                if (
-                  r === "DIP blocked (Perfect gate): MAs not stacked bullishly."
-                ) {
-                  telemetry.gates.stackedGateFailed++;
-                }
-                if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
-                  const reason = extractGuardReason(r);
-                  inc(telemetry.dip.guardVetoReasons, reason || "guard");
-                }
-                if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
-                  const m = r.match(/need\s+([0-9.]+)/i);
-                  const need = m ? parseFloat(m[1]) : NaN;
-                  inc(telemetry.rr.rejected, bucketize(need));
-                }
-              }
-            }
-
-            // parallel: simulate rejected buys using **signal** levels when available
-            if (SIM_REJECTED) {
-              const entry = today.close; // same-bar for CF simplicity
-              const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
-              const simTarget = Number(
-                sig?.smartPriceTarget ?? sig?.priceTarget
-              );
-
-              if (
-                Number.isFinite(simStop) &&
-                Number.isFinite(simTarget) &&
-                simStop < entry
-              ) {
-                const outcome = simulateTradeForward(
-                  candles,
-                  i,
-                  entry,
-                  simStop,
-                  simTarget
-                );
-
-                const k = sentiKey(ST, LT);
-                if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
-                if (outcome.result !== "OPEN") {
-                  sentiUpdate(sentiment.rejected[k], outcome);
-                  parallel.rejectedBuys.totalSimulated++;
-                  if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
-                }
-
-                const reasonsRaw = Array.isArray(sig?.debug?.reasons)
-                  ? sig.debug.reasons.slice(0, 2)
-                  : [sig?.reason || "unspecified"];
-
-                for (const rr of reasonsRaw) {
-                  const key = normalizeRejectedReason(rr);
-                  if (!parallel.rejectedBuys.byReasonRaw[key]) {
-                    parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
-                  }
-                  cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
-
-                  if (outcome.result === "WIN") {
-                    if (!parallel.rejectedBuys.examples[key])
-                      parallel.rejectedBuys.examples[key] = [];
-                    if (
-                      parallel.rejectedBuys.examples[key].length < EXAMPLE_MAX
-                    ) {
-                      parallel.rejectedBuys.examples[key].push({
-                        ticker: code,
-                        date: toISO(today.date),
-                        entry: r2(entry),
-                        stop: r2(simStop),
-                        target: r2(simTarget),
-                        exitType: outcome.exitType,
-                        R: +(outcome.R || 0).toFixed(2),
-                        returnPct: +(outcome.returnPct || 0).toFixed(2),
-                        ST,
-                        LT,
-                      });
-                    }
-                  }
-                }
-              }
-            }
-          }
-        } else if (COUNT_BLOCKED) {
-          // Count signals even when blocked by warmup/cooldown/in-trade (optional)
-          const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1); // align with live vs completed-only
-          const sig = analyseCrossing(stock, hist, {
-            debug: true,
-            debugLevel: "verbose",
-            dataForGates: gatesData, // prevents analyseCrossing from slicing
-          });
-
-          if (sig?.buyNow) {
-            signalsTotal++;
-            if (i >= WARMUP) signalsAfterWarmup++;
-          }
-        }
-      } // bars loop
-
-      // per-ticker summary
-      const tStops = trades.filter((x) => x.exitType === "STOP").length;
-      const tTargets = trades.filter((x) => x.exitType === "TARGET").length;
-      const tTimes = trades.filter((x) => x.exitType === "TIME").length;
-
-      if (INCLUDE_BY_TICKER) {
-        byTicker.push({
-          ticker: code,
-          trades,
-          counts: { target: tTargets, stop: tStops, time: tTimes },
-          openAtEnd: activeProfiles.some((p) => !!openByProfile[p.id]),
-        });
+if (!sig?.buyNow) {
+  // collect reasons for "no buy" (same as your old code)
+  const dbg = sig?.debug || {};
+  if (dbg && dbg.priceActionGate === false) {
+    telemetry.gates.priceActionGateFailed++;
+  }
+  if (Array.isArray(dbg.reasons)) {
+    for (const r of dbg.reasons) {
+      if (typeof r === "string" && r.startsWith("DIP not ready:")) {
+        const why = afterColon(r, "DIP not ready:").replace(/^[:\s]+/, "");
+        inc(telemetry.dip.notReadyReasons, why || "unspecified");
       }
-
-      const stillOpenCount = activeProfiles.reduce(
-        (a, p) => a + (openByProfile[p.id] ? 1 : 0),
-        0
-      );
-      globalOpenPositions += stillOpenCount;
-
-      const total = globalTrades.length;
-      const winsSoFar = globalTrades.filter((x) => x.result === "WIN").length;
-      const winRateSoFar = total ? pct((winsSoFar / total) * 100) : 0;
-      const avgRetSoFar = total
-        ? pct(globalTrades.reduce((a, b) => a + (b.returnPct || 0), 0) / total)
-        : 0;
-
-      console.log(
-        `[BT] finished ${ti + 1}/${codes.length}: ${code} | finished stocks=${
-          ti + 1
-        } | current avg win=${winRateSoFar}% | current avg return=${avgRetSoFar}% | exits — target:${tTargets} stop:${tStops} time:${tTimes}`
-      );
-    } catch (e) {
-      if (INCLUDE_BY_TICKER) {
-        byTicker.push({
-          ticker: code,
-          trades: [],
-          error: String(e?.message || e),
-        });
+      if (r === "Structure gate: trend not up or price < MA5.") {
+        telemetry.gates.structureGateFailed++;
       }
-      console.log(
-        `[BT] finished ${ti + 1}/${codes.length}: ${code} | error: ${String(
-          e?.message || e
-        )}`
-      );
+      if (r === "DIP blocked (Perfect gate): MAs not stacked bullishly.") {
+        telemetry.gates.stackedGateFailed++;
+      }
+      if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
+        const reason = extractGuardReason(r);
+        inc(telemetry.dip.guardVetoReasons, reason || "guard");
+      }
+      if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
+        const m = r.match(/need\s+([0-9.]+)/i);
+        const need = m ? parseFloat(m[1]) : NaN;
+        inc(telemetry.rr.rejected, bucketize(need));
+      }
     }
   }
+
+  // parallel “rejected buys” simulation (unchanged)
+  if (SIM_REJECTED) {
+    const entry = today.close; // same-bar for CF simplicity
+    const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
+    const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+    if (Number.isFinite(simStop) && Number.isFinite(simTarget) && simStop < entry) {
+      const outcome = simulateTradeForward(candles, i, entry, simStop, simTarget);
+      const k = sentiKey(ST, LT);
+      if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
+      if (outcome.result !== "OPEN") {
+        sentiUpdate(sentiment.rejected[k], outcome);
+        parallel.rejectedBuys.totalSimulated++;
+        if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+      }
+      const reasonsRaw = Array.isArray(sig?.debug?.reasons)
+        ? sig.debug.reasons.slice(0, 2)
+        : [sig?.reason || "unspecified"];
+      for (const rr of reasonsRaw) {
+        const key = normalizeRejectedReason(rr);
+        if (!parallel.rejectedBuys.byReasonRaw[key]) {
+          parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
+        }
+        cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
+        if (outcome.result === "WIN") {
+          if (!parallel.rejectedBuys.examples[key]) parallel.rejectedBuys.examples[key] = [];
+          if (parallel.rejectedBuys.examples[key].length < EXAMPLE_MAX) {
+            parallel.rejectedBuys.examples[key].push({
+              ticker: code,
+              date: toISO(today.date),
+              entry: r2(entry),
+              stop: r2(simStop),
+              target: r2(simTarget),
+              exitType: outcome.exitType,
+              R: +(outcome.R || 0).toFixed(2),
+              returnPct: +(outcome.returnPct || 0).toFixed(2),
+              ST,
+              LT,
+            });
+          }
+        }
+      }
+    }
+  }
+
+} else {
+  // ---------------- After detection, decide if we can actually ENTER ----------------
+  const anyProfileEligible =
+    i >= WARMUP &&
+    activeProfiles.some((p) => !openByProfile[p.id] && i > cooldownUntilByProfile[p.id]) &&
+    (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
+
+  // RR telemetry bucket (same as before)
+  const rRatio = Number(sig?.debug?.rr?.ratio);
+  inc(telemetry.rr.accepted, bucketize(rRatio));
+  if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
+    telemetry.examples.buyNow.push({
+      ticker: code,
+      date: toISO(today.date),
+      reason: sig?.reason || "",
+      rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
+    });
+  }
+
+
+  // optional sentiment gate (now disabled by default due to change #1)
+  if (anyProfileEligible) {
+    // optional regime gate ...
+    if (!allowedRegimes || allowedRegimes.has(dayRegime)) {
+      // ENTRY = next-bar open (fallback close)
+      const hasNext = i + 1 < candles.length;
+      const entryBarIdx = hasNext ? i + 1 : i;
+      const entryBar = candles[entryBarIdx];
+      const entry = hasNext ? entryBar.open : today.close;
+
+      for (const p of activeProfiles) {
+        if (openByProfile[p.id]) continue;
+        if (i <= cooldownUntilByProfile[p.id]) continue;
+        if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT) break;
+
+        const plan =
+          p.compute({
+            entry,
+            stock: { ...stock, currentPrice: entry },
+            sig,
+            today: entryBar,
+            hist: candles.slice(0, entryBarIdx + 1),
+          }) || {};
+        const stop = Number(plan.stop);
+        const target = Number(plan.target);
+        if (!Number.isFinite(stop) || !Number.isFinite(target)) {
+          signalsInvalid++;
+          continue;
+        }
+        if (stop >= entry) {
+          signalsRiskBad++;
+          continue;
+        }
+
+        const qStop = toTick(stop, stock);
+        const qTarget = toTick(target, stock);
+
+        openByProfile[p.id] = {
+          entryIdx: entryBarIdx,
+          entry,
+          stop: qStop,
+          stopInit: qStop,
+          target: qTarget,
+          ST,
+          LT,
+          regime: dayRegime,
+          kind:
+            String(sig?.debug?.chosen || sig?.reason || "")
+              .split(":")[0]
+              .trim() || "UNKNOWN",
+        };
+        globalOpenCount++;
+        signalsExecuted++;
+      }
+    }
+  }
+} // <-- end of if (!sig?.buyNow) { ... } else { ... }
+} // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
+
+// keep per-ticker result if requested
+if (INCLUDE_BY_TICKER) byTicker.push({ ticker: code, trades });
+
+console.log(
+  `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${trades.length}`
+);
+} catch (e) { // <-- close the per-ticker try
+if (INCLUDE_BY_TICKER)
+  byTicker.push({ ticker: code, trades: [], error: String(e?.message || e) });
+console.log(
+  `[BT] failed ${ti + 1}/${codes.length}: ${code} — ${String(e?.message || e)}`
+);
+}
+} // <-- end of per-ticker loop: for (let ti = 0; ti < codes.length; ti++)
+
+
 
   // ---- final metrics ----
   const all = byTicker.length
@@ -1116,7 +1000,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount}`
   );
   console.log(
-    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup} | stlt: DIP=${blockedBySentiment_DIP}`
+    `[BT] SIGNALS | total=${signalsTotal} | afterWarmup=${signalsAfterWarmup} | whileFlat=${signalsWhileFlat} | executed=${signalsExecuted} | invalid=${signalsInvalid} | riskStop>=px=${signalsRiskBad} | blocked: inTrade=${blockedInTrade} cooldown=${blockedCooldown} warmup=${blockedWarmup}`
   );
   console.log(
     `[BT] DAILY AVG | tradingDays=${days} | trades/day=${tradesPerDay.toFixed(
@@ -1165,12 +1049,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
       // Kept for UI compatibility; this build always uses the RAW profile only
       profileIds: ["raw_signal_levels"],
-      allowedSentiments: Array.isArray(opts.allowedSentiments)
-        ? opts.allowedSentiments
-        : [],
-      allowedSentiRanks: Array.isArray(opts.allowedSentiRanks)
-        ? opts.allowedSentiRanks
-        : undefined,
       maxConcurrent: MAX_CONCURRENT,
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
@@ -1201,7 +1079,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         inTrade: blockedInTrade,
         cooldown: blockedCooldown,
         warmup: blockedWarmup,
-        stlt: { dip: blockedBySentiment_DIP },
       },
     },
     strategy: {
