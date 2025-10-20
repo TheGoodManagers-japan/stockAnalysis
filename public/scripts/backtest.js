@@ -1045,7 +1045,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             let exit = null;
 
             // 1) price-based exits first
-            // 1) price-based exits first
             if (today.low <= st.stop) {
               // If the (possibly trailed) stop is at/above entry, the trade is profitable — count as WIN
               const isProfit = st.stop >= st.entry; // use '>' if you want breakeven to be LOSS
