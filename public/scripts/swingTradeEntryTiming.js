@@ -1359,66 +1359,99 @@ export function summarizeBlocks(teleList = []) {
 export { getConfig, summarizeTelemetryForLog };
 
 
-/* ========= 13/26/52 weekly MA “fresh flip” engine ========= */
-/* ========= Hardened 13/26/52 weekly “fresh flip” detector ========= */
-function detectWeeklyStackedCross(data, lookbackBars = 5) {
-  const weeks = resampleToWeeks(data);
-  // Treat the last aggregated ISO week as INCOMPLETE; drop it
-  const usable = weeks.slice(0, -1);
-  if (usable.length < 52) {
+/* ========= 13/26/52 weekly “fresh flip or recent stack” detector ========= */
+function detectWeeklyStackedCross(data, lookbackBars = 5, opts = {}) {
+  const { allowStackedWindow = true } = opts;
+
+    // 1) Build weekly closes, and drop the last week ONLY if it's really incomplete
+    const weeksAll = resampleToWeeks(data);
+  
+    // ISO week helpers
+    const isoKey = (d) => {
+      const dt = new Date(d);
+      const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+      const dayNum = t.getUTCDay() || 7;         // 1..7 (Mon..Sun)
+      t.setUTCDate(t.getUTCDate() + 4 - dayNum); // Thu of this week
+      const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+      return t.getUTCFullYear() + "-" + weekNo;  // e.g. "2025-42"
+    };
+  
+    // How many daily bars do we actually have in the last daily week?
+    const lastDaily = data.at(-1);
+    const lastDailyWeek = lastDaily ? isoKey(lastDaily.date) : null;
+    let barsInLastDailyWeek = 0;
+    if (lastDailyWeek) {
+      for (let i = data.length - 1; i >= 0; i--) {
+        if (isoKey(data[i].date) !== lastDailyWeek) break;
+        barsInLastDailyWeek++;
+      }
+    }
+    // Consider a week "complete" if we saw at least 4 trading days (holidays tolerated).
+    const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
+    const weeks = (weeksAll.length >= 1 && dropLastWeekly) ? weeksAll.slice(0, -1) : weeksAll;
+
+  if (weeks.length < 52) {
     return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
   }
 
-  // weekly SMA at index i (inclusive) over usable[]
+  // 2) Weekly SMA helper (inclusive index)
   const smaW = (n, i) => {
     if (i + 1 < n) return 0;
     let s = 0;
-    for (let k = i - n + 1; k <= i; k++) s += +usable[k].close || 0;
+    for (let k = i - n + 1; k <= i; k++) s += +weeks[k].close || 0;
     return s / n;
   };
 
-  // helper: find most-recent cross age (bars ago) where SMA(a) crossed above SMA(b)
-  function lastCrossAge(shortN, longN, maxLookback) {
-    const last = usable.length - 1;
-    for (let i = last; i >= Math.max(1, last - maxLookback + 1); i--) {
-      const sPrev = smaW(shortN, i - 1), lPrev = smaW(longN, i - 1);
-      const sNow  = smaW(shortN, i),     lNow  = smaW(longN, i);
-      if (sPrev > 0 && lPrev > 0 && sNow > 0 && lNow > 0) {
-        const crossedUp = sPrev <= lPrev && sNow > lNow;
-        if (crossedUp) return last - i; // 0 = this week (but we already dropped current week)
-      }
+  const last = weeks.length - 1;
+  const eps = 0.0015; // ~0.15% margin to avoid micro-jitters
+
+  const getTriplet = (i) => {
+    const m13 = smaW(13, i), m26 = smaW(26, i), m52 = smaW(52, i);
+    const stacked =
+      m13 > 0 && m26 > 0 && m52 > 0 &&
+      m13 >= m26 * (1 + eps) &&
+      m26 >= m52 * (1 + eps);
+    return { m13, m26, m52, stacked };
+  };
+
+  // 3) Fresh flip: first bar in the lookback where it becomes stacked
+  for (let i = last; i >= Math.max(1, last - lookbackBars + 1); i--) {
+    const cur = getTriplet(i);
+    const prev = getTriplet(i - 1);
+    if (cur.stacked && !prev.stacked) {
+      return {
+        trigger: true,
+        weeksAgo: last - i,
+        index: i,
+        m13: cur.m13, m26: cur.m26, m52: cur.m52,
+        why: `Weekly MAs freshly flipped to 13>26>52 within last ${lookbackBars} weeks`,
+      };
     }
-    return Infinity;
   }
 
-  const last = usable.length - 1;
-  const eps = 0.002; // 0.2% margin to avoid micro jitter
-
-  // Require BOTH crosses (13>26 and 26>52) to be fresh (≤ lookbackBars)
-  const age13_26 = lastCrossAge(13, 26, lookbackBars);
-  const age26_52 = lastCrossAge(26, 52, lookbackBars);
-
-  // Check that the stack is currently valid with margin
-  const m13 = smaW(13, last), m26 = smaW(26, last), m52 = smaW(52, last);
-  const stackedNow =
-    m13 > 0 && m26 > 0 && m52 > 0 &&
-    m13 >= m26 * (1 + eps) && m26 >= m52 * (1 + eps);
-
-  if (stackedNow && age13_26 <= lookbackBars && age26_52 <= lookbackBars) {
-    return {
-      trigger: true,
-      weeksAgo: Math.max(age13_26, age26_52), // the later of the two flips
-      index: last,
-      m13, m26, m52,
-      why: `Weekly MAs freshly flipped: 13>26 and 26>52 within last ${lookbackBars} weeks`,
-    };
+  // 4) Guarded fallback: stacked on any completed week within the window
+  if (allowStackedWindow) {
+    for (let i = last; i >= Math.max(0, last - lookbackBars + 1); i--) {
+      const cur = getTriplet(i);
+      if (cur.stacked) {
+        return {
+          trigger: true,
+          weeksAgo: last - i,
+          index: i,
+          m13: cur.m13, m26: cur.m26, m52: cur.m52,
+          why: `Weekly MAs stacked (13>26>52) in last ${lookbackBars} completed weeks`,
+        };
+      }
+    }
   }
 
   return {
     trigger: false,
-    why: `No fresh weekly dual-cross (13>26 & 26>52) in ≤${lookbackBars} weeks`,
+    why: `No weekly 13>26>52 flip/stack in ≤${lookbackBars} completed weeks`,
   };
 }
+
 
 
 /* ========= Daily 5/25/75 “fresh flip” engine (completed daily bars) ========= */
@@ -1492,7 +1525,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const dayPct = openPx ? ((px - openPx) / openPx) * 100 : 0;
 
   // Completed-bars views
-  const completedDaily = Array.isArray(opts?.dataForGates) ? opts.dataForGates : dataAll.slice(0, -1);
+  // Use completed daily bars: if we have ≥76, drop the live bar; else keep all so SMA(75) can compute.
+  const completedDaily = Array.isArray(opts?.dataForGates)
+    ? opts.dataForGates
+    : (dataAll.length >= 76 ? dataAll.slice(0, -1) : dataAll);
 
   // Context snapshot (same as DIP engine)
   const msFull = getMarketStructure(stock, dataAll);
