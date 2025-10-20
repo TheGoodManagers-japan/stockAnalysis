@@ -1,5 +1,6 @@
 // /scripts/backtest.js — swing-period backtest (browser) — RAW LEVELS + REGIME
-// Next-bar-open entries, optional time-based exit, **NO post-entry adjustment**,
+// Next-bar-open entries, optional time-based exit,
+// optional ATR trailing stop (no lookahead),
 // sentiment gates, and Nikkei-based market regime tagging & metrics.
 //
 // Options you may pass to window.backtest(..., opts):
@@ -10,9 +11,11 @@
 //   - regimeTicker: "1321.T" (default Nikkei 225 ETF proxy)
 //   - allowedRegimes: ["UP","STRONG_UP"] to only trade in those regimes
 //
-// NOTE: This version **ignores any profileId/profileIds** and always uses
-// the signal's raw suggested levels (smartStopLoss/smartPriceTarget if present,
-// otherwise stopLoss/priceTarget). No trailing; no dynamic adjustments.
+// NOTE: This build supports two profiles:
+// - raw_signal_levels: use signal's raw stop/target (no adjustments)
+// - atr_trail: same entry levels but updates stop with an ATR chandelier trail (no lookahead)
+// Toggle with opts.useTrailing (default true). Profile IDs are returned.
+
 
 import {
   analyzeSwingTradeEntry,
@@ -693,9 +696,70 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       stop: Number(sig?.smartStopLoss ?? sig?.stopLoss),
       target: Number(sig?.smartPriceTarget ?? sig?.priceTarget),
     }),
+
     // no advance(): never modify stop/target after entry
   };
-  const activeProfiles = [RAW_PROFILE];
+
+  // ---- Add alongside RAW_PROFILE ----
+  function lastATR(hist, p = 14) {
+    const a = atrArr(hist, p);
+    return Number(a[a.length - 1]) || 0;
+  }
+  function highestCloseSince(hist, startIdx) {
+    let hi = -Infinity;
+    for (let k = startIdx; k < hist.length; k++)
+      hi = Math.max(hi, Number(hist[k].close) || 0);
+    return hi;
+  }
+
+  function quantizeToTick(px, refPx) {
+    const tick = inferTickFromPrice(refPx);
+    return Math.round(px / tick) * tick;
+  }
+
+  const ATR_TRAIL_PROFILE = {
+    id: "atr_trail",
+    label: "ATR trail (Chandelier)",
+    // Initial plan: same levels the signal suggested
+    compute: ({ sig }) => ({
+      stop: Number(sig?.smartStopLoss ?? sig?.stopLoss),
+      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget), // keep target for now; you can test "no target" later
+    }),
+    // Advance trailing stop using ONLY completed data (hist up to i-1)
+    // Params: atrMult, startAfterBars, breakevenR
+    advance: ({
+      state,
+      hist,
+      i,
+      atrMult = 3,
+      startAfterBars = 2,
+      breakevenR = 0.8,
+    }) => {
+      if (i <= state.entryIdx + startAfterBars) return; // don’t trail immediately
+      const lookHist = hist.slice(0, i); // up to yesterday to avoid peeking
+      const atr = lastATR(lookHist, 14);
+      if (!atr) return;
+
+      const hiClose = highestCloseSince(lookHist, state.entryIdx);
+      const trailCandidate = hiClose - atrMult * atr;
+
+      // Optional breakeven jump once unrealized R >= breakevenR
+      const lastClose = lookHist[lookHist.length - 1].close;
+      const risk = Math.max(0.01, state.entry - state.stopInit);
+      const unrealizedR = (lastClose - state.entry) / risk;
+      const breakevenStop = unrealizedR >= breakevenR ? state.entry : -Infinity;
+
+      // Tighten but never loosen; quantize to tick ladder
+      const rawNewStop = Math.max(trailCandidate, breakevenStop, state.stop);
+      const tick = Number(state.tickSize) || inferTickFromPrice(state.entry);
+      state.stop = Math.round(rawNewStop / tick) * tick;
+    },
+  };
+
+  const USE_TRAIL = true; // opts.useTrailing = true/false
+  const activeProfiles = USE_TRAIL
+    ? [RAW_PROFILE, ATR_TRAIL_PROFILE]
+    : [RAW_PROFILE];
 
   // --- NEW: regime options ---
   const REGIME_TICKER =
@@ -870,37 +934,47 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           if (i < WARMUP) blockedWarmup++;
         }
 
-        // manage open positions per profile (NO post-entry adjustment!)
-        for (const p of activeProfiles) {
-          const list = openByProfile[p.id] || [];
-          if (!list.length) continue;
 
-          for (let k = list.length - 1; k >= 0; k--) {
-            const st = list[k];
+            // manage open positions per profile (trailing BEFORE exit checks)
+for (const p of activeProfiles) {
+  const list = openByProfile[p.id] || [];
+  if (!list.length) continue;
 
-            // No p.advance(), no mutations of st.stop/st.target here
+  for (let k = list.length - 1; k >= 0; k--) {
+    const st = list[k];
 
-            let exit = null;
+    // NEW: update trailing stop using only completed data (up to i-1)
+    if (typeof p.advance === "function") {
+      p.advance({
+        state: st,
+        hist: candles,              // p.advance will only use data up to i-1
+        i,
+        atrMult: opts.atrMult ?? 3,
+        startAfterBars: opts.trailStartAfterBars ?? 2,
+        breakevenR: opts.breakevenR ?? 0.8,
+      });
+    }
 
-            // 1) price-based exits first (priority: stop/target)
-            if (today.low <= st.stop) {
-              exit = { type: "STOP", price: st.stop, result: "LOSS" };
-            } else if (today.high >= st.target) {
-              exit = { type: "TARGET", price: st.target, result: "WIN" };
-            }
+    // now do your normal exit checks on today's bar i
+    let exit = null;
 
-            // 2) optional hard time exit at HOLD_BARS
-            if (!exit && HOLD_BARS > 0) {
-              const ageBars = i - st.entryIdx;
-              if (ageBars >= HOLD_BARS) {
-                const rawPnL = today.close - st.entry;
-                exit = {
-                  type: "TIME",
-                  price: today.close,
-                  result: rawPnL >= 0 ? "WIN" : "LOSS",
-                };
-              }
-            }
+    // 1) price-based exits first
+    if (today.low <= st.stop) {
+      exit = { type: "STOP", price: st.stop, result: "LOSS" };
+    } else if (today.high >= st.target) {
+      exit = { type: "TARGET", price: st.target, result: "WIN" };
+    }
+
+    // 2) optional time exit
+    if (!exit && HOLD_BARS > 0) {
+      const ageBars = i - st.entryIdx;
+      if (ageBars >= HOLD_BARS) {
+        const rawPnL = today.close - st.entry;
+        exit = { type: "TIME", price: today.close, result: rawPnL >= 0 ? "WIN" : "LOSS" };
+      }
+    }
+
+    // (rest of your existing exit handling unchanged)
 
             if (exit) {
               const pctRet =
@@ -1170,6 +1244,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 openByProfile[p.id].push({
                   entryIdx: entryBarIdx,
                   entry,
+                  tickSize:
+                    Number(stock?.tickSize) || inferTickFromPrice(entry),
                   stop: qStop,
                   stopInit: qStop,
                   target: qTarget,
@@ -1346,11 +1422,30 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     };
   }
   // With a single profile, "best" is trivially that profile:
+  function pickBest(by) {
+    let bestId = null,
+      bestVal = -Infinity;
+    for (const [id, obj] of Object.entries(profiles)) {
+      const m = obj.metrics || {};
+      const val =
+        by === "winRate"
+          ? m.winRate ?? -Infinity
+          : by === "expR"
+          ? m.expR ?? -Infinity
+          : m.profitFactor ?? -Infinity;
+      if (val > bestVal) {
+        bestVal = val;
+        bestId = id;
+      }
+    }
+    return bestId || "raw_signal_levels";
+  }
   const bestProfiles = {
-    byWinRate: "raw_signal_levels",
-    byExpR: "raw_signal_levels",
-    byProfitFactor: "raw_signal_levels",
+    byWinRate: pickBest("winRate"),
+    byExpR: pickBest("expR"),
+    byProfitFactor: pickBest("pf"),
   };
+  
 
   // optional: per-playbook breakdown (DIP/SPC/OXR/BPB/RRP)
   const byKind = {};
@@ -1594,7 +1689,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       examplesCap: EX_CAP,
       includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
       // Kept for UI compatibility; this build always uses the RAW profile only
-      profileIds: ["raw_signal_levels"],
+      profileIds: activeProfiles.map((p) => p.id),
+      useTrailing: USE_TRAIL,
+      atrMult: opts.atrMult ?? 3,
+      trailStartAfterBars: opts.trailStartAfterBars ?? 2,
+      breakevenR: opts.breakevenR ?? 0.8,
+
       maxConcurrent: MAX_CONCURRENT,
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
