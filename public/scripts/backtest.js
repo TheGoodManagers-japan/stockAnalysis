@@ -501,6 +501,44 @@ function computeAnalytics(candles, idx, entry) {
 }
 
 
+// === SCORING (uses your observed lifts; higher is better) ===
+// Weights reflect your analysis:
+// - Regime: DOWN > UP (STRONG_UP/RANGE neutral)
+// - Cross-lag: WEEKLY lag>=2 strong; DAILY lag>=4 helpful
+// - Sentiment: LT in 3–5 (bullish), ST in 6–7 (bearish = pullback)
+// - Analytics: gap>0, RSI>=60 (top-ish tercile), pxVsMA25Pct<=+4% (not extended)
+// - Small penalty if pxVsMA25Pct is very extended (>+6%)
+function computeScore({ analytics, regime, crossType, crossLag, ST, LT }) {
+  let s = 0;
+
+  // Regime
+  if (regime === "DOWN") s += 2;
+  else if (regime === "UP") s += 1;
+
+  // Cross lag (prefer some delay; WEEKLY carries more weight in your data)
+  const lag = Number.isFinite(crossLag) ? crossLag : null;
+  if (crossType === "WEEKLY" || crossType === "BOTH") {
+    if (lag !== null && lag >= 2) s += 2;
+  } else if (crossType === "DAILY") {
+    if (lag !== null && lag >= 4) s += 1;
+  }
+
+  // Sentiment (you clarified: LT1=most bullish, LT7=most bearish; same for ST)
+  if (Number.isFinite(LT) && LT >= 3 && LT <= 5) s += 1; // mild-bullish long-term
+  if (Number.isFinite(ST) && ST >= 6 && ST <= 7) s += 1; // short-term bearish (pullback)
+
+  // Analytics
+  const a = analytics || {};
+  if (Number.isFinite(a.gapPct) && a.gapPct > 0) s += 1;
+  if (Number.isFinite(a.rsi) && a.rsi >= 60) s += 1;
+  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct <= 4) s += 1;
+  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6) s -= 1; // penalty for being too extended
+
+  return s;
+}
+
+
+
 /**
  * Compute simple daily regime labels from a Nikkei proxy candles array.
  * Logic:
@@ -792,7 +830,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         );
         continue;
       }
-      
 
       const trades = [];
       const tradesByProfile = Object.fromEntries(
@@ -890,7 +927,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 crossType: st.crossType || null,
                 crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
                 analytics: st.analytics || null, // <<< adds RSI/ATR/VolumeZ/Gap/MA info
-              };              
+                score: Number.isFinite(st.score) ? st.score : null, // <<< NEW
+              };
 
               tradesByProfile[p.id].push(trade);
               trades.push(trade);
@@ -1136,6 +1174,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   crossType: selected, // "WEEKLY" | "DAILY" | "BOTH" | null
                   crossLag: Number.isFinite(lag) ? lag : null, // integer bars ago
                   analytics, // <<< store per-entry analytics for later
+                  score, // <<< NEW
                 });
 
                 globalOpenCount++;
@@ -1145,8 +1184,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
-
-
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
@@ -1356,6 +1393,84 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     WEEKLY: toMetricsMap(crossLagBuckets.WEEKLY),
     DAILY: toMetricsMap(crossLagBuckets.DAILY),
   };
+
+  function metricsByScore(allTrades) {
+    const buckets = {}; // score -> trades[]
+    for (const t of allTrades) {
+      const s = Number.isFinite(t.score) ? t.score : null;
+      if (s === null) continue;
+      if (!buckets[s]) buckets[s] = [];
+      buckets[s].push(t);
+    }
+    const scored = Object.keys(buckets)
+      .map((k) => +k)
+      .sort((a, b) => a - b)
+      .map((s) => [s, computeMetrics(buckets[s])]);
+    return { buckets, scored };
+  }
+  function pearson(xs, ys) {
+    const n = Math.min(xs.length, ys.length);
+    if (n === 0) return NaN;
+    let sx = 0,
+      sy = 0,
+      sxx = 0,
+      syy = 0,
+      sxy = 0;
+    for (let i = 0; i < n; i++) {
+      const x = Number(xs[i]) || 0,
+        y = Number(ys[i]) || 0;
+      sx += x;
+      sy += y;
+      sxx += x * x;
+      syy += y * y;
+      sxy += x * y;
+    }
+    const cov = sxy / n - (sx / n) * (sy / n);
+    const vx = sxx / n - (sx / n) * (sx / n);
+    const vy = syy / n - (sy / n) * (sy / n);
+    const denom = Math.sqrt(Math.max(vx, 0)) * Math.sqrt(Math.max(vy, 0));
+    return denom ? +(cov / denom).toFixed(3) : NaN;
+  }
+
+  // --- NEW: scoring diagnostics ---
+  const scored = metricsByScore(all);
+  const scoreLevels = scored.scored.map(([s, m]) => ({
+    score: s,
+    trades: m.trades,
+    winRate: m.winRate,
+    profitFactor: m.profitFactor,
+    avgReturnPct: m.avgReturnPct,
+  }));
+
+  // correlations: score vs win (0/1) and vs returnPct
+  const _scoreArr = [];
+  const _winArr = [];
+  const _retArr = [];
+  for (const t of all) {
+    if (!Number.isFinite(t.score)) continue;
+    _scoreArr.push(t.score);
+    _winArr.push(t.result === "WIN" ? 1 : 0);
+    _retArr.push(Number(t.returnPct) || 0);
+  }
+  const scoreCorr = {
+    win: pearson(_scoreArr, _winArr),
+    ret: pearson(_scoreArr, _retArr),
+  };
+
+  // Console snapshot
+  console.log("[BT] SCORE STATS (score -> trades, WR, PF, AvgRet)");
+  for (const row of scoreLevels) {
+    console.log(
+      `[BT] score=${String(row.score).padStart(2)} | trades=${
+        row.trades
+      } | WR=${row.winRate}% | PF=${row.profitFactor} | AvgRet=${
+        row.avgReturnPct
+      }%`
+    );
+  }
+  console.log(
+    `[BT] SCORE CORR | ρ(score, win)=${scoreCorr.win} | ρ(score, ret)=${scoreCorr.ret}`
+  );
 
   console.log("[BT] CROSS-LAG STATS (WEEKLY)");
   for (const k of Object.keys(crossingByLag.WEEKLY)) {
@@ -1605,6 +1720,22 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       tradesPerDay: 0,
       tradingDays: 0,
       openAtEnd: 0,
+      scoring: {
+        schema: {
+          regime: { DOWN: 2, UP: 1 },
+          crossLag: { WEEKLY_ge2: 2, DAILY_ge4: 1 },
+          sentiment: { LT_3to5: 1, ST_6to7: 1 },
+          analytics: {
+            gapPos: 1,
+            rsiGe60: 1,
+            pxVsMA25Le4: 1,
+            pxVsMA25Gt6_penalty: -1,
+          },
+        },
+        byScore: scoreLevels, // array sorted by score asc
+        correlation: scoreCorr, // { win, ret }
+      },
+
       exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
       signals: {
         total: 0,
