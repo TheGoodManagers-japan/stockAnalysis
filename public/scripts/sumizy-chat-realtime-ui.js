@@ -105,6 +105,18 @@ function getPaneIdsFromUrl() {
   }
 }
 
+
+// helper: run Bubble fn when a real AI message is rendered
+function maybeHideLoadingOnAIMsg(m) {
+  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+  if (!m || !m.id || m.id === "typing-indicator") return; // ignore the animated placeholder
+  if (String(m.user_id) !== AI_USER_ID) return;
+  if (typeof window.bubble_fn_hideLoading100 === "function") {
+    try { window.bubble_fn_hideLoading100(); } catch {}
+  }
+}
+
+
 // warn only once per session for multiple mains
 let __warnedMultipleMain = false;
 
@@ -742,6 +754,8 @@ function patchMessageInPlace(rg, msg) {
     window.updateReadReceiptsInPlace(el, msg);
   }
 
+  maybeHideLoadingOnAIMsg(msg);
+
   log.info("Patched message in place", { rg, id: msg.id });
   // record UI activity for the pane that owns this rg
   try {
@@ -878,6 +892,7 @@ function injectBatchForPane(paneRole, chatId, batch) {
             window.updateReadReceiptsInPlace(el, m);
           } catch {}
         }
+        maybeHideLoadingOnAIMsg(m);
 
       } catch (e) {
         log.warn("AI markdown re-render failed", { id: m.id, e });
