@@ -140,6 +140,18 @@ function ensureHistoryBarrier(paneRole) {
   return p;
 }
 
+/* ─────────── Optional HTTP fallback hook ───────────
+   Implement window.fetchHistoryForConversation = async (chatId, paneRole) => {
+     const list = await fetch(...); // get messages newest->oldest or oldest->newest
+     injectHistoryAndGoLiveForPane(paneRole, chatId, list);
+   };
+   If not implemented, this is a no-op.
+*/
+if (typeof window.fetchHistoryForConversation !== "function") {
+  window.fetchHistoryForConversation = null; // explicit no-op
+}
+
+
 
 
 // helper: run Bubble fn when a real AI message is rendered
@@ -827,6 +839,8 @@ function getStateForPane(paneRole, chatId) {
     joinPending: false,
     joinRetryTid: 0,
     joinRetryCount: 0,
+    historyNudgeTid: 0,
+    httpFallbackTid: 0,
   });
 }
 
@@ -1039,7 +1053,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             payloadType: typeof data?.payload,
           });
 
-
           // --- FAST PATH: handle refresh events (e.g., {"refresh":"thing"}) ---
           try {
             if (data?.action === "event") {
@@ -1098,7 +1111,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             main: byPane.main.length,
             ai: byPane.ai.length,
           });
-
 
           log.debug("RT relevant per pane", {
             main: byPane.main.length,
@@ -1199,6 +1211,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                 paneRole,
                 add: toAppend.length,
               });
+              // Ensure any pending barrier is released if we got live first
+try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
+
               injectBatchForPane(paneRole, chatId, toAppend);
             }
           }
@@ -1219,8 +1234,39 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     };
     window.currentUserId = userId;
     window.xanoRealtime[channelKey] = { channel };
-        // Channel is callable now — flush anything queued before readiness.
-    try { flushOutboundQueue(); } catch {}
+    // Channel is callable now — flush anything queued before readiness.
+    try {
+      flushOutboundQueue();
+    } catch {}
+    /* ─────────── History request nudge ─────────── */
+    window.requestHistoryNudge = function requestHistoryNudge(
+      conversation_id,
+      paneRole = "main"
+    ) {
+      try {
+        const info = window.currentChannel;
+        if (!info || !isChannelReady()) {
+          trace("NUDGE:SKIP (channel not ready)", {
+            conversation_id,
+            paneRole,
+          });
+          return;
+        }
+        const payload = {
+          // backend-agnostic event; server should interpret as “send me the backlog”
+          action: "event",
+          type: "request_history",
+          conversation_id,
+          pane: paneRole,
+        };
+        trace("NUDGE:REQUEST_HISTORY", { conversation_id, paneRole });
+        // send through the same pipe
+        const ch = window.xanoRealtime?.[info.channelKey]?.channel;
+        if (ch && typeof ch.message === "function") ch.message(payload);
+      } catch (e) {
+        trace("NUDGE:ERROR", { err: String(e) });
+      }
+    };
 
     trace("JOIN_CHANNEL:READY", { channelKey, userId });
 
@@ -1240,13 +1286,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       } catch {}
     })();
 
-
     // Immediate nudges so we don't wait only on the 1s timer.
     try {
       if (window._paneActive?.main) window.ensureJoinForPane("main", true);
-      if (window._paneActive?.ai)   window.ensureJoinForPane("ai",   true);
+      if (window._paneActive?.ai) window.ensureJoinForPane("ai", true);
     } catch {}
-
 
     setTimeout(() => {
       if (typeof window.bubble_fn_joinedChannel === "function") {
@@ -1257,9 +1301,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       try {
         window.ensureJoinForPane("main", true);
         window.ensureJoinForPane("ai", true);
-           // Nudge any panes that were pending
-   if (window._paneActive?.main) window.ensureJoinForPane("main", true);
-   if (window._paneActive?.ai)   window.ensureJoinForPane("ai",   true);
+        // Nudge any panes that were pending
+        if (window._paneActive?.main) window.ensureJoinForPane("main", true);
+        if (window._paneActive?.ai) window.ensureJoinForPane("ai", true);
       } catch {}
     }, 1000);
 
@@ -1295,6 +1339,10 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       if (st.phase === "join_sent" && st.lastJoinSentAt && (now - st.lastJoinSentAt) > JOIN_STALE_MS) {
         log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
         trace("WATCHDOG:RESEND_JOIN", { paneRole, chatId });
+        try {
+          window.requestHistoryNudge(chatId, paneRole);
+        } catch {}
+
 
         st.joinDispatched = false;
         st.joinPending = false;
@@ -1547,8 +1595,6 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
         log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
         trace("ENSURE_JOIN:ABANDON_TO_PENDING", { paneRole, chatId });
 
-        
-        
         // Re-arm on container OR channel readiness (whichever becomes ready first)
         Promise.race([
           waitForPaneContainer(paneRole, 20000),
@@ -1572,7 +1618,6 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       (force &&
         s.phase !== "join_sent" &&
         (!channelReadyNow || !containerReadyNow));
-    
 
     if (!canJoin) {
       s.joinPending = false;
@@ -1600,6 +1645,30 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     log.info("ensureJoin: sending join", { paneRole, chatId, payload });
     trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: s.phase });
     window.sendMessage(payload);
+    // Arm a soft nudge if we're still waiting shortly after JOIN
+    try {
+      if (s.historyNudgeTid) clearTimeout(s.historyNudgeTid);
+      s.historyNudgeTid = setTimeout(() => {
+        const still = getStateForPane(paneRole, chatId);
+        if (!still) return;
+        if (still.phase === "join_sent") {
+          trace("NUDGE:SEND_AFTER_JOIN", { paneRole, chatId });
+          window.requestHistoryNudge(chatId, paneRole);
+        }
+      }, 1200);
+    } catch {}
+    // Arm hard fallback later (HTTP) — implemented in section C
+    try {
+      if (s.httpFallbackTid) clearTimeout(s.httpFallbackTid);
+      s.httpFallbackTid = setTimeout(() => {
+        const still = getStateForPane(paneRole, chatId);
+        if (!still) return;
+        if (still.phase === "join_sent") {
+          trace("FALLBACK:HTTP_AFTER_JOIN", { paneRole, chatId });
+          window.fetchHistoryForConversation?.(chatId, paneRole);
+        }
+      }, 4000);
+    } catch {}
   };
 
   const rg = getRGForEntityOrPane(paneRole);
@@ -1647,6 +1716,29 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
     trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: st.phase });
     window.sendMessage(payload);
+    try {
+      if (st.historyNudgeTid) clearTimeout(st.historyNudgeTid);
+      st.historyNudgeTid = setTimeout(() => {
+        const still = getStateForPane(paneRole, chatId);
+        if (!still) return;
+        if (still.phase === "join_sent") {
+          trace("NUDGE:SEND_AFTER_JOIN", { paneRole, chatId });
+          window.requestHistoryNudge(chatId, paneRole);
+        }
+      }, 1200);
+    } catch {}
+    try {
+      if (st.httpFallbackTid) clearTimeout(st.httpFallbackTid);
+      st.httpFallbackTid = setTimeout(() => {
+        const still = getStateForPane(paneRole, chatId);
+        if (!still) return;
+        if (still.phase === "join_sent") {
+          trace("FALLBACK:HTTP_AFTER_JOIN", { paneRole, chatId });
+          window.fetchHistoryForConversation?.(chatId, paneRole);
+        }
+      }, 4000);
+    } catch {}
+    
 
   };
 
