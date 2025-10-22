@@ -226,42 +226,37 @@ function getRGForPane(paneRole) {
   const nodes = Array.from(
     document.querySelectorAll(`[id^="rg"][data-pane="${paneRole}"]`)
   );
+  if (!nodes.length) return null;
 
-  // Sort newest first (rg12 before rg1)
+  // newest first by rg number
   nodes.sort((a, b) => {
     const aNum = parseInt(String(a.id).match(/\d+/)?.[0] || "0", 10);
     const bNum = parseInt(String(b.id).match(/\d+/)?.[0] || "0", 10);
     return bNum - aNum;
   });
 
+  // choose the best candidate
   const pick =
-    // Prefer VISIBLE with a chat-messages container
     nodes.find(
       (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
     ) ||
-    // Then any VISIBLE
     nodes.find((el) => el.offsetParent !== null) ||
-    // Then any with chat-messages (hidden fallback)
     nodes.find((el) => el.querySelector(".chat-messages")) ||
-    // Finally anything
-    nodes[0] ||
-    null;
+    nodes[0];
 
-  if (!pick) return null;
+  // prune older duplicates to avoid confusion in queries/selections
+  for (const n of nodes) {
+    if (n === pick) continue;
+    try {
+      n.remove();
+    } catch {}
+  }
 
   const m = String(pick.id).match(/\d+/);
   const rgNum = m ? parseInt(m[0], 10) : null;
-
-  if (paneRole === "main" && nodes.length > 1 && !window.__warnedMultipleMain) {
-    console.warn(
-      '[sumizy] Multiple data-pane="main" in DOM:',
-      nodes.map((n) => n.id)
-    );
-    window.__warnedMultipleMain = true;
-  }
-
   return Number.isFinite(rgNum) ? rgNum : null;
 }
+
 
 
 
@@ -1064,8 +1059,6 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
     prebuffer: st.prebuffer.length,
   });
 
-
-
   const combined = dedupeById(
     [...(incomingHistory || []), ...(st.prebuffer || [])],
     st.seen
@@ -1080,35 +1073,50 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
     orderedCount: ordered.length,
   });
 
-    if (ordered.length) {
-        // Only clear if we haven't rendered anything yet
-        const rg = getRGForEntityOrPane(paneRole);
-        const container = rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
-        const hasExistingNodes = !!(container && container.querySelector(".message"));
-        if (!hasExistingNodes) {
-          clearPaneDom(paneRole);
-        }
-        injectBatchForPane(paneRole, chatId, ordered);
-      }
-      try {
-        const rg = getRGForEntityOrPane(paneRole);
-        if (rg != null) scheduleAutoScrollToLatestForRG(rg, "history");
-      } catch {}
-    
+  if (ordered.length) {
+    // Only clear if we haven't rendered anything yet
+    const rg = getRGForEntityOrPane(paneRole);
+    const container =
+      rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+    const hasExistingNodes = !!(
+      container && container.querySelector(".message")
+    );
+    if (!hasExistingNodes) {
+      clearPaneDom(paneRole);
+    }
+    injectBatchForPane(paneRole, chatId, ordered);
+  }
+  try {
+    const rg = getRGForEntityOrPane(paneRole);
+    if (rg != null) scheduleAutoScrollToLatestForRG(rg, "history");
+  } catch {}
 
   st.prebuffer = [];
   trace("HISTORY:GO_LIVE", { paneRole, chatId, orderedCount: ordered.length });
 
+  // D: seed seen + lastTs from injected history
+  if (!st.seen) st.seen = new Set();
+  let maxTs = st.lastTs || 0;
+  for (const m of ordered) {
+    const id = String(m?.id || "");
+    if (id) st.seen.add(id);
+    const c = parseTime(m?.created_at);
+    const u = m?.updated_at ? parseTime(m.updated_at) : 0;
+    const t = Math.max(c || 0, u || 0);
+    if (t > maxTs) maxTs = t;
+  }
+  st.lastTs = maxTs || Date.now();
+
   st.phase = "live";
-  // prevent immediate “stale” detection on quiet rooms
   st.lastActivityAt = Date.now();
-  if (!st.lastTs) st.lastTs = st.lastActivityAt;
-  // Also mute the watchdog right after going live to absorb late echoes
-  st.watchdogMuteUntil = Date.now() + 6000;
+  // keep the longer of the two windows (25s vs 6s)
+  const baseMuteMs = 25000,
+    extraMuteMs = 6000;
+  st.watchdogMuteUntil = Date.now() + Math.max(baseMuteMs, extraMuteMs);
+  
   try {
     ensureHistoryBarrier(paneRole)._resolve?.();
   } catch {}
-  
 }
 
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
@@ -1136,6 +1144,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     if (!already) {
       log.debug("joinChannel: wiring channel.on handler", { channelKey });
       channel.on((data) => {
+        const stMain = getStateForPane("main", currentChatId());
+        if (stMain) stMain.lastActivityAt = Date.now();
+        const stAI = getStateForPane("ai", currentChatId());
+        if (stAI) stAI.lastActivityAt = Date.now();
+
         try {
           log.debug("RT inbound", data);
           trace("RT:INBOUND", {
@@ -1218,7 +1231,9 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             const rg = getRGForEntityOrPane(paneRole);
             const st = getStateForPane(paneRole, chatId);
             if (!st) continue;
+            // E1: any message traffic counts as activity
             st.lastActivityAt = Date.now();
+            
 
             // PATCH A: During LIVE, ignore already-seen, older history unless it looks edited
 if (st.phase === "live") {
@@ -1591,7 +1606,25 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
 
   if (!chatId) return;
 
+  // F: throttle ensureJoin calls when live & healthy
   const st = getStateForPane(paneRole, chatId);
+  if (!st) return;
+
+  // Throttle when already live & channel callable
+  const now = Date.now();
+  const THROTTLE_MS = 10000; // 10s
+  if (st.phase === "live" && isChannelReady() && !force) {
+    if (!st._nextEnsureAt) st._nextEnsureAt = 0;
+    if (now < st._nextEnsureAt) {
+      trace("ENSURE_JOIN:THROTTLED", {
+        paneRole,
+        until: st._nextEnsureAt - now,
+      });
+      return;
+    }
+    st._nextEnsureAt = now + THROTTLE_MS;
+  }
+
   const currentGen = window._chatGen || 0;
 
   if (st.joinGen !== currentGen) {
@@ -1757,8 +1790,8 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   const container =
     rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
-      // Only gate on channel readiness; DOM can catch up later (we buffer).
-      if (!isChannelReady()) {
+  // Only gate on channel readiness; DOM can catch up later (we buffer).
+  if (!isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
@@ -1773,56 +1806,59 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     }
     return;
   }
-  
 
-    // Immediate path (channel is ready here; mirror trySend() rules, minus the undefined var)
-    const canJoin =
-      st.phase === "idle" ||
-      st.phase === "injecting_history" ||
-      (force && st.phase !== "join_sent");
-  
-    if (!canJoin) {
-      st.joinPending = false;
-      log.debug("ensureJoin: blocked by phase (immediate path)", {
-        paneRole,
-        chatId,
-        phase: st.phase,
-      });
-      return;
-    }
-  
-    st.joinDispatched = true;
-    st.phase = "join_sent";
-    st.lastJoinSentAt = Date.now();
-    const payload = { isReaction:false, isDelete:false, isJoin:true, conversation_id: chatId, message:"" };
-    log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
-    trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: st.phase });
-    window.sendMessage(payload);
-    try {
-      if (st.historyNudgeTid) clearTimeout(st.historyNudgeTid);
-      st.historyNudgeTid = setTimeout(() => {
-        const still = getStateForPane(paneRole, chatId);
-        if (!still) return;
-        if (still.phase === "join_sent") {
-          trace("NUDGE:SEND_AFTER_JOIN", { paneRole, chatId });
-          window.requestHistoryNudge(chatId, paneRole);
-        }
-      }, 1200);
-    } catch {}
-    try {
-      if (st.httpFallbackTid) clearTimeout(st.httpFallbackTid);
-      st.httpFallbackTid = setTimeout(() => {
-        const still = getStateForPane(paneRole, chatId);
-        if (!still) return;
-        if (still.phase === "join_sent") {
-          trace("FALLBACK:HTTP_AFTER_JOIN", { paneRole, chatId });
-          window.fetchHistoryForConversation?.(chatId, paneRole);
-        }
-      }, 4000);
-    } catch {}
-    
+  // Immediate path (channel is ready here; mirror trySend() rules, minus the undefined var)
+  const canJoin =
+    st.phase === "idle" ||
+    st.phase === "injecting_history" ||
+    (force && st.phase !== "join_sent");
 
+  if (!canJoin) {
+    st.joinPending = false;
+    log.debug("ensureJoin: blocked by phase (immediate path)", {
+      paneRole,
+      chatId,
+      phase: st.phase,
+    });
+    return;
+  }
+
+  st.joinDispatched = true;
+  st.phase = "join_sent";
+  st.lastJoinSentAt = Date.now();
+  const payload = {
+    isReaction: false,
+    isDelete: false,
+    isJoin: true,
+    conversation_id: chatId,
+    message: "",
   };
+  log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
+  trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: st.phase });
+  window.sendMessage(payload);
+  try {
+    if (st.historyNudgeTid) clearTimeout(st.historyNudgeTid);
+    st.historyNudgeTid = setTimeout(() => {
+      const still = getStateForPane(paneRole, chatId);
+      if (!still) return;
+      if (still.phase === "join_sent") {
+        trace("NUDGE:SEND_AFTER_JOIN", { paneRole, chatId });
+        window.requestHistoryNudge(chatId, paneRole);
+      }
+    }, 1200);
+  } catch {}
+  try {
+    if (st.httpFallbackTid) clearTimeout(st.httpFallbackTid);
+    st.httpFallbackTid = setTimeout(() => {
+      const still = getStateForPane(paneRole, chatId);
+      if (!still) return;
+      if (still.phase === "join_sent") {
+        trace("FALLBACK:HTTP_AFTER_JOIN", { paneRole, chatId });
+        window.fetchHistoryForConversation?.(chatId, paneRole);
+      }
+    }, 4000);
+  } catch {}
+};
 
 /* ─────────── Route watcher: clear & (re)join per pane ─────────── */
 function handleChatRouteChangeDual() {
