@@ -844,6 +844,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const rawNewStop = Math.max(trailCandidate, armFloor, state.stop);
         state.stop = quantizeToTick(rawNewStop, state.entry);
       }
+      // Safety clamp: never place stop above today's actual tradable range
+      if (Number.isFinite(todayHigh)) {
+        state.stop = Math.min(state.stop, todayHigh);
+      }
     },
   };
 
@@ -1054,28 +1058,41 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
 
             // now do your normal exit checks on today's bar i
-           let exit = null;
+            let exit = null;
 
-           // 1) price-based exits first
-           if (!st.noStop && today.low <= st.stop) {          // <-- NEW guard
-             const isProfit = st.stop >= st.entry;
-             exit = { type: "STOP", price: st.stop, result: isProfit ? "WIN" : "LOSS" };
-           } else if (!st.skipTarget && today.high >= st.target) {
-             exit = { type: "TARGET", price: st.target, result: "WIN" };
-           }
+            // 1) price-based exits first (gap-aware, realistic fill)
+            const stopTouched = !st.noStop && today.low <= st.stop;
+            if (stopTouched) {
+              // If we gapped below the stop, worst plausible fill is today's open.
+              // If intrabar touch, fill at the stop but never above today's high.
+              const stopFill =
+                today.open < st.stop
+                  ? today.open
+                  : Math.min(st.stop, today.high);
 
-           // 2) optional time exit (only if this profile allows it)
-           if (!exit && HOLD_BARS > 0 && !st.ignoreTimeExit) { // <-- NEW guard
-             const ageBars = i - st.entryIdx;
-             if (ageBars >= HOLD_BARS) {
-               const rawPnL = today.close - st.entry;
-               exit = {
-                 type: "TIME",
-                 price: today.close,
-                 result: rawPnL >= 0 ? "WIN" : "LOSS",
-               };
-             }
-           }
+              const isProfit = stopFill >= st.entry; // count ≥entry as WIN; change to '>' if you prefer BE as LOSS
+              exit = {
+                type: "STOP",
+                price: stopFill,
+                result: isProfit ? "WIN" : "LOSS",
+              };
+            } else if (!st.skipTarget && today.high >= st.target) {
+              exit = { type: "TARGET", price: st.target, result: "WIN" };
+            }
+
+            // 2) optional time exit (only if this profile allows it)
+            if (!exit && HOLD_BARS > 0 && !st.ignoreTimeExit) {
+              // <-- NEW guard
+              const ageBars = i - st.entryIdx;
+              if (ageBars >= HOLD_BARS) {
+                const rawPnL = today.close - st.entry;
+                exit = {
+                  type: "TIME",
+                  price: today.close,
+                  result: rawPnL >= 0 ? "WIN" : "LOSS",
+                };
+              }
+            }
 
             // (rest of your existing exit handling unchanged)
 
