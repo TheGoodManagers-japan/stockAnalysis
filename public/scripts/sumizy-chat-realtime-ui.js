@@ -1218,6 +1218,25 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             const rg = getRGForEntityOrPane(paneRole);
             const st = getStateForPane(paneRole, chatId);
             if (!st) continue;
+            st.lastActivityAt = Date.now();
+
+            // PATCH A: During LIVE, ignore already-seen, older history unless it looks edited
+if (st.phase === "live") {
+  const hasUpdatedAt = (m) =>
+    m && m.updated_at != null && !Number.isNaN(parseTime(m.updated_at));
+  const newerThan = (m, t) => {
+    const c = parseTime(m.created_at);
+    const u = hasUpdatedAt(m) ? parseTime(m.updated_at) : 0;
+    return (u || c) > t;
+  };
+  relevant = relevant.filter((m) => {
+    const id = String(m?.id || "");
+    if (!id) return false;
+    // keep if unseen OR (edited/newer than our lastTs)
+    return !st.seen.has(id) || newerThan(m, st.lastTs);
+  });
+}
+
 
             // In-place patch
             const updatedIds = new Set();
@@ -1382,8 +1401,8 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
   if (window.__sumizyJoinWatchdogWired) return;
   window.__sumizyJoinWatchdogWired = true;
 
-  const JOIN_STALE_MS = 5000;   // join_sent for >5s → resend join
-  const LIVE_STALE_MS = 12000;  // live but no newer ts for >12s → nudge
+  const JOIN_STALE_MS = 5000; // join_sent for >5s → resend join
+  const LIVE_STALE_MS = 20000; // live but no newer ts for >20s → nudge
 
   setInterval(() => {
     const act = window._paneActive || {};
@@ -1396,13 +1415,19 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
       const now = Date.now();
 
       // Stuck in join_sent? Re-send (idempotent on backend).
-      if (st.phase === "join_sent" && st.lastJoinSentAt && (now - st.lastJoinSentAt) > JOIN_STALE_MS) {
-        log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
+      if (
+        st.phase === "join_sent" &&
+        st.lastJoinSentAt &&
+        now - st.lastJoinSentAt > JOIN_STALE_MS
+      ) {
+        log.warn("Watchdog: re-sending join (stale join_sent)", {
+          paneRole,
+          chatId,
+        });
         trace("WATCHDOG:RESEND_JOIN", { paneRole, chatId });
         try {
           window.requestHistoryNudge(chatId, paneRole);
         } catch {}
-
 
         st.joinDispatched = false;
         st.joinPending = false;
@@ -1417,7 +1442,6 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
       const hasVisibleContainer = !!(el && el.offsetParent !== null);
       const channelOk =
         typeof isChannelReady === "function" && isChannelReady();
-      
 
       const lastFresh = Math.max(
         st.lastActivityAt || 0,
@@ -1443,8 +1467,6 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
         st.lastJoinSentAt = now;
         window.ensureJoinForPane(paneRole, true);
       }
-      
-
     }
   }, 1500);
 })();
@@ -1853,7 +1875,7 @@ function handleChatRouteChangeDual() {
       window._paneActive.main = main;
       const st = resetStateForPane("main", main);
       // Mute the watchdog while the route stabilizes
-      if (st) st.watchdogMuteUntil = Date.now() + 6000;
+      st.watchdogMuteUntil = Date.now() + 25000; // was 6000
       clearPaneDom("main");
       window.ensureJoinForPane("main", true);
     } else {
