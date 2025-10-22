@@ -106,6 +106,18 @@ function getPaneIdsFromUrl() {
 }
 
 
+window.__historyBarrier = window.__historyBarrier || { main: null, ai: null };
+function ensureHistoryBarrier(paneRole) {
+  if (window.__historyBarrier[paneRole])
+    return window.__historyBarrier[paneRole];
+  let resolve;
+  const p = new Promise((r) => (resolve = r));
+  p._resolve = resolve;
+  window.__historyBarrier[paneRole] = p;
+  return p;
+}
+
+
 // helper: run Bubble fn when a real AI message is rendered
 function maybeHideLoadingOnAIMsg(m) {
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
@@ -953,6 +965,9 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
   if (!st.lastTs) st.lastTs = st.lastActivityAt;
   // Also mute the watchdog right after going live to absorb late echoes
   st.watchdogMuteUntil = Date.now() + 6000;
+  try {
+    ensureHistoryBarrier(paneRole)._resolve?.();
+  } catch {}
   
 }
 
@@ -1140,6 +1155,15 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     };
     window.currentUserId = userId;
     window.xanoRealtime[channelKey] = { channel };
+        // Channel is callable now — flush anything queued before readiness.
+    try { flushOutboundQueue(); } catch {}
+
+    // Immediate nudges so we don't wait only on the 1s timer.
+    try {
+      if (window._paneActive?.main) window.ensureJoinForPane("main", true);
+      if (window._paneActive?.ai)   window.ensureJoinForPane("ai",   true);
+    } catch {}
+
 
     setTimeout(() => {
       if (typeof window.bubble_fn_joinedChannel === "function") {
@@ -1235,6 +1259,28 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
 window.getCurrentChannel = () => window.currentChannel || null;
 
+
+
+// Simple outbound queue for messages attempted before channel.message exists
+window.__outboundQueue = window.__outboundQueue || [];
+function flushOutboundQueue() {
+  try {
+    if (!isChannelReady()) return;
+    const info = window.currentChannel;
+    if (!info) return;
+    const ch = window.xanoRealtime?.[info.channelKey]?.channel;
+    if (!ch || typeof ch.message !== "function") return;
+    if (!window.__outboundQueue.length) return;
+    log.info("Flushing outbound queue", { count: window.__outboundQueue.length });
+    while (window.__outboundQueue.length) {
+      const msg = window.__outboundQueue.shift();
+      try { ch.message(msg); } catch (e) { log.error("Flush failed", e, msg); }
+    }
+  } catch (e) {
+    log.error("flushOutboundQueue error", e);
+  }
+}
+
 /* ─────────── Sending (unchanged) ─────────── */
 window.sendMessage = (messageData) => {
   if (!messageData || typeof messageData !== "object") {
@@ -1242,10 +1288,13 @@ window.sendMessage = (messageData) => {
       new Error("Message data is required and must be an object")
     );
   }
-  const info = window.currentChannel;
-  if (!info) {
-    return Promise.reject(new Error("No active channel"));
-  }
+    const info = window.currentChannel;
+    // If channel not ready yet, queue the message so the very first JOIN can't be lost.
+    if (!info || !isChannelReady()) {
+      window.__outboundQueue.push(messageData);
+      log.debug("sendMessage queued (channel not ready)", messageData);
+      return Promise.resolve();
+    }
   try {
     const channelKey = info.channelKey;
     if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
@@ -1442,11 +1491,11 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   }
   
 
-    // Immediate path (respect canJoin like trySend())
-      const canJoin =
-        st.phase === "idle" ||
-        st.phase === "injecting_history" ||
-        (force && st.phase !== "join_sent" && !channelReadyNow); // only channel matters here
+    // Immediate path (channel is ready here; mirror trySend() rules, minus the undefined var)
+    const canJoin =
+      st.phase === "idle" ||
+      st.phase === "injecting_history" ||
+      (force && st.phase !== "join_sent");
   
     if (!canJoin) {
       st.joinPending = false;
