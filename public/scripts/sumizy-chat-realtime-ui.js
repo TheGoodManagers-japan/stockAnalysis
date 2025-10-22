@@ -935,10 +935,16 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
     orderedCount: ordered.length,
   });
 
-  if (ordered.length) {
-    clearPaneDom(paneRole);
-    injectBatchForPane(paneRole, chatId, ordered);
-  }
+    if (ordered.length) {
+        // Only clear if we haven't rendered anything yet
+        const rg = getRGForEntityOrPane(paneRole);
+        const container = rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
+        const hasExistingNodes = !!(container && container.querySelector(".message"));
+        if (!hasExistingNodes) {
+          clearPaneDom(paneRole);
+        }
+        injectBatchForPane(paneRole, chatId, ordered);
+      }
 
   st.prebuffer = [];
   st.phase = "live";
@@ -1436,20 +1442,32 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   }
   
 
-  // Immediate path
-  st.joinDispatched = true;
-  st.phase = "join_sent";
-  st.lastJoinSentAt = Date.now(); // <<< PATCH
-  const payload = {
-    isReaction: false,
-    isDelete: false,
-    isJoin: true,
-    conversation_id: chatId,
-    message: "",
+    // Immediate path (respect canJoin like trySend())
+    const channelReadyNow = isChannelReady();
+    const containerReadyNow = !!container;
+    const canJoin =
+      st.phase === "idle" ||
+      st.phase === "injecting_history" ||
+      (force && st.phase !== "join_sent" && (!channelReadyNow || !containerReadyNow));
+  
+    if (!canJoin) {
+      st.joinPending = false;
+      log.debug("ensureJoin: blocked by phase (immediate path)", {
+        paneRole,
+        chatId,
+        phase: st.phase,
+      });
+      return;
+    }
+  
+    st.joinDispatched = true;
+    st.phase = "join_sent";
+    st.lastJoinSentAt = Date.now();
+    const payload = { isReaction:false, isDelete:false, isJoin:true, conversation_id: chatId, message:"" };
+    log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
+    window.sendMessage(payload);
+
   };
-  log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
-  window.sendMessage(payload);
-};
 
 /* ─────────── Route watcher: clear & (re)join per pane ─────────── */
 function handleChatRouteChangeDual() {
@@ -1598,5 +1616,3 @@ Object.assign(window, {
   getRGForPane,
   ensureJoinForPane: window.ensureJoinForPane,
 });
-
-
