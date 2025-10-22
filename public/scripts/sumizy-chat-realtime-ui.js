@@ -238,7 +238,7 @@ function waitForPaneContainer(paneRole, timeoutMs = 20000) {
       const rg = getRGForEntityOrPane(paneRole);
       const el =
         rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
-      if (el && el.offsetParent !== null) return resolve(true); // require visible
+      if (el) return resolve(true); // existence is enough for us to later inject
       if (Date.now() - start > timeoutMs) return resolve(false);
       requestAnimationFrame(tryNow);
     };
@@ -1424,8 +1424,8 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   const container =
     rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
 
-  // If container missing or hidden, defer and retry
-  if (!container || container.offsetParent === null || !isChannelReady()) {
+      // Only gate on channel readiness; DOM can catch up later (we buffer).
+      if (!isChannelReady()) {
     st.joinPending = true;
     if (!st.joinRetryTid) {
       st.joinRetryCount = 0;
@@ -1443,12 +1443,10 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
   
 
     // Immediate path (respect canJoin like trySend())
-    const channelReadyNow = isChannelReady();
-    const containerReadyNow = !!container;
-    const canJoin =
-      st.phase === "idle" ||
-      st.phase === "injecting_history" ||
-      (force && st.phase !== "join_sent" && (!channelReadyNow || !containerReadyNow));
+      const canJoin =
+        st.phase === "idle" ||
+        st.phase === "injecting_history" ||
+        (force && st.phase !== "join_sent" && !channelReadyNow); // only channel matters here
   
     if (!canJoin) {
       st.joinPending = false;
