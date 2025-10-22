@@ -1096,7 +1096,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 target: st.target,
                 result: exit.result,
                 exitType: exit.type,
-                R: r2((exit.price - st.entry) / risk),
+                R: st.noStop ? null : r2((exit.price - st.entry) / risk),
                 returnPct: r2(pctRet),
                 ST: st.ST,
                 LT: st.LT,
@@ -1398,6 +1398,55 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
+
+
+      // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
+for (const p of activeProfiles) {
+  const list = openByProfile[p.id] || [];
+  if (!list.length) continue;
+
+  const lastIdx = candles.length - 1;
+  const lastBar = candles[lastIdx];
+
+  for (const st of list) {
+    // Close at last close; mark as WIN if >= entry, else LOSS.
+    const endExitPrice = lastBar.close;
+    const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
+
+    const risk = Math.max(0.01, st.entry - st.stopInit);
+    const trade = {
+      ticker: code,
+      profile: p.id,
+      strategy: st.kind || "DIP",
+      entryDate: toISO(candles[st.entryIdx].date),
+      exitDate: toISO(lastBar.date),
+      holdingDays: lastIdx - st.entryIdx,
+      entry: r2(st.entry),
+      exit: r2(endExitPrice),
+      stop: st.stopInit,
+      target: st.target,
+      result: endResult,
+      exitType: "END",              // <- distinct from TIME
+      // If noStop, R is meaningless → set to null; else compute normally
+      R: st.noStop ? null : r2((endExitPrice - st.entry) / risk),
+      returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+      ST: st.ST,
+      LT: st.LT,
+      regime: st.regime || "RANGE",
+      crossType: st.crossType || null,
+      crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+      analytics: st.analytics || null,
+      score: Number.isFinite(st.score) ? st.score : null,
+    };
+
+    tradesByProfile[p.id].push(trade);
+    trades.push(trade);
+    globalTrades.push(trade);
+  }
+
+  openByProfile[p.id] = [];
+}
+
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
@@ -1933,8 +1982,8 @@ function computeMetrics(trades) {
     ? sum(losses.map((t) => t.returnPct || 0)) / losses.length
     : 0;
 
-  const rWins = wins.map((t) => t.R || 0);
-  const rLosses = losses.map((t) => t.R || 0);
+     const rWins = wins.map((t) => Number.isFinite(t.R) ? t.R : null).filter(Number.isFinite);
+     const rLosses = losses.map((t) => Number.isFinite(t.R) ? t.R : null).filter(Number.isFinite);
   const avgRwin = rWins.length ? sum(rWins) / rWins.length : 0;
   const avgRloss = rLosses.length ? sum(rLosses) / rLosses.length : 0;
   const p = n ? wins.length / n : 0;
@@ -1965,7 +2014,7 @@ function computeMetrics(trades) {
     avgRwin: r2(avgRwin),
     avgRloss: r2(avgRloss),
     expR: r2(expR),
-    profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : Infinity,
+    profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : "Infinity",
     exits,
   };
 }
