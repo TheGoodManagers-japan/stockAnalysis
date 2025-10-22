@@ -22,7 +22,7 @@
     height: 100dvh;
     /* or 100vh / 100% if parent controls height */
     width: 100%;
-    background: #fff;
+    background: transparent;
     overflow: hidden;
     /* keep if you want only the messages pane to scroll */ }
 
