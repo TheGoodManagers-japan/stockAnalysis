@@ -48,6 +48,24 @@
 
 const log = window.__sumizyLog;
 
+/* ─────────── Timeline tracer ─────────── */
+(function initSumizyTrace(){
+  if (window.__sumizyTrace) return;
+  let __seq = 0;
+  const now = () => (performance?.now?.() || Date.now()) / 1000;
+  const stamp = (label) => `[t+${now().toFixed(3)}s #${++__seq}] ${label}`;
+  window.__sumizyTrace = function trace(label, data) {
+    if (!window.SUMIZY_DEBUG) return;
+    const head = stamp(label);
+    try {
+      if (data !== undefined) console.log(head, data);
+      else console.log(head);
+    } catch { console.log(head); }
+  };
+})();
+const trace = window.__sumizyTrace;
+
+
 /* ─────────── Entity→RG map + URL entity resolver ─────────── */
 const ENTITY_TO_RG = {
   messaging: 1,
@@ -106,16 +124,22 @@ function getPaneIdsFromUrl() {
 }
 
 
+// Logged history barrier
 window.__historyBarrier = window.__historyBarrier || { main: null, ai: null };
 function ensureHistoryBarrier(paneRole) {
-  if (window.__historyBarrier[paneRole])
-    return window.__historyBarrier[paneRole];
+  const cur = window.__historyBarrier[paneRole];
+  if (cur) return cur;
   let resolve;
   const p = new Promise((r) => (resolve = r));
-  p._resolve = resolve;
+  p._resolve = () => {
+    trace(`HISTORY_BARRIER_RESOLVE:${paneRole}`);
+    resolve();
+  };
   window.__historyBarrier[paneRole] = p;
+  trace(`HISTORY_BARRIER_CREATE:${paneRole}`);
   return p;
 }
+
 
 
 // helper: run Bubble fn when a real AI message is rendered
@@ -931,7 +955,16 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
 
   const st = getStateForPane(paneRole, chatId);
   if (!st) return;
+
   st.phase = "injecting_history";
+  trace("HISTORY:START", {
+    paneRole,
+    chatId,
+    incoming: (incomingHistory || []).length,
+    prebuffer: st.prebuffer.length,
+  });
+
+
 
   const combined = dedupeById(
     [...(incomingHistory || []), ...(st.prebuffer || [])],
@@ -959,6 +992,8 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
       }
 
   st.prebuffer = [];
+  trace("HISTORY:GO_LIVE", { paneRole, chatId, orderedCount: ordered.length });
+
   st.phase = "live";
   // prevent immediate “stale” detection on quiet rooms
   st.lastActivityAt = Date.now();
@@ -998,6 +1033,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       channel.on((data) => {
         try {
           log.debug("RT inbound", data);
+          trace("RT:INBOUND", {
+            action: data?.action,
+            hasPayload: !!data?.payload,
+            payloadType: typeof data?.payload,
+          });
+
 
           // --- FAST PATH: handle refresh events (e.g., {"refresh":"thing"}) ---
           try {
@@ -1053,6 +1094,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
               : [],
           };
 
+          trace("RT:BY_PANE", {
+            main: byPane.main.length,
+            ai: byPane.ai.length,
+          });
+
+
           log.debug("RT relevant per pane", {
             main: byPane.main.length,
             ai: byPane.ai.length,
@@ -1093,6 +1140,11 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
                   paneRole,
                   count: updatedIds.size,
                 });
+                trace("RT:PATCHED_EXISTING", {
+                  paneRole,
+                  count: updatedIds.size,
+                });
+
                 afterInjectUiRefresh(rg);
               }
             }
@@ -1104,6 +1156,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
               st.phase === "idle"
             ) {
               if (data.action === "message") {
+                trace("RT:INJECT_HISTORY", {
+                  paneRole,
+                  count: relevant.length,
+                  phase: st.phase,
+                });
+
                 injectHistoryAndGoLiveForPane(paneRole, chatId, relevant);
               } else {
                 const fresh = dedupeById(relevant, st.seen);
@@ -1126,6 +1184,12 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             if (st.phase === "live") {
               const fresh = dedupeById(relevant, st.seen);
               if (!fresh.length) continue;
+              trace("RT:APPEND_LIVE", {
+                paneRole,
+                add: toAppend.length,
+                phase: st.phase,
+              });
+
               const toAppend = sortAscByTs(fresh).filter(
                 (m) => parseTime(m.created_at) >= st.lastTs
               );
@@ -1157,6 +1221,25 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
     window.xanoRealtime[channelKey] = { channel };
         // Channel is callable now — flush anything queued before readiness.
     try { flushOutboundQueue(); } catch {}
+
+    trace("JOIN_CHANNEL:READY", { channelKey, userId });
+
+    // Optional diagnostic waits that don’t block your flow
+    (async () => {
+      try {
+        if (window._paneActive?.main) {
+          trace("WAIT:JOIN->MAIN_HISTORY_BARRIER:BEGIN");
+          await ensureHistoryBarrier("main");
+          trace("WAIT:JOIN->MAIN_HISTORY_BARRIER:END");
+        }
+        if (window._paneActive?.ai) {
+          trace("WAIT:JOIN->AI_HISTORY_BARRIER:BEGIN");
+          await ensureHistoryBarrier("ai");
+          trace("WAIT:JOIN->AI_HISTORY_BARRIER:END");
+        }
+      } catch {}
+    })();
+
 
     // Immediate nudges so we don't wait only on the 1s timer.
     try {
@@ -1211,6 +1294,8 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
       // Stuck in join_sent? Re-send (idempotent on backend).
       if (st.phase === "join_sent" && st.lastJoinSentAt && (now - st.lastJoinSentAt) > JOIN_STALE_MS) {
         log.warn("Watchdog: re-sending join (stale join_sent)", { paneRole, chatId });
+        trace("WATCHDOG:RESEND_JOIN", { paneRole, chatId });
+
         st.joinDispatched = false;
         st.joinPending = false;
         st.lastJoinSentAt = now;
@@ -1271,30 +1356,42 @@ function flushOutboundQueue() {
     const ch = window.xanoRealtime?.[info.channelKey]?.channel;
     if (!ch || typeof ch.message !== "function") return;
     if (!window.__outboundQueue.length) return;
-    log.info("Flushing outbound queue", { count: window.__outboundQueue.length });
+    trace("QUEUE:FLUSH_START", { count: window.__outboundQueue.length }); // <-- ADD
+    log.info("Flushing outbound queue", {
+      count: window.__outboundQueue.length,
+    });
     while (window.__outboundQueue.length) {
       const msg = window.__outboundQueue.shift();
-      try { ch.message(msg); } catch (e) { log.error("Flush failed", e, msg); }
+      try {
+        trace("QUEUE:FLUSH_SEND", { msg }); // <-- ADD
+        ch.message(msg);
+      } catch (e) {
+        log.error("Flush failed", e, msg);
+        trace("QUEUE:FLUSH_ERROR", { error: String(e), msg }); // <-- ADD
+      }
     }
+    trace("QUEUE:FLUSH_DONE"); // <-- ADD
   } catch (e) {
     log.error("flushOutboundQueue error", e);
+    trace("QUEUE:FLUSH_FATAL", { error: String(e) }); // <-- ADD
   }
 }
 
 /* ─────────── Sending (unchanged) ─────────── */
 window.sendMessage = (messageData) => {
   if (!messageData || typeof messageData !== "object") {
-    return Promise.reject(
-      new Error("Message data is required and must be an object")
-    );
+    return Promise.reject(new Error("Message data is required and must be an object"));
   }
-    const info = window.currentChannel;
-    // If channel not ready yet, queue the message so the very first JOIN can't be lost.
-    if (!info || !isChannelReady()) {
-      window.__outboundQueue.push(messageData);
-      log.debug("sendMessage queued (channel not ready)", messageData);
-      return Promise.resolve();
-    }
+  const info = window.currentChannel;
+
+  // VISUAL TRACE for first JOINs being queued vs sent
+  if (!info || !isChannelReady()) {
+    window.__outboundQueue.push(messageData);
+    trace("SEND:QUEUED (channel not ready)", { messageData, qlen: window.__outboundQueue.length });
+    log.debug("sendMessage queued (channel not ready)", messageData);
+    return Promise.resolve();
+  }
+
   try {
     const channelKey = info.channelKey;
     if (!window.xanoRealtime || !window.xanoRealtime[channelKey]) {
@@ -1304,14 +1401,17 @@ window.sendMessage = (messageData) => {
     if (!ch) {
       return Promise.reject(new Error("Channel object not found"));
     }
+    trace("SEND:DISPATCH", { messageData });
     ch.message(messageData);
     log.debug("sendMessage", messageData);
     return Promise.resolve();
   } catch (error) {
     log.error("sendMessage failed", error);
+    trace("SEND:ERROR", { error: String(error) });
     return Promise.reject(error);
   }
 };
+
 
 /* ─────────── Ensure-join per pane (single-flight + channel-ready) ─────────── */
 function isChannelReady() {
@@ -1321,7 +1421,29 @@ function isChannelReady() {
   return !!(ch && typeof ch.message === "function");
 }
 
+/* Probe channel readiness transitions */
+(function probeChannelReady(){
+  if (window.__sumizyProbeReady) return;
+  window.__sumizyProbeReady = true;
+  let last = null;
+  setInterval(() => {
+    let cur = false;
+    try { cur = isChannelReady(); } catch {}
+    if (cur !== last) {
+      trace(`CHANNEL_READY:${cur ? "TRUE" : "FALSE"}`);
+      last = cur;
+    }
+  }, 200);
+})();
+
+
 window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
+  trace("ENSURE_JOIN:CALL", {
+    paneRole,
+    force,
+    chatId: window._paneActive[paneRole],
+  });
+
   let chatId = window._paneActive[paneRole];
 
   // If we have a composite like "tickets:123", try to map to a real conversation id.
@@ -1358,6 +1480,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       chatId,
       currentGen,
     });
+    trace("ENSURE_JOIN:NEW_GEN_RESET", { paneRole, chatId, currentGen });
   }
 
   if (force && st.joinPending) {
@@ -1398,6 +1521,13 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
 
     if (!cNow || !isChannelReady()) {
       if (s.joinRetryCount < 80) {
+        trace("ENSURE_JOIN:RETRY_SCHEDULE", {
+          paneRole,
+          chatId,
+          retry: s.joinRetryCount + 1,
+          channelReady: isChannelReady(),
+          hasContainer: !!cNow,
+        });
         s.joinRetryCount++;
         s.joinRetryTid = setTimeout(trySend, 200);
         log.debug("ensureJoin retry", {
@@ -1415,6 +1545,8 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
         s.lastJoinSentAt = Date.now();
         s.lastActivityAt = Date.now();
         log.warn("ensureJoin abandoned after retries", { paneRole, chatId });
+        trace("ENSURE_JOIN:ABANDON_TO_PENDING", { paneRole, chatId });
+
         
         
         // Re-arm on container OR channel readiness (whichever becomes ready first)
@@ -1466,6 +1598,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
       message: "",
     };
     log.info("ensureJoin: sending join", { paneRole, chatId, payload });
+    trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: s.phase });
     window.sendMessage(payload);
   };
 
@@ -1512,6 +1645,7 @@ window.ensureJoinForPane = function ensureJoinForPane(paneRole, force = false) {
     st.lastJoinSentAt = Date.now();
     const payload = { isReaction:false, isDelete:false, isJoin:true, conversation_id: chatId, message:"" };
     log.info("ensureJoin: immediate join", { paneRole, chatId, payload });
+    trace("ENSURE_JOIN:SEND_JOIN", { paneRole, chatId, phase: st.phase });
     window.sendMessage(payload);
 
   };
@@ -1536,6 +1670,15 @@ function handleChatRouteChangeDual() {
     chatGen: window._chatGen,
     changed,
   });
+  trace("ROUTE:CHANGE", {
+    prevMain,
+    prevAI,
+    main,
+    ai,
+    chatGen: window._chatGen,
+    changed,
+  });
+
 
   const __entity = getCurrentEntityFromUrl();
   if (__entity) {
