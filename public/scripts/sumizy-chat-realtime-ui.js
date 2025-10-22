@@ -308,6 +308,30 @@ function waitForChannelReady(timeoutMs = 20000) {
   });
 }
 
+// --- History nudge: resend a JOIN in the original format ---
+window.requestHistoryNudge = function requestHistoryNudge(conversation_id, paneRole = "main") {
+  try {
+    const info = window.currentChannel;
+    if (!info || !isChannelReady()) {
+      trace("NUDGE:SKIP (channel not ready)", { conversation_id, paneRole });
+      return;
+    }
+    const payload = {
+      isReaction: false,
+      isDelete: false,
+      isJoin: true,       // <- EXACT same schema as your normal JOIN
+      conversation_id,
+      message: ""
+    };
+    trace("NUDGE:RESEND_JOIN", { conversation_id, paneRole });
+    const ch = window.xanoRealtime?.[info.channelKey]?.channel;
+    if (ch && typeof ch.message === "function") ch.message(payload);
+  } catch (e) {
+    trace("NUDGE:ERROR", { err: String(e) });
+  }
+};
+
+
 
 
 /* ─────────── Reactions aggregation (fallback when no window.agg) ─────────── */
@@ -862,7 +886,10 @@ function resetStateForPane(paneRole, chatId) {
     joinPending: false,
     joinRetryTid: 0,
     joinRetryCount: 0,
+    historyNudgeTid: 0, // <-- add
+    httpFallbackTid: 0, // <-- add
   };
+  
   
   log.info("Pane state reset", { paneRole, chatId });
   return window._paneState[key];
@@ -1195,16 +1222,13 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
 
             if (st.phase === "live") {
               const fresh = dedupeById(relevant, st.seen);
-              if (!fresh.length) continue;
-              trace("RT:APPEND_LIVE", {
-                paneRole,
-                add: toAppend.length,
-                phase: st.phase,
-              });
+if (!fresh.length) continue;
 
-              const toAppend = sortAscByTs(fresh).filter(
-                (m) => parseTime(m.created_at) >= st.lastTs
-              );
+const toAppend = sortAscByTs(fresh).filter(
+  (m) => parseTime(m.created_at) >= st.lastTs
+);
+trace("RT:APPEND_LIVE", { paneRole, add: toAppend.length, phase: st.phase });
+
               if (!toAppend.length) continue;
 
               log.info("Appending live", {
@@ -1238,26 +1262,6 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
     try {
       flushOutboundQueue();
     } catch {}
-    /* ─────────── History request nudge ─────────── */
-    try {
-      const info = window.currentChannel;
-      if (!info || !isChannelReady()) {
-        trace("NUDGE:SKIP (channel not ready)", { conversation_id, paneRole });
-        return;
-      }
-      const payload = {
-        isReaction: false,
-        isDelete: false,
-        isJoin: true, // ← same as your original join
-        conversation_id,
-        message: "",
-      };
-      trace("NUDGE:RESEND_JOIN", { conversation_id, paneRole });
-      const ch = window.xanoRealtime?.[info.channelKey]?.channel;
-      if (ch && typeof ch.message === "function") ch.message(payload);
-    } catch (e) {
-      trace("NUDGE:ERROR", { err: String(e) });
-    }
     
 
     trace("JOIN_CHANNEL:READY", { channelKey, userId });
