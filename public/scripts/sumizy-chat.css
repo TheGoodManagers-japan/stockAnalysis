@@ -59,7 +59,7 @@
 
 .chat-messages {
     padding: 0;
-    background: #fff;
+    background: transparent;
     overflow-y: auto;
     max-height: none;
     /* remove the 600px cap */
