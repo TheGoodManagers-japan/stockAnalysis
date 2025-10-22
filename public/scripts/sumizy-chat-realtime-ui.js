@@ -100,9 +100,12 @@ function getCurrentEntityFromUrl() {
 function getRGForEntityOrPane(paneRole) {
   if (paneRole === "main") {
     const ent = getCurrentEntityFromUrl();
-    if (ent && ENTITY_TO_RG[ent]) return ENTITY_TO_RG[ent];
+    const mapped = ent ? ENTITY_TO_RG[ent] : null;
+    if (mapped != null && document.getElementById(`rg${mapped}`)) {
+      return mapped;
+    }
   }
-  return getRGForPane(paneRole); // legacy heuristic fallback
+  return getRGForPane(paneRole); // fallback to live DOM
 }
 
 
@@ -228,30 +231,19 @@ function getRGForPane(paneRole) {
   );
   if (!nodes.length) return null;
 
-  // newest first by rg number
   nodes.sort((a, b) => {
-    const aNum = parseInt(String(a.id).match(/\d+/)?.[0] || "0", 10);
-    const bNum = parseInt(String(b.id).match(/\d+/)?.[0] || "0", 10);
-    return bNum - aNum;
+    const na = parseInt((a.id.match(/\d+/) || [0])[0], 10);
+    const nb = parseInt((b.id.match(/\d+/) || [0])[0], 10);
+    return nb - na; // newest first
   });
 
-  // choose the best candidate
   const pick =
-    nodes.find(
-      (el) => el.offsetParent !== null && el.querySelector(".chat-messages")
-    ) ||
-    nodes.find((el) => el.offsetParent !== null) ||
-    nodes.find((el) => el.querySelector(".chat-messages")) ||
+    nodes.find(el => el.offsetParent && el.querySelector('.chat-messages')) ||
+    nodes.find(el => el.offsetParent) ||
+    nodes.find(el => el.querySelector('.chat-messages')) ||
     nodes[0];
 
-  // prune older duplicates to avoid confusion in queries/selections
-  for (const n of nodes) {
-    if (n === pick) continue;
-    try {
-      n.remove();
-    } catch {}
-  }
-
+  // ❌ do NOT remove the others
   const m = String(pick.id).match(/\d+/);
   const rgNum = m ? parseInt(m[0], 10) : null;
   return Number.isFinite(rgNum) ? rgNum : null;
@@ -288,34 +280,24 @@ const keyParts = (paneKey) => {
 };
 
 function clearPaneDom(paneRole) {
-  if (paneRole === "ai") {
-    // Preserve AI pane by default
-    log.info("clearPaneDom skipped for AI pane (preserve)", { paneRole });
-    return;
-  }
+  if (paneRole === "ai") return; // keep your current preserve behavior
   const rg = getRGForEntityOrPane(paneRole);
-  if (rg == null) {
-    log.warn("clearPaneDom skipped (no RG)", { paneRole });
+  const container = rg && document.querySelector(`#rg${rg} .chat-messages`);
+  if (!container) {
+    log.warn("clearPaneDom skipped (no container)");
     return;
   }
-  const container = document.querySelector(`#rg${rg} .chat-messages`);
-  if (container) {
-    container.innerHTML = "";
-    // reset per-chat scroll marker
-    const wrap = container.closest(`[id^="rg"]`);
-    if (wrap) {
-      const c = wrap.querySelector(".chat-messages");
-      if (c) c.dataset.scrolledOnce = "false";
-    }
-
-    log.info("Cleared pane DOM", { paneRole, rg });
-  }
-  if (typeof window.hideAITypingIndicator === "function") {
+  container.innerHTML = "";
+  const wrap = container.closest(`[id^="rg"]`);
+  if (wrap)
+    (wrap.querySelector(".chat-messages") || {}).dataset.scrolledOnce = "false";
+  if (typeof window.hideAITypingIndicator === "function")
     try {
       window.hideAITypingIndicator();
     } catch {}
-  }
+  log.info("Cleared pane DOM", { paneRole, rg });
 }
+
 
 
 function safeSelId(id) {
@@ -336,17 +318,26 @@ function _esc(s) {
 function waitForPaneContainer(paneRole, timeoutMs = 20000) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const tryNow = () => {
+    const tick = () => {
       const rg = getRGForEntityOrPane(paneRole);
       const el =
         rg != null ? document.querySelector(`#rg${rg} .chat-messages`) : null;
-      if (el) return resolve(true); // existence is enough for us to later inject
+
+      // Fallback: any visible pane with chat-messages
+      const any =
+        el ||
+        document.querySelector(
+          `[id^="rg"][data-pane="${paneRole}"] .chat-messages`
+        );
+
+      if (any) return resolve(true);
       if (Date.now() - start > timeoutMs) return resolve(false);
-      requestAnimationFrame(tryNow);
+      requestAnimationFrame(tick);
     };
-    tryNow();
+    tick();
   });
 }
+
 
 
 // >>> PATCH: wait for realtime channel to be callable
