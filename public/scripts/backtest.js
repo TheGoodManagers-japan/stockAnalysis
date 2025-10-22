@@ -727,6 +727,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     return Math.round(px / tick) * tick;
   }
 
+  // ---- NEW PROFILE: target-only (no stop, hold for target) ----
+  const TARGET_ONLY_PROFILE = {
+    id: "target_only",
+    label: "Target only (no stop, no time exit)",
+    compute: ({ entry, sig }) => ({
+      // we must return a numeric stop for plumbing; set to 0 but it will be ignored
+      stop: 0,
+      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget),
+    }),
+    // no advance(): never trails; we also skip time exits for this profile
+  };
+
   const ATR_TRAIL_PROFILE = {
     id: "atr_trail",
     label: "ATR trail (Chandelier, arm at target)",
@@ -837,8 +849,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const USE_TRAIL = true; // opts.useTrailing = true/false
   const activeProfiles = USE_TRAIL
-    ? [RAW_PROFILE, ATR_TRAIL_PROFILE]
-    : [RAW_PROFILE];
+    ? [RAW_PROFILE, ATR_TRAIL_PROFILE, TARGET_ONLY_PROFILE] // <-- NEW
+    : [RAW_PROFILE, TARGET_ONLY_PROFILE]; // <-- NEW
 
   // --- NEW: regime options ---
   const REGIME_TICKER =
@@ -1042,33 +1054,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
 
             // now do your normal exit checks on today's bar i
-            let exit = null;
+           let exit = null;
 
-            // 1) price-based exits first
-            if (today.low <= st.stop) {
-              // If the (possibly trailed) stop is at/above entry, the trade is profitable — count as WIN
-              const isProfit = st.stop >= st.entry; // use '>' if you want breakeven to be LOSS
-              exit = {
-                type: "STOP",
-                price: st.stop,
-                result: isProfit ? "WIN" : "LOSS",
-              };
-            } else if (!st.skipTarget && today.high >= st.target) {
-              exit = { type: "TARGET", price: st.target, result: "WIN" };
-            }
+           // 1) price-based exits first
+           if (!st.noStop && today.low <= st.stop) {          // <-- NEW guard
+             const isProfit = st.stop >= st.entry;
+             exit = { type: "STOP", price: st.stop, result: isProfit ? "WIN" : "LOSS" };
+           } else if (!st.skipTarget && today.high >= st.target) {
+             exit = { type: "TARGET", price: st.target, result: "WIN" };
+           }
 
-            // 2) optional time exit (unchanged)
-            if (!exit && HOLD_BARS > 0) {
-              const ageBars = i - st.entryIdx;
-              if (ageBars >= HOLD_BARS) {
-                const rawPnL = today.close - st.entry;
-                exit = {
-                  type: "TIME",
-                  price: today.close,
-                  result: rawPnL >= 0 ? "WIN" : "LOSS",
-                };
-              }
-            }
+           // 2) optional time exit (only if this profile allows it)
+           if (!exit && HOLD_BARS > 0 && !st.ignoreTimeExit) { // <-- NEW guard
+             const ageBars = i - st.entryIdx;
+             if (ageBars >= HOLD_BARS) {
+               const rawPnL = today.close - st.entry;
+               exit = {
+                 type: "TIME",
+                 price: today.close,
+                 result: rawPnL >= 0 ? "WIN" : "LOSS",
+               };
+             }
+           }
 
             // (rest of your existing exit handling unchanged)
 
@@ -1366,6 +1373,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   entryATR,
                   trailArmed: false,
                   skipTarget: p.id === "atr_trail", // <— never take fixed target on the trailing profile
+
+                  // ---- NEW flags for target-only profile ----
+                  noStop: p.id === "target_only", // ignore stop checks
+                  ignoreTimeExit: p.id === "target_only", // ignore HOLD_BARS exits
 
                   ST,
                   LT,
