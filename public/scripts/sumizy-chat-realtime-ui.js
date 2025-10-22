@@ -151,6 +151,58 @@ if (typeof window.fetchHistoryForConversation !== "function") {
   window.fetchHistoryForConversation = null; // explicit no-op
 }
 
+// --- Smart auto-scroll to latest message (with retries & image-load awareness)
+function scheduleAutoScrollToLatestForRG(rg, reason = "history") {
+  if (rg == null) return;
+  const container = document.querySelector(`#rg${rg} .chat-messages`);
+  if (!container) return;
+
+  // only force-scroll once per chat load (unless explicitly called with reason="history")
+  const already = container.dataset.scrolledOnce === "true";
+  const nearBottom = () => {
+    const diff = container.scrollHeight - (container.scrollTop + container.clientHeight);
+    return diff < 40; // px
+  };
+
+  const shouldForce =
+    reason === "history" || !already || container.scrollTop < 20 || nearBottom();
+
+  if (!shouldForce) return;
+
+  const doScroll = () => {
+    try {
+      container.scrollTop = container.scrollHeight;
+      // also try parent if it’s a scroll port
+      container.parentElement?.scrollTo?.(0, container.parentElement.scrollHeight || container.scrollHeight);
+    } catch {}
+  };
+
+  // a few passes to survive late layout / fonts / images
+  requestAnimationFrame(doScroll);
+  setTimeout(doScroll, 0);
+  setTimeout(doScroll, 120);
+  setTimeout(doScroll, 500);
+
+  // one-shot image listeners: when images resolve, re-scroll
+  try {
+    const imgs = Array.from(container.querySelectorAll("img"));
+    let pending = 0;
+    const onImg = () => {
+      if (--pending <= 0) setTimeout(doScroll, 16);
+    };
+    imgs.forEach((img) => {
+      if (!img.complete) {
+        pending++;
+        img.addEventListener("load", onImg, { once: true });
+        img.addEventListener("error", onImg, { once: true });
+      }
+    });
+  } catch {}
+
+  container.dataset.scrolledOnce = "true";
+}
+
+
 
 
 
@@ -254,6 +306,13 @@ function clearPaneDom(paneRole) {
   const container = document.querySelector(`#rg${rg} .chat-messages`);
   if (container) {
     container.innerHTML = "";
+    // reset per-chat scroll marker
+    const wrap = container.closest(`[id^="rg"]`);
+    if (wrap) {
+      const c = wrap.querySelector(".chat-messages");
+      if (c) c.dataset.scrolledOnce = "false";
+    }
+
     log.info("Cleared pane DOM", { paneRole, rg });
   }
   if (typeof window.hideAITypingIndicator === "function") {
@@ -1031,6 +1090,11 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
         }
         injectBatchForPane(paneRole, chatId, ordered);
       }
+      try {
+        const rg = getRGForEntityOrPane(paneRole);
+        if (rg != null) scheduleAutoScrollToLatestForRG(rg, "history");
+      } catch {}
+    
 
   st.prebuffer = [];
   trace("HISTORY:GO_LIVE", { paneRole, chatId, orderedCount: ordered.length });
