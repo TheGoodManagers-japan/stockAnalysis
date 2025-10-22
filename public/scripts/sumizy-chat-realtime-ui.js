@@ -1119,6 +1119,11 @@ function injectHistoryAndGoLiveForPane(paneRole, chatId, incomingHistory) {
   } catch {}
 }
 
+window.currentChatId ??= function currentChatId() {
+  return window._paneActive?.main || window._paneActive?.ai || null;
+};
+
+
 /* ─────────── Channel join/leave/send (unchanged) ─────────── */
 window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
   if (!userId || !authToken || !realtimeHash) return;
