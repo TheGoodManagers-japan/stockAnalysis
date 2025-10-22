@@ -1239,34 +1239,26 @@ try { ensureHistoryBarrier(paneRole)._resolve?.(); } catch {}
       flushOutboundQueue();
     } catch {}
     /* ─────────── History request nudge ─────────── */
-    window.requestHistoryNudge = function requestHistoryNudge(
-      conversation_id,
-      paneRole = "main"
-    ) {
-      try {
-        const info = window.currentChannel;
-        if (!info || !isChannelReady()) {
-          trace("NUDGE:SKIP (channel not ready)", {
-            conversation_id,
-            paneRole,
-          });
-          return;
-        }
-        const payload = {
-          // backend-agnostic event; server should interpret as “send me the backlog”
-          action: "event",
-          type: "request_history",
-          conversation_id,
-          pane: paneRole,
-        };
-        trace("NUDGE:REQUEST_HISTORY", { conversation_id, paneRole });
-        // send through the same pipe
-        const ch = window.xanoRealtime?.[info.channelKey]?.channel;
-        if (ch && typeof ch.message === "function") ch.message(payload);
-      } catch (e) {
-        trace("NUDGE:ERROR", { err: String(e) });
+    try {
+      const info = window.currentChannel;
+      if (!info || !isChannelReady()) {
+        trace("NUDGE:SKIP (channel not ready)", { conversation_id, paneRole });
+        return;
       }
-    };
+      const payload = {
+        isReaction: false,
+        isDelete: false,
+        isJoin: true, // ← same as your original join
+        conversation_id,
+        message: "",
+      };
+      trace("NUDGE:RESEND_JOIN", { conversation_id, paneRole });
+      const ch = window.xanoRealtime?.[info.channelKey]?.channel;
+      if (ch && typeof ch.message === "function") ch.message(payload);
+    } catch (e) {
+      trace("NUDGE:ERROR", { err: String(e) });
+    }
+    
 
     trace("JOIN_CHANNEL:READY", { channelKey, userId });
 
