@@ -206,14 +206,29 @@ function showFileViewer(url, name, isImage) {
   if (isImage) {
     const img = ov.querySelector(".file-viewer-img");
     const loading = ov.querySelector(".file-viewer-loading");
-    img.onload = () => {
-      loading.style.display = "none";
-      img.style.display = "block";
+
+    const reveal = () => {
+      if (loading) loading.style.display = "none";
+      if (img) img.style.display = "block";
     };
-    img.onerror = () => {
-      loading.innerHTML = `<div class="file-viewer-icon">🚫</div><div>Failed to load image</div>`;
+
+    const fail = () => {
+      if (loading) {
+        loading.innerHTML = `<div class="file-viewer-icon">🚫</div><div>Failed to load image</div>`;
+      }
     };
+
+    // Attach listeners first
+    img.addEventListener("load", reveal, { once: true });
+    img.addEventListener("error", fail, { once: true });
+
+    // Handle the cached/already-loaded case
+    if (img.complete && img.naturalWidth > 0) {
+      // The image was loaded from cache before listeners were added
+      reveal();
+    }
   }
+  
 
   const close = () => {
     ov.style.animation = "fadeOut .2s ease-out";
