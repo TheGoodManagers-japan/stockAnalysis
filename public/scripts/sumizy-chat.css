@@ -1434,36 +1434,33 @@
 .reactions+.read-receipts {
     margin-top: 4px;
 }
-
-/* ─────────── Normal chat lane message bubble ─────────── */
-[data-pane="main"] .message .message-content-wrapper {
+/* ─────────── Normal lane: text-only bubble ─────────── */
+[data-pane="main"] .message .message-text {
     display: inline-block;
     background: #f3f4f6;
     /* light gray bubble */
     border: 1px solid #e5e7eb;
     border-radius: 18px 18px 18px 4px;
-    /* rounded corner like iMessage */
+    /* rounded tail shape */
     padding: 10px 14px;
-    max-width: 75%;
     line-height: 1.4;
     color: #1d1c1d;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    max-width: 75%;
+    white-space: pre-wrap;
+    /* preserve line breaks */
+    word-break: break-word;
     transition: background-color 0.15s ease, transform 0.15s ease;
 }
 
 /* subtle hover lift */
-[data-pane="main"] .message .message-content-wrapper:hover {
+[data-pane="main"] .message .message-text:hover {
     background: #edeef0;
     transform: translateY(-1px);
 }
 
-/* text and links inside bubble */
-[data-pane="main"] .message .message-text {
-    color: #1d1c1d;
-    font-size: 15px;
-}
-
-/* keep avatar and layout spacing tidy */
-[data-pane="main"] .message .message-wrapper {
-    align-items: flex-end;
+/* remove double margins when followed by reactions, etc. */
+[data-pane="main"] .message .reactions,
+[data-pane="main"] .message .read-receipts {
+    margin-top: 6px;
 }
