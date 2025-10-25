@@ -1436,22 +1436,15 @@
 }
 /* ─────────── Normal lane: text-only bubble ─────────── */
 [data-pane="main"] .message .message-text {
-    display: inline-block;
-    background: #f3f4f6;
-    /* light gray bubble */
-    border: 1px solid #e5e7eb;
-    border-radius: 18px 18px 18px 4px;
-    /* rounded tail shape */
-    padding: 10px 14px;
-    line-height: 1.4;
-    color: #1d1c1d;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    max-width: 75%;
-    white-space: pre-wrap;
-    /* preserve line breaks */
-    word-break: break-word;
-    transition: background-color 0.15s ease, transform 0.15s ease;
-}
+        font-size: 15px;
+        color: #374151;
+        line-height: 1.4;
+        background: #f9fafb;
+        padding: 8px 12px;
+        border-radius: 12px;
+        border-top-left-radius: 4px;
+        display: inline-block;
+    }
 
 /* subtle hover lift */
 [data-pane="main"] .message .message-text:hover {
