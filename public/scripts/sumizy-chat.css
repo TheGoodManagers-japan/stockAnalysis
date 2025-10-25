@@ -1434,3 +1434,36 @@
 .reactions+.read-receipts {
     margin-top: 4px;
 }
+
+/* ─────────── Normal chat lane message bubble ─────────── */
+[data-pane="main"] .message .message-content-wrapper {
+    display: inline-block;
+    background: #f3f4f6;
+    /* light gray bubble */
+    border: 1px solid #e5e7eb;
+    border-radius: 18px 18px 18px 4px;
+    /* rounded corner like iMessage */
+    padding: 10px 14px;
+    max-width: 75%;
+    line-height: 1.4;
+    color: #1d1c1d;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+/* subtle hover lift */
+[data-pane="main"] .message .message-content-wrapper:hover {
+    background: #edeef0;
+    transform: translateY(-1px);
+}
+
+/* text and links inside bubble */
+[data-pane="main"] .message .message-text {
+    color: #1d1c1d;
+    font-size: 15px;
+}
+
+/* keep avatar and layout spacing tidy */
+[data-pane="main"] .message .message-wrapper {
+    align-items: flex-end;
+}
