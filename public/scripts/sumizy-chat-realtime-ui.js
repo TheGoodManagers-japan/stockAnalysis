@@ -65,7 +65,6 @@ const log = window.__sumizyLog;
 })();
 const trace = window.__sumizyTrace;
 
-
 /* ─────────── Entity→RG map + URL entity resolver ─────────── */
 const ENTITY_TO_RG = {
   messaging: 1,
@@ -1231,22 +1230,6 @@ window.joinChannel = (userId, authToken, realtimeHash, channelOptions = {}) => {
             st.lastActivityAt = Date.now();
             
 
-            // PATCH A: During LIVE, ignore already-seen, older history unless it looks edited
-if (st.phase === "live") {
-  const hasUpdatedAt = (m) =>
-    m && m.updated_at != null && !Number.isNaN(parseTime(m.updated_at));
-  const newerThan = (m, t) => {
-    const c = parseTime(m.created_at);
-    const u = hasUpdatedAt(m) ? parseTime(m.updated_at) : 0;
-    return (u || c) > t;
-  };
-  relevant = relevant.filter((m) => {
-    const id = String(m?.id || "");
-    if (!id) return false;
-    // keep if unseen OR (edited/newer than our lastTs)
-    return !st.seen.has(id) || newerThan(m, st.lastTs);
-  });
-}
 
 
             // In-place patch
@@ -1281,7 +1264,26 @@ if (st.phase === "live") {
                 afterInjectUiRefresh(rg);
               }
             }
-            relevant = relevant.filter((m) => !updatedIds.has(String(m?.id)));
+            // Only now consider items that weren't already patched
+let pending = relevant.filter((m) => !updatedIds.has(String(m?.id)));
+
+// For LIVE, drop old history among *non-existing* nodes only
+if (st.phase === "live") {
+  const hasUpdatedAt = (m) =>
+    m && m.updated_at != null && !Number.isNaN(parseTime(m.updated_at));
+  const newerThan = (m, t) => {
+    const c = parseTime(m.created_at);
+    const u = hasUpdatedAt(m) ? parseTime(m.updated_at) : 0;
+    return (u || c) > t;
+  };
+  pending = pending.filter((m) => {
+    const id = String(m?.id || "");
+    if (!id) return false;
+    // unseen OR clearly newer/edited
+    return !st.seen.has(id) || newerThan(m, st.lastTs);
+  });
+}
+
 
             if (
               st.phase === "join_sent" ||
@@ -1295,9 +1297,11 @@ if (st.phase === "live") {
                   phase: st.phase,
                 });
 
-                injectHistoryAndGoLiveForPane(paneRole, chatId, relevant);
+                injectHistoryAndGoLiveForPane(paneRole, chatId, pending);
+
               } else {
-                const fresh = dedupeById(relevant, st.seen);
+                const fresh = dedupeById(pending, st.seen);
+
                 if (fresh.length) {
                   st.prebuffer.push(...fresh);
                   for (const m of fresh) {
@@ -1315,12 +1319,13 @@ if (st.phase === "live") {
             }
 
             if (st.phase === "live") {
-              const fresh = dedupeById(relevant, st.seen);
-if (!fresh.length) continue;
-
-const toAppend = sortAscByTs(fresh).filter(
-  (m) => parseTime(m.created_at) >= st.lastTs
-);
+              const fresh = dedupeById(pending, st.seen);
+              if (!fresh.length) continue;
+              
+              const toAppend = sortAscByTs(fresh).filter(
+                (m) => parseTime(m.created_at) >= st.lastTs
+              );
+              
 trace("RT:APPEND_LIVE", { paneRole, add: toAppend.length, phase: st.phase });
 
               if (!toAppend.length) continue;
