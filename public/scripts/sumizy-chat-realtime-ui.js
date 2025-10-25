@@ -572,7 +572,9 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     (t) => t && (t.language === "en" || t.language === "en_us")
   );
   const deleteText =
-    (enTr && enTr.translated_text) || msg.message || "Message Unsent";
+    (enTr && enTr.translated_text) ||
+    msg.message ||
+    "メッセージが削除されました / Message Unsent";
 
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
@@ -785,7 +787,7 @@ function updateReplyPreviewsForMessage(msg) {
     );
     if (en?.translated_text) return en.translated_text;
     if (trs[0]?.translated_text) return trs[0].translated_text;
-    return "Message Unsent";
+    return "メッセージが削除されました / Message Unsent";
   };
 
   const displayText = pickDisplayText(msg);
