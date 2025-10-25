@@ -176,14 +176,26 @@
 }
 
 /* Message actions menu */
+/* Message actions menu */
 .message-actions-menu {
-    position: absolute;
+    position: fixed;
+    /* was absolute */
     background: white;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .1);
     padding: 4px;
     z-index: 1000;
+    max-width: calc(100vw - 16px);
+    /* clamp horizontally on mobile */
+    box-sizing: border-box;
+    will-change: transform, top, left;
+    max-height: calc(100dvh - 16px);
+    /* prevent vertical overflow */
+    overflow: auto;
+    /* scroll if it still gets tall */
+    transform-origin: right top;
+    /* JS adjusts this after measuring */
 }
 
 .actions-row {
@@ -1456,4 +1468,26 @@
 [data-pane="main"] .message .reactions,
 [data-pane="main"] .message .read-receipts {
     margin-top: 6px;
+}
+
+
+
+.message-actions-menu .actions-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    /* ensure wrap on narrow screens */
+    row-gap: 6px;
+}
+
+@media (hover: none) {
+    .message .message-actions-trigger {
+        opacity: 0.8;
+        /* visible without hover */
+    }
+
+    .message .message-actions-trigger:hover {
+        opacity: 1;
+    }
 }

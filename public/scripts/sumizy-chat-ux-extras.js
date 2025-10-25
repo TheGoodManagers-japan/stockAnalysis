@@ -290,13 +290,88 @@ document.addEventListener("click", (e) => {
   );
 });
 
+/* Viewport helpers: prefer visualViewport on mobile */
+function __getViewportRect() {
+  const vv = window.visualViewport;
+  if (vv && typeof vv.width === "number" && typeof vv.height === "number") {
+    return { left: vv.offsetLeft || 0, top: vv.offsetTop || 0, width: vv.width, height: vv.height };
+  }
+  return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+}
+
+/**
+ * Position the actions menu within the viewport. Uses fixed positioning.
+ * - Prefers below the trigger; flips above if not enough space.
+ * - Clamps horizontally with padding.
+ */
+function __positionActionMenuFixed(menuEl, triggerRect, opts = {}) {
+  const pad = opts.pad ?? 8;
+  const vp = __getViewportRect();
+
+  // Render off-screen first to measure
+  menuEl.style.visibility = "hidden";
+  menuEl.style.position = "fixed";
+  menuEl.style.left = "0px";
+  menuEl.style.top  = "0px";
+  menuEl.style.maxWidth = `calc(${vp.width}px - ${pad * 2}px)`;
+  menuEl.style.zIndex = 9999;
+
+  // Force layout, then measure
+  const menuRect = menuEl.getBoundingClientRect();
+
+  // Decide vertical placement: below by default, else above
+  const spaceBelow = vp.top + vp.height - triggerRect.bottom;
+  const spaceAbove = triggerRect.top - vp.top;
+  const placeBelow = spaceBelow >= menuRect.height + pad || spaceBelow >= spaceAbove;
+
+  let top = placeBelow
+    ? triggerRect.bottom + pad
+    : Math.max(vp.top + pad, triggerRect.top - menuRect.height - pad);
+
+  // Horizontal: try to align right edge to trigger’s right; clamp to viewport
+  let left = Math.min(
+    Math.max(triggerRect.right - menuRect.width, vp.left + pad),
+    vp.left + vp.width - pad - menuRect.width
+  );
+
+  // If still off left, fall back to aligning to trigger’s left
+  if (left + menuRect.width > vp.left + vp.width - pad) {
+    left = Math.min(triggerRect.left, vp.left + vp.width - pad - menuRect.width);
+  }
+  if (left < vp.left + pad) left = vp.left + pad;
+
+  // Apply
+  menuEl.style.left = `${left}px`;
+  menuEl.style.top  = `${top}px`;
+  menuEl.style.visibility = "visible";
+
+  // Optional: transform origin for subtle scale/opacity effects
+  const originX = (triggerRect.left + triggerRect.width / 2) < (left + menuRect.width / 2) ? "left" : "right";
+  const originY = placeBelow ? "top" : "bottom";
+  menuEl.style.transformOrigin = `${originX} ${originY}`;
+  menuEl.dataset.drop = placeBelow ? "down" : "up";
+}
+
+
 /* ─────────── ACTION MENU (emoji | reply | delete) ───────────
    Note: AI pane messages hide the ⋮ trigger via render; still guard here. */
-let currentActionMenu = null;
-function hideActionMenu() {
-  currentActionMenu?.remove();
-  currentActionMenu = null;
-}
+   let currentActionMenu = null;
+   function hideActionMenu() {
+     if (currentActionMenu) {
+       try {
+         if (Array.isArray(currentActionMenu.__removers)) {
+           currentActionMenu.__removers.forEach((fn) => {
+             try {
+               fn();
+             } catch {}
+           });
+         }
+       } catch {}
+       currentActionMenu.remove();
+     }
+     currentActionMenu = null;
+   }
+   
 
 document.addEventListener("click", (e) => {
   if (!e.target.classList.contains("message-actions-trigger")) return;
@@ -345,15 +420,48 @@ document.addEventListener("click", (e) => {
         }
       </div>`;
 
-  const r = e.target.getBoundingClientRect();
-  Object.assign(menu.style, {
-    position: "absolute",
-    right: `${innerWidth - r.right + 5}px`,
-    top: `${r.bottom + 5}px`,
-    zIndex: 9999,
-  });
-  document.body.appendChild(menu);
-  currentActionMenu = menu;
+      document.body.appendChild(menu);
+      currentActionMenu = menu;
+
+      // Fixed, viewport-aware positioning
+      const triggerRect = e.target.getBoundingClientRect();
+      __positionActionMenuFixed(menu, triggerRect);
+
+      // Reposition on viewport changes (resize/scroll/zoom/keyboard)
+      const rePos = () => {
+        try {
+          const rect = e.target.getBoundingClientRect();
+          __positionActionMenuFixed(menu, rect);
+        } catch {}
+      };
+
+      // Save listeners on the element so we can clean up on hide
+      menu.__rePos = rePos;
+      menu.__removers = [];
+
+      menu.__removers.push(() => window.removeEventListener("resize", rePos));
+      menu.__removers.push(() =>
+        window.removeEventListener("scroll", rePos, true)
+      );
+      window.addEventListener("resize", rePos);
+      window.addEventListener("scroll", rePos, true);
+
+      // visualViewport events (mobile keyboard / zoom)
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener("resize", rePos);
+        window.visualViewport.addEventListener("scroll", rePos);
+        menu.__removers.push(() =>
+          window.visualViewport.removeEventListener("resize", rePos)
+        );
+        menu.__removers.push(() =>
+          window.visualViewport.removeEventListener("scroll", rePos)
+        );
+      }
+
+      // Re-measure after paint, in case fonts/layout shift
+      requestAnimationFrame(rePos);
+      setTimeout(rePos, 150);
+      
 
   menu.addEventListener("click", (ev) => {
     ev.stopPropagation();
