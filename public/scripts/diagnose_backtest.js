@@ -1,28 +1,15 @@
 #!/usr/bin/env node
 /**
  * diagnose_backtest.js
- * Node.js analyzer for your backtest output (the JSON your backtest.js returns).
+ *
+ * Extended version:
+ * - Everything from your original diagnostic pipeline
+ * - Adds sector / liquidity / price buckets
+ * - Adds per-ticker combo profiling using those buckets
+ * - Adds ticker PF ladder (best/worst tickers by PF)
  *
  * Usage:
  *   node diagnose_backtest.js path/to/backtest.json --out metrics.json --md report.md
- *
- * What it does:
- * - Reads the backtest JSON.
- * - Pulls all trades (from byTicker[].trades if present).
- * - Computes:
- *    * Overall metrics: winRate, PF, avgReturn, holding, exits.
- *    * Return distribution stats (medians, tails).
- *    * Feature deciles + win/ret by decile for: rsi, atrPct, volZ, pxVsMA25Pct, gapPct, maStackScore.
- *    * Pearson correlations vs win (1/0) and vs returnPct.
- *    * Sentiment breakdown (LT-ST combos, LT only, ST only).
- *    * Regime metrics (STRONG_UP/UP/RANGE/DOWN).
- *    * Cross-lag metrics (DAILY/WEEKLY by lag).
- *    * DIP-after-cross metrics.
- *    * Profile metrics and best profile.
- *    * Composite score ladder and correlations.
- *    * Playbook slices (prebuilt "good conditions").
- *    * Target-only deep dive (volatility + time-to-target).
- *    * Loss autopsy (why did losers lose).
  */
 
 const fs = require("fs");
@@ -80,8 +67,8 @@ function bucketIndex(value, bounds) {
   for (let i = 0; i < bounds.length - 1; i++) {
     const lo = bounds[i],
       hi = bounds[i + 1];
-    // include top in last bin
     if (i === bounds.length - 2) {
+      // last bin inclusive on top
       if (value >= lo && value <= hi) return i;
     } else if (value >= lo && value < hi) {
       return i;
@@ -154,7 +141,7 @@ function groupBy(arr, keyFn) {
   return m;
 }
 
-// --- NEW helper: generic basic stats for arrays ---
+// --- basic stats for arrays ---
 function basicStats(arr) {
   const clean = arr.filter(Number.isFinite).sort((a, b) => a - b);
   if (!clean.length) {
@@ -172,7 +159,7 @@ function basicStats(arr) {
   };
 }
 
-// --- NEW helper: summary for any subset of trades ---
+// --- subset summary ---
 function summarizeSubset(trades) {
   const m = summarizeMetrics(trades);
 
@@ -183,7 +170,7 @@ function summarizeSubset(trades) {
     .filter((t) => t.result === "LOSS")
     .map((t) => +t.returnPct || 0);
 
-  const winStats = basicStats(wins); // avg/med/p90/etc.
+  const winStats = basicStats(wins);
   const lossStats = basicStats(losses);
 
   const holdStats = basicStats(trades.map((t) => +t.holdingDays || 0));
@@ -196,7 +183,7 @@ function summarizeSubset(trades) {
   };
 }
 
-// --- NEW helper: time to target stats for target_only ---
+// --- time-to-target stats for target_only ---
 function summarizeTimeToTarget(trades) {
   const hits = trades.filter((t) => t.exitType === "TARGET");
 
@@ -219,22 +206,75 @@ function summarizeTimeToTarget(trades) {
   return {
     count: hits.length,
     winRate: wr,
-    days: dayStats, // {avg,med,p90,p10}
+    days: dayStats,
     returns: retStats,
   };
 }
 
-// -------------------- main --------------------
+// -------------------- NEW BUCKET HELPERS --------------------
+
+// Cross lag bucket: how "stale" the cross was
+function bucketLag(lagVal) {
+  if (!Number.isFinite(lagVal)) return "lag:n/a";
+  if (lagVal < 2) return "lag:early(<2)";
+  if (lagVal <= 5) return "lag:mid(2-5)";
+  return "lag:late(>5)";
+}
+
+// ATR% at entry bucket (volatility style)
+function bucketAtrPct(v) {
+  if (!Number.isFinite(v)) return "ATR:n/a";
+  if (v < 1.0) return "ATR:low(<1%)";
+  if (v < 3.0) return "ATR:med(1-3%)";
+  return "ATR:high(>3%)";
+}
+
+// Distance above MA25 bucket (extension / chase risk)
+function bucketPxVsMA25(distPct) {
+  if (!Number.isFinite(distPct)) return "pxMA25:n/a";
+  // distPct = how far above MA25 in %
+  if (distPct < 0) return "pxMA25:below";
+  if (distPct <= 2) return "pxMA25:0-2%";
+  if (distPct <= 6) return "pxMA25:2-6%";
+  return "pxMA25:>6%";
+}
+
+// Sector bucket (just echo sector for now)
+function bucketSector(sec) {
+  if (!sec) return "sector:n/a";
+  return `sector:${sec}`;
+}
+
+// Liquidity bucket (turnoverJPY ~ avgVol20 * entryPx)
+function bucketLiquidity(turnoverJPY) {
+  if (!Number.isFinite(turnoverJPY)) return "liq:n/a";
+  if (turnoverJPY < 5_000_000) return "liq:<5M";
+  if (turnoverJPY < 50_000_000) return "liq:5-50M";
+  if (turnoverJPY < 200_000_000) return "liq:50-200M";
+  return "liq:200M+";
+}
+
+// Price bucket (cash price per share)
+function bucketPrice(entryPx) {
+  if (!Number.isFinite(entryPx)) return "px:n/a";
+  if (entryPx < 200) return "px:<200";
+  if (entryPx < 500) return "px:200-500";
+  if (entryPx < 1000) return "px:500-1000";
+  if (entryPx < 3000) return "px:1k-3k";
+  return "px:3k+";
+}
+
+// -------------------- LOAD & PREP DATA --------------------
 const raw = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 const allTradesRaw = safeGetAllTrades(raw);
 
-// Guard: if no trades with analytics, explain and exit gracefully
+// Guard
 const withAnalytics = allTradesRaw.filter(
   (t) => t && t.analytics && typeof t.analytics === "object"
 );
 if (!withAnalytics.length) {
   console.log(
-    "[diagnose] No trades with `analytics` found. Ensure you applied the patch to store analytics on each trade."
+    "[diagnose] No trades with `analytics` found. Ensure trades store analytics."
   );
   process.exit(0);
 }
@@ -243,7 +283,7 @@ if (!withAnalytics.length) {
 const overall = summarizeMetrics(withAnalytics);
 const spotlight = raw?.spotlight || {};
 
-// Return distribution (for the whole set)
+// Return distribution
 const winReturns = withAnalytics
   .filter((t) => t.result === "WIN")
   .map((t) => +t.returnPct || 0);
@@ -253,7 +293,7 @@ const lossReturns = withAnalytics
 const winStatsAll = basicStats(winReturns);
 const lossStatsAll = basicStats(lossReturns);
 
-// Holding behavior breakdown
+// Holding behavior
 const holdsWin = basicStats(
   withAnalytics
     .filter((t) => t.result === "WIN")
@@ -267,12 +307,12 @@ const holdsLoss = basicStats(
 
 // -------------------- FEATURE ANALYSIS --------------------
 const FEATURES = [
-  "rsi", // 14-period RSI at entry
-  "atrPct", // ATR(14) as % of entry
-  "volZ", // 20-day volume Z-score
-  "pxVsMA25Pct", // price vs MA25 in %
-  "gapPct", // open-vs-prev-close gap in %
-  "maStackScore", // 0..3 (MA5>MA25, MA25>MA75, price>MA25)
+  "rsi",
+  "atrPct",
+  "volZ",
+  "pxVsMA25Pct",
+  "gapPct",
+  "maStackScore",
 ];
 
 const yWin = withAnalytics.map((t) => (t.result === "WIN" ? 1 : 0));
@@ -287,7 +327,7 @@ for (const f of FEATURES) {
   const finiteVals = values.filter(Number.isFinite);
   const { bounds } = deciles(finiteVals);
 
-  // bucket each trade into deciles of this feature
+  // bucket each trade into deciles
   const bins = Array.from({ length: 10 }, () => ({
     count: 0,
     wins: 0,
@@ -323,7 +363,6 @@ for (const f of FEATURES) {
   };
 }
 
-// helper: produce simple takeaway strings for features
 function pickFeatureTakeaways(fr) {
   const out = [];
   for (const [name, obj] of Object.entries(fr)) {
@@ -335,7 +374,6 @@ function pickFeatureTakeaways(fr) {
     const retDiff = r2(high.avgReturnPct - low.avgReturnPct);
     const cWin = obj.corr.win;
     const cRet = obj.corr.ret;
-
     const dir =
       cWin > 0.1 || retDiff > 0.2
         ? "↑"
@@ -377,7 +415,6 @@ const sentiPairSummaryRejected = summarizeSentiPairs(
   "rejected LT-ST"
 );
 
-// LT-only / ST-only sentiment (new fields in backtest return)
 const sentiLTActual = raw?.sentiment?.byLT?.bestByWinRateActual || [];
 const sentiLTRejected = raw?.sentiment?.byLT?.bestByWinRateRejected || [];
 const sentiSTActual = raw?.sentiment?.byST?.bestByWinRateActual || [];
@@ -404,7 +441,6 @@ const sentiSTRejectedSummary = summarizeSingleAxis(
 
 // -------------------- REGIME --------------------
 const regime = raw?.regime?.metrics || {};
-
 function fmtRegime(name) {
   const m = regime?.[name] || {};
   if (!m || !("trades" in m)) return `${name}: n/a`;
@@ -414,7 +450,6 @@ const regimeSummary = ["STRONG_UP", "UP", "RANGE", "DOWN"].map(fmtRegime);
 
 // -------------------- CROSS-LAG --------------------
 const xlag = raw?.crossing?.byLag || { WEEKLY: {}, DAILY: {} };
-
 function summarizeLag(side) {
   const m = xlag?.[side] || {};
   const keys = Object.keys(m)
@@ -444,7 +479,6 @@ function fmtDipAfter(label, m) {
 // -------------------- PROFILES --------------------
 const profiles = raw?.profiles || {};
 const bestProfiles = raw?.bestProfiles || {};
-
 function summarizeProfile(id, obj) {
   if (!obj || !obj.metrics) return null;
   const m = obj.metrics;
@@ -459,12 +493,11 @@ function summarizeProfile(id, obj) {
     exits: obj.exits || { target: 0, stop: 0, time: 0 },
   };
 }
-
 const profileSummaries = Object.entries(profiles)
   .map(([id, obj]) => summarizeProfile(id, obj))
   .filter(Boolean);
 
-// -------------------- COMPOSITE SCORE (rule-based score in backtest) --------------------
+// -------------------- COMPOSITE SCORE --------------------
 function metricsByScore(allTrades) {
   const buckets = {}; // score -> trades[]
   for (const t of allTrades) {
@@ -510,34 +543,23 @@ const scoreInfo = metricsByScore(withAnalytics);
 const scoreCorr = corrScore(withAnalytics);
 
 // -------------------- PLAYBOOK SLICES --------------------
-// These are "AND filters" that describe situations that look good/risky.
-// We'll define some candidate slices:
-
 function slice_HIGH_SCORE_6plus(t) {
   return Number.isFinite(t.score) && t.score >= 6;
 }
-
 function slice_DOWN_regime_ST_panic_weekly_flip(t) {
-  // Regime DOWN,
-  // ST capitulation (ST>=6),
-  // weekly/both cross lag >=2 (fresh-enough higher timeframe momentum),
-  // We look at t.regime, t.ST, t.crossType, t.crossLag
+  // DOWN regime, strong ST capitulation, flip lag >=2 bars
   return (
     t.regime === "DOWN" &&
     Number.isFinite(t.ST) &&
     t.ST >= 6 &&
     (t.crossType === "WEEKLY" ||
-      t.crossType === "BOTH" ||
-      t.crossType === "DAILY") &&
+      t.crossType === "DAILY" ||
+      t.crossType === "BOTH") &&
     Number.isFinite(t.crossLag) &&
     t.crossLag >= 2
   );
 }
-
 function slice_RANGE_regime_gap_up_near_MA25(t) {
-  // Regime RANGE, small positive gap (>0),
-  // px close to MA25 (pxVsMA25Pct <= 4),
-  // This is roughly "controlled strength from a base"
   const a = t.analytics || {};
   return (
     t.regime === "RANGE" &&
@@ -556,7 +578,7 @@ const SLICES = [
   },
   {
     name: "DOWN_regime_ST_panic_weekly_flip",
-    desc: "Regime DOWN, ST>=6 (panic pullback), WEEKLY/BOTH cross lag>=2",
+    desc: "Regime DOWN, ST>=6 (panic pullback), WEEKLY/DAILY/BOTH crossLag>=2",
     fn: slice_DOWN_regime_ST_panic_weekly_flip,
   },
   {
@@ -566,7 +588,6 @@ const SLICES = [
   },
 ];
 
-// helper to evaluate a slice
 function analyzeSlice(name, desc, trades, tradingDaysGuess = 1) {
   const n = trades.length;
   const m = summarizeMetrics(trades);
@@ -597,7 +618,6 @@ function analyzeSlice(name, desc, trades, tradingDaysGuess = 1) {
   };
 }
 
-// We'll guess tradingDays from raw.tradingDays if present
 const tradingDaysGuess = raw?.tradingDays || 1;
 const sliceResults = SLICES.map((s) => {
   const subset = withAnalytics.filter((t) => s.fn(t));
@@ -622,12 +642,11 @@ function profileBreakdownForSlice(sliceTrades) {
   return out.sort((a, b) => b.n - a.n);
 }
 
-// pick "best" slice = first slice in SLICES for now (HIGH_SCORE_6plus)
 const bestSlice = sliceResults[0];
 const bestSliceTrades = withAnalytics.filter((t) => SLICES[0].fn(t));
 const bestSliceProfiles = profileBreakdownForSlice(bestSliceTrades);
 
-// -------------------- TARGET_ONLY PROFILE DEEP DIVE --------------------
+// -------------------- TARGET_ONLY DEEP DIVE --------------------
 const targetOnlyAll = withAnalytics.filter((t) => t.profile === "target_only");
 const targetHits = targetOnlyAll.filter((t) => t.exitType === "TARGET");
 const targetEnd = targetOnlyAll.filter((t) => t.exitType === "END");
@@ -636,10 +655,9 @@ const targetAllStats = summarizeSubset(targetOnlyAll);
 const targetHitStats = summarizeSubset(targetHits);
 const targetEndStats = summarizeSubset(targetEnd);
 
-const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target stats
+const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target
 
 // -------------------- ENTRY ORIGIN COUNTS (crossType) --------------------
-// We want counts by crossType (WEEKLY / DAILY / BOTH / NONE) + perf stats.
 const crossCounts = {};
 withAnalytics.forEach((t) => {
   const ct = t.crossType || "NONE";
@@ -650,8 +668,6 @@ withAnalytics.forEach((t) => {
   if (t.result === "WIN") crossCounts[ct].wins++;
   crossCounts[ct].sumRet += +t.returnPct || 0;
 });
-
-// Turn that into an array of pretty rows
 const crossStats = Object.entries(crossCounts).map(([ct, info]) => {
   const wr = info.trades ? r2((info.wins / info.trades) * 100) : 0;
   const avgR = info.trades ? r2(info.sumRet / info.trades) : 0;
@@ -663,9 +679,7 @@ const crossStats = Object.entries(crossCounts).map(([ct, info]) => {
   };
 });
 
-
 // -------------------- LOSS AUTOPSY --------------------
-// crude heuristics for "why it lost"
 function isExtendedPx(t) {
   const a = t.analytics || {};
   return Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
@@ -680,7 +694,8 @@ function isEarlyLag(t) {
   );
 }
 function isBadRegime(t) {
-  return t.regime === "STRONG_UP"; // heuristic: buying strength blowoff
+  // heuristic: buying late strength blowoff
+  return t.regime === "STRONG_UP";
 }
 function weakPullback(t) {
   return Number.isFinite(t.ST) && t.ST < 6;
@@ -694,12 +709,184 @@ const lossReasons = {
   weakPullback: losers.filter(weakPullback).length,
 };
 
-// -------------------- Console output --------------------
+// -------------------------------------------------------------------------
+// NEW PART 1: Per-ticker combo breakdown (with sector/liquidity/price buckets)
+// -------------------------------------------------------------------------
+
+// We'll group trades by ticker first.
+const perTickerRaw = {};
+withAnalytics.forEach((t) => {
+  const tick = t.ticker || t.symbol || "UNKNOWN";
+  if (!perTickerRaw[tick]) perTickerRaw[tick] = [];
+  perTickerRaw[tick].push(t);
+});
+
+// helper to build a "combo row" for each trade with bucketed context
+function makeComboRow(t) {
+  const a = t.analytics || {};
+  return {
+    regime: t.regime || "n/a",
+    crossType: t.crossType || "NONE",
+    lagBucket: bucketLag(t.crossLag),
+    atrBucket: bucketAtrPct(a.atrPct),
+    pxMA25Bucket: bucketPxVsMA25(a.pxVsMA25Pct),
+    sectorBucket: bucketSector(t.sector),
+    liqBucket: bucketLiquidity(a.turnoverJPY),
+    priceBucket: bucketPrice(a.entryPx || t.entryPrice),
+    result: t.result,
+    ret: +t.returnPct || 0,
+  };
+}
+
+// summarize combos inside a ticker
+function summarizeCombos(rows) {
+  // rows: [{ regime, crossType, lagBucket,..., result, ret }, ...]
+  const map = new Map();
+  for (const tr of rows) {
+    const key = [
+      tr.regime,
+      tr.crossType,
+      tr.lagBucket,
+      tr.atrBucket,
+      tr.pxMA25Bucket,
+      tr.sectorBucket,
+      tr.liqBucket,
+      tr.priceBucket,
+    ].join("|");
+
+    if (!map.has(key)) {
+      map.set(key, {
+        count: 0,
+        wins: 0,
+        sumRet: 0,
+        regime: tr.regime,
+        crossType: tr.crossType,
+        lagBucket: tr.lagBucket,
+        atrBucket: tr.atrBucket,
+        pxMA25Bucket: tr.pxMA25Bucket,
+        sectorBucket: tr.sectorBucket,
+        liqBucket: tr.liqBucket,
+        priceBucket: tr.priceBucket,
+      });
+    }
+    const agg = map.get(key);
+    agg.count++;
+    if (tr.result === "WIN") agg.wins++;
+    agg.sumRet += tr.ret;
+  }
+  const list = [];
+  for (const [key, agg] of map.entries()) {
+    const losses = agg.count - agg.wins;
+    const avgRet = agg.sumRet / agg.count;
+    const gw = agg.sumRet > 0 ? agg.sumRet : 0;
+    const gl = agg.sumRet < 0 ? -agg.sumRet : 0;
+    // Profit factor here is crude because we don't have per-trade P/L breakdown inside agg.
+    // Let's approximate PF using wins/loses avg instead:
+    // We'll need per-trade data to do PF right; this is a shortcut.
+    // For ranking, avgRet & winRate are already very informative.
+    const wrPct = (agg.wins / agg.count) * 100;
+    list.push({
+      key,
+      count: agg.count,
+      winRate: r2(wrPct),
+      avgRet: r2(avgRet),
+      approxPF:
+        losses > 0 ? r2(wrPct / 100 / (1 - wrPct / 100 || 1e-9)) : Infinity,
+      regime: agg.regime,
+      crossType: agg.crossType,
+      lagBucket: agg.lagBucket,
+      atrBucket: agg.atrBucket,
+      pxMA25Bucket: agg.pxMA25Bucket,
+      sectorBucket: agg.sectorBucket,
+      liqBucket: agg.liqBucket,
+      priceBucket: agg.priceBucket,
+    });
+  }
+
+  // sort best first by PF-ish, then WR, then avgRet
+  const sorted = list.sort((a, b) => {
+    const pfA = Number.isFinite(a.approxPF) ? a.approxPF : -1;
+    const pfB = Number.isFinite(b.approxPF) ? b.approxPF : -1;
+    if (pfB !== pfA) return pfB - pfA;
+    if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+    return b.avgRet - a.avgRet;
+  });
+  return sorted;
+}
+
+// Build breakdown per ticker
+const perTickerCombos = {};
+Object.entries(perTickerRaw).forEach(([ticker, trades]) => {
+  const rows = trades.map(makeComboRow);
+  const combos = summarizeCombos(rows);
+
+  // Take best 3 and worst 3 with sample size filter (count >= 10 for trust)
+  const best3 = combos.filter((c) => c.count >= 10).slice(0, 3);
+  const worst3 = combos
+    .filter((c) => c.count >= 10)
+    .sort((a, b) => {
+      // reverse sort: worst PF / WR / avgRet
+      const pfA = Number.isFinite(a.approxPF) ? a.approxPF : -1;
+      const pfB = Number.isFinite(b.approxPF) ? b.approxPF : -1;
+      if (pfA !== pfB) return pfA - pfB;
+      if (a.winRate !== b.winRate) return a.winRate - b.winRate;
+      return a.avgRet - b.avgRet;
+    })
+    .slice(0, 3);
+
+  // overall ticker metrics
+  const m = summarizeMetrics(trades);
+
+  perTickerCombos[ticker] = {
+    overall: {
+      trades: m.trades,
+      winRate: m.winRate,
+      profitFactor: m.profitFactor,
+      avgRet: m.avgReturnPct,
+    },
+    bestCombos: best3,
+    worstCombos: worst3,
+  };
+});
+
+// -------------------------------------------------------------------------
+// NEW PART 2: Ticker PF ladder (global best/worst tickers)
+// -------------------------------------------------------------------------
+const tickerPF = [];
+if (Array.isArray(raw.byTicker)) {
+  for (const rec of raw.byTicker) {
+    const sym = rec.ticker || rec.symbol || "UNKNOWN";
+    const tradesArr = Array.isArray(rec.trades) ? rec.trades : [];
+    if (!tradesArr.length) continue;
+    const m = summarizeMetrics(tradesArr);
+    tickerPF.push({
+      ticker: sym,
+      trades: m.trades,
+      winRate: m.winRate,
+      pf: m.profitFactor,
+      avgRet: m.avgReturnPct,
+    });
+  }
+}
+
+const worstTickers = [...tickerPF]
+  .filter((t) => t.trades >= 30)
+  .sort((a, b) => (a.pf || 0) - (b.pf || 0))
+  .slice(0, 15);
+
+const bestTickers = [...tickerPF]
+  .filter((t) => t.trades >= 30)
+  .sort((a, b) => (b.pf || 0) - (a.pf || 0))
+  .slice(0, 15);
+
+// -------------------------------------------------------------------------
+// CONSOLE OUTPUT
+// -------------------------------------------------------------------------
+
 console.log("=== OVERALL ===");
 console.log(
   `Trades ${overall.trades} | WinRate ${overall.winRate}% | PF ${overall.profitFactor} | AvgRet ${overall.avgReturnPct}% | AvgHold ${overall.avgHoldingDays} bars`
 );
-
 
 if (spotlight && (spotlight.best || spotlight.worst)) {
   console.log("\n=== SPOTLIGHT TICKERS ===");
@@ -717,17 +904,13 @@ if (spotlight && (spotlight.best || spotlight.worst)) {
   }
 }
 
-
-// Signals / execution pressure
 const sig = raw?.signals || {};
 if (sig && Object.keys(sig).length) {
   console.log("\n=== SIGNALS / FLOW ===");
   console.log(
     `Signals total=${sig.total}, afterWarmup=${sig.afterWarmup}, whileFlat=${sig.whileFlat}, executed=${sig.executed}`
   );
-  console.log(
-    `Invalid=${sig.invalid}, riskStop>=px=${sig.riskStopGtePx}`
-  );
+  console.log(`Invalid=${sig.invalid}, riskStop>=px=${sig.riskStopGtePx}`);
   if (sig.blocked) {
     console.log(
       `Blocked: inTrade=${sig.blocked.inTrade}, cooldown=${sig.blocked.cooldown}, warmup=${sig.blocked.warmup}`
@@ -735,10 +918,13 @@ if (sig && Object.keys(sig).length) {
   }
   if (Number.isFinite(raw.tradesPerDay)) {
     console.log(
-      `Throughput: trades/day=${r2(raw.tradesPerDay)} over ${raw.tradingDays} trading days`
+      `Throughput: ${r2(raw.tradesPerDay)} trades/day over ${
+        raw.tradingDays
+      } trading days`
     );
   }
 }
+
 console.log("\n=== RETURN DISTRIBUTION (all trades) ===");
 console.log(
   `Win median ${winStatsAll.med}% | Win 90th ${winStatsAll.p90}% | Loss median ${lossStatsAll.med}% | Loss 10th ${lossStatsAll.p10}%`
@@ -774,7 +960,6 @@ console.log("\n=== DIP AFTER FRESH CROSS ===");
 console.log(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
 console.log(fmtDipAfter("DAILY", dipAfter.DAILY));
 
-// crossType origin summary
 console.log("\n=== ENTRY ORIGIN BY CROSSTYPE ===");
 crossStats.forEach((row) => {
   console.log(
@@ -782,8 +967,6 @@ crossStats.forEach((row) => {
   );
 });
 
-
-// -------------------- VOLATILITY BUCKETS (ATR% at entry) --------------------
 const volBuckets = raw?.volatility?.byAtrPctBucket || {};
 console.log("\n=== VOLATILITY BUCKETS (ATR% at entry) ===");
 Object.entries(volBuckets).forEach(([bucket, m]) => {
@@ -795,14 +978,16 @@ Object.entries(volBuckets).forEach(([bucket, m]) => {
 
 console.log("\n=== PROFILES ===");
 profileSummaries.forEach((p) => {
-    const exits = raw?.profiles?.[p.id]?.exits || {};
-    console.log(
-      `- ${p.label} (${p.id}): trades ${p.trades}, WR ${p.winRate}%, PF ${p.pf}, AvgRet ${p.avgRet}%, Hold ${p.hold} bars`
-    );
-    console.log(
-      `    exits: TARGET=${exits.target ?? 0}, STOP=${exits.stop ?? 0}, TIME=${exits.time ?? 0}`
-    );
-  });
+  const exits = raw?.profiles?.[p.id]?.exits || {};
+  console.log(
+    `- ${p.label} (${p.id}): trades ${p.trades}, WR ${p.winRate}%, PF ${p.pf}, AvgRet ${p.avgRet}%, Hold ${p.hold} bars`
+  );
+  console.log(
+    `    exits: TARGET=${exits.target ?? 0}, STOP=${exits.stop ?? 0}, TIME=${
+      exits.time ?? 0
+    }`
+  );
+});
 console.log(
   `  best by WR: ${bestProfiles.byWinRate}, best by PF: ${bestProfiles.byProfitFactor}, best by expR: ${bestProfiles.byExpR}`
 );
@@ -817,7 +1002,6 @@ console.log(
   `corr(score, win)=${r2(scoreCorr.win)}, corr(score, ret)=${r2(scoreCorr.ret)}`
 );
 
-// playbook slices
 console.log(
   "\n=== PLAYBOOK SLICES (candidate entry rules; already AND-filtered) ==="
 );
@@ -832,7 +1016,7 @@ sliceResults.forEach((s) => {
   console.log(`  hold(med all=${s.holdStats.med} bars)`);
 });
 
-// rejected / blocked alpha (simulated trades we skipped)
+// rejected / blocked alpha
 const rej = raw?.parallel?.rejectedBuys;
 if (rej && rej.summary) {
   console.log("\n=== REJECTED BUYS (SIM ONLY) ===");
@@ -859,7 +1043,7 @@ bestSliceProfiles.forEach((bp) => {
   );
 });
 
-// target_only deep dive
+// target_only dive
 console.log("\n=== TARGET_ONLY PROFILE DEEP DIVE ===");
 console.log(
   `All target_only trades: n=${targetOnlyAll.length}, WR ${targetAllStats.metrics.winRate}%, PF ${targetAllStats.metrics.profitFactor}, AvgRet ${targetAllStats.metrics.avgReturnPct}%, HoldAvg ${targetAllStats.metrics.avgHoldingDays} bars`
@@ -882,7 +1066,7 @@ console.log(
 );
 
 console.log(
-  `\n The slow grinders / never-hit-target (exitType=END): n=${targetEnd.length} | WR ${targetEndStats.metrics.winRate}% | PF ${targetEndStats.metrics.profitFactor} | AvgRet ${targetEndStats.metrics.avgReturnPct}%`
+  `\n The slow grinders / never-hit-target (exitType=END): n=${targetEnd.length} | WR ${targetEndStats.metrics.winRate}%, PF ${targetEndStats.metrics.profitFactor} | AvgRet ${targetEndStats.metrics.avgReturnPct}%`
 );
 console.log(
   ` These held longer: Hold med ${targetEndStats.holdStats.med} bars, p90 ${targetEndStats.holdStats.p90} bars`
@@ -894,9 +1078,49 @@ console.log(
   `Total losses ${losers.length}:\n` +
     ` - extendedPx (>6% above MA25): ${lossReasons.extendedPx}\n` +
     ` - earlyLag (too soon after flip): ${lossReasons.earlyLag}\n` +
-    ` - badRegime (STRONG_UP): ${lossReasons.badRegime}\n` +
-    ` - weakPullback (ST<6): ${lossReasons.weakPullback}`
+    ` - badRegime (STRONG_UP blowoff risk): ${lossReasons.badRegime}\n` +
+    ` - weakPullback (ST<6, not enough 'panic'): ${lossReasons.weakPullback}`
 );
+
+// new ladder output
+console.log("\n=== WORST TICKERS BY PF (n>=30 trades) ===");
+worstTickers.forEach((row) => {
+  console.log(
+    `[AVOID] ${row.ticker}: PF ${row.pf}, WR ${row.winRate}% , AvgRet ${row.avgRet}% , n=${row.trades}`
+  );
+});
+
+console.log("\n=== BEST TICKERS BY PF (n>=30 trades) ===");
+bestTickers.forEach((row) => {
+  console.log(
+    `[FOCUS] ${row.ticker}: PF ${row.pf}, WR ${row.winRate}% , AvgRet ${row.avgRet}% , n=${row.trades}`
+  );
+});
+
+// per-ticker combo summary (top/worst combos inside each ticker)
+console.log("\n=== PER-TICKER BEST/WORST COMBOS (sample>=10) ===");
+Object.entries(perTickerCombos).forEach(([ticker, info]) => {
+  const o = info.overall;
+  console.log(
+    `\n[ticker ${ticker}] overall PF ${o.profitFactor} | WR ${o.winRate}% | AvgRet ${o.avgRet}% | n=${o.trades}`
+  );
+  if (info.bestCombos.length) {
+    console.log("  BEST COMBOS:");
+    info.bestCombos.forEach((c) => {
+      console.log(
+        `    n=${c.count} | WR ${c.winRate}% | PF~${c.approxPF} | AvgRet ${c.avgRet}% :: ${c.regime}, ${c.crossType}, ${c.lagBucket}, ${c.atrBucket}, ${c.pxMA25Bucket}, ${c.sectorBucket}, ${c.liqBucket}, ${c.priceBucket}`
+      );
+    });
+  }
+  if (info.worstCombos.length) {
+    console.log("  WORST COMBOS:");
+    info.worstCombos.forEach((c) => {
+      console.log(
+        `    n=${c.count} | WR ${c.winRate}% | PF~${c.approxPF} | AvgRet ${c.avgRet}% :: ${c.regime}, ${c.crossType}, ${c.lagBucket}, ${c.atrBucket}, ${c.pxMA25Bucket}, ${c.sectorBucket}, ${c.liqBucket}, ${c.priceBucket}`
+      );
+    });
+  }
+});
 
 // -------------------- Optional outputs --------------------
 const exportObj = {
@@ -921,7 +1145,7 @@ const exportObj = {
   crossLag: xlag,
   dipAfterFreshCross: dipAfter,
   entryOriginByCrossType: crossStats,
-  volatilityBuckets: volBuckets,
+  volatilityBuckets: raw?.volatility?.byAtrPctBucket || {},
   profiles: profileSummaries,
   bestProfiles,
   scoreLadder: scoreInfo.scored,
@@ -937,6 +1161,12 @@ const exportObj = {
   signals: sig,
   rejectedBuys: rej || null,
   lossAutopsy: lossReasons,
+
+  // NEW
+  tickerPFAll: tickerPF,
+  worstTickers,
+  bestTickers,
+  perTickerCombos,
 };
 
 if (outPath) {
@@ -969,25 +1199,24 @@ if (mdPath) {
     }
     lines.push("");
   }
+
   lines.push("## Feature Takeaways");
   for (const s of takeaways) lines.push(`- ${s}`);
   lines.push("");
-  lines.push("## Sentiment (Top by WinRate)");
-  lines.push(`- ${sentiPairSummaryActual}`);
-  lines.push(`- ${sentiPairSummaryRejected}`);
-  lines.push("");
+
   lines.push("## Regime");
   for (const s of regimeSummary) lines.push(`- ${s}`);
   lines.push("");
+
   lines.push("## Cross-Lag");
   for (const s of lagSummary) lines.push(`- ${s}`);
   lines.push("");
+
   lines.push("## DIP After Fresh Cross");
   lines.push(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
   lines.push(fmtDipAfter("DAILY", dipAfter.DAILY));
   lines.push("");
 
-  // Entry source stats (DAILY / WEEKLY / BOTH / NONE)
   lines.push("## Entry Origin By CrossType");
   crossStats.forEach((row) => {
     lines.push(
@@ -996,7 +1225,6 @@ if (mdPath) {
   });
   lines.push("");
 
-  // Rejected buys (sim)
   if (rej && rej.summary) {
     lines.push("## Rejected Buys (Sim Only)");
     lines.push(
@@ -1013,17 +1241,59 @@ if (mdPath) {
   }
 
   lines.push("## Volatility Buckets (ATR% at entry)");
-  if (Object.keys(volBuckets).length === 0) {
+  const volBucketsKeys = Object.keys(volBuckets || {});
+  if (!volBucketsKeys.length) {
     lines.push("- n/a");
   } else {
-    for (const [bucket, m] of Object.entries(volBuckets)) {
-      if (!m) continue;
+    volBucketsKeys.forEach((bucket) => {
+      const m = volBuckets[bucket];
+      if (!m) return;
       lines.push(
         `- ${bucket}: n=${m.trades}, WR ${m.winRate}%, PF ${m.profitFactor}, AvgRet ${m.avgReturnPct}%`
       );
-    }
+    });
   }
   lines.push("");
+
+  lines.push("## Ticker PF Ladder (n>=30 trades)");
+  lines.push("### Worst");
+  worstTickers.forEach((row) => {
+    lines.push(
+      `- [AVOID] ${row.ticker}: PF ${row.pf}, WR ${row.winRate}%, AvgRet ${row.avgRet}%, n=${row.trades}`
+    );
+  });
+  lines.push("### Best");
+  bestTickers.forEach((row) => {
+    lines.push(
+      `- [FOCUS] ${row.ticker}: PF ${row.pf}, WR ${row.winRate}%, AvgRet ${row.avgRet}%, n=${row.trades}`
+    );
+  });
+  lines.push("");
+
+  lines.push("## Per-Ticker Best/Worst Combos (sample>=10)");
+  Object.entries(perTickerCombos).forEach(([ticker, info]) => {
+    lines.push(
+      `### ${ticker} :: PF ${info.overall.profitFactor}, WR ${info.overall.winRate}%, AvgRet ${info.overall.avgRet}%, n=${info.overall.trades}`
+    );
+    if (info.bestCombos.length) {
+      lines.push(" Best:");
+      info.bestCombos.forEach((c) => {
+        lines.push(
+          `  - n=${c.count} | WR ${c.winRate}% | PF~${c.approxPF} | AvgRet ${c.avgRet}% :: ${c.regime}, ${c.crossType}, ${c.lagBucket}, ${c.atrBucket}, ${c.pxMA25Bucket}, ${c.sectorBucket}, ${c.liqBucket}, ${c.priceBucket}`
+        );
+      });
+    }
+    if (info.worstCombos.length) {
+      lines.push(" Worst:");
+      info.worstCombos.forEach((c) => {
+        lines.push(
+          `  - n=${c.count} | WR ${c.winRate}% | PF~${c.approxPF} | AvgRet ${c.avgRet}% :: ${c.regime}, ${c.crossType}, ${c.lagBucket}, ${c.atrBucket}, ${c.pxMA25Bucket}, ${c.sectorBucket}, ${c.liqBucket}, ${c.priceBucket}`
+        );
+      });
+    }
+  });
+  lines.push("");
+
   lines.push("## Target Only Deep Dive");
   lines.push(
     `All target_only trades: n=${targetOnlyAll.length}, WR ${targetAllStats.metrics.winRate}%, PF ${targetAllStats.metrics.profitFactor}, AvgRet ${targetAllStats.metrics.avgReturnPct}%, HoldAvg ${targetAllStats.metrics.avgHoldingDays} bars`
@@ -1035,7 +1305,6 @@ if (mdPath) {
     `Never-hit (END exits): n=${targetEnd.length}, Hold med ${targetEndStats.holdStats.med} bars`
   );
 
-  // Signals / Flow
   if (sig && Object.keys(sig).length) {
     lines.push("");
     lines.push("## Signals / Flow");

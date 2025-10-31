@@ -513,7 +513,20 @@ function computeAnalytics(candles, idx, entry) {
   const pxAboveMA25 = Number.isFinite(m25) ? px > m25 : false;
   const pxAboveMA75 = Number.isFinite(m75) ? px > m75 : false;
 
+  // --- NEW liquidity proxy ---
+  // avgVol20 = mean of last ~20 vols up to idx
+  let avgVol20 = 0;
+  {
+    const start = Math.max(0, idx - 19);
+    const slice = vols.slice(start, idx + 1).filter(v => Number.isFinite(v));
+    avgVol20 = slice.length
+      ? slice.reduce((a, b) => a + b, 0) / slice.length
+      : 0;
+  }
+  const turnoverJPY = avgVol20 * px; // approximate daily yen turnover
+
   return {
+    // existing fields
     rsi: Number.isFinite(rsi) ? +rsi.toFixed(2) : null,
     atrPct: +atrPct.toFixed(2),
     volZ: Number.isFinite(volZ) ? +volZ.toFixed(2) : null,
@@ -521,7 +534,13 @@ function computeAnalytics(candles, idx, entry) {
     pxVsMA25Pct: Number.isFinite(pxVsMA25Pct) ? +pxVsMA25Pct.toFixed(2) : null,
     maStackScore,
     pxAboveMA25,
-    pxAboveMA75
+    pxAboveMA75,
+
+    // NEW fields used by diagnose_backtest.js
+    entryPx: px,                // fill price at entry
+    turnoverJPY: Number.isFinite(turnoverJPY)
+      ? +turnoverJPY.toFixed(2)
+      : null,
   };
 }
 
@@ -731,6 +750,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       : `${String(c).toUpperCase().replace(/\..*$/, "")}.T`
   );
 
+  // map ticker -> { code, sector } for fast lookup
+  const tickerInfoMap = Object.create(null);
+  for (const t of allTickers) {
+    if (!t || !t.code) continue;
+    tickerInfoMap[t.code.toUpperCase()] = t;
+  }
+
   // --- Fixed RAW profile: take the signal's suggested stop/target and never change them
   const RAW_PROFILE = {
     id: "raw_signal_levels",
@@ -889,7 +915,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
 
-
   const USE_TRAIL = true;
   const activeProfiles = USE_TRAIL
     ? [RAW_PROFILE, ATR_TRAIL_PROFILE, TARGET_ONLY_PROFILE] // <-- NEW
@@ -1023,7 +1048,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
-
 
     try {
       const candles = await fetchHistory(code, FROM, TO);
@@ -1184,35 +1208,39 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 Number.isFinite(st.crossLag) &&
                 st.crossLag <= 3;
 
-              const trade = {
-                ticker: code,
-                profile: p.id,
-                strategy: st.kind || "DIP",
+                const trade = {
+                  ticker: code,
+                  profile: p.id,
+                  strategy: st.kind || "DIP",
 
-                entryDate: toISO(candles[st.entryIdx].date),
-                exitDate: toISO(today.date),
-                returnPct: r2(pctRet),
-                result: exit.result,
-                holdingDays: i - st.entryIdx,
-                exitType: exit.type,
+                  entryDate: toISO(candles[st.entryIdx].date),
+                  exitDate: toISO(today.date),
+                  returnPct: r2(pctRet),
+                  result: exit.result,
+                  holdingDays: i - st.entryIdx,
+                  exitType: exit.type,
 
-                entry: r2(st.entry),
-                exit: r2(exit.price),
-                stop: st.stopInit,
-                target: st.target,
-                R: Rval,
+                  entry: r2(st.entry),
+                  exit: r2(exit.price),
+                  stop: st.stopInit,
+                  target: st.target,
+                  R: Rval,
 
-                ST: st.ST,
-                LT: st.LT,
-                regime: st.regime || "RANGE",
-                crossType: st.crossType || null,
-                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-                analytics: st.analytics || null,
-                score: Number.isFinite(st.score) ? st.score : null,
+                  ST: st.ST,
+                  LT: st.LT,
+                  regime: st.regime || "RANGE",
+                  crossType: st.crossType || null,
+                  crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+                  analytics: st.analytics || null,
+                  score: Number.isFinite(st.score) ? st.score : null,
 
-                // 🔥 NEW FIELDS
-                dipAfterFreshCross: isDipAfterFreshCrossSignal,
-              };
+                  // NEW: enrich for diagnose_backtest.js
+                  sector: tickerInfoMap[code]?.sector || null,
+
+                  // convenience label you already had
+                  dipAfterFreshCross: isDipAfterFreshCrossSignal,
+                };
+                
 
               // 🔥 Optional convenience label
               trade.entryArchetype = trade.dipAfterFreshCross
@@ -1561,55 +1589,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   entryIdx: entryBarIdx,
                   entry,
 
-                  // base stop & reference stop
                   stop: isTargetOnly ? null : qStop,
                   stopInit: isTargetOnly ? null : qStop,
-
-                  // we keep `target` for reporting (what was first target on entry),
-                  // but the ladder logic will manage its own `nextTarget`.
                   target: qTarget,
 
-                  // === LADDER TRAIL FIELDS (used only when p.id === "atr_trail") ===
-                  // rung: how many promotions we’ve done so far (0 at entry)
+                  // ladder / trail fields
                   rung: p.id === "atr_trail" ? 0 : null,
-
-                  // nextTarget: the level we want to hit next to trigger a promotion.
                   nextTarget: p.id === "atr_trail" ? qTarget : null,
-
-                  // baseDelta: how much we raise target each promotion.
-                  // We'll define it as (firstTarget - entry). So T2 = T1 + baseDelta, etc.
                   baseDelta: p.id === "atr_trail" ? qTarget - entry : null,
-
-                  // prevTargetFloor: last locked-in target level we can use as future stop floor
                   prevTargetFloor: null,
-
-                  // lastPromotionIdx: index in candles where we last promoted the ladder.
-                  // At entry, treat the entry itself as the "latest promotion".
                   lastPromotionIdx: p.id === "atr_trail" ? entryBarIdx : null,
-
-                  // timeBudgetBars: how many bars we're allowed to wait
-                  // after the most recent promotion before TIME exit kills it.
-                  // We'll seed with HOLD_BARS from outer scope.
                   timeBudgetBars:
                     p.id === "atr_trail"
                       ? Number.isFinite(HOLD_BARS)
                         ? HOLD_BARS
                         : 30
                       : null,
-
-                  // ageSincePromo will be filled in advance() as we go.
                   ageSincePromo: 0,
 
-                  // We no longer use trailArmed / entryATR / etc. for ATR logic.
-                  // Keep them for other profiles if you want, but they're not needed anymore.
                   entryATR,
                   trailArmed: false,
 
-                  // We NEVER auto-sell at target in atr_trail ladder mode.
-                  // So skipTarget must be true for atr_trail and false otherwise.
                   skipTarget: p.id === "atr_trail",
-
-                  // behavior flags
                   noStop: isTargetOnly,
                   ignoreTimeExit: false,
 
@@ -1622,8 +1623,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                       .trim() || "UNKNOWN",
                   crossType: selected,
                   crossLag: Number.isFinite(lag) ? lag : null,
-                  analytics,
+
+                  analytics, // <-- now includes entryPx & turnoverJPY after Patch 2A
                   score,
+
+                  // NEW: store sector for later exit reporting
+                  sector: tickerInfoMap[code]?.sector || null,
                 });
                 
 
@@ -1636,132 +1641,133 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
       // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
-// --- Force-close any remaining open positions at end-of-data (bookkeeping only)
-for (const p of activeProfiles) {
-  const list = openByProfile[p.id] || [];
-  if (!list.length) continue;
+      // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
+      for (const p of activeProfiles) {
+        const list = openByProfile[p.id] || [];
+        if (!list.length) continue;
 
-  const lastIdx = candles.length - 1;
-  const lastBar = candles[lastIdx];
-  const lastClose = lastBar.close;
+        const lastIdx = candles.length - 1;
+        const lastBar = candles[lastIdx];
+        const lastClose = lastBar.close;
 
-  for (const st of list) {
-    const ageBars = lastIdx - st.entryIdx;
-    const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
+        for (const st of list) {
+          const ageBars = lastIdx - st.entryIdx;
+          const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
 
-    let exitTypeFinal;
-    let endResult;
+          let exitTypeFinal;
+          let endResult;
 
-    if (p.id === "atr_trail") {
-      // firstTarget = the original first target we stored on entry
-      const firstTarget = Number(st.target);
+          if (p.id === "atr_trail") {
+            // firstTarget = the original first target we stored on entry
+            const firstTarget = Number(st.target);
 
-      // breakevenFloor = where we ratcheted the stop after promotion.
-      // if stop >= entry, that means we locked profit at/above breakeven+buffer.
-      const breakevenFloor = Number.isFinite(st.stop) ? st.stop : st.entry;
+            // breakevenFloor = where we ratcheted the stop after promotion.
+            // if stop >= entry, that means we locked profit at/above breakeven+buffer.
+            const breakevenFloor = Number.isFinite(st.stop)
+              ? st.stop
+              : st.entry;
 
-      if (
-        Number.isFinite(firstTarget) &&
-        lastClose >= firstTarget
-      ) {
-        // finished above or equal to first target -> treat like TARGET
-        exitTypeFinal = "TARGET";
-        endResult = "WIN";
-      } else if (
-        lastClose >= breakevenFloor &&
-        breakevenFloor >= st.entry
-      ) {
-        // between locked-in breakeven+buffer and first target -> TIME (profit timeout)
-        exitTypeFinal = "TIME";
-        endResult = "WIN";
-      } else {
-        // below breakeven lock or never promoted
-        if (overMaxHold) {
-          exitTypeFinal = "TIME";
-          endResult = lastClose >= st.entry ? "WIN" : "LOSS";
-        } else {
-          exitTypeFinal = "END";
-          endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+            if (Number.isFinite(firstTarget) && lastClose >= firstTarget) {
+              // finished above or equal to first target -> treat like TARGET
+              exitTypeFinal = "TARGET";
+              endResult = "WIN";
+            } else if (
+              lastClose >= breakevenFloor &&
+              breakevenFloor >= st.entry
+            ) {
+              // between locked-in breakeven+buffer and first target -> TIME (profit timeout)
+              exitTypeFinal = "TIME";
+              endResult = "WIN";
+            } else {
+              // below breakeven lock or never promoted
+              if (overMaxHold) {
+                exitTypeFinal = "TIME";
+                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              } else {
+                exitTypeFinal = "END";
+                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              }
+            }
+          } else {
+            // non-trail profiles keep old logic
+            if (overMaxHold) {
+              exitTypeFinal = "TIME";
+              endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+            } else {
+              exitTypeFinal = "END";
+              endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+            }
+          }
+
+          // holdingDays at exit for reporting
+          const holdingBarsFinal =
+            HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
+
+          // R math
+          const baseRisk = Number.isFinite(st.stopInit)
+            ? st.entry - st.stopInit
+            : 0.01;
+          const risk = Math.max(0.01, baseRisk);
+
+          const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
+
+          // DIP-after-fresh-cross flag
+          const isDipAfterFreshCrossSignal =
+            /DIP/i.test(st.kind || "") &&
+            (st.crossType === "WEEKLY" ||
+              st.crossType === "DAILY" ||
+              st.crossType === "BOTH") &&
+            Number.isFinite(st.crossLag) &&
+            st.crossLag <= 3;
+
+            const trade = {
+              ticker: code,
+              profile: p.id,
+              strategy: st.kind || "DIP",
+
+              entryDate: toISO(candles[st.entryIdx].date),
+              exitDate: toISO(lastBar.date),
+              returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
+              result: endResult,
+
+              holdingDays: holdingBarsFinal,
+              exitType: exitTypeFinal,
+
+              entry: r2(st.entry),
+              exit: r2(lastClose),
+              stop: st.stopInit,
+              target: st.target,
+              R: Rval,
+
+              ST: st.ST,
+              LT: st.LT,
+              regime: st.regime || "RANGE",
+              crossType: st.crossType || null,
+              crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+              analytics: st.analytics || null,
+              score: Number.isFinite(st.score) ? st.score : null,
+
+              // NEW for diagnose_backtest.js
+              sector: tickerInfoMap[code]?.sector || st.sector || null,
+
+              dipAfterFreshCross: isDipAfterFreshCrossSignal,
+            };
+          
+
+          trade.entryArchetype = trade.dipAfterFreshCross
+            ? "DIP_AFTER_FRESH_CROSS"
+            : trade.crossType || "OTHER";
+
+          tradesByProfile[p.id].push(trade);
+          trades.push(trade);
+          globalTrades.push(trade);
         }
+
+        // these positions are now closed, so reduce the open count
+        globalOpenCount = Math.max(0, globalOpenCount - list.length);
+
+        openByProfile[p.id] = [];
       }
-    } else {
-      // non-trail profiles keep old logic
-      if (overMaxHold) {
-        exitTypeFinal = "TIME";
-        endResult = lastClose >= st.entry ? "WIN" : "LOSS";
-      } else {
-        exitTypeFinal = "END";
-        endResult = lastClose >= st.entry ? "WIN" : "LOSS";
-      }
-    }
-
-    // holdingDays at exit for reporting
-    const holdingBarsFinal =
-      HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
-
-    // R math
-    const baseRisk = Number.isFinite(st.stopInit)
-      ? st.entry - st.stopInit
-      : 0.01;
-    const risk = Math.max(0.01, baseRisk);
-
-    const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
-
-    // DIP-after-fresh-cross flag
-    const isDipAfterFreshCrossSignal =
-      /DIP/i.test(st.kind || "") &&
-      (st.crossType === "WEEKLY" ||
-        st.crossType === "DAILY" ||
-        st.crossType === "BOTH") &&
-      Number.isFinite(st.crossLag) &&
-      st.crossLag <= 3;
-
-    const trade = {
-      ticker: code,
-      profile: p.id,
-      strategy: st.kind || "DIP",
-
-      entryDate: toISO(candles[st.entryIdx].date),
-      exitDate: toISO(lastBar.date),
-      returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
-      result: endResult,
-
-      holdingDays: holdingBarsFinal,
-      exitType: exitTypeFinal,
-
-      entry: r2(st.entry),
-      exit: r2(lastClose),
-      stop: st.stopInit,
-      target: st.target,
-      R: Rval,
-
-      ST: st.ST,
-      LT: st.LT,
-      regime: st.regime || "RANGE",
-      crossType: st.crossType || null,
-      crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-      analytics: st.analytics || null,
-      score: Number.isFinite(st.score) ? st.score : null,
-
-      dipAfterFreshCross: isDipAfterFreshCrossSignal,
-    };
-
-    trade.entryArchetype = trade.dipAfterFreshCross
-      ? "DIP_AFTER_FRESH_CROSS"
-      : trade.crossType || "OTHER";
-
-    tradesByProfile[p.id].push(trade);
-    trades.push(trade);
-    globalTrades.push(trade);
-  }
-
-  // these positions are now closed, so reduce the open count
-  globalOpenCount = Math.max(0, globalOpenCount - list.length);
-
-  openByProfile[p.id] = [];
-}
-
-
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
@@ -1825,7 +1831,6 @@ for (const p of activeProfiles) {
   ).length;
 
   const endExitCount = all.filter((t) => t.exitType === "END").length;
-
 
   const days = tradingDays.size;
   const tradesPerDay = days ? totalTrades / days : 0;
