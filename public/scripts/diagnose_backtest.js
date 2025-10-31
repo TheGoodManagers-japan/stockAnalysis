@@ -352,11 +352,12 @@ const takeaways = pickFeatureTakeaways(featureResults);
 
 // -------------------- SENTIMENT --------------------
 const sentiPairsActual =
-  raw?.sentiment?.combos?.actual?.bestByWinRate || // older naming
+  raw?.sentiment?.combos?.bestByWinRate?.actual ||
   raw?.sentiment?.bestByWinRate?.actual ||
   [];
+
 const sentiPairsRejected =
-  raw?.sentiment?.combos?.rejected?.bestByWinRate ||
+  raw?.sentiment?.combos?.bestByWinRate?.rejected ||
   raw?.sentiment?.bestByWinRate?.rejected ||
   [];
 
@@ -637,6 +638,32 @@ const targetEndStats = summarizeSubset(targetEnd);
 
 const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target stats
 
+// -------------------- ENTRY ORIGIN COUNTS (crossType) --------------------
+// We want counts by crossType (WEEKLY / DAILY / BOTH / NONE) + perf stats.
+const crossCounts = {};
+withAnalytics.forEach((t) => {
+  const ct = t.crossType || "NONE";
+  if (!crossCounts[ct]) {
+    crossCounts[ct] = { trades: 0, wins: 0, sumRet: 0 };
+  }
+  crossCounts[ct].trades++;
+  if (t.result === "WIN") crossCounts[ct].wins++;
+  crossCounts[ct].sumRet += +t.returnPct || 0;
+});
+
+// Turn that into an array of pretty rows
+const crossStats = Object.entries(crossCounts).map(([ct, info]) => {
+  const wr = info.trades ? r2((info.wins / info.trades) * 100) : 0;
+  const avgR = info.trades ? r2(info.sumRet / info.trades) : 0;
+  return {
+    crossType: ct,
+    trades: info.trades,
+    winRate: wr,
+    avgReturnPct: avgR,
+  };
+});
+
+
 // -------------------- LOSS AUTOPSY --------------------
 // crude heuristics for "why it lost"
 function isExtendedPx(t) {
@@ -746,6 +773,15 @@ lagSummary.forEach((s) => console.log("- " + s));
 console.log("\n=== DIP AFTER FRESH CROSS ===");
 console.log(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
 console.log(fmtDipAfter("DAILY", dipAfter.DAILY));
+
+// crossType origin summary
+console.log("\n=== ENTRY ORIGIN BY CROSSTYPE ===");
+crossStats.forEach((row) => {
+  console.log(
+    `${row.crossType}: n=${row.trades}, WR ${row.winRate}%, AvgRet ${row.avgReturnPct}%`
+  );
+});
+
 
 // -------------------- VOLATILITY BUCKETS (ATR% at entry) --------------------
 const volBuckets = raw?.volatility?.byAtrPctBucket || {};
@@ -884,6 +920,7 @@ const exportObj = {
   regime: raw?.regime?.metrics || {},
   crossLag: xlag,
   dipAfterFreshCross: dipAfter,
+  entryOriginByCrossType: crossStats,
   volatilityBuckets: volBuckets,
   profiles: profileSummaries,
   bestProfiles,
@@ -916,11 +953,10 @@ if (mdPath) {
   );
   lines.push("");
 
-  
   if (spotlight && (spotlight.best || spotlight.worst)) {
     lines.push("## Spotlight Tickers");
     if (spotlight.best) {
-     lines.push(
+      lines.push(
         `- Best ${spotlight.best.ticker}: PF ${spotlight.best.pf}, WR ${spotlight.best.winRate}%`
       );
       lines.push(`  Why: ${spotlight.best.why}`);
@@ -951,12 +987,21 @@ if (mdPath) {
   lines.push(fmtDipAfter("DAILY", dipAfter.DAILY));
   lines.push("");
 
-    // Rejected buys (sim)
+  // Entry source stats (DAILY / WEEKLY / BOTH / NONE)
+  lines.push("## Entry Origin By CrossType");
+  crossStats.forEach((row) => {
+    lines.push(
+      `- ${row.crossType}: n=${row.trades}, WR ${row.winRate}%, AvgRet ${row.avgReturnPct}%`
+    );
+  });
+  lines.push("");
+
+  // Rejected buys (sim)
   if (rej && rej.summary) {
     lines.push("## Rejected Buys (Sim Only)");
     lines.push(
       `Simulated=${rej.summary.total}, WinRate=${rej.summary.winRate}%, Winners=${rej.summary.winners}`
-   );
+    );
     const topReasons = Object.entries(rej.byReason || {}).slice(0, 5);
     topReasons.forEach(([reason, stats]) => {
       if (!stats) return;
@@ -967,7 +1012,6 @@ if (mdPath) {
     lines.push("");
   }
 
-  
   lines.push("## Volatility Buckets (ATR% at entry)");
   if (Object.keys(volBuckets).length === 0) {
     lines.push("- n/a");
@@ -991,17 +1035,18 @@ if (mdPath) {
     `Never-hit (END exits): n=${targetEnd.length}, Hold med ${targetEndStats.holdStats.med} bars`
   );
 
-  
   // Signals / Flow
   if (sig && Object.keys(sig).length) {
     lines.push("");
-   lines.push("## Signals / Flow");
+    lines.push("## Signals / Flow");
     lines.push(
       `Signals: total=${sig.total}, executed=${sig.executed}, blocked.inTrade=${sig.blocked?.inTrade}, cooldown=${sig.blocked?.cooldown}, warmup=${sig.blocked?.warmup}`
     );
     if (Number.isFinite(raw.tradesPerDay)) {
       lines.push(
-        `Throughput: ${r2(raw.tradesPerDay)} trades/day over ${raw.tradingDays} trading days`
+        `Throughput: ${r2(raw.tradesPerDay)} trades/day over ${
+          raw.tradingDays
+        } trading days`
       );
     }
   }

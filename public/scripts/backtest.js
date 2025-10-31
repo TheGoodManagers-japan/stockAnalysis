@@ -4,7 +4,7 @@
 // sentiment gates, and Nikkei-based market regime tagging & metrics.
 //
 // Options you may pass to window.backtest(..., opts):
-//   - holdBars: 0 (default = disabled). Set >0 to enforce hard time exit.
+//   - holdBars: 30
 //   - maxConcurrent: 0 (default = unlimited global positions)
 //   - simulateRejectedBuys: true
 //   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
@@ -696,9 +696,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars)
-    ? Math.max(0, opts.holdBars)
-    : 30; // default: off
+  const HOLD_BARS = 30;
   const COOLDOWN = 0;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -874,7 +872,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
 
-  const USE_TRAIL = true; // opts.useTrailing = true/false
+  const USE_TRAIL = true; 
   const activeProfiles = USE_TRAIL
     ? [RAW_PROFILE, ATR_TRAIL_PROFILE, TARGET_ONLY_PROFILE] // <-- NEW
     : [RAW_PROFILE, TARGET_ONLY_PROFILE]; // <-- NEW
@@ -1131,29 +1129,50 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const pctRet =
                 ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
               const risk = Math.max(0.01, st.entry - st.stopInit);
+              const isDipAfterFreshCrossSignal =
+                /DIP/i.test(st.kind || "") && // it's one of our DIP-style entries
+                (st.crossType === "WEEKLY" ||
+                  st.crossType === "DAILY" ||
+                  st.crossType === "BOTH") &&
+                Number.isFinite(st.crossLag) &&
+                st.crossLag <= 3; // "fresh" = lag <= 3 bars (tweak if you want)
+
               const trade = {
                 ticker: code,
                 profile: p.id,
                 strategy: st.kind || "DIP",
+
                 entryDate: toISO(candles[st.entryIdx].date),
                 exitDate: toISO(today.date),
+                returnPct: r2(pctRet),
+                result: exit.result,
                 holdingDays: i - st.entryIdx,
+                exitType: exit.type,
+
+                // extra metadata we were already attaching
                 entry: r2(st.entry),
                 exit: r2(exit.price),
                 stop: st.stopInit,
                 target: st.target,
-                result: exit.result,
-                exitType: exit.type,
                 R: st.noStop ? null : r2((exit.price - st.entry) / risk),
-                returnPct: r2(pctRet),
+
                 ST: st.ST,
                 LT: st.LT,
                 regime: st.regime || "RANGE",
                 crossType: st.crossType || null,
                 crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-                analytics: st.analytics || null, // <<< adds RSI/ATR/VolumeZ/Gap/MA info
-                score: Number.isFinite(st.score) ? st.score : null, // <<< NEW
+                analytics: st.analytics || null,
+                score: Number.isFinite(st.score) ? st.score : null,
+
+                // 🔥 NEW FIELDS
+                dipAfterFreshCross: isDipAfterFreshCrossSignal,
               };
+
+              // 🔥 Optional convenience label
+              trade.entryArchetype = trade.dipAfterFreshCross
+                ? "DIP_AFTER_FRESH_CROSS"
+                : trade.crossType || "OTHER";
+            
 
               tradesByProfile[p.id].push(trade);
               trades.push(trade);
@@ -1196,17 +1215,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
               // Bucket: DIP after fresh DAILY/WEEKLY flips
               // We treat anything whose strategy contains "DIP" as a DIP lane trade.
-              if (trade.strategy && /DIP/i.test(trade.strategy)) {
+              if (trade.dipAfterFreshCross) {
                 if (trade.crossType === "WEEKLY") {
                   dipAfterAgg.WEEKLY.push(trade);
                 } else if (trade.crossType === "DAILY") {
                   dipAfterAgg.DAILY.push(trade);
                 } else if (trade.crossType === "BOTH") {
-                  // If analyseCrossing flagged BOTH, count it in both buckets.
                   dipAfterAgg.WEEKLY.push(trade);
                   dipAfterAgg.DAILY.push(trade);
                 }
               }
+              
 
               list.splice(k, 1);
               cooldownUntilByProfile[p.id] = i + COOLDOWN;
@@ -1533,22 +1552,32 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
 
           const risk = Math.max(0.01, st.entry - st.stopInit);
+          const isDipAfterFreshCrossSignal =
+            /DIP/i.test(st.kind || "") &&
+            (st.crossType === "WEEKLY" ||
+              st.crossType === "DAILY" ||
+              st.crossType === "BOTH") &&
+            Number.isFinite(st.crossLag) &&
+            st.crossLag <= 3;
+
           const trade = {
             ticker: code,
             profile: p.id,
             strategy: st.kind || "DIP",
+
             entryDate: toISO(candles[st.entryIdx].date),
             exitDate: toISO(lastBar.date),
+            returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+            result: endResult,
             holdingDays: lastIdx - st.entryIdx,
+            exitType: "END",
+
             entry: r2(st.entry),
             exit: r2(endExitPrice),
             stop: st.stopInit,
             target: st.target,
-            result: endResult,
-            exitType: "END", // <- distinct from TIME
-            // If noStop, R is meaningless → set to null; else compute normally
             R: st.noStop ? null : r2((endExitPrice - st.entry) / risk),
-            returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+
             ST: st.ST,
             LT: st.LT,
             regime: st.regime || "RANGE",
@@ -1556,7 +1585,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
             analytics: st.analytics || null,
             score: Number.isFinite(st.score) ? st.score : null,
+
+            // NEW:
+            dipAfterFreshCross: isDipAfterFreshCrossSignal,
           };
+
+          trade.entryArchetype = trade.dipAfterFreshCross
+            ? "DIP_AFTER_FRESH_CROSS"
+            : trade.crossType || "OTHER";
+        
 
           tradesByProfile[p.id].push(trade);
           trades.push(trade);
