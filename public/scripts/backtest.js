@@ -1077,141 +1077,207 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         enrichForTechnicalScore(stock);
 
         // manage open positions per profile (trailing BEFORE exit checks)
-        // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
         for (const p of activeProfiles) {
           const list = openByProfile[p.id] || [];
           if (!list.length) continue;
 
-          const lastIdx = candles.length - 1;
-          const lastBar = candles[lastIdx];
-          const lastClose = lastBar.close;
+          for (let k = list.length - 1; k >= 0; k--) {
+            const st = list[k];
 
-          for (const st of list) {
-            const ageBars = lastIdx - st.entryIdx;
-            const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
+            // NEW: update trailing stop using only completed data (up to i-1)
+            if (typeof p.advance === "function") {
+              p.advance({
+                state: st,
+                i,
+                todayHigh: today.high,
+                holdBarsForProfile: HOLD_BARS, // pass our global holdBars
+                breakevenBufferPct: 0.003, // ~0.3% above entry on first promotion
+              });
+            }
 
-            // --- NEW: custom exit classification for atr_trail at test end ---
-            let exitTypeFinal;
-            let endResult;
+            // now do your normal exit checks on today's bar i
+            let exit = null;
 
-            if (p.id === "atr_trail") {
-              // ladder semantics:
-              // 1. if we finished above or equal to first target => treat like TARGET
-              // 2. else if we finished above breakeven buffer (first promotion floor)
-              //    => treat like TIME (because we sat there and timed out in profit)
-              // 3. else fall back to TIME/END logic like the others
+            // 1) price-based exits first (gap-aware, realistic fill)
+            const canStop = !st.noStop && Number.isFinite(st.stop);
+            const stopTouched = canStop && today.low <= st.stop;
 
-              // first target from entry
-              const firstTarget = Number(st.target); // st.target never changes, it's the initial rung-0 target
-              // breakeven+buffer floor:
-              // after first promotion we set:
-              //   beFloor = entry * (1 + breakevenBufferPct)
-              //   st.stop is ratcheted up to at least that.
-              //
-              // By the end of the test, st.stop should be:
-              //   - null for target_only profile
-              //   - possibly moved above breakeven for atr_trail
-              //
-              // If st.stop >= entry, that implies we've at least locked some profit.
-              const breakevenFloor = Number.isFinite(st.stop)
-                ? st.stop
-                : st.entry;
+            if (stopTouched) {
+              const stopFill =
+                today.open < st.stop
+                  ? today.open
+                  : Math.min(st.stop, today.high);
 
-              if (Number.isFinite(firstTarget) && lastClose >= firstTarget) {
-                // finished above original target -> classify as TARGET win
-                exitTypeFinal = "TARGET";
-                endResult = "WIN";
-              } else if (
-                lastClose >= breakevenFloor &&
-                breakevenFloor >= st.entry // means we had at least BE+buffer locked
-              ) {
-                // in profit region between BE+buffer and first target -> TIME
-                exitTypeFinal = "TIME";
-                endResult = "WIN";
-              } else {
-                // below breakeven lock or never promoted -> use fallback aging logic
-                if (overMaxHold) {
-                  exitTypeFinal = "TIME";
-                  endResult = lastClose >= st.entry ? "WIN" : "LOSS";
-                } else {
-                  exitTypeFinal = "END";
-                  endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              const isProfit = stopFill >= st.entry;
+              exit = {
+                type: "STOP",
+                price: stopFill,
+                result: isProfit ? "WIN" : "LOSS",
+              };
+            } else if (
+              !st.skipTarget &&
+              Number.isFinite(st.target) &&
+              today.high >= st.target
+            ) {
+              exit = { type: "TARGET", price: st.target, result: "WIN" };
+            }
+
+            // 2) optional time exit (only if this profile allows it)
+            // 2) optional time exit
+            if (!exit && HOLD_BARS > 0 && !st.ignoreTimeExit) {
+              // For normal profiles (raw_signal_levels / target_only),
+              // we still use total age since entry.
+              // For the ladder profile (atr_trail), we ONLY care about
+              // how long it's been since the last promotion.
+              if (p.id === "atr_trail") {
+                // ladder logic
+                const barsSincePromo = Number.isFinite(st.lastPromotionIdx)
+                  ? i - st.lastPromotionIdx
+                  : i - st.entryIdx;
+
+                // how long have we been waiting compared to the refreshed budget?
+                const overStale =
+                  Number.isFinite(st.timeBudgetBars) &&
+                  barsSincePromo >= st.timeBudgetBars;
+
+                if (overStale) {
+                  const rawPnL = today.close - st.entry;
+                  exit = {
+                    type: "TIME",
+                    price: today.close,
+                    result: rawPnL >= 0 ? "WIN" : "LOSS",
+                  };
                 }
-              }
-            } else {
-              // non-trail profiles use the old logic
-              if (overMaxHold) {
-                exitTypeFinal = "TIME";
-                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
               } else {
-                exitTypeFinal = "END";
-                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+                // legacy behavior for other profiles
+                const ageBars = i - st.entryIdx;
+                if (ageBars >= HOLD_BARS) {
+                  const rawPnL = today.close - st.entry;
+                  exit = {
+                    type: "TIME",
+                    price: today.close,
+                    result: rawPnL >= 0 ? "WIN" : "LOSS",
+                  };
+                }
               }
             }
 
-            // holding days reporting: same behavior you had before
-            const holdingBarsFinal =
-              HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
+            // (rest of your existing exit handling unchanged)
 
-            // R math
-            const baseRisk = Number.isFinite(st.stopInit)
-              ? st.entry - st.stopInit
-              : 0.01;
-            const risk = Math.max(0.01, baseRisk);
-            const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
+            if (exit) {
+              const pctRet =
+                ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
 
-            // DIP-after-fresh-cross flag
-            const isDipAfterFreshCrossSignal =
-              /DIP/i.test(st.kind || "") &&
-              (st.crossType === "WEEKLY" ||
-                st.crossType === "DAILY" ||
-                st.crossType === "BOTH") &&
-              Number.isFinite(st.crossLag) &&
-              st.crossLag <= 3;
+              const baseRisk = Number.isFinite(st.stopInit)
+                ? st.entry - st.stopInit
+                : 0.01;
+              const risk = Math.max(0.01, baseRisk);
+              const Rval = st.noStop
+                ? null
+                : r2((exit.price - st.entry) / risk);
 
-            const trade = {
-              ticker: code,
-              profile: p.id,
-              strategy: st.kind || "DIP",
+              const isDipAfterFreshCrossSignal =
+                /DIP/i.test(st.kind || "") &&
+                (st.crossType === "WEEKLY" ||
+                  st.crossType === "DAILY" ||
+                  st.crossType === "BOTH") &&
+                Number.isFinite(st.crossLag) &&
+                st.crossLag <= 3;
 
-              entryDate: toISO(candles[st.entryIdx].date),
-              exitDate: toISO(lastBar.date),
-              returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
-              result: endResult,
+              const trade = {
+                ticker: code,
+                profile: p.id,
+                strategy: st.kind || "DIP",
 
-              holdingDays: holdingBarsFinal,
-              exitType: exitTypeFinal,
+                entryDate: toISO(candles[st.entryIdx].date),
+                exitDate: toISO(today.date),
+                returnPct: r2(pctRet),
+                result: exit.result,
+                holdingDays: i - st.entryIdx,
+                exitType: exit.type,
 
-              entry: r2(st.entry),
-              exit: r2(lastClose),
-              stop: st.stopInit,
-              target: st.target,
-              R: Rval,
+                entry: r2(st.entry),
+                exit: r2(exit.price),
+                stop: st.stopInit,
+                target: st.target,
+                R: Rval,
 
-              ST: st.ST,
-              LT: st.LT,
-              regime: st.regime || "RANGE",
-              crossType: st.crossType || null,
-              crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-              analytics: st.analytics || null,
-              score: Number.isFinite(st.score) ? st.score : null,
+                ST: st.ST,
+                LT: st.LT,
+                regime: st.regime || "RANGE",
+                crossType: st.crossType || null,
+                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+                analytics: st.analytics || null,
+                score: Number.isFinite(st.score) ? st.score : null,
 
-              dipAfterFreshCross: isDipAfterFreshCrossSignal,
-            };
+                // 🔥 NEW FIELDS
+                dipAfterFreshCross: isDipAfterFreshCrossSignal,
+              };
 
-            trade.entryArchetype = trade.dipAfterFreshCross
-              ? "DIP_AFTER_FRESH_CROSS"
-              : trade.crossType || "OTHER";
+              // 🔥 Optional convenience label
+              trade.entryArchetype = trade.dipAfterFreshCross
+                ? "DIP_AFTER_FRESH_CROSS"
+                : trade.crossType || "OTHER";
 
-            tradesByProfile[p.id].push(trade);
-            trades.push(trade);
-            globalTrades.push(trade);
+              tradesByProfile[p.id].push(trade);
+              trades.push(trade);
+              globalTrades.push(trade);
+
+              const kKey = sentiKey(st.ST, st.LT);
+              if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
+              sentiUpdate(sentiment.actual[kKey], {
+                result: trade.result,
+                returnPct: trade.returnPct,
+                R: trade.R,
+              });
+              // --- NEW: LT-only aggregation for ACTUAL trades ---
+              if (Number.isFinite(st.LT)) {
+                if (!sentiment.actualLT[st.LT]) {
+                  sentiment.actualLT[st.LT] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualLT[st.LT], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
+              }
+
+              // --- NEW: ST-only aggregation for ACTUAL trades ---
+              if (Number.isFinite(st.ST)) {
+                if (!sentiment.actualST[st.ST]) {
+                  sentiment.actualST[st.ST] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualST[st.ST], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
+              }
+
+              if (trade.regime && regimeAgg[trade.regime]) {
+                regimeAgg[trade.regime].push(trade);
+              }
+
+              // Bucket: DIP after fresh DAILY/WEEKLY flips
+              // We treat anything whose strategy contains "DIP" as a DIP lane trade.
+              if (trade.dipAfterFreshCross) {
+                if (trade.crossType === "WEEKLY") {
+                  dipAfterAgg.WEEKLY.push(trade);
+                } else if (trade.crossType === "DAILY") {
+                  dipAfterAgg.DAILY.push(trade);
+                } else if (trade.crossType === "BOTH") {
+                  dipAfterAgg.WEEKLY.push(trade);
+                  dipAfterAgg.DAILY.push(trade);
+                }
+              }
+
+              list.splice(k, 1);
+              cooldownUntilByProfile[p.id] = i + COOLDOWN;
+              globalOpenCount = Math.max(0, globalOpenCount - 1);
+            }
           }
 
-          // reduce open count since we just force-closed these
-          globalOpenCount = Math.max(0, globalOpenCount - list.length);
-
-          openByProfile[p.id] = [];
+          openByProfile[p.id] = list;
         }
 
         // ---------------- ALWAYS detect first (parity with live scanner) ----------------
@@ -1559,6 +1625,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   analytics,
                   score,
                 });
+                
 
                 globalOpenCount++;
                 signalsExecuted++;
@@ -1569,33 +1636,78 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
       // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
-      // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
+// --- Force-close any remaining open positions at end-of-data (bookkeeping only)
 for (const p of activeProfiles) {
   const list = openByProfile[p.id] || [];
   if (!list.length) continue;
 
   const lastIdx = candles.length - 1;
   const lastBar = candles[lastIdx];
+  const lastClose = lastBar.close;
 
   for (const st of list) {
     const ageBars = lastIdx - st.entryIdx;
     const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
 
-    const exitTypeFinal = overMaxHold ? "TIME" : "END";
+    let exitTypeFinal;
+    let endResult;
 
+    if (p.id === "atr_trail") {
+      // firstTarget = the original first target we stored on entry
+      const firstTarget = Number(st.target);
+
+      // breakevenFloor = where we ratcheted the stop after promotion.
+      // if stop >= entry, that means we locked profit at/above breakeven+buffer.
+      const breakevenFloor = Number.isFinite(st.stop) ? st.stop : st.entry;
+
+      if (
+        Number.isFinite(firstTarget) &&
+        lastClose >= firstTarget
+      ) {
+        // finished above or equal to first target -> treat like TARGET
+        exitTypeFinal = "TARGET";
+        endResult = "WIN";
+      } else if (
+        lastClose >= breakevenFloor &&
+        breakevenFloor >= st.entry
+      ) {
+        // between locked-in breakeven+buffer and first target -> TIME (profit timeout)
+        exitTypeFinal = "TIME";
+        endResult = "WIN";
+      } else {
+        // below breakeven lock or never promoted
+        if (overMaxHold) {
+          exitTypeFinal = "TIME";
+          endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+        } else {
+          exitTypeFinal = "END";
+          endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+        }
+      }
+    } else {
+      // non-trail profiles keep old logic
+      if (overMaxHold) {
+        exitTypeFinal = "TIME";
+        endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+      } else {
+        exitTypeFinal = "END";
+        endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+      }
+    }
+
+    // holdingDays at exit for reporting
     const holdingBarsFinal =
       HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
 
-    const endExitPrice = lastBar.close;
-    const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
-
+    // R math
     const baseRisk = Number.isFinite(st.stopInit)
       ? st.entry - st.stopInit
       : 0.01;
     const risk = Math.max(0.01, baseRisk);
 
-    const Rval = st.noStop ? null : r2((endExitPrice - st.entry) / risk);
+    const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
 
+    // DIP-after-fresh-cross flag
     const isDipAfterFreshCrossSignal =
       /DIP/i.test(st.kind || "") &&
       (st.crossType === "WEEKLY" ||
@@ -1611,14 +1723,14 @@ for (const p of activeProfiles) {
 
       entryDate: toISO(candles[st.entryIdx].date),
       exitDate: toISO(lastBar.date),
-      returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+      returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
       result: endResult,
 
       holdingDays: holdingBarsFinal,
       exitType: exitTypeFinal,
 
       entry: r2(st.entry),
-      exit: r2(endExitPrice),
+      exit: r2(lastClose),
       stop: st.stopInit,
       target: st.target,
       R: Rval,
@@ -1648,6 +1760,7 @@ for (const p of activeProfiles) {
 
   openByProfile[p.id] = [];
 }
+
 
 
       // Per-ticker snapshot: win % and profit %
