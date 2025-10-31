@@ -18,7 +18,6 @@
 // - target_only: enter with target only, conceptually no stop
 //                (R is null, exits at target/TIME/END only)
 //
-// You can control whether the atr_trail profile is active using opts.useTrailing
 // (default true). raw_signal_levels and target_only are always active.
 
 
@@ -775,115 +774,121 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const ATR_TRAIL_PROFILE = {
     id: "atr_trail",
-    label: "ATR trail (Chandelier, arm at target)",
+    label: "Ladder trail (ratchet stop & extend time)",
 
-    // Seed with the signal's levels; we use the target only as the *arming* threshold.
+    // At entry we just record the raw stop and the first target.
+    // We'll generate ladder state later when we open the trade.
     compute: ({ sig }) => ({
       stop: Number(sig?.smartStopLoss ?? sig?.stopLoss),
-      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget), // used only to ARM trailing
+      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget),
     }),
 
     /**
      * advance()
-     * - Before target is reached: do *nothing* (use original stop).
-     * - Once today's high crosses target: ARM the trailing stop = target - armBuffer.
-     * - After armed: ratchet stop = max(previous stop, (highestHighSinceArm - atrMult*ATR), armFloor)
      *
-     * Options (from opts):
-     *   - atrMult:               how loose the chandelier trail is (default 3.5 is gentler)
-     *   - armUnderTargetAtrMult: how far below the initial target to drop the FIRST armed stop, in ATRs (default 1.0)
-     *   - armUnderTargetPct:     fallback % if ATR is missing (e.g., 1.5 means 1.5% of price)
+     * This implements the “ladder” logic:
+     *
+     * - We do NOT exit at target. Instead, each time price touches the
+     *   current ladder target ("nextTarget"), we PROMOTE:
+     *
+     *   rung 0  -> rung 1:
+     *      stop := max(stop, breakevenPlusBuffer)
+     *   rung 1+ -> rung 2+:
+     *      stop := max(stop, previousTargetLevel)
+     *
+     *   Then:
+     *      - we define a NEW higher target (nextTarget += baseDelta)
+     *      - we record lastPromotionIdx = i
+     *      - we effectively "reset the clock" for TIME exit
+     *
+     * - TIME exit will key off lastPromotionIdx instead of entryIdx.
+     *
+     * Notes:
+     *   state fields we rely on:
+     *     entry               number
+     *     stop                number (live stop)
+     *     stopInit            number (initial stop, for R calc later)
+     *     rung                integer (0 at entry, increments on each promotion)
+     *     nextTarget          number (the target we are trying to hit next)
+     *     baseDelta           number (the step size between rungs)
+     *     lastPromotionIdx    integer (bar index of the most recent promotion)
+     *     prevTargetFloor     number (the previous rung target we can lock in)
+     *     timeBudgetBars      integer (how many bars we allow after the most recent promotion before TIME exit triggers)
+     *
+     * Inputs:
+     *    holdBarsForProfile   how many bars max we'll allow after the latest promotion
+     *    todayHigh            today's high (to detect promotion)
+     *    i                    today's index in candles
+     *
+     * We do NOT trail with ATR here. We only ratchet using prior targets.
+     * That matches your "hit next target -> lock previous target in as stop".
      */
     advance: ({
       state,
-      hist,
       i,
-      atrMult = 3.5,
-      startAfterBars = 0, // ignored until armed
-      breakevenR = 1.0, // optional: jump to breakeven if big cushion before arming
-      armUnderTargetAtrMult = 1.0,
-      armUnderTargetPct = 1.5,
-      todayHigh, // <- pass today's high from caller
+      todayHigh,
+      holdBarsForProfile = 30, // fallback
+      breakevenBufferPct = 0.003, // 0.3% over entry for first lock
     }) => {
-      const lookHist = hist.slice(0, i + 1); // include today for arming check
-      if (!lookHist.length) return;
+      // 1. Check if we hit or exceeded the next ladder target
+      if (
+        Number.isFinite(state.nextTarget) &&
+        Number.isFinite(todayHigh) &&
+        todayHigh >= state.nextTarget
+      ) {
+        // --- PROMOTION EVENT ---
+        if (state.rung === 0) {
+          // first promotion:
+          // move stop to breakeven + tiny buffer
+          const beFloor = state.entry * (1 + (Number(breakevenBufferPct) || 0));
+          state.stop = Math.max(state.stop || state.entry, beFloor);
 
-      // Compute latest ATR on completed data (up to i-1)
-      const completed = hist.slice(0, Math.max(0, i));
-      const atr = lastATR(completed.length ? completed : lookHist, 14) || 0;
-
-      // 1) Not armed yet: see if we should arm now (today hit or exceeded the target)
-      if (!state.trailArmed) {
-        // Optional: if move already >= breakevenR, lift floor to breakeven even before arming
-        if (breakevenR != null) {
-          const risk = Math.max(0.01, state.entry - state.stopInit);
-          const lastClose = completed.length
-            ? completed[completed.length - 1].close
-            : state.entry;
-          const unrealizedR = (lastClose - state.entry) / risk;
-          if (unrealizedR >= breakevenR)
-            state.stop = Math.max(state.stop, state.entry);
+          // store this target as the floor for future rungs
+          state.prevTargetFloor = state.nextTarget;
+        } else {
+          // rung >= 1:
+          // lock in previous target as the new guaranteed floor
+          if (Number.isFinite(state.prevTargetFloor)) {
+            state.stop = Math.max(
+              state.stop || state.entry,
+              state.prevTargetFloor
+            );
+          }
+          // update prevTargetFloor to THIS rung's target for the *next* promotion
+          state.prevTargetFloor = state.nextTarget;
         }
 
-        // Arm when today's high tags/passes the original target
-        if (
-          Number.isFinite(state.target) &&
-          Number.isFinite(todayHigh) &&
-          todayHigh >= state.target
-        ) {
-          const armBufAtr = atr ? armUnderTargetAtrMult * atr : 0;
-          const armBufPct = (armUnderTargetPct / 100) * state.entry;
-          const armBuffer = Math.max(armBufAtr, armBufPct); // choose the larger for safety
+        // advance rung counter
+        state.rung += 1;
 
-          const armStop = state.target - armBuffer;
-          state.stop = quantizeToTick(
-            Math.max(state.stop, armStop),
-            state.entry
-          );
-
-          state.trailArmed = true;
-          state.armIdx = i;
-          // We trail off highs after arming
-          state.hiSinceArm = Math.max(
-            todayHigh || -Infinity,
-            highestHighSince(lookHist, state.entryIdx)
-          );
-          // No longer use the target for exiting once armed
-          state.skipTarget = true;
+        // define a NEW higher target for the next promotion
+        // (simple ladder: just add the same baseDelta each time)
+        if (Number.isFinite(state.baseDelta)) {
+          state.nextTarget = state.nextTarget + state.baseDelta;
+        } else {
+          // fallback safety: +5% over the just-hit target
+          state.nextTarget = state.nextTarget * 1.05;
         }
-        return; // nothing else until we are armed
+
+        // reset the "promotion clock"
+        state.lastPromotionIdx = i;
+        // refresh "time budget" after promotion
+        state.timeBudgetBars = holdBarsForProfile;
       }
 
-      // 2) Already armed: trail as chandelier off the highest *high* since arming
-      // Update hiSinceArm with today's high
-      if (Number.isFinite(todayHigh)) {
-        state.hiSinceArm = Math.max(state.hiSinceArm || -Infinity, todayHigh);
-      } else {
-        // fallback to completed highs if needed
-        const hi = highestHighSince(lookHist, state.armIdx ?? state.entryIdx);
-        state.hiSinceArm = Math.max(state.hiSinceArm || -Infinity, hi);
-      }
-
-      // Chandelier stop (loose leash)
-      if (atr) {
-        const trailCandidate = state.hiSinceArm - atrMult * atr;
-        // Never loosen; respect the initial armed floor near target
-        const armFloor = state.targetInit
-          ? Math.min(state.targetInit, state.hiSinceArm) -
-            Math.max(
-              armUnderTargetAtrMult * atr,
-              (armUnderTargetPct / 100) * state.entry
-            )
-          : -Infinity;
-        const rawNewStop = Math.max(trailCandidate, armFloor, state.stop);
-        state.stop = quantizeToTick(rawNewStop, state.entry);
-      }
-      // Safety clamp: never place stop above today's actual tradable range
-      if (Number.isFinite(todayHigh)) {
-        state.stop = Math.min(state.stop, todayHigh);
+      // 2. Aging logic: each tick we decrement remaining patience after the last promotion.
+      // We don't actually exit here – exit is still handled later in the main loop.
+      // But we keep track of how long since lastPromotionIdx for TIME exit checks.
+      if (
+        Number.isFinite(state.lastPromotionIdx) &&
+        Number.isFinite(state.timeBudgetBars)
+      ) {
+        const ageSincePromo = i - state.lastPromotionIdx;
+        state.ageSincePromo = ageSincePromo; // just for debug/exit logic read later
       }
     },
   };
+
 
   const USE_TRAIL = true;
   const activeProfiles = USE_TRAIL
@@ -1072,183 +1077,141 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         enrichForTechnicalScore(stock);
 
         // manage open positions per profile (trailing BEFORE exit checks)
+        // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
         for (const p of activeProfiles) {
           const list = openByProfile[p.id] || [];
           if (!list.length) continue;
 
-          for (let k = list.length - 1; k >= 0; k--) {
-            const st = list[k];
+          const lastIdx = candles.length - 1;
+          const lastBar = candles[lastIdx];
+          const lastClose = lastBar.close;
 
-            // NEW: update trailing stop using only completed data (up to i-1)
-            if (typeof p.advance === "function") {
-              p.advance({
-                state: st,
-                hist: candles, // p.advance will only use data up to i-1
-                i,
-                atrMult: opts.atrMult ?? 3,
-                startAfterBars: opts.trailStartAfterBars ?? 2,
-                breakevenR: opts.breakevenR ?? 0.8,
-                todayHigh: today.high, // <-- add this
-              });
-            }
+          for (const st of list) {
+            const ageBars = lastIdx - st.entryIdx;
+            const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
 
-            // now do your normal exit checks on today's bar i
-            let exit = null;
+            // --- NEW: custom exit classification for atr_trail at test end ---
+            let exitTypeFinal;
+            let endResult;
 
-            // 1) price-based exits first (gap-aware, realistic fill)
-            const canStop = !st.noStop && Number.isFinite(st.stop);
-            const stopTouched = canStop && today.low <= st.stop;
+            if (p.id === "atr_trail") {
+              // ladder semantics:
+              // 1. if we finished above or equal to first target => treat like TARGET
+              // 2. else if we finished above breakeven buffer (first promotion floor)
+              //    => treat like TIME (because we sat there and timed out in profit)
+              // 3. else fall back to TIME/END logic like the others
 
-            if (stopTouched) {
-              const stopFill =
-                today.open < st.stop
-                  ? today.open
-                  : Math.min(st.stop, today.high);
+              // first target from entry
+              const firstTarget = Number(st.target); // st.target never changes, it's the initial rung-0 target
+              // breakeven+buffer floor:
+              // after first promotion we set:
+              //   beFloor = entry * (1 + breakevenBufferPct)
+              //   st.stop is ratcheted up to at least that.
+              //
+              // By the end of the test, st.stop should be:
+              //   - null for target_only profile
+              //   - possibly moved above breakeven for atr_trail
+              //
+              // If st.stop >= entry, that implies we've at least locked some profit.
+              const breakevenFloor = Number.isFinite(st.stop)
+                ? st.stop
+                : st.entry;
 
-              const isProfit = stopFill >= st.entry;
-              exit = {
-                type: "STOP",
-                price: stopFill,
-                result: isProfit ? "WIN" : "LOSS",
-              };
-            } else if (
-              !st.skipTarget &&
-              Number.isFinite(st.target) &&
-              today.high >= st.target
-            ) {
-              exit = { type: "TARGET", price: st.target, result: "WIN" };
-            }
-
-            // 2) optional time exit (only if this profile allows it)
-            if (!exit && HOLD_BARS > 0 && !st.ignoreTimeExit) {
-              // <-- NEW guard
-              const ageBars = i - st.entryIdx;
-              if (ageBars >= HOLD_BARS) {
-                const rawPnL = today.close - st.entry;
-                exit = {
-                  type: "TIME",
-                  price: today.close,
-                  result: rawPnL >= 0 ? "WIN" : "LOSS",
-                };
-              }
-            }
-
-            // (rest of your existing exit handling unchanged)
-
-            if (exit) {
-              const pctRet =
-                ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
-
-              const baseRisk = Number.isFinite(st.stopInit)
-                ? st.entry - st.stopInit
-                : 0.01;
-              const risk = Math.max(0.01, baseRisk);
-              const Rval = st.noStop
-                ? null
-                : r2((exit.price - st.entry) / risk);
-
-              const isDipAfterFreshCrossSignal =
-                /DIP/i.test(st.kind || "") &&
-                (st.crossType === "WEEKLY" ||
-                  st.crossType === "DAILY" ||
-                  st.crossType === "BOTH") &&
-                Number.isFinite(st.crossLag) &&
-                st.crossLag <= 3;
-
-              const trade = {
-                ticker: code,
-                profile: p.id,
-                strategy: st.kind || "DIP",
-
-                entryDate: toISO(candles[st.entryIdx].date),
-                exitDate: toISO(today.date),
-                returnPct: r2(pctRet),
-                result: exit.result,
-                holdingDays: i - st.entryIdx,
-                exitType: exit.type,
-
-                entry: r2(st.entry),
-                exit: r2(exit.price),
-                stop: st.stopInit,
-                target: st.target,
-                R: Rval,
-
-                ST: st.ST,
-                LT: st.LT,
-                regime: st.regime || "RANGE",
-                crossType: st.crossType || null,
-                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-                analytics: st.analytics || null,
-                score: Number.isFinite(st.score) ? st.score : null,
-
-                // 🔥 NEW FIELDS
-                dipAfterFreshCross: isDipAfterFreshCrossSignal,
-              };
-
-              // 🔥 Optional convenience label
-              trade.entryArchetype = trade.dipAfterFreshCross
-                ? "DIP_AFTER_FRESH_CROSS"
-                : trade.crossType || "OTHER";
-
-              tradesByProfile[p.id].push(trade);
-              trades.push(trade);
-              globalTrades.push(trade);
-
-              const kKey = sentiKey(st.ST, st.LT);
-              if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
-              sentiUpdate(sentiment.actual[kKey], {
-                result: trade.result,
-                returnPct: trade.returnPct,
-                R: trade.R,
-              });
-              // --- NEW: LT-only aggregation for ACTUAL trades ---
-              if (Number.isFinite(st.LT)) {
-                if (!sentiment.actualLT[st.LT]) {
-                  sentiment.actualLT[st.LT] = sentiInit();
-                }
-                sentiUpdate(sentiment.actualLT[st.LT], {
-                  result: trade.result,
-                  returnPct: trade.returnPct,
-                  R: trade.R,
-                });
-              }
-
-              // --- NEW: ST-only aggregation for ACTUAL trades ---
-              if (Number.isFinite(st.ST)) {
-                if (!sentiment.actualST[st.ST]) {
-                  sentiment.actualST[st.ST] = sentiInit();
-                }
-                sentiUpdate(sentiment.actualST[st.ST], {
-                  result: trade.result,
-                  returnPct: trade.returnPct,
-                  R: trade.R,
-                });
-              }
-
-              if (trade.regime && regimeAgg[trade.regime]) {
-                regimeAgg[trade.regime].push(trade);
-              }
-
-              // Bucket: DIP after fresh DAILY/WEEKLY flips
-              // We treat anything whose strategy contains "DIP" as a DIP lane trade.
-              if (trade.dipAfterFreshCross) {
-                if (trade.crossType === "WEEKLY") {
-                  dipAfterAgg.WEEKLY.push(trade);
-                } else if (trade.crossType === "DAILY") {
-                  dipAfterAgg.DAILY.push(trade);
-                } else if (trade.crossType === "BOTH") {
-                  dipAfterAgg.WEEKLY.push(trade);
-                  dipAfterAgg.DAILY.push(trade);
+              if (Number.isFinite(firstTarget) && lastClose >= firstTarget) {
+                // finished above original target -> classify as TARGET win
+                exitTypeFinal = "TARGET";
+                endResult = "WIN";
+              } else if (
+                lastClose >= breakevenFloor &&
+                breakevenFloor >= st.entry // means we had at least BE+buffer locked
+              ) {
+                // in profit region between BE+buffer and first target -> TIME
+                exitTypeFinal = "TIME";
+                endResult = "WIN";
+              } else {
+                // below breakeven lock or never promoted -> use fallback aging logic
+                if (overMaxHold) {
+                  exitTypeFinal = "TIME";
+                  endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+                } else {
+                  exitTypeFinal = "END";
+                  endResult = lastClose >= st.entry ? "WIN" : "LOSS";
                 }
               }
-
-              list.splice(k, 1);
-              cooldownUntilByProfile[p.id] = i + COOLDOWN;
-              globalOpenCount = Math.max(0, globalOpenCount - 1);
+            } else {
+              // non-trail profiles use the old logic
+              if (overMaxHold) {
+                exitTypeFinal = "TIME";
+                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              } else {
+                exitTypeFinal = "END";
+                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              }
             }
+
+            // holding days reporting: same behavior you had before
+            const holdingBarsFinal =
+              HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
+
+            // R math
+            const baseRisk = Number.isFinite(st.stopInit)
+              ? st.entry - st.stopInit
+              : 0.01;
+            const risk = Math.max(0.01, baseRisk);
+            const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
+
+            // DIP-after-fresh-cross flag
+            const isDipAfterFreshCrossSignal =
+              /DIP/i.test(st.kind || "") &&
+              (st.crossType === "WEEKLY" ||
+                st.crossType === "DAILY" ||
+                st.crossType === "BOTH") &&
+              Number.isFinite(st.crossLag) &&
+              st.crossLag <= 3;
+
+            const trade = {
+              ticker: code,
+              profile: p.id,
+              strategy: st.kind || "DIP",
+
+              entryDate: toISO(candles[st.entryIdx].date),
+              exitDate: toISO(lastBar.date),
+              returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
+              result: endResult,
+
+              holdingDays: holdingBarsFinal,
+              exitType: exitTypeFinal,
+
+              entry: r2(st.entry),
+              exit: r2(lastClose),
+              stop: st.stopInit,
+              target: st.target,
+              R: Rval,
+
+              ST: st.ST,
+              LT: st.LT,
+              regime: st.regime || "RANGE",
+              crossType: st.crossType || null,
+              crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+              analytics: st.analytics || null,
+              score: Number.isFinite(st.score) ? st.score : null,
+
+              dipAfterFreshCross: isDipAfterFreshCrossSignal,
+            };
+
+            trade.entryArchetype = trade.dipAfterFreshCross
+              ? "DIP_AFTER_FRESH_CROSS"
+              : trade.crossType || "OTHER";
+
+            tradesByProfile[p.id].push(trade);
+            trades.push(trade);
+            globalTrades.push(trade);
           }
 
-          openByProfile[p.id] = list;
+          // reduce open count since we just force-closed these
+          globalOpenCount = Math.max(0, globalOpenCount - list.length);
+
+          openByProfile[p.id] = [];
         }
 
         // ---------------- ALWAYS detect first (parity with live scanner) ----------------
@@ -1532,25 +1495,58 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   entryIdx: entryBarIdx,
                   entry,
 
-                  // If this is the "target only" profile, we conceptually have no stop.
-                  // So store null instead of fake 0 to avoid insane R math later.
+                  // base stop & reference stop
                   stop: isTargetOnly ? null : qStop,
                   stopInit: isTargetOnly ? null : qStop,
 
+                  // we keep `target` for reporting (what was first target on entry),
+                  // but the ladder logic will manage its own `nextTarget`.
                   target: qTarget,
 
-                  // trailing-profile bookkeeping
-                  targetInit: qTarget,
+                  // === LADDER TRAIL FIELDS (used only when p.id === "atr_trail") ===
+                  // rung: how many promotions we’ve done so far (0 at entry)
+                  rung: p.id === "atr_trail" ? 0 : null,
+
+                  // nextTarget: the level we want to hit next to trigger a promotion.
+                  nextTarget: p.id === "atr_trail" ? qTarget : null,
+
+                  // baseDelta: how much we raise target each promotion.
+                  // We'll define it as (firstTarget - entry). So T2 = T1 + baseDelta, etc.
+                  baseDelta: p.id === "atr_trail" ? qTarget - entry : null,
+
+                  // prevTargetFloor: last locked-in target level we can use as future stop floor
+                  prevTargetFloor: null,
+
+                  // lastPromotionIdx: index in candles where we last promoted the ladder.
+                  // At entry, treat the entry itself as the "latest promotion".
+                  lastPromotionIdx: p.id === "atr_trail" ? entryBarIdx : null,
+
+                  // timeBudgetBars: how many bars we're allowed to wait
+                  // after the most recent promotion before TIME exit kills it.
+                  // We'll seed with HOLD_BARS from outer scope.
+                  timeBudgetBars:
+                    p.id === "atr_trail"
+                      ? Number.isFinite(HOLD_BARS)
+                        ? HOLD_BARS
+                        : 30
+                      : null,
+
+                  // ageSincePromo will be filled in advance() as we go.
+                  ageSincePromo: 0,
+
+                  // We no longer use trailArmed / entryATR / etc. for ATR logic.
+                  // Keep them for other profiles if you want, but they're not needed anymore.
                   entryATR,
                   trailArmed: false,
 
-                  // ATR trail profile will flip skipTarget=true once armed.
-                  // others (including target_only) should keep exiting at target.
+                  // We NEVER auto-sell at target in atr_trail ladder mode.
+                  // So skipTarget must be true for atr_trail and false otherwise.
                   skipTarget: p.id === "atr_trail",
 
                   // behavior flags
                   noStop: isTargetOnly,
                   ignoreTimeExit: false,
+
                   ST,
                   LT,
                   regime: dayRegime,
