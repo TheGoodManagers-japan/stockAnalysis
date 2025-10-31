@@ -452,7 +452,44 @@ export function analyzeSwingTradeEntry(stock, historicalData, opts = {}) {
     });
   }
 
-  if (dip?.trigger && structureGateOk && dipGatePass) {
+  // --- NEW: freshness / recency gating for DIP ENTRY ---
+  // 1) Do we have a fresh daily or fresh weekly flip *right now*?
+  const haveFreshDailyCross = !!crossDailyFresh.trigger;
+  const haveFreshWeeklyCross = !!crossWeeklyFresh.trigger;
+  const haveAnyFreshCross = haveFreshDailyCross || haveFreshWeeklyCross;
+
+  // 2) How "recent but not ancient" was the most recent bullish flip?
+  //    We'll reuse the same stale windows you already defined in getConfig().
+  const lastDailyFlip = lastDailyStackedCrossAge(data);
+  const lastWeeklyFlip = lastWeeklyStackedCrossAge(data);
+
+  const freshD = cfg.freshDailyLookbackDays ?? 5;
+  const freshW = cfg.freshWeeklyLookbackWeeks ?? 5;
+  const maxStaleD = cfg.staleDailyCrossMaxAgeBars ?? 20;
+  const maxStaleW = cfg.staleWeeklyCrossMaxAgeWeeks ?? 10;
+
+  // "recentEnough" means:
+  // - happened AFTER the fresh window
+  // - but not older than the stale limit
+  const recentEnoughDaily =
+    !!lastDailyFlip.found &&
+    lastDailyFlip.barsAgo > freshD &&
+    lastDailyFlip.barsAgo <= maxStaleD;
+
+  const recentEnoughWeekly =
+    !!lastWeeklyFlip.found &&
+    lastWeeklyFlip.weeksAgo > freshW &&
+    lastWeeklyFlip.weeksAgo <= maxStaleW;
+
+  const recentEnoughForDip = recentEnoughDaily || recentEnoughWeekly;
+
+  if (
+    dip?.trigger &&
+    structureGateOk &&
+    dipGatePass &&
+    !haveAnyFreshCross && // don't overshadow a fresh cross
+    recentEnoughForDip // don't allow super old trends
+  ) {
     // === NEW: historical slice gating and loser veto ===
 
     // run loser veto first
@@ -735,9 +772,9 @@ function getConfig(opts = {}) {
     freshDailyLookbackDays: 5,
 
     // getConfig(...)
-    requireFreshWeeklyFlipForDIP: true, // new
+    requireFreshWeeklyFlipForDIP: false, // new
     freshWeeklyLookbackWeeks: 5, // reuse the same freshness window you like
-    allowStaleCrossDip: false, // turn off stale DIP lane
+    allowStaleCrossDip: true, // allow stale-cross + DIP lane
     // NEW: explicit stale windows for “old flip still valid”
     staleDailyCrossMaxAgeBars: 20, // <= your suggestion
     staleWeeklyCrossMaxAgeWeeks: 10, // <= your suggestion
@@ -1999,65 +2036,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
 
   const candidates = [];
 
-  const planCross = (label) => {
-    const baseATR = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
-    const rr = analyzeRR(
-      px,
-      Math.max(1, px - 1.2 * baseATR),
-      px + 2.4 * baseATR,
-      stock,
-      msFull,
-      { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
-      { kind: "CROSS", data: completedDaily }
-    );
-    return { label, rr };
-  };
-
-  // Fresh WEEKLY
-  if (crossW.trigger && structureGateOk) {
-    const p = planCross("WEEKLY");
-    if (p.rr.acceptable)
-      candidates.push({
-        kind: "WEEKLY CROSS",
-        why: crossW.why,
-        rr: p.rr,
-        stop: p.rr.stop,
-        target: p.rr.target,
-      });
-    else
-      tele.histos.rrShortfall.push({
-        need: +p.rr.need.toFixed(2),
-        have: +p.rr.ratio.toFixed(2),
-        short: +(p.rr.need - p.rr.ratio).toFixed(3),
-        atrPct: +((p.rr.atr / Math.max(px, 1e-9)) * 100).toFixed(2),
-        trend: msFull.trend,
-        ticker: stock?.ticker,
-      });
-  }
-
-  // Fresh DAILY
-  if (crossD.trigger && structureGateOk) {
-    const p = planCross("DAILY");
-    if (p.rr.acceptable)
-      candidates.push({
-        kind: "DAILY CROSS",
-        why: crossD.why,
-        rr: p.rr,
-        stop: p.rr.stop,
-        target: p.rr.target,
-      });
-    else
-      tele.histos.rrShortfall.push({
-        need: +p.rr.need.toFixed(2),
-        have: +p.rr.ratio.toFixed(2),
-        short: +(p.rr.need - p.rr.ratio).toFixed(3),
-        atrPct: +((p.rr.atr / Math.max(px, 1e-9)) * 100).toFixed(2),
-        trend: msFull.trend,
-        ticker: stock?.ticker,
-      });
-  }
-
-  /* ---------------- DIP lane (same flavor as analyzeSwingTradeEntry) ---------------- */
+  /* ---------------- DIP lane (daily + weekly flavors) ---------------- */
   const U = {
     num,
     avg,
@@ -2069,18 +2048,46 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     inferTickFromPrice,
     tracer: T,
   };
-  const dip = detectDipBounce(stock, dataAll, cfg, U);
+
+  // Daily-based dip (uses daily pullback/bounce logic)
+  const dipDailyNow = detectDipBounce(stock, dataAll, cfg, U);
+
+  // Weekly-based dip (uses weekly pullback/bounce logic)
+  const dipWeeklyNow = detectDipBounceWeekly(stock, dataAll, cfg, U);
+
+  // Telemetry mirror (keep both so we see which one fired)
   tele.dip = {
-    trigger: !!dip?.trigger,
-    waitReason: dip?.waitReason || "",
-    why: dip?.why || "",
-    diagnostics: dip?.diagnostics || {},
+    daily: {
+      trigger: !!dipDailyNow?.trigger,
+      waitReason: dipDailyNow?.waitReason || "",
+      why: dipDailyNow?.why || "",
+      diagnostics: dipDailyNow?.diagnostics || {},
+    },
+    weekly: {
+      trigger: !!dipWeeklyNow?.trigger,
+      waitReason: dipWeeklyNow?.waitReason || "",
+      why: dipWeeklyNow?.why || "",
+      diagnostics: dipWeeklyNow?.diagnostics || {},
+    },
   };
-  if (!dip?.trigger) {
-    pushBlock(tele, "DIP_WAIT", "dip", dip?.waitReason || "DIP not ready", {
-      px,
-      diag: dip?.diagnostics || {},
-    });
+
+  if (!dipDailyNow?.trigger) {
+    pushBlock(
+      tele,
+      "DIP_DAILY_WAIT",
+      "dipDaily",
+      dipDailyNow?.waitReason || "Daily DIP not ready",
+      { px, diag: dipDailyNow?.diagnostics || {} }
+    );
+  }
+  if (!dipWeeklyNow?.trigger) {
+    pushBlock(
+      tele,
+      "DIP_WEEKLY_WAIT",
+      "dipWeekly",
+      dipWeeklyNow?.waitReason || "Weekly DIP not ready",
+      { px, diag: dipWeeklyNow?.diagnostics || {} }
+    );
   }
 
   // DIP gates: weekly relaxed up + (reclaim25&75 OR MA25>75 cross)
@@ -2090,8 +2097,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     cfg.dailyReclaimLookback
   );
   const maCrossGate = recentMA25Over75Cross(dataAll, cfg.maCrossMaxAgeBars);
-  let dipGatePass = true,
-    dipGateWhy = [];
+
+  let dipGatePass = true;
+  let dipGateWhy = [];
+
   if (cfg.requireWeeklyUpForDIP && !wkGate.passRelaxed) {
     dipGatePass = false;
     dipGateWhy.push("not above 13/26/52-week MAs");
@@ -2105,59 +2114,191 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     }
   }
 
-  // fresh-weekly constraint (only if enabled)
-  const freshWeeklyOk =
-    !cfg.requireFreshWeeklyFlipForDIP ||
-    (crossW.trigger &&
-      (crossW.weeksAgo ?? 0) <= (cfg.freshWeeklyLookbackWeeks ?? 5));
+  // --- crossing + recency helpers for DIP gating ---
+  // 1. Fresh crosses now?
+  const haveFreshWeeklyCross = !!crossW.trigger;
+  const haveFreshDailyCross = !!crossD.trigger;
+  const haveAnyFreshCross = haveFreshWeeklyCross || haveFreshDailyCross;
 
-  if (dip?.trigger && structureGateOk && dipGatePass && freshWeeklyOk) {
-    const rrD = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
-      kind: "DIP",
-      data: dataAll,
-    });
-    tele.rr = tele.rr?.checked ? tele.rr : toTeleRR(rrD);
+  // 2. Most recent bullish flips (not just 'fresh', any recent flip)
+  const lastDailyFlip = lastDailyStackedCrossAge(completedDaily);
+  const lastWeeklyFlip = lastWeeklyStackedCrossAge(completedDaily);
 
-    if (rrD.acceptable) {
-      const gv = guardVeto(
+  // Config windows
+  const freshD = cfg.freshDailyLookbackDays ?? 5; // "fresh" boundary DAILY
+  const freshW = cfg.freshWeeklyLookbackWeeks ?? 5; // "fresh" boundary WEEKLY
+  const maxStaleD = cfg.staleDailyCrossMaxAgeBars ?? 20; // after this, too old DAILY
+  const maxStaleW = cfg.staleWeeklyCrossMaxAgeWeeks ?? 10; // after this, too old WEEKLY
+
+  // Is the DAILY flip recent-but-not-ancient (not fresh anymore, but still valid)?
+  const recentEnoughDailyFlip =
+    !!lastDailyFlip.found &&
+    lastDailyFlip.barsAgo > freshD &&
+    lastDailyFlip.barsAgo <= maxStaleD;
+
+  // Is the WEEKLY flip recent-but-not-ancient?
+  const recentEnoughWeeklyFlip =
+    !!lastWeeklyFlip.found &&
+    lastWeeklyFlip.weeksAgo > freshW &&
+    lastWeeklyFlip.weeksAgo <= maxStaleW;
+
+  // Is the dip bounce itself still "fresh"?
+  const dailyDipStillValid =
+    !!dipDailyNow?.trigger &&
+    (!Number.isFinite(dipDailyNow?.diagnostics?.bounceAgeBars) ||
+      dipDailyNow.diagnostics.bounceAgeBars <=
+        (cfg.dipDaily?.maxBounceAgeBars ?? cfg.dipMaxBounceAgeBars ?? 7));
+
+  const weeklyDipStillValid =
+    !!dipWeeklyNow?.trigger &&
+    (!Number.isFinite(dipWeeklyNow?.diagnostics?.bounceAgeBars) ||
+      dipWeeklyNow.diagnostics.bounceAgeBars <=
+        (cfg.dipWeekly?.maxBounceAgeWeeks ?? 2));
+
+  // Final entry booleans
+  const dailyDipOK =
+    dailyDipStillValid && !haveAnyFreshCross && recentEnoughDailyFlip;
+
+  const weeklyDipOK =
+    weeklyDipStillValid && !haveAnyFreshCross && recentEnoughWeeklyFlip;
+
+  // --- DAILY DIP candidate
+  if (structureGateOk && dipGatePass && dailyDipOK) {
+    const rrDailyDip = analyzeRR(
+      px,
+      dipDailyNow.stop,
+      dipDailyNow.target,
+      stock,
+      msFull,
+      cfg,
+      { kind: "DIP", data: dataAll }
+    );
+
+    if (rrDailyDip.acceptable) {
+      const gvDaily = guardVeto(
         stock,
         dataAll,
         px,
-        rrD,
+        rrDailyDip,
         msFull,
         cfg,
-        dip.nearestRes,
+        dipDailyNow.nearestRes,
         "DIP"
       );
-      if (!gv.veto) {
+
+      if (!gvDaily.veto) {
         candidates.push({
-          kind: "DIP ENTRY",
-          why: dip.why,
-          rr: rrD,
-          stop: rrD.stop,
-          target: rrD.target,
+          kind: "STALE DAILY + DIP",
+          why: `Daily flip was ${lastDailyFlip.barsAgo}d ago (>${freshD} & ≤${maxStaleD}); daily DIP now.`,
+          rr: rrDailyDip,
+          stop: rrDailyDip.stop,
+          target: rrDailyDip.target,
         });
       } else {
-        pushBlock(tele, "VETO_DIP", "guard", gv.reason, gv.details);
+        pushBlock(
+          tele,
+          "DAILY_DIP_VETO",
+          "guard",
+          gvDaily.reason,
+          gvDaily.details
+        );
       }
     } else {
       pushBlock(
         tele,
-        "RR_FAIL_DIP",
+        "DAILY_DIP_RR_FAIL",
         "rr",
-        `RR ${fmt(rrD.ratio)} < need ${fmt(rrD.need)}`,
-        { stop: rrD.stop, target: rrD.target }
+        `RR ${fmt(rrDailyDip.ratio)} < need ${fmt(rrDailyDip.need)}`,
+        { stop: rrDailyDip.stop, target: rrDailyDip.target }
       );
     }
-  } else if (dip?.trigger && structureGateOk && dipGatePass && !freshWeeklyOk) {
+  } else if (
+    structureGateOk &&
+    dipGatePass &&
+    !dailyDipOK &&
+    dipDailyNow?.trigger
+  ) {
+    // Daily DIP fired but disqualified (fresh cross priority or stale flip too old)
     pushBlock(
       tele,
-      "DIP_REQ_WEEKLY_FRESH",
-      "dip",
-      `DIP gated: requires fresh weekly flip ≤${cfg.freshWeeklyLookbackWeeks}w`,
-      { weeklyFlip: { trigger: crossW.trigger, weeksAgo: crossW.weeksAgo } }
+      "DAILY_DIP_SKIP",
+      "dipDaily",
+      "Daily DIP skipped due to fresh cross or stale flip",
+      {
+        haveAnyFreshCross,
+        recentEnoughDailyFlip,
+        dailyDipStillValid,
+      }
     );
-  } else if (dip?.trigger && !dipGatePass) {
+  }
+
+  // --- WEEKLY DIP candidate
+  if (structureGateOk && dipGatePass && weeklyDipOK) {
+    const rrWeeklyDip = analyzeRR(
+      px,
+      dipWeeklyNow.stop,
+      dipWeeklyNow.target,
+      stock,
+      msFull,
+      cfg,
+      { kind: "DIP", data: dataAll }
+    );
+
+    if (rrWeeklyDip.acceptable) {
+      const gvWeekly = guardVeto(
+        stock,
+        dataAll,
+        px,
+        rrWeeklyDip,
+        msFull,
+        cfg,
+        dipWeeklyNow.nearestRes,
+        "DIP"
+      );
+      if (!gvWeekly.veto) {
+        candidates.push({
+          kind: "STALE WEEKLY + DIP",
+          why: `Weekly flip was ${lastWeeklyFlip.weeksAgo}w ago (>${freshW} & ≤${maxStaleW}); weekly DIP now.`,
+          rr: rrWeeklyDip,
+          stop: rrWeeklyDip.stop,
+          target: rrWeeklyDip.target,
+        });
+      } else {
+        pushBlock(
+          tele,
+          "WEEKLY_DIP_VETO",
+          "guard",
+          gvWeekly.reason,
+          gvWeekly.details
+        );
+      }
+    } else {
+      pushBlock(
+        tele,
+        "WEEKLY_DIP_RR_FAIL",
+        "rr",
+        `RR ${fmt(rrWeeklyDip.ratio)} < need ${fmt(rrWeeklyDip.need)}`,
+        { stop: rrWeeklyDip.stop, target: rrWeeklyDip.target }
+      );
+    }
+  } else if (
+    structureGateOk &&
+    dipGatePass &&
+    !weeklyDipOK &&
+    dipWeeklyNow?.trigger
+  ) {
+    pushBlock(
+      tele,
+      "WEEKLY_DIP_SKIP",
+      "dipWeekly",
+      "Weekly DIP skipped due to fresh cross or stale flip",
+      {
+        haveAnyFreshCross,
+        recentEnoughWeeklyFlip,
+        weeklyDipStillValid,
+      }
+    );
+  } else if (!dipGatePass) {
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
       wkGate,
       reclaimGate,
@@ -2165,132 +2306,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     });
   }
 
-  /* -------- NEW: precise “stale cross → now DIP” logic --------
-       If no fresh flips, look for older flips inside stale windows, then require a DIP now.
-    */
-  if (
-    cfg.allowStaleCrossDip &&
-    !crossW.trigger &&
-    !crossD.trigger &&
-    structureGateOk
-  ) {
-    const Umtf = {
-      num,
-      avg,
-      near,
-      sma,
-      rsiFromData,
-      findResistancesAbove,
-      findSupportsBelow,
-      inferTickFromPrice,
-      tracer: T,
-    };
-    const dipDailyNow = dip; // already computed (daily)
-    const dipWeeklyNow = detectDipBounceWeekly(stock, dataAll, cfg, Umtf);
-
-    // Find last flips (no freshness cap)
-    const lastDailyFlip = lastDailyStackedCrossAge(completedDaily);
-    const lastWeeklyFlip = lastWeeklyStackedCrossAge(completedDaily);
-
-    const freshD = cfg.freshDailyLookbackDays ?? 5;
-    const freshW = cfg.freshWeeklyLookbackWeeks ?? 5;
-    const maxStaleD = cfg.staleDailyCrossMaxAgeBars ?? 20;
-    const maxStaleW = cfg.staleWeeklyCrossMaxAgeWeeks ?? 10;
-
-    // DAILY stale window: (freshD, maxStaleD]
-    const dailyWindowOK =
-      !!lastDailyFlip.found &&
-      lastDailyFlip.barsAgo > freshD &&
-      lastDailyFlip.barsAgo <= maxStaleD;
-
-    // WEEKLY stale window: (freshW, maxStaleW]
-    const weeklyWindowOK =
-      !!lastWeeklyFlip.found &&
-      lastWeeklyFlip.weeksAgo > freshW &&
-      lastWeeklyFlip.weeksAgo <= maxStaleW;
-
-    // Require “now DIP”
-    const dailyDipOK =
-      !!dipDailyNow?.trigger &&
-      (!Number.isFinite(dipDailyNow?.diagnostics?.bounceAgeBars) ||
-        dipDailyNow.diagnostics.bounceAgeBars <= (cfg.staleDipMaxAgeBars ?? 7));
-
-    const weeklyDipOK =
-      !!dipWeeklyNow?.trigger &&
-      (!Number.isFinite(dipWeeklyNow?.diagnostics?.bounceAgeBars) ||
-        dipWeeklyNow.diagnostics.bounceAgeBars <=
-          (cfg.staleDipMaxAgeWeeklyWeeks ?? 2));
-
-    // Prefer WEEKLY if both qualify; else DAILY
-    const doWeekly = weeklyWindowOK && weeklyDipOK;
-    const doDaily = dailyWindowOK && dailyDipOK && !doWeekly;
-
-    if (doWeekly || doDaily) {
-      const chosen = doWeekly ? dipWeeklyNow : dipDailyNow;
-      const rrS = analyzeRR(
-        px,
-        chosen.stop,
-        chosen.target,
-        stock,
-        msFull,
-        cfg,
-        { kind: "DIP", data: dataAll }
-      );
-      if (rrS.acceptable) {
-        const gvS = guardVeto(
-          stock,
-          dataAll,
-          px,
-          rrS,
-          msFull,
-          cfg,
-          chosen.nearestRes,
-          "DIP"
-        );
-        if (!gvS.veto) {
-          candidates.push({
-            kind: doWeekly ? "STALE WEEKLY + DIP" : "STALE DAILY + DIP",
-            why: doWeekly
-              ? `Weekly flip was ${lastWeeklyFlip.weeksAgo}w ago (>${freshW} & ≤${maxStaleW}); DIP now.`
-              : `Daily flip was ${lastDailyFlip.barsAgo}d ago (>${freshD} & ≤${maxStaleD}); DIP now.`,
-            rr: rrS,
-            stop: rrS.stop,
-            target: rrS.target,
-          });
-        } else {
-          pushBlock(tele, "STALE_VETO", "guard", gvS.reason, gvS.details);
-        }
-      } else {
-        pushBlock(
-          tele,
-          "STALE_RR_FAIL",
-          "rr",
-          `RR ${fmt(rrS.ratio)} < need ${fmt(rrS.need)}`,
-          {
-            stop: rrS.stop,
-            target: rrS.target,
-          }
-        );
-      }
-    } else {
-      pushBlock(
-        tele,
-        "STALE_SKIP",
-        "cross",
-        "No acceptable stale-window flip or no DIP now",
-        {
-          lastDailyFlip,
-          lastWeeklyFlip,
-          freshD,
-          freshW,
-          maxStaleD,
-          maxStaleW,
-          dipDailyNow: { trigger: !!dipDailyNow?.trigger },
-          dipWeeklyNow: { trigger: !!dipWeeklyNow?.trigger },
-        }
-      );
-    }
-  }
 
   /* ------------------------ Decide & return ------------------------ */
   // attach global guard histos
@@ -2338,10 +2353,17 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     return out;
   }
 
-  // Preference: if any fresh cross passed, prefer WEEKLY > DAILY > others; otherwise pick best RR
+  // Preference:
+  // 1. WEEKLY CROSS
+  // 2. DAILY CROSS
+  // 3. STALE WEEKLY + DIP
+  // 4. STALE DAILY + DIP
+  // 5. (fallback) best RR, which can include "DIP ENTRY"
   const pref =
     candidates.find((c) => c.kind === "WEEKLY CROSS") ||
     candidates.find((c) => c.kind === "DAILY CROSS") ||
+    candidates.find((c) => c.kind === "STALE WEEKLY + DIP") ||
+    candidates.find((c) => c.kind === "STALE DAILY + DIP") ||
     candidates.sort(
       (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
     )[0];
