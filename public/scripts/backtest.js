@@ -989,19 +989,29 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // telemetry
   const telemetry = {
-    trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0 },
+    // How often we traded (or tried to trade) in each regime
+    trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0, RANGE: 0 },
+
+    // Why a signal was blocked (we'll reuse these counters, even if the names
+    // were originally for older gates)
     gates: {
-      priceActionGateFailed: 0,
-      structureGateFailed: 0,
-      stackedGateFailed: 0,
+      priceActionGateFailed: 0, // we'll map "warmup blocked" here
+      structureGateFailed: 0, // we'll map "at capacity" here
+      stackedGateFailed: 0, // we'll map "cooldown blocked" here
+      tooWildAtr: 0, // NEW: filtered by ATR%
+      regimeFiltered: 0, // NEW: filtered by regime allowlist
     },
+
     dip: {
       notReadyReasons: {},
       guardVetoReasons: {},
     },
+
     rr: { rejected: {}, accepted: {} },
+
     examples: { buyNow: [], rejected: [] },
   };
+
   const EXAMPLE_MAX = 5;
 
   // parallel (buyNow=false sims)
@@ -1086,6 +1096,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         // NEW: regime tag for this day (based on reference map)
         const dayISO = toISO(today.date);
         const dayRegime = regimeMap ? regimeMap[dayISO] || "RANGE" : "RANGE";
+
+        // --- Telemetry: count regime usage regardless of analyseCrossing() internals
+        if (dayRegime && telemetry.trends.hasOwnProperty(dayRegime)) {
+          telemetry.trends[dayRegime]++;
+        }
 
         const stock = {
           ticker: code,
@@ -1208,39 +1223,38 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 Number.isFinite(st.crossLag) &&
                 st.crossLag <= 3;
 
-                const trade = {
-                  ticker: code,
-                  profile: p.id,
-                  strategy: st.kind || "DIP",
+              const trade = {
+                ticker: code,
+                profile: p.id,
+                strategy: st.kind || "DIP",
 
-                  entryDate: toISO(candles[st.entryIdx].date),
-                  exitDate: toISO(today.date),
-                  returnPct: r2(pctRet),
-                  result: exit.result,
-                  holdingDays: i - st.entryIdx,
-                  exitType: exit.type,
+                entryDate: toISO(candles[st.entryIdx].date),
+                exitDate: toISO(today.date),
+                returnPct: r2(pctRet),
+                result: exit.result,
+                holdingDays: i - st.entryIdx,
+                exitType: exit.type,
 
-                  entry: r2(st.entry),
-                  exit: r2(exit.price),
-                  stop: st.stopInit,
-                  target: st.target,
-                  R: Rval,
+                entry: r2(st.entry),
+                exit: r2(exit.price),
+                stop: st.stopInit,
+                target: st.target,
+                R: Rval,
 
-                  ST: st.ST,
-                  LT: st.LT,
-                  regime: st.regime || "RANGE",
-                  crossType: st.crossType || null,
-                  crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-                  analytics: st.analytics || null,
-                  score: Number.isFinite(st.score) ? st.score : null,
+                ST: st.ST,
+                LT: st.LT,
+                regime: st.regime || "RANGE",
+                crossType: st.crossType || null,
+                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+                analytics: st.analytics || null,
+                score: Number.isFinite(st.score) ? st.score : null,
 
-                  // NEW: enrich for diagnose_backtest.js
-                  sector: tickerInfoMap[code]?.sector || null,
+                // NEW: enrich for diagnose_backtest.js
+                sector: tickerInfoMap[code]?.sector || null,
 
-                  // convenience label you already had
-                  dipAfterFreshCross: isDipAfterFreshCrossSignal,
-                };
-                
+                // convenience label you already had
+                dipAfterFreshCross: isDipAfterFreshCrossSignal,
+              };
 
               // 🔥 Optional convenience label
               trade.entryArchetype = trade.dipAfterFreshCross
@@ -1486,9 +1500,51 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             }
           }
 
-          // RR telemetry bucket (same as before)
-          const rRatio = Number(sig?.debug?.rr?.ratio);
+          // --- Telemetry mapping of block reasons into counters
+          if (!anyProfileEligible) {
+            // Map the newer block reasons into the legacy-ish telemetry.gates buckets
+            const cooldownBlocked = activeProfiles.some(
+              (p) => i <= cooldownUntilByProfile[p.id]
+            );
+
+            if (atCapacity) {
+              // reuse "structureGateFailed" to mean "we were already full"
+              telemetry.gates.structureGateFailed++;
+            }
+            if (i < WARMUP) {
+              // reuse "priceActionGateFailed" to mean "not past warmup yet"
+              telemetry.gates.priceActionGateFailed++;
+            }
+            if (cooldownBlocked) {
+              // reuse "stackedGateFailed" to mean "in cooldown"
+              telemetry.gates.stackedGateFailed++;
+            }
+          }
+
+          // --- RR telemetry bucket (recomputed if missing) ---
+          let rRatio = Number(sig?.debug?.rr?.ratio);
+
+          if (!Number.isFinite(rRatio)) {
+            const rawStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
+            const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+            const pxNow = today.close; // pre-entry proxy
+
+            if (
+              Number.isFinite(rawStop) &&
+              Number.isFinite(rawTarget) &&
+              rawStop < pxNow &&
+              rawTarget > pxNow
+            ) {
+              const reward = rawTarget - pxNow;
+              const risk = pxNow - rawStop;
+              if (risk > 0) {
+                rRatio = reward / risk;
+              }
+            }
+          }
+
           inc(telemetry.rr.accepted, bucketize(rRatio));
+
           if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
             telemetry.examples.buyNow.push({
               ticker: code,
@@ -1500,8 +1556,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
           // optional sentiment gate (now disabled by default due to change #1)
           if (anyProfileEligible) {
-            // optional regime gate ...
-            if (!allowedRegimes || allowedRegimes.has(dayRegime)) {
+            // --- Regime gate
+            if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
+              telemetry.gates.regimeFiltered++;
+            } else {
               // ENTRY = next-bar open (fallback close)
               const hasNext = i + 1 < candles.length;
               const entryBarIdx = hasNext ? i + 1 : i;
@@ -1577,6 +1635,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   Number.isFinite(analytics.atrPct) &&
                   analytics.atrPct > MAX_ATR_PCT;
                 if (tooWild) {
+                  telemetry.gates.tooWildAtr++; // <--- NEW LOGGING
                   // skip opening this profile due to crazy ATR%
                   continue;
                 }
@@ -1624,19 +1683,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   crossType: selected,
                   crossLag: Number.isFinite(lag) ? lag : null,
 
-                  analytics, // <-- now includes entryPx & turnoverJPY after Patch 2A
+                  analytics,
                   score,
 
                   // NEW: store sector for later exit reporting
                   sector: tickerInfoMap[code]?.sector || null,
                 });
-                
 
                 globalOpenCount++;
                 signalsExecuted++;
-              }
-            }
-          }
+              } // end for each profile
+            } // end else (regime ok)
+          } // end if (anyProfileEligible)
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
@@ -1917,9 +1975,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const profiles = {};
   for (const p of activeProfiles) {
     const list = all.filter((t) => t.profile === p.id);
+    const m = computeMetrics(list);
+
+    // Optional: propose a "catastrophic kill stop" for target_only.
+    // Heuristic: use p90LossPct of the loss distribution.
+    // Meaning: "90% of losers are not worse than this drawdown."
+    let catastrophicStopSuggestion = null;
+    if (
+      p.id === "target_only" &&
+      m.lossTail &&
+      m.lossTail.countLosses > 5 && // need some sample size
+      Number.isFinite(m.lossTail.p90LossPct)
+    ) {
+      catastrophicStopSuggestion = {
+        killAtPct: m.lossTail.p90LossPct, // e.g. -5.2
+        comment:
+          "If you hard-stop target_only at this % loss, you cap ~90% of losers before they become disasters.",
+      };
+    }
+
     profiles[p.id] = {
       label: p.label,
-      metrics: computeMetrics(list),
+      metrics: m,
       exits: {
         target: list.filter((t) => t.exitType === "TARGET").length,
         stop: list.filter((t) => t.exitType === "STOP").length,
@@ -1927,9 +2004,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         end: list.filter((t) => t.exitType === "END").length,
       },
 
+      ...(catastrophicStopSuggestion ? { catastrophicStopSuggestion } : {}),
+
       ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
+  
   // With a single profile, "best" is trivially that profile:
   function pickBest(by) {
     let bestId = null,
@@ -2351,7 +2431,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   };
 }
 
+
 /* ------------------------ metrics helpers ------------------------ */
+
+// helper to get percentile of an array of numbers
+// p is 0..100. We interpolate between ranks.
+// NOTE: losses are negative, sorted asc means "most negative first".
+function percentile(arr, p) {
+  if (!arr.length) return 0;
+  const sorted = [...arr].sort((a, b) => a - b); // ascending
+  const rank = (p / 100) * (sorted.length - 1);
+  const low = Math.floor(rank);
+  const high = Math.ceil(rank);
+  if (low === high) return sorted[low];
+  const w = rank - low;
+  return sorted[low] * (1 - w) + sorted[high] * w;
+}
+
 function computeMetrics(trades) {
   // cap single-trade returns at +/-50% for stability in reporting
   const capped = trades.map((t) => {
@@ -2377,6 +2473,22 @@ function computeMetrics(trades) {
   const avgLossPct = losses.length
     ? sum(losses.map((t) => t._retPctForStats)) / losses.length
     : 0;
+
+  // --- loss tail stats (for stop tuning, especially target_only profile) ---
+  // lossPcts are negative numbers like -1.2, -5.4, etc.
+  const lossPcts = losses.map((t) => t._retPctForStats);
+
+  // worstLossPct: the most negative (max damage trade)
+  const maxLossPct = lossPcts.length ? Math.min(...lossPcts) : 0;
+
+  // minLossPct: the "least bad" loser (closest to 0, still negative)
+  const minLossPct = lossPcts.length ? Math.max(...lossPcts) : 0;
+
+  // tail cutoffs:
+  // p90LossPct ~ level where only ~10% of losses are worse
+  // p95LossPct ~ level where only ~5% of losses are worse
+  const p90LossPct = lossPcts.length ? percentile(lossPcts, 10) : 0;
+  const p95LossPct = lossPcts.length ? percentile(lossPcts, 5) : 0;
 
   // R stats (unchanged, we don't cap R because it's already relative to stop)
   const rWins = wins
@@ -2409,17 +2521,43 @@ function computeMetrics(trades) {
 
   return {
     trades: r2(n),
+
     winRate: r2(winRate),
+
     avgReturnPct: r2(avgReturnPct),
     avgHoldingDays: r2(avgHoldingDays),
+
     avgWinPct: r2(avgWinPct),
     avgLossPct: r2(avgLossPct),
+
     avgRwin: r2(avgRwin),
     avgRloss: r2(avgRloss),
     expR: r2(expR),
+
     profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : "Infinity",
+
     exits,
+
+    // 🔥 NEW: downside shape, mainly to tame `target_only`
+    lossTail: {
+      // "best" loss (closest to break-even, usually like -0.8%)
+      minLossPct: r2(minLossPct),
+
+      // absolute ugliest observed loss in this bucket
+      maxLossPct: r2(maxLossPct),
+
+      // catastrophe threshold suggestion:
+      // "90% of losers are not worse than this"
+      p90LossPct: r2(p90LossPct),
+
+      // even stricter tail: only ~5% of losers are worse
+      p95LossPct: r2(p95LossPct),
+
+      // how many losing trades went into this calc
+      countLosses: losses.length,
+    },
   };
+
 }
 
 function sum(arr) {
