@@ -11,10 +11,16 @@
 //   - regimeTicker: "1321.T" (default Nikkei 225 ETF proxy)
 //   - allowedRegimes: ["UP","STRONG_UP"] to only trade in those regimes
 //
-// NOTE: This build supports two profiles:
-// - raw_signal_levels: use signal's raw stop/target (no adjustments)
-// - atr_trail: same entry levels but updates stop with an ATR chandelier trail (no lookahead)
-// Toggle with opts.useTrailing (default true). Profile IDs are returned.
+// NOTE: This build supports THREE profiles:
+// - raw_signal_levels: uses signal's raw stop + target, never moves stop
+// - atr_trail: same initial stop/target, BUT after price tags target we arm
+//              a trailing "chandelier"-style stop (no lookahead data)
+// - target_only: enter with target only, conceptually no stop
+//                (R is null, exits at target/TIME/END only)
+//
+// You can control whether the atr_trail profile is active using opts.useTrailing
+// (default true). raw_signal_levels and target_only are always active.
+
 
 
 import {
@@ -1012,8 +1018,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
-        // reset open position count for this ticker's simulation timeline
-        globalOpenCount = 0;
 
 
     try {
@@ -1546,7 +1550,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
                   // behavior flags
                   noStop: isTargetOnly,
-                  ignoreTimeExit: isTargetOnly ? true : false,
+                  ignoreTimeExit: false,
                   ST,
                   LT,
                   regime: dayRegime,
@@ -1569,77 +1573,86 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
       // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
-      for (const p of activeProfiles) {
-        const list = openByProfile[p.id] || [];
-        if (!list.length) continue;
+      // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
+for (const p of activeProfiles) {
+  const list = openByProfile[p.id] || [];
+  if (!list.length) continue;
 
-        const lastIdx = candles.length - 1;
-        const lastBar = candles[lastIdx];
+  const lastIdx = candles.length - 1;
+  const lastBar = candles[lastIdx];
 
-        for (const st of list) {
-          // Close at last close; mark as WIN if >= entry, else LOSS.
-          const endExitPrice = lastBar.close;
-          const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
+  for (const st of list) {
+    const ageBars = lastIdx - st.entryIdx;
+    const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
 
-          const baseRisk = Number.isFinite(st.stopInit)
-            ? st.entry - st.stopInit
-            : 0.01;
-          const risk = Math.max(0.01, baseRisk);
+    const exitTypeFinal = overMaxHold ? "TIME" : "END";
 
-          const Rval = st.noStop ? null : r2((endExitPrice - st.entry) / risk);
+    const holdingBarsFinal =
+      HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
 
-          const isDipAfterFreshCrossSignal =
-            /DIP/i.test(st.kind || "") &&
-            (st.crossType === "WEEKLY" ||
-              st.crossType === "DAILY" ||
-              st.crossType === "BOTH") &&
-            Number.isFinite(st.crossLag) &&
-            st.crossLag <= 3;
+    const endExitPrice = lastBar.close;
+    const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
 
-          const trade = {
-            ticker: code,
-            profile: p.id,
-            strategy: st.kind || "DIP",
+    const baseRisk = Number.isFinite(st.stopInit)
+      ? st.entry - st.stopInit
+      : 0.01;
+    const risk = Math.max(0.01, baseRisk);
 
-            entryDate: toISO(candles[st.entryIdx].date),
-            exitDate: toISO(lastBar.date),
-            returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
-            result: endResult,
-            holdingDays: lastIdx - st.entryIdx,
-            exitType: "END",
+    const Rval = st.noStop ? null : r2((endExitPrice - st.entry) / risk);
 
-            entry: r2(st.entry),
-            exit: r2(endExitPrice),
-            stop: st.stopInit,
-            target: st.target,
-            R: Rval,
+    const isDipAfterFreshCrossSignal =
+      /DIP/i.test(st.kind || "") &&
+      (st.crossType === "WEEKLY" ||
+        st.crossType === "DAILY" ||
+        st.crossType === "BOTH") &&
+      Number.isFinite(st.crossLag) &&
+      st.crossLag <= 3;
 
-            ST: st.ST,
-            LT: st.LT,
-            regime: st.regime || "RANGE",
-            crossType: st.crossType || null,
-            crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-            analytics: st.analytics || null,
-            score: Number.isFinite(st.score) ? st.score : null,
+    const trade = {
+      ticker: code,
+      profile: p.id,
+      strategy: st.kind || "DIP",
 
-            // NEW:
-            dipAfterFreshCross: isDipAfterFreshCrossSignal,
-          };
+      entryDate: toISO(candles[st.entryIdx].date),
+      exitDate: toISO(lastBar.date),
+      returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+      result: endResult,
 
-          trade.entryArchetype = trade.dipAfterFreshCross
-            ? "DIP_AFTER_FRESH_CROSS"
-            : trade.crossType || "OTHER";
+      holdingDays: holdingBarsFinal,
+      exitType: exitTypeFinal,
 
-          tradesByProfile[p.id].push(trade);
-          trades.push(trade);
-          globalTrades.push(trade);
-        }
+      entry: r2(st.entry),
+      exit: r2(endExitPrice),
+      stop: st.stopInit,
+      target: st.target,
+      R: Rval,
 
-                // these positions are now closed, so reduce the open count
-                globalOpenCount = Math.max(0, globalOpenCount - list.length);
+      ST: st.ST,
+      LT: st.LT,
+      regime: st.regime || "RANGE",
+      crossType: st.crossType || null,
+      crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+      analytics: st.analytics || null,
+      score: Number.isFinite(st.score) ? st.score : null,
 
-        openByProfile[p.id] = [];
-      }
+      dipAfterFreshCross: isDipAfterFreshCrossSignal,
+    };
+
+    trade.entryArchetype = trade.dipAfterFreshCross
+      ? "DIP_AFTER_FRESH_CROSS"
+      : trade.crossType || "OTHER";
+
+    tradesByProfile[p.id].push(trade);
+    trades.push(trade);
+    globalTrades.push(trade);
+  }
+
+  // these positions are now closed, so reduce the open count
+  globalOpenCount = Math.max(0, globalOpenCount - list.length);
+
+  openByProfile[p.id] = [];
+}
+
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
@@ -1701,6 +1714,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const timeLosses = all.filter(
     (t) => t.exitType === "TIME" && t.result === "LOSS"
   ).length;
+
+  const endExitCount = all.filter((t) => t.exitType === "END").length;
+
 
   const days = tradingDays.size;
   const tradesPerDay = days ? totalTrades / days : 0;
@@ -1794,7 +1810,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         target: list.filter((t) => t.exitType === "TARGET").length,
         stop: list.filter((t) => t.exitType === "STOP").length,
         time: list.filter((t) => t.exitType === "TIME").length,
+        end: list.filter((t) => t.exitType === "END").length,
       },
+
       ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
@@ -2104,8 +2122,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       topRejectedReasons: TOP_K,
       examplesCap: EX_CAP,
       includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
-      // Kept for UI compatibility; this build always uses the RAW profile only
+      // profiles actually simulated this run
       profileIds: activeProfiles.map((p) => p.id),
+      // trailing config (atr_trail is only active if useTrailing=true)
       useTrailing: USE_TRAIL,
       atrMult: 3.5,
       trailStartAfterBars: 0,
@@ -2147,6 +2166,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       target: hitTargetCount,
       stop: hitStopCount,
       time: timeExitCount,
+      end: endExitCount,
       timeWins,
       timeLosses,
     },
@@ -2265,10 +2285,12 @@ function computeMetrics(trades) {
     ? Infinity
     : 0;
 
+  // exit breakdown, now including END (forced close / EOD mark)
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
     time: trades.filter((t) => t.exitType === "TIME").length,
+    end: trades.filter((t) => t.exitType === "END").length,
   };
 
   return {
