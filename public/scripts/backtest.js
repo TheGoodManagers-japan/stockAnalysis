@@ -128,8 +128,8 @@ function buildTickerAnalysis(ticker, trades){
   const n = trades.length;
 
   // Regime breakdown
-  const regimes = ["STRONG_UP","UP","RANGE","DOWN"];
-  const regCount = (list)=>Object.fromEntries(regimes.map(r=>[r, list.filter(t=>t.regime===r).length]));
+    const regimesList = ["STRONG_UP","UP","RANGE","DOWN"];
+    const regCount = (list)=>Object.fromEntries(regimesList.map(r=>[r, list.filter(t=>t.regime===r).length]));
   const regWins = regCount(wins);
   const regLoss = regCount(losses);
 
@@ -170,8 +170,8 @@ function buildTickerAnalysis(ticker, trades){
 
   // Concise bullets (kept for UI if you want to show them)
   const bullets = [];
-  const worstReg = regimes.sort((a,b)=> (regLoss[b]-regLoss[a]))[0];
-  const bestReg  = regimes.sort((a,b)=> (regWins[b]-regWins[a]))[0];
+    const worstReg = [...regimesList].sort((a,b)=> (regLoss[b]-regLoss[a]))[0];
+    const bestReg  = [...regimesList].sort((a,b)=> (regWins[b]-regWins[a]))[0];
   if(regWins[bestReg]) bullets.push(`Wins clustered in **${bestReg}** (wins ${regWins[bestReg]}/${wins.length}).`);
   if(regLoss[worstReg]) bullets.push(`Losses clustered in **${worstReg}** (losses ${regLoss[worstReg]}/${losses.length}).`);
 
@@ -536,19 +536,36 @@ function computeScore({ analytics, regime, crossType, crossLag, ST, LT }) {
     if (lag !== null && lag >= 4) s += 1;
   }
 
-  // Sentiment (you clarified: LT1=most bullish, LT7=most bearish; same for ST)
+  // Sentiment (LT1=most bullish … LT7=most bearish; same for ST)
   if (Number.isFinite(LT) && LT >= 3 && LT <= 5) s += 1; // mild-bullish long-term
   if (Number.isFinite(ST) && ST >= 6 && ST <= 7) s += 1; // short-term bearish (pullback)
 
   // Analytics
   const a = analytics || {};
+
+  // gap up, momentum-ish
   if (Number.isFinite(a.gapPct) && a.gapPct > 0) s += 1;
+
+  // RSI strong
   if (Number.isFinite(a.rsi) && a.rsi >= 60) s += 1;
+
+  // Not super extended above MA25 at entry
   if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct <= 4) s += 1;
-  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6) s -= 1; // penalty for being too extended
+
+  // Punish really stretched entries
+  if (Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6) s -= 1;
+
+  // 🔥 NEW: volatility component
+  // Reward "tradable but not insane" volatility (ATR% in [1,4]),
+  // penalize ultra-chaos (>6%)
+  if (Number.isFinite(a.atrPct)) {
+    if (a.atrPct >= 1 && a.atrPct <= 4) s += 1;
+    if (a.atrPct > 6) s -= 1;
+  }
 
   return s;
 }
+
 
 
 
@@ -687,6 +704,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     ? Math.max(0, opts.maxConcurrent)
     : 0; // 0 = unlimited
 
+  // 🔥 NEW: volatility max gate for entries (ATR% at entry).
+  // Infinity default = no filter unless caller sets it.
+  const MAX_ATR_PCT = Number.isFinite(opts.maxAtrPct)
+    ? opts.maxAtrPct
+    : Infinity;
+
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
   if (!tickers.length) tickers = allTickers.map((t) => t.code);
   tickers = [...new Set([...tickers, ...append])];
@@ -727,16 +750,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     return Math.round(px / tick) * tick;
   }
 
-  // ---- NEW PROFILE: target-only (no stop, hold for target) ----
+  // ---- NEW PROFILE: target-only (no stop) ----
   const TARGET_ONLY_PROFILE = {
     id: "target_only",
-    label: "Target only (no stop, no time exit)",
+    label: "Target only (no stop)",
     compute: ({ entry, sig }) => ({
       // we must return a numeric stop for plumbing; set to 0 but it will be ignored
       stop: 0,
       target: Number(sig?.smartPriceTarget ?? sig?.priceTarget),
     }),
-    // no advance(): never trails; we also skip time exits for this profile
+    // no advance(): never trails;
   };
 
   const ATR_TRAIL_PROFILE = {
@@ -1340,13 +1363,25 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 }
               }
             }
-          }          
+          }
         } else {
           // ---------------- After detection, decide if we can actually ENTER ----------------
-          const anyProfileEligible =
-            i >= WARMUP &&
-            activeProfiles.some((p) => i > cooldownUntilByProfile[p.id]) &&
-            (MAX_CONCURRENT === 0 || globalOpenCount < MAX_CONCURRENT);
+                    const atCapacity =
+                      MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
+          
+                    const anyProfileEligible =
+                      i >= WARMUP &&
+                      activeProfiles.some((p) => i > cooldownUntilByProfile[p.id]) &&
+                      !atCapacity;
+          
+                    if (anyProfileEligible) {
+                      signalsWhileFlat++;
+                    } else {
+                      // We *had* a buy signal but we're blocked due to position cap
+                      if (COUNT_BLOCKED && atCapacity) {
+                        blockedInTrade++;
+                      }
+                    }
 
           // RR telemetry bucket (same as before)
           const rRatio = Number(sig?.debug?.rr?.ratio);
@@ -1370,105 +1405,115 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const entryBar = candles[entryBarIdx];
               const entry = hasNext ? entryBar.open : today.close;
 
-              for (const p of activeProfiles) {
-                if (i <= cooldownUntilByProfile[p.id]) continue;
-                if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
-                  break;
-
-                const plan =
-                  p.compute({
-                    entry,
-                    stock: { ...stock, currentPrice: entry },
-                    sig,
-                    today: entryBar,
-                    hist: candles.slice(0, entryBarIdx + 1),
-                  }) || {};
-                const stop = Number(plan.stop);
-                const target = Number(plan.target);
-                if (!Number.isFinite(stop) || !Number.isFinite(target)) {
-                  signalsInvalid++;
-                  continue;
-                }
-                if (stop >= entry) {
-                  signalsRiskBad++;
-                  continue;
-                }
-
-                const qStop = toTick(stop, stock);
-                const qTarget = toTick(target, stock);
-
-                // derive cross type & lag from analyseCrossing meta
-                const cm = sig?.meta?.cross || {};
-                const selected =
-                  cm?.selected ||
-                  (cm?.weekly && cm?.daily
-                    ? "BOTH"
-                    : cm?.weekly
-                    ? "WEEKLY"
-                    : cm?.daily
-                    ? "DAILY"
-                    : null);
-
-                const lag =
-                  selected === "WEEKLY" && cm.weekly
-                    ? cm.weekly.barsAgo
-                    : selected === "DAILY" && cm.daily
-                    ? cm.daily.barsAgo
-                    : selected === "BOTH"
-                    ? Math.min(
-                        cm.weekly ? cm.weekly.barsAgo : Infinity,
-                        cm.daily ? cm.daily.barsAgo : Infinity
-                      )
-                    : null;
-
-                if (!openByProfile[p.id]) openByProfile[p.id] = [];
-
-                const analytics = computeAnalytics(candles, entryBarIdx, entry);
-                const score = computeScore({
-                  analytics,
-                  regime: dayRegime,
-                  crossType: selected,
-                  crossLag: Number.isFinite(lag) ? lag : null,
-                  ST,
-                  LT,
-                });
-
-                const entryATR =
-                  lastATR(candles.slice(0, entryBarIdx + 1), 14) || 0;
-
-                openByProfile[p.id].push({
-                  entryIdx: entryBarIdx,
-                  entry,
-                  stop: qStop,
-                  stopInit: qStop,
-                  target: qTarget,
-
-                  // NEW for trailing profile:
-                  targetInit: qTarget,
-                  entryATR,
-                  trailArmed: false,
-                  skipTarget: p.id === "atr_trail", // <— never take fixed target on the trailing profile
-
-                  // ---- profile behavior flags ----
-                  noStop: p.id === "target_only", // still ignore the stop for target_only
-                  ignoreTimeExit: false, // ALL profiles are allowed to time out
-
-                  ST,
-                  LT,
-                  regime: dayRegime,
-                  kind:
-                    String(sig?.debug?.chosen || sig?.reason || "")
-                      .split(":")[0]
-                      .trim() || "UNKNOWN",
-                  crossType: selected,
-                  crossLag: Number.isFinite(lag) ? lag : null,
-                  analytics,
-                  score,
-                });
-
-                globalOpenCount++;
-                signalsExecuted++;
-              }
+                            for (const p of activeProfiles) {
+                               if (i <= cooldownUntilByProfile[p.id]) continue;
+                                if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
+                                  break;
+                
+                                const plan =
+                                  p.compute({
+                                    entry,
+                                    stock: { ...stock, currentPrice: entry },
+                                    sig,
+                                    today: entryBar,
+                                    hist: candles.slice(0, entryBarIdx + 1),
+                                  }) || {};
+                                const stop = Number(plan.stop);
+                                const target = Number(plan.target);
+                                if (!Number.isFinite(stop) || !Number.isFinite(target)) {
+                                  signalsInvalid++;
+                                  continue;
+                                }
+                                if (stop >= entry) {
+                                  signalsRiskBad++;
+                                  continue;
+                                }
+                
+                                const qStop = toTick(stop, stock);
+                                const qTarget = toTick(target, stock);
+                
+                                // derive cross type & lag ...
+                                const cm = sig?.meta?.cross || {};
+                                const selected =
+                                  cm?.selected ||
+                                  (cm?.weekly && cm?.daily
+                                    ? "BOTH"
+                                    : cm?.weekly
+                                    ? "WEEKLY"
+                                    : cm?.daily
+                                    ? "DAILY"
+                                    : null);
+                
+                                const lag =
+                                  selected === "WEEKLY" && cm.weekly
+                                    ? cm.weekly.barsAgo
+                                    : selected === "DAILY" && cm.daily
+                                    ? cm.daily.barsAgo
+                                    : selected === "BOTH"
+                                    ? Math.min(
+                                        cm.weekly ? cm.weekly.barsAgo : Infinity,
+                                        cm.daily ? cm.daily.barsAgo : Infinity
+                                      )
+                                    : null;
+                
+                                const analytics = computeAnalytics(candles, entryBarIdx, entry);
+                                const score = computeScore({
+                                  analytics,
+                                  regime: dayRegime,
+                                  crossType: selected,
+                                  crossLag: Number.isFinite(lag) ? lag : null,
+                                  ST,
+                                  LT,
+                                });
+                
+                                const entryATR =
+                                  lastATR(candles.slice(0, entryBarIdx + 1), 14) || 0;
+                
+                                // 🔥 volatility gate
+                                const tooWild =
+                                  Number.isFinite(analytics.atrPct) &&
+                                  analytics.atrPct > MAX_ATR_PCT;
+                                if (tooWild) {
+                                  // skip opening this profile due to crazy ATR%
+                                  continue;
+                                }
+                
+                                if (!openByProfile[p.id]) openByProfile[p.id] = [];
+                
+                                openByProfile[p.id].push({
+                                  entryIdx: entryBarIdx,
+                                  entry,
+                                  stop: qStop,
+                                  stopInit: qStop,
+                                  target: qTarget,
+                
+                                  // trailing-profile bookkeeping
+                                  targetInit: qTarget,
+                                  entryATR,
+                                  trailArmed: false,
+                                  skipTarget: p.id === "atr_trail",
+                
+                                  // behavior flags
+                                   noStop: p.id === "target_only",
+                                   ignoreTimeExit: false,
+                
+                                  ST,
+                                  LT,
+                                  regime: dayRegime,
+                                  kind:
+                                    String(sig?.debug?.chosen || sig?.reason || "")
+                                      .split(":")[0]
+                                      .trim() || "UNKNOWN",
+                                  crossType: selected,
+                                  crossLag: Number.isFinite(lag) ? lag : null,
+                                  analytics,
+                                  score,
+                                });
+                
+                                globalOpenCount++;
+                                signalsExecuted++;
+                              }
+              
             }
           }
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
@@ -1761,6 +1806,31 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     DAILY: toMetricsMap(crossLagBuckets.DAILY),
   };
 
+  // --- NEW: Volatility buckets (ATR% at entry) --------------------
+  function bucketAtrPct(v) {
+    if (!Number.isFinite(v)) return "na";
+    if (v < 2) return "<2%";
+    if (v < 4) return "2-4%";
+    if (v < 6) return "4-6%";
+    return ">=6%";
+  }
+
+  const volBuckets = {}; // bucketLabel -> trades[]
+  for (const t of all) {
+    const ap = t.analytics?.atrPct;
+    const b = bucketAtrPct(ap);
+    if (!volBuckets[b]) volBuckets[b] = [];
+    volBuckets[b].push(t);
+  }
+
+  // Turn buckets into metrics objects using your existing computeMetrics()
+  const volatilityBuckets = Object.fromEntries(
+    Object.entries(volBuckets).map(([bucket, list]) => [
+      bucket,
+      computeMetrics(list),
+    ])
+  );
+
   function metricsByScore(allTrades) {
     const buckets = {}; // score -> trades[]
     for (const t of allTrades) {
@@ -1954,6 +2024,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       targetTradesPerDay: targetTPD,
       countBlockedSignals: COUNT_BLOCKED,
       includeByTicker: INCLUDE_BY_TICKER,
+      maxAtrPct: MAX_ATR_PCT,
       simulateRejectedBuys: SIM_REJECTED,
       topRejectedReasons: TOP_K,
       examplesCap: EX_CAP,
@@ -1983,9 +2054,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           pxVsMA25Le4: 1,
           pxVsMA25Gt6_penalty: -1,
         },
+        // 🔥 NEW: volatility section documents how atrPct is scored
+        volatility: {
+          atrPct_1to4: 1,
+          atrPct_gt6_penalty: -1,
+        },
       },
-      byScore: scoreLevels, // from your computed `scoreLevels`
-      correlation: scoreCorr, // from your computed `scoreCorr`
+      byScore: scoreLevels, // score -> PF, WR, etc.
+      correlation: scoreCorr, // Pearson corr(score, win%) and score vs returnPct
     },
 
     spotlight,
@@ -2058,6 +2134,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     dipAfterFreshCrossing: {
       WEEKLY: dipAfterMetrics.WEEKLY, // DIP entries after fresh WEEKLY flip
       DAILY: dipAfterMetrics.DAILY, // DIP entries after fresh DAILY flip
+    },
+    volatility: {
+      byAtrPctBucket: volatilityBuckets, // e.g. "<2%": { winRate, PF, ... }
     },
 
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
@@ -2145,81 +2224,118 @@ window.backtest = async (tickersOrOpts, maybeOpts) => {
       : await runBacktest({ ...(tickersOrOpts || {}) });
   } catch (e) {
     console.error("[backtest] error:", e);
-    return {
-      from: "",
-      to: "",
-      totalTrades: 0,
-      winRate: 0,
-      avgReturnPct: 0,
-      avgHoldingDays: 0,
-      tradesPerDay: 0,
-      tradingDays: 0,
-      openAtEnd: 0,
-      scoring: {
-        schema: {
-          regime: { DOWN: 2, UP: 1 },
-          crossLag: { WEEKLY_ge2: 2, DAILY_ge4: 1 },
-          sentiment: { LT_3to5: 1, ST_6to7: 1 },
-          analytics: {
-            gapPos: 1,
-            rsiGe60: 1,
-            pxVsMA25Le4: 1,
-            pxVsMA25Gt6_penalty: -1,
-          },
-        },
-        byScore: [], // <-- was scoreLevels
-        correlation: { win: null, ret: null }, // <-- was scoreCorr
-      },
-
-      exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
-      signals: {
-        total: 0,
-        afterWarmup: 0,
-        whileFlat: 0,
-        executed: 0,
-        invalid: 0,
-        riskStopGtePx: 0,
-        blocked: {
-          inTrade: 0,
-          cooldown: 0,
-          warmup: 0,
-          stlt: { dip: 0 },
-        },
-      },
-      strategy: {
-        all: computeMetrics([]),
-        dip: computeMetrics([]),
-      },
-      telemetry: {
-        trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0 },
-        gates: {
-          priceActionGateFailed: 0,
-          structureGateFailed: 0,
-          stackedGateFailed: 0,
-        },
-        dip: { notReadyReasons: {}, guardVetoReasons: {} },
-        rr: { rejected: {}, accepted: {} },
-        examples: { buyNow: [], rejected: [] },
-      },
-      parallel: {
-        rejectedBuys: {
-          totalSimulated: 0,
-          winners: 0,
-          summary: { total: 0, winners: 0, winRate: 0 },
-          topK: 12,
-          byReason: {},
-          examples: {},
-        },
-      },
-      sentiment: {
-        actual: {},
-        rejected: {},
-        bestByWinRate: { actual: [], rejected: [] },
-      },
-      regime: { ticker: "", metrics: {} },
-      profiles: {},
-      bestProfiles: {},
-      error: String(e?.message || e),
-    };
+        return {
+            from: "",
+            to: "",
+            totalTrades: 0,
+            winRate: 0,
+            avgReturnPct: 0,
+            avgHoldingDays: 0,
+            tradesPerDay: 0,
+            tradingDays: 0,
+            openAtEnd: 0,
+            scoring: {
+              schema: {
+                regime: { DOWN: 2, UP: 1 },
+                crossLag: { WEEKLY_ge2: 2, DAILY_ge4: 1 },
+                sentiment: { LT_3to5: 1, ST_6to7: 1 },
+                analytics: {
+                  gapPos: 1,
+                  rsiGe60: 1,
+                  pxVsMA25Le4: 1,
+                  pxVsMA25Gt6_penalty: -1,
+                },
+                volatility: {
+                  atrPct_1to4: 1,
+                  atrPct_gt6_penalty: -1,
+                },
+              },
+              byScore: [],
+              correlation: { win: null, ret: null },
+            },
+      
+            exitCounts: { target: 0, stop: 0, time: 0, timeWins: 0, timeLosses: 0 },
+            signals: {
+              total: 0,
+              afterWarmup: 0,
+              whileFlat: 0,
+              executed: 0,
+              invalid: 0,
+              riskStopGtePx: 0,
+              blocked: {
+                inTrade: 0,
+                cooldown: 0,
+                warmup: 0,
+              },
+            },
+      
+            strategy: {
+              all: computeMetrics([]),
+              dip: computeMetrics([]),
+            },
+      
+            telemetry: {
+              trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0 },
+              gates: {
+                priceActionGateFailed: 0,
+                structureGateFailed: 0,
+                stackedGateFailed: 0,
+              },
+              dip: { notReadyReasons: {}, guardVetoReasons: {} },
+              rr: { rejected: {}, accepted: {} },
+              examples: { buyNow: [], rejected: [] },
+            },
+      
+            parallel: {
+              rejectedBuys: {
+                totalSimulated: 0,
+                winners: 0,
+                summary: { total: 0, winners: 0, winRate: 0 },
+                topK: 12,
+                byReason: {},
+                examples: {},
+              },
+            },
+      
+            sentiment: {
+              combos: {
+                actual: {},
+                rejected: {},
+                bestByWinRate: { actual: [], rejected: [] },
+              },
+              byLT: {
+                actual: {},
+                rejected: {},
+                bestByWinRateActual: [],
+                bestByWinRateRejected: [],
+              },
+              byST: {
+                actual: {},
+                rejected: {},
+                bestByWinRateActual: [],
+                bestByWinRateRejected: [],
+              },
+            },
+      
+            regime: { ticker: "", metrics: {} },
+      
+            crossing: {
+              byLag: { WEEKLY: {}, DAILY: {} },
+            },
+      
+            dipAfterFreshCrossing: {
+              WEEKLY: computeMetrics([]),
+              DAILY: computeMetrics([]),
+            },
+      
+            volatility: {
+              byAtrPctBucket: {},
+            },
+      
+            profiles: {},
+            bestProfiles: {},
+      
+            error: String(e?.message || e),
+          };
   }
 };
