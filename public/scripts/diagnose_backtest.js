@@ -241,6 +241,7 @@ if (!withAnalytics.length) {
 
 // -------------------- OVERALL / DISTRIBUTIONS --------------------
 const overall = summarizeMetrics(withAnalytics);
+const spotlight = raw?.spotlight || {};
 
 // Return distribution (for the whole set)
 const winReturns = withAnalytics
@@ -454,6 +455,7 @@ function summarizeProfile(id, obj) {
     pf: m.profitFactor,
     avgRet: m.avgReturnPct,
     hold: m.avgHoldingDays,
+    exits: obj.exits || { target: 0, stop: 0, time: 0 },
   };
 }
 
@@ -671,6 +673,45 @@ console.log(
   `Trades ${overall.trades} | WinRate ${overall.winRate}% | PF ${overall.profitFactor} | AvgRet ${overall.avgReturnPct}% | AvgHold ${overall.avgHoldingDays} bars`
 );
 
+
+if (spotlight && (spotlight.best || spotlight.worst)) {
+  console.log("\n=== SPOTLIGHT TICKERS ===");
+  if (spotlight.best) {
+    console.log(
+      `Best: ${spotlight.best.ticker} | PF ${spotlight.best.pf} | WR ${spotlight.best.winRate}%`
+    );
+    console.log(`  Why: ${spotlight.best.why}`);
+  }
+  if (spotlight.worst) {
+    console.log(
+      `Worst: ${spotlight.worst.ticker} | PF ${spotlight.worst.pf} | WR ${spotlight.worst.winRate}%`
+    );
+    console.log(`  Why: ${spotlight.worst.why}`);
+  }
+}
+
+
+// Signals / execution pressure
+const sig = raw?.signals || {};
+if (sig && Object.keys(sig).length) {
+  console.log("\n=== SIGNALS / FLOW ===");
+  console.log(
+    `Signals total=${sig.total}, afterWarmup=${sig.afterWarmup}, whileFlat=${sig.whileFlat}, executed=${sig.executed}`
+  );
+  console.log(
+    `Invalid=${sig.invalid}, riskStop>=px=${sig.riskStopGtePx}`
+  );
+  if (sig.blocked) {
+    console.log(
+      `Blocked: inTrade=${sig.blocked.inTrade}, cooldown=${sig.blocked.cooldown}, warmup=${sig.blocked.warmup}`
+    );
+  }
+  if (Number.isFinite(raw.tradesPerDay)) {
+    console.log(
+      `Throughput: trades/day=${r2(raw.tradesPerDay)} over ${raw.tradingDays} trading days`
+    );
+  }
+}
 console.log("\n=== RETURN DISTRIBUTION (all trades) ===");
 console.log(
   `Win median ${winStatsAll.med}% | Win 90th ${winStatsAll.p90}% | Loss median ${lossStatsAll.med}% | Loss 10th ${lossStatsAll.p10}%`
@@ -706,12 +747,26 @@ console.log("\n=== DIP AFTER FRESH CROSS ===");
 console.log(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
 console.log(fmtDipAfter("DAILY", dipAfter.DAILY));
 
-console.log("\n=== PROFILES ===");
-profileSummaries.forEach((p) => {
+// -------------------- VOLATILITY BUCKETS (ATR% at entry) --------------------
+const volBuckets = raw?.volatility?.byAtrPctBucket || {};
+console.log("\n=== VOLATILITY BUCKETS (ATR% at entry) ===");
+Object.entries(volBuckets).forEach(([bucket, m]) => {
+  if (!m) return;
   console.log(
-    `- ${p.label} (${p.id}): trades ${p.trades}, WR ${p.winRate}%, PF ${p.pf}, AvgRet ${p.avgRet}%, Hold ${p.hold} bars`
+    `${bucket}: n=${m.trades}, WR ${m.winRate}%, PF ${m.profitFactor}, AvgRet ${m.avgReturnPct}%`
   );
 });
+
+console.log("\n=== PROFILES ===");
+profileSummaries.forEach((p) => {
+    const exits = raw?.profiles?.[p.id]?.exits || {};
+    console.log(
+      `- ${p.label} (${p.id}): trades ${p.trades}, WR ${p.winRate}%, PF ${p.pf}, AvgRet ${p.avgRet}%, Hold ${p.hold} bars`
+    );
+    console.log(
+      `    exits: TARGET=${exits.target ?? 0}, STOP=${exits.stop ?? 0}, TIME=${exits.time ?? 0}`
+    );
+  });
 console.log(
   `  best by WR: ${bestProfiles.byWinRate}, best by PF: ${bestProfiles.byProfitFactor}, best by expR: ${bestProfiles.byExpR}`
 );
@@ -738,10 +793,24 @@ sliceResults.forEach((s) => {
   console.log(
     `  dist: winMed=${s.winStats.med}% win90=${s.winStats.p90}% | lossMed=${s.lossStats.med}% loss10=${s.lossStats.p10}%`
   );
-  console.log(
-    `  hold(med wins=${s.holdStats.med} vs losses=${s.holdStats.med})`
-  );
+  console.log(`  hold(med all=${s.holdStats.med} bars)`);
 });
+
+// rejected / blocked alpha (simulated trades we skipped)
+const rej = raw?.parallel?.rejectedBuys;
+if (rej && rej.summary) {
+  console.log("\n=== REJECTED BUYS (SIM ONLY) ===");
+  console.log(
+    `Simulated=${rej.summary.total}, WinRate=${rej.summary.winRate}%, Winners=${rej.summary.winners}`
+  );
+  const topReasons = Object.entries(rej.byReason || {}).slice(0, 5);
+  topReasons.forEach(([reason, stats]) => {
+    if (!stats) return;
+    console.log(
+      `- ${reason}: n=${stats.total}, WR ${stats.winRate}%, expR ${stats.expR}, PF ${stats.profitFactor}`
+    );
+  });
+}
 
 // best slice profile breakdown
 console.log("\n=== BEST SLICE PROFILE BREAKDOWN ===");
@@ -796,6 +865,7 @@ console.log(
 // -------------------- Optional outputs --------------------
 const exportObj = {
   overall,
+  spotlight: spotlight || {},
   featureResults,
   sentiment: {
     pairs: {
@@ -814,6 +884,7 @@ const exportObj = {
   regime: raw?.regime?.metrics || {},
   crossLag: xlag,
   dipAfterFreshCross: dipAfter,
+  volatilityBuckets: volBuckets,
   profiles: profileSummaries,
   bestProfiles,
   scoreLadder: scoreInfo.scored,
@@ -826,6 +897,8 @@ const exportObj = {
     end: targetEndStats,
     timeToTarget: ttt,
   },
+  signals: sig,
+  rejectedBuys: rej || null,
   lossAutopsy: lossReasons,
 };
 
@@ -842,6 +915,24 @@ if (mdPath) {
     `**Trades**: ${overall.trades}  |  **WinRate**: ${overall.winRate}%  |  **PF**: ${overall.profitFactor}  |  **AvgRet**: ${overall.avgReturnPct}%  |  **AvgHold**: ${overall.avgHoldingDays} bars`
   );
   lines.push("");
+
+  
+  if (spotlight && (spotlight.best || spotlight.worst)) {
+    lines.push("## Spotlight Tickers");
+    if (spotlight.best) {
+     lines.push(
+        `- Best ${spotlight.best.ticker}: PF ${spotlight.best.pf}, WR ${spotlight.best.winRate}%`
+      );
+      lines.push(`  Why: ${spotlight.best.why}`);
+    }
+    if (spotlight.worst) {
+      lines.push(
+        `- Worst ${spotlight.worst.ticker}: PF ${spotlight.worst.pf}, WR ${spotlight.worst.winRate}%`
+      );
+      lines.push(`  Why: ${spotlight.worst.why}`);
+    }
+    lines.push("");
+  }
   lines.push("## Feature Takeaways");
   for (const s of takeaways) lines.push(`- ${s}`);
   lines.push("");
@@ -859,6 +950,36 @@ if (mdPath) {
   lines.push(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
   lines.push(fmtDipAfter("DAILY", dipAfter.DAILY));
   lines.push("");
+
+    // Rejected buys (sim)
+  if (rej && rej.summary) {
+    lines.push("## Rejected Buys (Sim Only)");
+    lines.push(
+      `Simulated=${rej.summary.total}, WinRate=${rej.summary.winRate}%, Winners=${rej.summary.winners}`
+   );
+    const topReasons = Object.entries(rej.byReason || {}).slice(0, 5);
+    topReasons.forEach(([reason, stats]) => {
+      if (!stats) return;
+      lines.push(
+        `- ${reason}: n=${stats.total}, WR ${stats.winRate}%, expR ${stats.expR}, PF ${stats.profitFactor}`
+      );
+    });
+    lines.push("");
+  }
+
+  
+  lines.push("## Volatility Buckets (ATR% at entry)");
+  if (Object.keys(volBuckets).length === 0) {
+    lines.push("- n/a");
+  } else {
+    for (const [bucket, m] of Object.entries(volBuckets)) {
+      if (!m) continue;
+      lines.push(
+        `- ${bucket}: n=${m.trades}, WR ${m.winRate}%, PF ${m.profitFactor}, AvgRet ${m.avgReturnPct}%`
+      );
+    }
+  }
+  lines.push("");
   lines.push("## Target Only Deep Dive");
   lines.push(
     `All target_only trades: n=${targetOnlyAll.length}, WR ${targetAllStats.metrics.winRate}%, PF ${targetAllStats.metrics.profitFactor}, AvgRet ${targetAllStats.metrics.avgReturnPct}%, HoldAvg ${targetAllStats.metrics.avgHoldingDays} bars`
@@ -869,6 +990,21 @@ if (mdPath) {
   lines.push(
     `Never-hit (END exits): n=${targetEnd.length}, Hold med ${targetEndStats.holdStats.med} bars`
   );
+
+  
+  // Signals / Flow
+  if (sig && Object.keys(sig).length) {
+    lines.push("");
+   lines.push("## Signals / Flow");
+    lines.push(
+      `Signals: total=${sig.total}, executed=${sig.executed}, blocked.inTrade=${sig.blocked?.inTrade}, cooldown=${sig.blocked?.cooldown}, warmup=${sig.blocked?.warmup}`
+    );
+    if (Number.isFinite(raw.tradesPerDay)) {
+      lines.push(
+        `Throughput: ${r2(raw.tradesPerDay)} trades/day over ${raw.tradingDays} trading days`
+      );
+    }
+  }
 
   fs.writeFileSync(mdPath, lines.join("\n"), "utf8");
   console.log(`[write] Markdown report -> ${mdPath}`);
