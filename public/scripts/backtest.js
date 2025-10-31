@@ -150,8 +150,16 @@ function buildTickerAnalysis(ticker, trades){
   const medHoldLoss = median(losses.map(t=>t.holdingDays||0));
 
   // Risk/target geometry at entry
-  const riskAtEntry = (t)=>Math.max(0.01, t.entry - t.stop);
-  const rrAtEntry   = (t)=> (t.target - t.entry) / Math.max(0.01, t.entry - t.stop);
+  const riskAtEntry = (t) => {
+    const base = Number.isFinite(t.stop) ? t.entry - t.stop : 0.01;
+    return Math.max(0.01, base);
+  };
+
+  const rrAtEntry = (t) => {
+    const den = riskAtEntry(t);
+    return (t.target - t.entry) / den;
+  };
+  
   const medRRwin = median(wins.map(rrAtEntry));
   const medRRloss = median(losses.map(rrAtEntry));
   const tightStopsLossPct = pct(losses.filter(t=>riskAtEntry(t) <= (t.entry*0.008)).length, losses.length); // ≤0.8% risk
@@ -696,7 +704,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = 30;
+  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 30;
   const COOLDOWN = 0;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -872,7 +880,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
 
-  const USE_TRAIL = true; 
+  const USE_TRAIL = true;
   const activeProfiles = USE_TRAIL
     ? [RAW_PROFILE, ATR_TRAIL_PROFILE, TARGET_ONLY_PROFILE] // <-- NEW
     : [RAW_PROFILE, TARGET_ONLY_PROFILE]; // <-- NEW
@@ -928,9 +936,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const byTicker = [];
   const globalTrades = [];
   const tradingDays = new Set();
-  let globalOpenPositions = 0;
 
   let signalsTotal = 0;
+
   let signalsAfterWarmup = 0;
   let signalsWhileFlat = 0;
   let signalsInvalid = 0;
@@ -1005,6 +1013,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
+        // reset open position count for this ticker's simulation timeline
+        globalOpenCount = 0;
+
 
     try {
       const candles = await fetchHistory(code, FROM, TO);
@@ -1057,14 +1068,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // blocked counters (optional, per profile)
-        if (COUNT_BLOCKED) {
-          for (const p of activeProfiles) {
-            if (i <= cooldownUntilByProfile[p.id]) blockedCooldown++;
-          }
-          if (i < WARMUP) blockedWarmup++;
-        }
-
         // manage open positions per profile (trailing BEFORE exit checks)
         for (const p of activeProfiles) {
           const list = openByProfile[p.id] || [];
@@ -1081,7 +1084,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 i,
                 atrMult: opts.atrMult ?? 3,
                 startAfterBars: opts.trailStartAfterBars ?? 2,
-                breakevenR: 1.0,
+                breakevenR: opts.breakevenR ?? 0.8,
                 todayHigh: today.high, // <-- add this
               });
             }
@@ -1090,22 +1093,26 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             let exit = null;
 
             // 1) price-based exits first (gap-aware, realistic fill)
-            const stopTouched = !st.noStop && today.low <= st.stop;
+            const canStop = !st.noStop && Number.isFinite(st.stop);
+            const stopTouched = canStop && today.low <= st.stop;
+
             if (stopTouched) {
-              // If we gapped below the stop, worst plausible fill is today's open.
-              // If intrabar touch, fill at the stop but never above today's high.
               const stopFill =
                 today.open < st.stop
                   ? today.open
                   : Math.min(st.stop, today.high);
 
-              const isProfit = stopFill >= st.entry; // count ≥entry as WIN; change to '>' if you prefer BE as LOSS
+              const isProfit = stopFill >= st.entry;
               exit = {
                 type: "STOP",
                 price: stopFill,
                 result: isProfit ? "WIN" : "LOSS",
               };
-            } else if (!st.skipTarget && today.high >= st.target) {
+            } else if (
+              !st.skipTarget &&
+              Number.isFinite(st.target) &&
+              today.high >= st.target
+            ) {
               exit = { type: "TARGET", price: st.target, result: "WIN" };
             }
 
@@ -1128,14 +1135,22 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             if (exit) {
               const pctRet =
                 ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
-              const risk = Math.max(0.01, st.entry - st.stopInit);
+
+              const baseRisk = Number.isFinite(st.stopInit)
+                ? st.entry - st.stopInit
+                : 0.01;
+              const risk = Math.max(0.01, baseRisk);
+              const Rval = st.noStop
+                ? null
+                : r2((exit.price - st.entry) / risk);
+
               const isDipAfterFreshCrossSignal =
-                /DIP/i.test(st.kind || "") && // it's one of our DIP-style entries
+                /DIP/i.test(st.kind || "") &&
                 (st.crossType === "WEEKLY" ||
                   st.crossType === "DAILY" ||
                   st.crossType === "BOTH") &&
                 Number.isFinite(st.crossLag) &&
-                st.crossLag <= 3; // "fresh" = lag <= 3 bars (tweak if you want)
+                st.crossLag <= 3;
 
               const trade = {
                 ticker: code,
@@ -1149,12 +1164,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 holdingDays: i - st.entryIdx,
                 exitType: exit.type,
 
-                // extra metadata we were already attaching
                 entry: r2(st.entry),
                 exit: r2(exit.price),
                 stop: st.stopInit,
                 target: st.target,
-                R: st.noStop ? null : r2((exit.price - st.entry) / risk),
+                R: Rval,
 
                 ST: st.ST,
                 LT: st.LT,
@@ -1172,7 +1186,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               trade.entryArchetype = trade.dipAfterFreshCross
                 ? "DIP_AFTER_FRESH_CROSS"
                 : trade.crossType || "OTHER";
-            
 
               tradesByProfile[p.id].push(trade);
               trades.push(trade);
@@ -1225,7 +1238,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   dipAfterAgg.DAILY.push(trade);
                 }
               }
-              
 
               list.splice(k, 1);
               cooldownUntilByProfile[p.id] = i + COOLDOWN;
@@ -1385,22 +1397,34 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } else {
           // ---------------- After detection, decide if we can actually ENTER ----------------
-                    const atCapacity =
-                      MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
-          
-                    const anyProfileEligible =
-                      i >= WARMUP &&
-                      activeProfiles.some((p) => i > cooldownUntilByProfile[p.id]) &&
-                      !atCapacity;
-          
-                    if (anyProfileEligible) {
-                      signalsWhileFlat++;
-                    } else {
-                      // We *had* a buy signal but we're blocked due to position cap
-                      if (COUNT_BLOCKED && atCapacity) {
-                        blockedInTrade++;
-                      }
-                    }
+          const atCapacity =
+            MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
+
+          const anyProfileEligible =
+            i >= WARMUP &&
+            activeProfiles.some((p) => i > cooldownUntilByProfile[p.id]) &&
+            !atCapacity;
+
+          if (anyProfileEligible) {
+            signalsWhileFlat++;
+          } else {
+            // We had a buy signal but couldn't actually take it.
+            if (COUNT_BLOCKED) {
+              if (atCapacity) {
+                blockedInTrade++;
+              }
+              if (i < WARMUP) {
+                blockedWarmup++;
+              }
+              // cooldown gate: none of the profiles were allowed yet due to cooldown
+              const cooldownBlocked = activeProfiles.some(
+                (p) => i <= cooldownUntilByProfile[p.id]
+              );
+              if (cooldownBlocked) {
+                blockedCooldown++;
+              }
+            }
+          }
 
           // RR telemetry bucket (same as before)
           const rRatio = Number(sig?.debug?.rr?.ratio);
@@ -1424,115 +1448,122 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const entryBar = candles[entryBarIdx];
               const entry = hasNext ? entryBar.open : today.close;
 
-                            for (const p of activeProfiles) {
-                               if (i <= cooldownUntilByProfile[p.id]) continue;
-                                if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
-                                  break;
-                
-                                const plan =
-                                  p.compute({
-                                    entry,
-                                    stock: { ...stock, currentPrice: entry },
-                                    sig,
-                                    today: entryBar,
-                                    hist: candles.slice(0, entryBarIdx + 1),
-                                  }) || {};
-                                const stop = Number(plan.stop);
-                                const target = Number(plan.target);
-                                if (!Number.isFinite(stop) || !Number.isFinite(target)) {
-                                  signalsInvalid++;
-                                  continue;
-                                }
-                                if (stop >= entry) {
-                                  signalsRiskBad++;
-                                  continue;
-                                }
-                
-                                const qStop = toTick(stop, stock);
-                                const qTarget = toTick(target, stock);
-                
-                                // derive cross type & lag ...
-                                const cm = sig?.meta?.cross || {};
-                                const selected =
-                                  cm?.selected ||
-                                  (cm?.weekly && cm?.daily
-                                    ? "BOTH"
-                                    : cm?.weekly
-                                    ? "WEEKLY"
-                                    : cm?.daily
-                                    ? "DAILY"
-                                    : null);
-                
-                                const lag =
-                                  selected === "WEEKLY" && cm.weekly
-                                    ? cm.weekly.barsAgo
-                                    : selected === "DAILY" && cm.daily
-                                    ? cm.daily.barsAgo
-                                    : selected === "BOTH"
-                                    ? Math.min(
-                                        cm.weekly ? cm.weekly.barsAgo : Infinity,
-                                        cm.daily ? cm.daily.barsAgo : Infinity
-                                      )
-                                    : null;
-                
-                                const analytics = computeAnalytics(candles, entryBarIdx, entry);
-                                const score = computeScore({
-                                  analytics,
-                                  regime: dayRegime,
-                                  crossType: selected,
-                                  crossLag: Number.isFinite(lag) ? lag : null,
-                                  ST,
-                                  LT,
-                                });
-                
-                                const entryATR =
-                                  lastATR(candles.slice(0, entryBarIdx + 1), 14) || 0;
-                
-                                // 🔥 volatility gate
-                                const tooWild =
-                                  Number.isFinite(analytics.atrPct) &&
-                                  analytics.atrPct > MAX_ATR_PCT;
-                                if (tooWild) {
-                                  // skip opening this profile due to crazy ATR%
-                                  continue;
-                                }
-                
-                                if (!openByProfile[p.id]) openByProfile[p.id] = [];
-                
-                                openByProfile[p.id].push({
-                                  entryIdx: entryBarIdx,
-                                  entry,
-                                  stop: qStop,
-                                  stopInit: qStop,
-                                  target: qTarget,
-                
-                                  // trailing-profile bookkeeping
-                                  targetInit: qTarget,
-                                  entryATR,
-                                  trailArmed: false,
-                                  skipTarget: p.id === "atr_trail",
-                
-                                  // behavior flags
-                                   noStop: p.id === "target_only",
-                                   ignoreTimeExit: false,
-                
-                                  ST,
-                                  LT,
-                                  regime: dayRegime,
-                                  kind:
-                                    String(sig?.debug?.chosen || sig?.reason || "")
-                                      .split(":")[0]
-                                      .trim() || "UNKNOWN",
-                                  crossType: selected,
-                                  crossLag: Number.isFinite(lag) ? lag : null,
-                                  analytics,
-                                  score,
-                                });
-                
-                                globalOpenCount++;
-                                signalsExecuted++;
-                              }
-              
+              for (const p of activeProfiles) {
+                if (i <= cooldownUntilByProfile[p.id]) continue;
+                if (MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT)
+                  break;
+
+                const plan =
+                  p.compute({
+                    entry,
+                    stock: { ...stock, currentPrice: entry },
+                    sig,
+                    today: entryBar,
+                    hist: candles.slice(0, entryBarIdx + 1),
+                  }) || {};
+                const stop = Number(plan.stop);
+                const target = Number(plan.target);
+                if (!Number.isFinite(stop) || !Number.isFinite(target)) {
+                  signalsInvalid++;
+                  continue;
+                }
+                if (stop >= entry) {
+                  signalsRiskBad++;
+                  continue;
+                }
+
+                const qStop = toTick(stop, stock);
+                const qTarget = toTick(target, stock);
+
+                // derive cross type & lag ...
+                const cm = sig?.meta?.cross || {};
+                const selected =
+                  cm?.selected ||
+                  (cm?.weekly && cm?.daily
+                    ? "BOTH"
+                    : cm?.weekly
+                    ? "WEEKLY"
+                    : cm?.daily
+                    ? "DAILY"
+                    : null);
+
+                const lag =
+                  selected === "WEEKLY" && cm.weekly
+                    ? cm.weekly.barsAgo
+                    : selected === "DAILY" && cm.daily
+                    ? cm.daily.barsAgo
+                    : selected === "BOTH"
+                    ? Math.min(
+                        cm.weekly ? cm.weekly.barsAgo : Infinity,
+                        cm.daily ? cm.daily.barsAgo : Infinity
+                      )
+                    : null;
+
+                const analytics = computeAnalytics(candles, entryBarIdx, entry);
+                const score = computeScore({
+                  analytics,
+                  regime: dayRegime,
+                  crossType: selected,
+                  crossLag: Number.isFinite(lag) ? lag : null,
+                  ST,
+                  LT,
+                });
+
+                const entryATR =
+                  lastATR(candles.slice(0, entryBarIdx + 1), 14) || 0;
+
+                // 🔥 volatility gate
+                const tooWild =
+                  Number.isFinite(analytics.atrPct) &&
+                  analytics.atrPct > MAX_ATR_PCT;
+                if (tooWild) {
+                  // skip opening this profile due to crazy ATR%
+                  continue;
+                }
+
+                if (!openByProfile[p.id]) openByProfile[p.id] = [];
+
+                const isTargetOnly = p.id === "target_only";
+
+                openByProfile[p.id].push({
+                  entryIdx: entryBarIdx,
+                  entry,
+
+                  // If this is the "target only" profile, we conceptually have no stop.
+                  // So store null instead of fake 0 to avoid insane R math later.
+                  stop: isTargetOnly ? null : qStop,
+                  stopInit: isTargetOnly ? null : qStop,
+
+                  target: qTarget,
+
+                  // trailing-profile bookkeeping
+                  targetInit: qTarget,
+                  entryATR,
+                  trailArmed: false,
+
+                  // ATR trail profile will flip skipTarget=true once armed.
+                  // others (including target_only) should keep exiting at target.
+                  skipTarget: p.id === "atr_trail",
+
+                  // behavior flags
+                  noStop: isTargetOnly,
+                  ignoreTimeExit: isTargetOnly ? true : false,
+                  ST,
+                  LT,
+                  regime: dayRegime,
+                  kind:
+                    String(sig?.debug?.chosen || sig?.reason || "")
+                      .split(":")[0]
+                      .trim() || "UNKNOWN",
+                  crossType: selected,
+                  crossLag: Number.isFinite(lag) ? lag : null,
+                  analytics,
+                  score,
+                });
+
+                globalOpenCount++;
+                signalsExecuted++;
+              }
             }
           }
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
@@ -1551,7 +1582,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const endExitPrice = lastBar.close;
           const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
 
-          const risk = Math.max(0.01, st.entry - st.stopInit);
+          const baseRisk = Number.isFinite(st.stopInit)
+            ? st.entry - st.stopInit
+            : 0.01;
+          const risk = Math.max(0.01, baseRisk);
+
+          const Rval = st.noStop ? null : r2((endExitPrice - st.entry) / risk);
+
           const isDipAfterFreshCrossSignal =
             /DIP/i.test(st.kind || "") &&
             (st.crossType === "WEEKLY" ||
@@ -1576,7 +1613,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             exit: r2(endExitPrice),
             stop: st.stopInit,
             target: st.target,
-            R: st.noStop ? null : r2((endExitPrice - st.entry) / risk),
+            R: Rval,
 
             ST: st.ST,
             LT: st.LT,
@@ -1593,12 +1630,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           trade.entryArchetype = trade.dipAfterFreshCross
             ? "DIP_AFTER_FRESH_CROSS"
             : trade.crossType || "OTHER";
-        
 
           tradesByProfile[p.id].push(trade);
           trades.push(trade);
           globalTrades.push(trade);
         }
+
+                // these positions are now closed, so reduce the open count
+                globalOpenCount = Math.max(0, globalOpenCount - list.length);
 
         openByProfile[p.id] = [];
       }
@@ -2105,7 +2144,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     avgHoldingDays,
     tradesPerDay,
     tradingDays: days,
-    openAtEnd: globalOpenCount,
     exitCounts: {
       target: hitTargetCount,
       stop: hitStopCount,
