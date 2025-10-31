@@ -952,11 +952,19 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
   };
 
-  // sentiment tables
+  // sentiment aggregation
   const sentiment = {
+    // LT/ST combos (existing behavior)
     actual: Object.create(null),
     rejected: Object.create(null),
-    bestByWinRate: { actual: [], rejected: [] },
+
+    // NEW: LT-only buckets, ST-only buckets
+    actualLT: Object.create(null), // key = LT score only
+    rejectedLT: Object.create(null),
+    actualST: Object.create(null), // key = ST score only
+    rejectedST: Object.create(null),
+
+    bestByWinRate: { actual: [], rejected: [] }, // will still be filled later
   };
 
   console.log(
@@ -1135,6 +1143,29 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 returnPct: trade.returnPct,
                 R: trade.R,
               });
+              // --- NEW: LT-only aggregation for ACTUAL trades ---
+              if (Number.isFinite(st.LT)) {
+                if (!sentiment.actualLT[st.LT]) {
+                  sentiment.actualLT[st.LT] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualLT[st.LT], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
+              }
+
+              // --- NEW: ST-only aggregation for ACTUAL trades ---
+              if (Number.isFinite(st.ST)) {
+                if (!sentiment.actualST[st.ST]) {
+                  sentiment.actualST[st.ST] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualST[st.ST], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
+              }
 
               if (trade.regime && regimeAgg[trade.regime]) {
                 regimeAgg[trade.regime].push(trade);
@@ -1232,6 +1263,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const entry = today.close; // same-bar for CF simplicity
             const simStop = Number(sig?.smartStopLoss ?? sig?.stopLoss);
             const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+
             if (
               Number.isFinite(simStop) &&
               Number.isFinite(simTarget) &&
@@ -1244,6 +1276,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 simStop,
                 simTarget
               );
+
+              // combo-level sentiment stats for rejected sims
               const k = sentiKey(ST, LT);
               if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
               if (outcome.result !== "OPEN") {
@@ -1251,15 +1285,39 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 parallel.rejectedBuys.totalSimulated++;
                 if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
               }
+
+              // --- NEW: LT-only aggregation for REJECTED sims (moved here) ---
+              if (Number.isFinite(LT)) {
+                if (!sentiment.rejectedLT[LT]) {
+                  sentiment.rejectedLT[LT] = sentiInit();
+                }
+                if (outcome.result !== "OPEN") {
+                  sentiUpdate(sentiment.rejectedLT[LT], outcome);
+                }
+              }
+
+              // --- NEW: ST-only aggregation for REJECTED sims (moved here) ---
+              if (Number.isFinite(ST)) {
+                if (!sentiment.rejectedST[ST]) {
+                  sentiment.rejectedST[ST] = sentiInit();
+                }
+                if (outcome.result !== "OPEN") {
+                  sentiUpdate(sentiment.rejectedST[ST], outcome);
+                }
+              }
+
+              // now do byReason breakdown + examples
               const reasonsRaw = Array.isArray(sig?.debug?.reasons)
                 ? sig.debug.reasons.slice(0, 2)
                 : [sig?.reason || "unspecified"];
+
               for (const rr of reasonsRaw) {
                 const key = normalizeRejectedReason(rr);
                 if (!parallel.rejectedBuys.byReasonRaw[key]) {
                   parallel.rejectedBuys.byReasonRaw[key] = cfInitAgg();
                 }
                 cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[key], outcome);
+
                 if (outcome.result === "WIN") {
                   if (!parallel.rejectedBuys.examples[key])
                     parallel.rejectedBuys.examples[key] = [];
@@ -1282,7 +1340,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 }
               }
             }
-          }
+          }          
         } else {
           // ---------------- After detection, decide if we can actually ENTER ----------------
           const anyProfileEligible =
@@ -1416,54 +1474,52 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
-
       // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
-for (const p of activeProfiles) {
-  const list = openByProfile[p.id] || [];
-  if (!list.length) continue;
+      for (const p of activeProfiles) {
+        const list = openByProfile[p.id] || [];
+        if (!list.length) continue;
 
-  const lastIdx = candles.length - 1;
-  const lastBar = candles[lastIdx];
+        const lastIdx = candles.length - 1;
+        const lastBar = candles[lastIdx];
 
-  for (const st of list) {
-    // Close at last close; mark as WIN if >= entry, else LOSS.
-    const endExitPrice = lastBar.close;
-    const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
+        for (const st of list) {
+          // Close at last close; mark as WIN if >= entry, else LOSS.
+          const endExitPrice = lastBar.close;
+          const endResult = endExitPrice >= st.entry ? "WIN" : "LOSS";
 
-    const risk = Math.max(0.01, st.entry - st.stopInit);
-    const trade = {
-      ticker: code,
-      profile: p.id,
-      strategy: st.kind || "DIP",
-      entryDate: toISO(candles[st.entryIdx].date),
-      exitDate: toISO(lastBar.date),
-      holdingDays: lastIdx - st.entryIdx,
-      entry: r2(st.entry),
-      exit: r2(endExitPrice),
-      stop: st.stopInit,
-      target: st.target,
-      result: endResult,
-      exitType: "END",              // <- distinct from TIME
-      // If noStop, R is meaningless → set to null; else compute normally
-      R: st.noStop ? null : r2((endExitPrice - st.entry) / risk),
-      returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
-      ST: st.ST,
-      LT: st.LT,
-      regime: st.regime || "RANGE",
-      crossType: st.crossType || null,
-      crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-      analytics: st.analytics || null,
-      score: Number.isFinite(st.score) ? st.score : null,
-    };
+          const risk = Math.max(0.01, st.entry - st.stopInit);
+          const trade = {
+            ticker: code,
+            profile: p.id,
+            strategy: st.kind || "DIP",
+            entryDate: toISO(candles[st.entryIdx].date),
+            exitDate: toISO(lastBar.date),
+            holdingDays: lastIdx - st.entryIdx,
+            entry: r2(st.entry),
+            exit: r2(endExitPrice),
+            stop: st.stopInit,
+            target: st.target,
+            result: endResult,
+            exitType: "END", // <- distinct from TIME
+            // If noStop, R is meaningless → set to null; else compute normally
+            R: st.noStop ? null : r2((endExitPrice - st.entry) / risk),
+            returnPct: r2(((endExitPrice - st.entry) / st.entry) * 100),
+            ST: st.ST,
+            LT: st.LT,
+            regime: st.regime || "RANGE",
+            crossType: st.crossType || null,
+            crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+            analytics: st.analytics || null,
+            score: Number.isFinite(st.score) ? st.score : null,
+          };
 
-    tradesByProfile[p.id].push(trade);
-    trades.push(trade);
-    globalTrades.push(trade);
-  }
+          tradesByProfile[p.id].push(trade);
+          trades.push(trade);
+          globalTrades.push(trade);
+        }
 
-  openByProfile[p.id] = [];
-}
-
+        openByProfile[p.id] = [];
+      }
 
       // Per-ticker snapshot: win % and profit %
       const m = computeMetrics(trades);
@@ -1600,6 +1656,12 @@ for (const p of activeProfiles) {
   const sentiRejected = finalizeSentiTable(sentiment.rejected);
   sentiment.bestByWinRate.actual = sentiActual.bestByWinRate;
   sentiment.bestByWinRate.rejected = sentiRejected.bestByWinRate;
+
+  // --- NEW: finalize LT-only and ST-only views ---
+  const sentiActualLT = finalizeSentiTable(sentiment.actualLT);
+  const sentiRejectedLT = finalizeSentiTable(sentiment.rejectedLT);
+  const sentiActualST = finalizeSentiTable(sentiment.actualST);
+  const sentiRejectedST = finalizeSentiTable(sentiment.rejectedST);
 
   // per-profile metrics (only RAW profile)
   const profiles = {};
@@ -1960,10 +2022,30 @@ for (const p of activeProfiles) {
     telemetry,
     parallel,
     sentiment: {
-      actual: sentiActual.combos,
-      rejected: sentiRejected.combos,
-      bestByWinRate: sentiment.bestByWinRate,
+      // Full LT/ST combo stats (same as before)
+      combos: {
+        actual: sentiActual.combos,
+        rejected: sentiRejected.combos,
+        bestByWinRate: sentiment.bestByWinRate, // top LT/ST pairs
+      },
+
+      // NEW: LT-only breakdown
+      byLT: {
+        actual: sentiActualLT.combos, // e.g. LT3: {count, winRate, ...}
+        rejected: sentiRejectedLT.combos,
+        bestByWinRateActual: sentiActualLT.bestByWinRate,
+        bestByWinRateRejected: sentiRejectedLT.bestByWinRate,
+      },
+
+      // NEW: ST-only breakdown
+      byST: {
+        actual: sentiActualST.combos, // e.g. ST7: {count, winRate, ...}
+        rejected: sentiRejectedST.combos,
+        bestByWinRateActual: sentiActualST.bestByWinRate,
+        bestByWinRateRejected: sentiRejectedST.bestByWinRate,
+      },
     },
+
     profiles,
     bestProfiles,
     regime: {
