@@ -2066,37 +2066,52 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
 /* ------------------------ metrics helpers ------------------------ */
 function computeMetrics(trades) {
-  const n = trades.length;
-  const wins = trades.filter((t) => t.result === "WIN");
-  const losses = trades.filter((t) => t.result === "LOSS");
+  // cap single-trade returns at +/-50% for stability in reporting
+  const capped = trades.map((t) => {
+    const rp = Number(t.returnPct) || 0;
+    const cappedRet = Math.max(-50, Math.min(50, rp));
+    return { ...t, _retPctForStats: cappedRet };
+  });
+
+  const n = capped.length;
+  const wins = capped.filter((t) => t.result === "WIN");
+  const losses = capped.filter((t) => t.result === "LOSS");
 
   const winRate = n ? (wins.length / n) * 100 : 0;
-  const avgReturnPct = n ? sum(trades.map((t) => t.returnPct || 0)) / n : 0;
-  const avgHoldingDays = n ? sum(trades.map((t) => t.holdingDays || 0)) / n : 0;
+
+  const avgReturnPct = n ? sum(capped.map((t) => t._retPctForStats)) / n : 0;
+
+  const avgHoldingDays = n ? sum(capped.map((t) => t.holdingDays || 0)) / n : 0;
 
   const avgWinPct = wins.length
-    ? sum(wins.map((t) => t.returnPct || 0)) / wins.length
-    : 0;
-  const avgLossPct = losses.length
-    ? sum(losses.map((t) => t.returnPct || 0)) / losses.length
+    ? sum(wins.map((t) => t._retPctForStats)) / wins.length
     : 0;
 
-     const rWins = wins.map((t) => Number.isFinite(t.R) ? t.R : null).filter(Number.isFinite);
-     const rLosses = losses.map((t) => Number.isFinite(t.R) ? t.R : null).filter(Number.isFinite);
+  const avgLossPct = losses.length
+    ? sum(losses.map((t) => t._retPctForStats)) / losses.length
+    : 0;
+
+  // R stats (unchanged, we don't cap R because it's already relative to stop)
+  const rWins = wins
+    .map((t) => (Number.isFinite(t.R) ? t.R : null))
+    .filter(Number.isFinite);
+  const rLosses = losses
+    .map((t) => (Number.isFinite(t.R) ? t.R : null))
+    .filter(Number.isFinite);
+
   const avgRwin = rWins.length ? sum(rWins) / rWins.length : 0;
   const avgRloss = rLosses.length ? sum(rLosses) / rLosses.length : 0;
   const p = n ? wins.length / n : 0;
   const expR = p * avgRwin + (1 - p) * avgRloss;
 
-  const grossWin = sum(wins.map((t) => t.returnPct || 0));
-  const grossLossAbs = Math.abs(sum(losses.map((t) => t.returnPct || 0)));
+  const grossWin = sum(wins.map((t) => t._retPctForStats));
+  const grossLossAbs = Math.abs(sum(losses.map((t) => t._retPctForStats)));
   const profitFactor = grossLossAbs
     ? grossWin / grossLossAbs
     : wins.length
     ? Infinity
     : 0;
 
-  // Count exits over ALL trades
   const exits = {
     target: trades.filter((t) => t.exitType === "TARGET").length,
     stop: trades.filter((t) => t.exitType === "STOP").length,
@@ -2117,6 +2132,7 @@ function computeMetrics(trades) {
     exits,
   };
 }
+
 function sum(arr) {
   return arr.reduce((a, b) => a + (Number(b) || 0), 0);
 }
