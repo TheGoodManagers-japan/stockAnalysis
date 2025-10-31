@@ -681,7 +681,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars)
     ? Math.max(0, opts.holdBars)
-    : 0; // default: off
+    : 30; // default: off
   const COOLDOWN = 0;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -1449,9 +1449,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   trailArmed: false,
                   skipTarget: p.id === "atr_trail", // <— never take fixed target on the trailing profile
 
-                  // ---- NEW flags for target-only profile ----
-                  noStop: p.id === "target_only", // ignore stop checks
-                  ignoreTimeExit: p.id === "target_only", // ignore HOLD_BARS exits
+                  // ---- profile behavior flags ----
+                  noStop: p.id === "target_only", // still ignore the stop for target_only
+                  ignoreTimeExit: false, // ALL profiles are allowed to time out
 
                   ST,
                   LT,

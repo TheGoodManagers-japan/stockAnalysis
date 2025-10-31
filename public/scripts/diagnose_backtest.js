@@ -8,16 +8,21 @@
  *
  * What it does:
  * - Reads the backtest JSON.
- * - Pulls all trades (or byTicker[].trades if present), WITHOUT listing tickers.
+ * - Pulls all trades (from byTicker[].trades if present).
  * - Computes:
  *    * Overall metrics: winRate, PF, avgReturn, holding, exits.
+ *    * Return distribution stats (medians, tails).
  *    * Feature deciles + win/ret by decile for: rsi, atrPct, volZ, pxVsMA25Pct, gapPct, maStackScore.
- *    * Simple Pearson correlations vs win (1/0) and returnPct.
- *    * Sentiment (LT, ST) actual vs rejected (best/worst by winRate).
+ *    * Pearson correlations vs win (1/0) and vs returnPct.
+ *    * Sentiment breakdown (LT-ST combos, LT only, ST only).
  *    * Regime metrics (STRONG_UP/UP/RANGE/DOWN).
  *    * Cross-lag metrics (DAILY/WEEKLY by lag).
- * - Prints a concise diagnosis to console.
- * - Optionally writes JSON (--out) and Markdown (--md) summaries.
+ *    * DIP-after-cross metrics.
+ *    * Profile metrics and best profile.
+ *    * Composite score ladder and correlations.
+ *    * Playbook slices (prebuilt "good conditions").
+ *    * Target-only deep dive (volatility + time-to-target).
+ *    * Loss autopsy (why did losers lose).
  */
 
 const fs = require("fs");
@@ -45,8 +50,6 @@ function safeGetAllTrades(obj) {
       Array.isArray(t.trades) ? t.trades : []
     );
   }
-  // fallback to global (some builds return globalTrades inline; yours returns only aggregates)
-  // We’ll reconstruct from strategy if trades aren’t present
   if (Array.isArray(obj?.globalTrades)) return obj.globalTrades;
   console.warn(
     "[info] No byTicker/globalTrades array found. This analyzer expects trades with `analytics`."
@@ -119,6 +122,7 @@ function summarizeMetrics(trades) {
   const n = trades.length;
   const wins = trades.filter((t) => t.result === "WIN");
   const losses = trades.filter((t) => t.result === "LOSS");
+
   const wr = n ? (wins.length / n) * 100 : 0;
   const avgRet = n
     ? trades.reduce((a, t) => a + (+t.returnPct || 0), 0) / n
@@ -126,9 +130,11 @@ function summarizeMetrics(trades) {
   const avgHold = n
     ? trades.reduce((a, t) => a + (+t.holdingDays || 0), 0) / n
     : 0;
+
   const gw = wins.reduce((a, t) => a + (+t.returnPct || 0), 0);
   const gl = Math.abs(losses.reduce((a, t) => a + (+t.returnPct || 0), 0));
   const pf = gl ? gw / gl : wins.length ? Infinity : 0;
+
   return {
     trades: n,
     winRate: r2(wr),
@@ -148,12 +154,82 @@ function groupBy(arr, keyFn) {
   return m;
 }
 
+// --- NEW helper: generic basic stats for arrays ---
+function basicStats(arr) {
+  const clean = arr.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!clean.length) {
+    return { avg: NaN, med: NaN, p90: NaN, p10: NaN };
+  }
+  const avg = clean.reduce((a, b) => a + b, 0) / clean.length;
+  const med = percentile(clean, 0.5);
+  const p90 = percentile(clean, 0.9);
+  const p10 = percentile(clean, 0.1);
+  return {
+    avg: r2(avg),
+    med: r2(med),
+    p90: r2(p90),
+    p10: r2(p10),
+  };
+}
+
+// --- NEW helper: summary for any subset of trades ---
+function summarizeSubset(trades) {
+  const m = summarizeMetrics(trades);
+
+  const wins = trades
+    .filter((t) => t.result === "WIN")
+    .map((t) => +t.returnPct || 0);
+  const losses = trades
+    .filter((t) => t.result === "LOSS")
+    .map((t) => +t.returnPct || 0);
+
+  const winStats = basicStats(wins); // avg/med/p90/etc.
+  const lossStats = basicStats(losses);
+
+  const holdStats = basicStats(trades.map((t) => +t.holdingDays || 0));
+
+  return {
+    metrics: m,
+    winStats,
+    lossStats,
+    holdStats,
+  };
+}
+
+// --- NEW helper: time to target stats for target_only ---
+function summarizeTimeToTarget(trades) {
+  const hits = trades.filter((t) => t.exitType === "TARGET");
+
+  const daysArr = hits.map((t) => +t.holdingDays || 0);
+  const retArr = hits.map((t) => +t.returnPct || 0);
+
+  const dayStats = basicStats(daysArr);
+  const retStats = basicStats(retArr);
+
+  const wr = hits.length
+    ? r2(
+        (100 *
+          hits.filter((t) => {
+            return t.result === "WIN";
+          }).length) /
+          hits.length
+      )
+    : 0;
+
+  return {
+    count: hits.length,
+    winRate: wr,
+    days: dayStats, // {avg,med,p90,p10}
+    returns: retStats,
+  };
+}
+
 // -------------------- main --------------------
 const raw = JSON.parse(fs.readFileSync(inputPath, "utf8"));
-const allTrades = safeGetAllTrades(raw);
+const allTradesRaw = safeGetAllTrades(raw);
 
 // Guard: if no trades with analytics, explain and exit gracefully
-const withAnalytics = allTrades.filter(
+const withAnalytics = allTradesRaw.filter(
   (t) => t && t.analytics && typeof t.analytics === "object"
 );
 if (!withAnalytics.length) {
@@ -163,7 +239,32 @@ if (!withAnalytics.length) {
   process.exit(0);
 }
 
-// Features to analyze (present in the patch you added)
+// -------------------- OVERALL / DISTRIBUTIONS --------------------
+const overall = summarizeMetrics(withAnalytics);
+
+// Return distribution (for the whole set)
+const winReturns = withAnalytics
+  .filter((t) => t.result === "WIN")
+  .map((t) => +t.returnPct || 0);
+const lossReturns = withAnalytics
+  .filter((t) => t.result === "LOSS")
+  .map((t) => +t.returnPct || 0);
+const winStatsAll = basicStats(winReturns);
+const lossStatsAll = basicStats(lossReturns);
+
+// Holding behavior breakdown
+const holdsWin = basicStats(
+  withAnalytics
+    .filter((t) => t.result === "WIN")
+    .map((t) => +t.holdingDays || 0)
+);
+const holdsLoss = basicStats(
+  withAnalytics
+    .filter((t) => t.result === "LOSS")
+    .map((t) => +t.holdingDays || 0)
+);
+
+// -------------------- FEATURE ANALYSIS --------------------
 const FEATURES = [
   "rsi", // 14-period RSI at entry
   "atrPct", // ATR(14) as % of entry
@@ -173,11 +274,9 @@ const FEATURES = [
   "maStackScore", // 0..3 (MA5>MA25, MA25>MA75, price>MA25)
 ];
 
-// Build arrays for correlations
 const yWin = withAnalytics.map((t) => (t.result === "WIN" ? 1 : 0));
 const yRet = withAnalytics.map((t) => +t.returnPct || 0);
 
-// Per-feature deciles + correlation
 const featureResults = {};
 for (const f of FEATURES) {
   const values = withAnalytics.map((t) => {
@@ -187,7 +286,7 @@ for (const f of FEATURES) {
   const finiteVals = values.filter(Number.isFinite);
   const { bounds } = deciles(finiteVals);
 
-  // bucket each trade
+  // bucket each trade into deciles of this feature
   const bins = Array.from({ length: 10 }, () => ({
     count: 0,
     wins: 0,
@@ -210,7 +309,6 @@ for (const f of FEATURES) {
     avgReturnPct: b.count ? r2(b.sumRet / b.count) : 0,
   }));
 
-  // correlations
   const x = withAnalytics.map((t) =>
     Number.isFinite(+t.analytics?.[f]) ? +t.analytics[f] : NaN
   );
@@ -224,21 +322,7 @@ for (const f of FEATURES) {
   };
 }
 
-// Sentiment rollups (actual + rejected already in backtest)
-const sentiActual = raw?.sentiment?.bestByWinRate?.actual || [];
-const sentiRejected = raw?.sentiment?.bestByWinRate?.rejected || [];
-
-// Regime metrics
-const regime = raw?.regime?.metrics || {};
-
-// Cross-lag metrics
-const xlag = raw?.crossing?.byLag || { WEEKLY: {}, DAILY: {} };
-const dipAfter = raw?.dipAfterFreshCrossing || { WEEKLY: null, DAILY: null };
-
-// Overall
-const overall = summarizeMetrics(withAnalytics);
-
-// -------------------- Compose concise diagnosis text --------------------
+// helper: produce simple takeaway strings for features
 function pickFeatureTakeaways(fr) {
   const out = [];
   for (const [name, obj] of Object.entries(fr)) {
@@ -248,8 +332,8 @@ function pickFeatureTakeaways(fr) {
       high = d[9];
     const wrDiff = r2(high.winRate - low.winRate);
     const retDiff = r2(high.avgReturnPct - low.avgReturnPct);
-    const cWin = obj.corr.win,
-      cRet = obj.corr.ret;
+    const cWin = obj.corr.win;
+    const cRet = obj.corr.ret;
 
     const dir =
       cWin > 0.1 || retDiff > 0.2
@@ -263,23 +347,62 @@ function pickFeatureTakeaways(fr) {
   }
   return out;
 }
-
 const takeaways = pickFeatureTakeaways(featureResults);
 
-// Sentiment snippets
-function summarizeSenti(list, label) {
+// -------------------- SENTIMENT --------------------
+const sentiPairsActual =
+  raw?.sentiment?.combos?.actual?.bestByWinRate || // older naming
+  raw?.sentiment?.bestByWinRate?.actual ||
+  [];
+const sentiPairsRejected =
+  raw?.sentiment?.combos?.rejected?.bestByWinRate ||
+  raw?.sentiment?.bestByWinRate?.rejected ||
+  [];
+
+function summarizeSentiPairs(list, label) {
   const top = list
     .slice(0, 5)
     .map((r) => `${r.key} (WR ${r.winRate}%, n=${r.count})`)
     .join("; ");
   return `${label}: ${top || "n/a"}`;
 }
-const sentiSummary = [
-  summarizeSenti(sentiActual, "Best actual LT-ST"),
-  summarizeSenti(sentiRejected, "Best rejected LT-ST"),
-];
+const sentiPairSummaryActual = summarizeSentiPairs(
+  sentiPairsActual,
+  "actual LT-ST"
+);
+const sentiPairSummaryRejected = summarizeSentiPairs(
+  sentiPairsRejected,
+  "rejected LT-ST"
+);
 
-// Regime summary
+// LT-only / ST-only sentiment (new fields in backtest return)
+const sentiLTActual = raw?.sentiment?.byLT?.bestByWinRateActual || [];
+const sentiLTRejected = raw?.sentiment?.byLT?.bestByWinRateRejected || [];
+const sentiSTActual = raw?.sentiment?.byST?.bestByWinRateActual || [];
+const sentiSTRejected = raw?.sentiment?.byST?.bestByWinRateRejected || [];
+
+function summarizeSingleAxis(list, label) {
+  const top = list
+    .slice(0, 5)
+    .map((r) => `${r.key} (WR ${r.winRate}%, n=${r.count})`)
+    .join("; ");
+  return `${label}: ${top || "n/a"}`;
+}
+
+const sentiLTActualSummary = summarizeSingleAxis(sentiLTActual, "actual LT");
+const sentiLTRejectedSummary = summarizeSingleAxis(
+  sentiLTRejected,
+  "rejected LT"
+);
+const sentiSTActualSummary = summarizeSingleAxis(sentiSTActual, "actual ST");
+const sentiSTRejectedSummary = summarizeSingleAxis(
+  sentiSTRejected,
+  "rejected ST"
+);
+
+// -------------------- REGIME --------------------
+const regime = raw?.regime?.metrics || {};
+
 function fmtRegime(name) {
   const m = regime?.[name] || {};
   if (!m || !("trades" in m)) return `${name}: n/a`;
@@ -287,61 +410,424 @@ function fmtRegime(name) {
 }
 const regimeSummary = ["STRONG_UP", "UP", "RANGE", "DOWN"].map(fmtRegime);
 
-// Cross-lag summary
+// -------------------- CROSS-LAG --------------------
+const xlag = raw?.crossing?.byLag || { WEEKLY: {}, DAILY: {} };
+
 function summarizeLag(side) {
   const m = xlag?.[side] || {};
   const keys = Object.keys(m)
     .map((k) => +k)
     .sort((a, b) => a - b);
   if (!keys.length) return `${side}: n/a`;
-  const first = m[keys[0]],
-    bestLag = keys.reduce((best, k) => {
-      const wr = m[k]?.winRate ?? -1;
-      return wr > (m[best]?.winRate ?? -1) ? k : best;
-    }, keys[0]);
+  const first = m[keys[0]];
+  const bestLag = keys.reduce((best, k) => {
+    const wr = m[k]?.winRate ?? -1;
+    return wr > (m[best]?.winRate ?? -1) ? k : best;
+  }, keys[0]);
   return `${side}: early lag ${keys[0]} → WR ${
     first?.winRate ?? "n/a"
   }%, best lag ${bestLag} → WR ${m[bestLag]?.winRate ?? "n/a"}%`;
 }
 const lagSummary = [summarizeLag("DAILY"), summarizeLag("WEEKLY")];
 
-// -------------------- Console output --------------------
-console.log("=== OVERALL ===");
-console.log(
-  `Trades ${overall.trades} | WinRate ${overall.winRate}% | PF ${overall.profitFactor} | AvgRet ${overall.avgReturnPct}% | AvgHold ${overall.avgHoldingDays} bars`
-);
-console.log("\n=== FEATURE SIGNALS (decile10 vs decile1 & correlations) ===");
-takeaways.forEach((s) => console.log("- " + s));
-console.log("\n=== SENTIMENT ===");
-sentiSummary.forEach((s) => console.log("- " + s));
-console.log("\n=== REGIME ===");
-regimeSummary.forEach((s) => console.log("- " + s));
-console.log("\n=== CROSS-LAG ===");
-lagSummary.forEach((s) => console.log("- " + s));
-console.log("\n=== DIP AFTER FRESH CROSS ===");
+// -------------------- DIP AFTER FRESH CROSS --------------------
+const dipAfter = raw?.dipAfterFreshCrossing || { WEEKLY: null, DAILY: null };
 function fmtDipAfter(label, m) {
   if (!m || typeof m !== "object" || !("trades" in m)) {
     return `- ${label}: n/a`;
   }
   return `- ${label}: trades ${m.trades} | WinRate ${m.winRate}% | PF ${m.profitFactor} | AvgRet ${m.avgReturnPct}%`;
 }
+
+// -------------------- PROFILES --------------------
+const profiles = raw?.profiles || {};
+const bestProfiles = raw?.bestProfiles || {};
+
+function summarizeProfile(id, obj) {
+  if (!obj || !obj.metrics) return null;
+  const m = obj.metrics;
+  return {
+    id,
+    label: obj.label || id,
+    trades: m.trades,
+    winRate: m.winRate,
+    pf: m.profitFactor,
+    avgRet: m.avgReturnPct,
+    hold: m.avgHoldingDays,
+  };
+}
+
+const profileSummaries = Object.entries(profiles)
+  .map(([id, obj]) => summarizeProfile(id, obj))
+  .filter(Boolean);
+
+// -------------------- COMPOSITE SCORE (rule-based score in backtest) --------------------
+function metricsByScore(allTrades) {
+  const buckets = {}; // score -> trades[]
+  for (const t of allTrades) {
+    const s = Number.isFinite(t.score) ? t.score : null;
+    if (s === null) continue;
+    if (!buckets[s]) buckets[s] = [];
+    buckets[s].push(t);
+  }
+  const scored = Object.keys(buckets)
+    .map((k) => +k)
+    .sort((a, b) => a - b)
+    .map((s) => {
+      const arr = buckets[s];
+      const m = summarizeMetrics(arr);
+      return {
+        score: s,
+        n: arr.length,
+        winRate: m.winRate,
+        pf: m.profitFactor,
+        avgRet: m.avgReturnPct,
+      };
+    });
+  return { buckets, scored };
+}
+
+function corrScore(allTrades) {
+  const xs = [];
+  const winArr = [];
+  const retArr = [];
+  for (const t of allTrades) {
+    if (!Number.isFinite(t.score)) continue;
+    xs.push(+t.score);
+    winArr.push(t.result === "WIN" ? 1 : 0);
+    retArr.push(+t.returnPct || 0);
+  }
+  return {
+    win: pearson(xs, winArr),
+    ret: pearson(xs, retArr),
+  };
+}
+
+const scoreInfo = metricsByScore(withAnalytics);
+const scoreCorr = corrScore(withAnalytics);
+
+// -------------------- PLAYBOOK SLICES --------------------
+// These are "AND filters" that describe situations that look good/risky.
+// We'll define some candidate slices:
+
+function slice_HIGH_SCORE_6plus(t) {
+  return Number.isFinite(t.score) && t.score >= 6;
+}
+
+function slice_DOWN_regime_ST_panic_weekly_flip(t) {
+  // Regime DOWN,
+  // ST capitulation (ST>=6),
+  // weekly/both cross lag >=2 (fresh-enough higher timeframe momentum),
+  // We look at t.regime, t.ST, t.crossType, t.crossLag
+  return (
+    t.regime === "DOWN" &&
+    Number.isFinite(t.ST) &&
+    t.ST >= 6 &&
+    (t.crossType === "WEEKLY" ||
+      t.crossType === "BOTH" ||
+      t.crossType === "DAILY") &&
+    Number.isFinite(t.crossLag) &&
+    t.crossLag >= 2
+  );
+}
+
+function slice_RANGE_regime_gap_up_near_MA25(t) {
+  // Regime RANGE, small positive gap (>0),
+  // px close to MA25 (pxVsMA25Pct <= 4),
+  // This is roughly "controlled strength from a base"
+  const a = t.analytics || {};
+  return (
+    t.regime === "RANGE" &&
+    Number.isFinite(a.gapPct) &&
+    a.gapPct > 0 &&
+    Number.isFinite(a.pxVsMA25Pct) &&
+    a.pxVsMA25Pct <= 4
+  );
+}
+
+const SLICES = [
+  {
+    name: "HIGH_SCORE_6plus",
+    desc: "Composite score >= 6",
+    fn: slice_HIGH_SCORE_6plus,
+  },
+  {
+    name: "DOWN_regime_ST_panic_weekly_flip",
+    desc: "Regime DOWN, ST>=6 (panic pullback), WEEKLY/BOTH cross lag>=2",
+    fn: slice_DOWN_regime_ST_panic_weekly_flip,
+  },
+  {
+    name: "RANGE_regime_gap_up_near_MA25",
+    desc: "Regime RANGE, gap up >0%, px ≤4% above MA25",
+    fn: slice_RANGE_regime_gap_up_near_MA25,
+  },
+];
+
+// helper to evaluate a slice
+function analyzeSlice(name, desc, trades, tradingDaysGuess = 1) {
+  const n = trades.length;
+  const m = summarizeMetrics(trades);
+
+  const winSide = trades
+    .filter((t) => t.result === "WIN")
+    .map((t) => +t.returnPct || 0);
+  const lossSide = trades
+    .filter((t) => t.result === "LOSS")
+    .map((t) => +t.returnPct || 0);
+
+  const winStats = basicStats(winSide);
+  const lossStats = basicStats(lossSide);
+
+  const holdStats = basicStats(trades.map((t) => +t.holdingDays || 0));
+
+  const perDay = tradingDaysGuess ? r2(n / tradingDaysGuess) : r2(n);
+
+  return {
+    name,
+    desc,
+    n,
+    metrics: m,
+    winStats,
+    lossStats,
+    holdStats,
+    perDay,
+  };
+}
+
+// We'll guess tradingDays from raw.tradingDays if present
+const tradingDaysGuess = raw?.tradingDays || 1;
+const sliceResults = SLICES.map((s) => {
+  const subset = withAnalytics.filter((t) => s.fn(t));
+  return analyzeSlice(s.name, s.desc, subset, tradingDaysGuess);
+});
+
+// -------------------- BEST SLICE PROFILE BREAKDOWN --------------------
+function profileBreakdownForSlice(sliceTrades) {
+  const byProfile = groupBy(sliceTrades, (t) => t.profile || "unknown");
+  const out = [];
+  for (const [profile, arr] of byProfile.entries()) {
+    const m = summarizeMetrics(arr);
+    out.push({
+      profile,
+      n: arr.length,
+      winRate: m.winRate,
+      pf: m.profitFactor,
+      avgRet: m.avgReturnPct,
+      hold: m.avgHoldingDays,
+    });
+  }
+  return out.sort((a, b) => b.n - a.n);
+}
+
+// pick "best" slice = first slice in SLICES for now (HIGH_SCORE_6plus)
+const bestSlice = sliceResults[0];
+const bestSliceTrades = withAnalytics.filter((t) => SLICES[0].fn(t));
+const bestSliceProfiles = profileBreakdownForSlice(bestSliceTrades);
+
+// -------------------- TARGET_ONLY PROFILE DEEP DIVE --------------------
+const targetOnlyAll = withAnalytics.filter((t) => t.profile === "target_only");
+const targetHits = targetOnlyAll.filter((t) => t.exitType === "TARGET");
+const targetEnd = targetOnlyAll.filter((t) => t.exitType === "END");
+
+const targetAllStats = summarizeSubset(targetOnlyAll);
+const targetHitStats = summarizeSubset(targetHits);
+const targetEndStats = summarizeSubset(targetEnd);
+
+const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target stats
+
+// -------------------- LOSS AUTOPSY --------------------
+// crude heuristics for "why it lost"
+function isExtendedPx(t) {
+  const a = t.analytics || {};
+  return Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
+}
+function isEarlyLag(t) {
+  return (
+    (t.crossType === "WEEKLY" ||
+      t.crossType === "DAILY" ||
+      t.crossType === "BOTH") &&
+    Number.isFinite(t.crossLag) &&
+    t.crossLag < 2
+  );
+}
+function isBadRegime(t) {
+  return t.regime === "STRONG_UP"; // heuristic: buying strength blowoff
+}
+function weakPullback(t) {
+  return Number.isFinite(t.ST) && t.ST < 6;
+}
+
+const losers = withAnalytics.filter((t) => t.result === "LOSS");
+const lossReasons = {
+  extendedPx: losers.filter(isExtendedPx).length,
+  earlyLag: losers.filter(isEarlyLag).length,
+  badRegime: losers.filter(isBadRegime).length,
+  weakPullback: losers.filter(weakPullback).length,
+};
+
+// -------------------- Console output --------------------
+console.log("=== OVERALL ===");
+console.log(
+  `Trades ${overall.trades} | WinRate ${overall.winRate}% | PF ${overall.profitFactor} | AvgRet ${overall.avgReturnPct}% | AvgHold ${overall.avgHoldingDays} bars`
+);
+
+console.log("\n=== RETURN DISTRIBUTION (all trades) ===");
+console.log(
+  `Win median ${winStatsAll.med}% | Win 90th ${winStatsAll.p90}% | Loss median ${lossStatsAll.med}% | Loss 10th ${lossStatsAll.p10}%`
+);
+
+console.log("\n=== HOLDING BEHAVIOR (all trades) ===");
+console.log(
+  `WIN avgHold ${holdsWin.avg} bars (med ${holdsWin.med}) | LOSS avgHold ${holdsLoss.avg} bars (med ${holdsLoss.med})`
+);
+
+console.log("\n=== FEATURE SIGNALS (decile10 vs decile1 & correlations) ===");
+takeaways.forEach((s) => console.log("- " + s));
+
+console.log("\n=== SENTIMENT (LT-ST pairs) ===");
+console.log("- " + sentiPairSummaryActual);
+console.log("- " + sentiPairSummaryRejected);
+
+console.log("\n=== SENTIMENT (LT only) ===");
+console.log("- " + sentiLTActualSummary);
+console.log("- " + sentiLTRejectedSummary);
+
+console.log("\n=== SENTIMENT (ST only) ===");
+console.log("- " + sentiSTActualSummary);
+console.log("- " + sentiSTRejectedSummary);
+
+console.log("\n=== REGIME ===");
+regimeSummary.forEach((s) => console.log("- " + s));
+
+console.log("\n=== CROSS-LAG ===");
+lagSummary.forEach((s) => console.log("- " + s));
+
+console.log("\n=== DIP AFTER FRESH CROSS ===");
 console.log(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
 console.log(fmtDipAfter("DAILY", dipAfter.DAILY));
 
+console.log("\n=== PROFILES ===");
+profileSummaries.forEach((p) => {
+  console.log(
+    `- ${p.label} (${p.id}): trades ${p.trades}, WR ${p.winRate}%, PF ${p.pf}, AvgRet ${p.avgRet}%, Hold ${p.hold} bars`
+  );
+});
+console.log(
+  `  best by WR: ${bestProfiles.byWinRate}, best by PF: ${bestProfiles.byProfitFactor}, best by expR: ${bestProfiles.byExpR}`
+);
+
+console.log("\n=== COMPOSITE SCORE (your rule-based score) ===");
+scoreInfo.scored.forEach((row) => {
+  console.log(
+    `score ${row.score}: n=${row.n}, WR ${row.winRate}%, PF ${row.pf}, AvgRet ${row.avgRet}%`
+  );
+});
+console.log(
+  `corr(score, win)=${r2(scoreCorr.win)}, corr(score, ret)=${r2(scoreCorr.ret)}`
+);
+
+// playbook slices
+console.log(
+  "\n=== PLAYBOOK SLICES (candidate entry rules; already AND-filtered) ==="
+);
+sliceResults.forEach((s) => {
+  console.log(
+    `- ${s.name} :: ${s.desc}\n` +
+      `  n=${s.n} (~${s.perDay} trades/day), WR=${s.metrics.winRate}%, PF=${s.metrics.profitFactor}, AvgRet=${s.metrics.avgReturnPct}%, HoldAvg=${s.metrics.avgHoldingDays} bars`
+  );
+  console.log(
+    `  dist: winMed=${s.winStats.med}% win90=${s.winStats.p90}% | lossMed=${s.lossStats.med}% loss10=${s.lossStats.p10}%`
+  );
+  console.log(
+    `  hold(med wins=${s.holdStats.med} vs losses=${s.holdStats.med})`
+  );
+});
+
+// best slice profile breakdown
+console.log("\n=== BEST SLICE PROFILE BREAKDOWN ===");
+console.log(
+  `Slice "${bestSlice.name}" (${bestSlice.desc}) :: n=${bestSlice.n}, WR=${bestSlice.metrics.winRate}%, PF=${bestSlice.metrics.profitFactor}`
+);
+bestSliceProfiles.forEach((bp) => {
+  console.log(
+    `- ${bp.profile}: n=${bp.n}, WR ${bp.winRate}%, PF ${bp.pf}, AvgRet ${bp.avgRet}%, Hold ${bp.hold} bars`
+  );
+});
+
+// target_only deep dive
+console.log("\n=== TARGET_ONLY PROFILE DEEP DIVE ===");
+console.log(
+  `All target_only trades: n=${targetOnlyAll.length}, WR ${targetAllStats.metrics.winRate}%, PF ${targetAllStats.metrics.profitFactor}, AvgRet ${targetAllStats.metrics.avgReturnPct}%, HoldAvg ${targetAllStats.metrics.avgHoldingDays} bars`
+);
+console.log(
+  ` Volatility snapshot: wins med ${targetAllStats.winStats.med}% (p90 ${targetAllStats.winStats.p90}%) | losses med ${targetAllStats.lossStats.med}% (p10 ${targetAllStats.lossStats.p10}%)`
+);
+console.log(
+  ` HoldingDays dist: med ${targetAllStats.holdStats.med} bars, p90 ${targetAllStats.holdStats.p90} bars`
+);
+
+console.log(
+  `\n When it actually tags TARGET early (exitType=TARGET): n=${targetHits.length} | WR ${targetHitStats.metrics.winRate}% | PF ${targetHitStats.metrics.profitFactor} | AvgRet ${targetHitStats.metrics.avgReturnPct}%`
+);
+console.log(
+  ` Time-to-target (only trades that hit TARGET): median ${ttt.days.med} bars, avg ${ttt.days.avg} bars, p90 ${ttt.days.p90} bars`
+);
+console.log(
+  ` Return on those hits: median ${ttt.returns.med}% , p90 ${ttt.returns.p90}%`
+);
+
+console.log(
+  `\n The slow grinders / never-hit-target (exitType=END): n=${targetEnd.length} | WR ${targetEndStats.metrics.winRate}% | PF ${targetEndStats.metrics.profitFactor} | AvgRet ${targetEndStats.metrics.avgReturnPct}%`
+);
+console.log(
+  ` These held longer: Hold med ${targetEndStats.holdStats.med} bars, p90 ${targetEndStats.holdStats.p90} bars`
+);
+
+// loss autopsy
+console.log("\n=== LOSS AUTOPSY (why did losers lose?) ===");
+console.log(
+  `Total losses ${losers.length}:\n` +
+    ` - extendedPx (>6% above MA25): ${lossReasons.extendedPx}\n` +
+    ` - earlyLag (too soon after flip): ${lossReasons.earlyLag}\n` +
+    ` - badRegime (STRONG_UP): ${lossReasons.badRegime}\n` +
+    ` - weakPullback (ST<6): ${lossReasons.weakPullback}`
+);
 
 // -------------------- Optional outputs --------------------
 const exportObj = {
   overall,
-  features: featureResults,
+  featureResults,
   sentiment: {
-    bestActual: sentiActual,
-    bestRejected: sentiRejected,
+    pairs: {
+      actual: sentiPairsActual,
+      rejected: sentiPairsRejected,
+    },
+    LT: {
+      actual: sentiLTActual,
+      rejected: sentiLTRejected,
+    },
+    ST: {
+      actual: sentiSTActual,
+      rejected: sentiSTRejected,
+    },
   },
   regime: raw?.regime?.metrics || {},
   crossLag: xlag,
-  dipAfterFreshCross: dipAfter, // <-- NEW
+  dipAfterFreshCross: dipAfter,
+  profiles: profileSummaries,
+  bestProfiles,
+  scoreLadder: scoreInfo.scored,
+  scoreCorr,
+  slices: sliceResults,
+  bestSliceProfileBreakdown: bestSliceProfiles,
+  targetOnlyDeepDive: {
+    all: targetAllStats,
+    hits: targetHitStats,
+    end: targetEndStats,
+    timeToTarget: ttt,
+  },
+  lossAutopsy: lossReasons,
 };
-  
 
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify(exportObj, null, 2), "utf8");
@@ -360,8 +846,8 @@ if (mdPath) {
   for (const s of takeaways) lines.push(`- ${s}`);
   lines.push("");
   lines.push("## Sentiment (Top by WinRate)");
-  lines.push(`- ${sentiSummary[0]}`);
-  lines.push(`- ${sentiSummary[1]}`);
+  lines.push(`- ${sentiPairSummaryActual}`);
+  lines.push(`- ${sentiPairSummaryRejected}`);
   lines.push("");
   lines.push("## Regime");
   for (const s of regimeSummary) lines.push(`- ${s}`);
@@ -372,6 +858,17 @@ if (mdPath) {
   lines.push("## DIP After Fresh Cross");
   lines.push(fmtDipAfter("WEEKLY", dipAfter.WEEKLY));
   lines.push(fmtDipAfter("DAILY", dipAfter.DAILY));
+  lines.push("");
+  lines.push("## Target Only Deep Dive");
+  lines.push(
+    `All target_only trades: n=${targetOnlyAll.length}, WR ${targetAllStats.metrics.winRate}%, PF ${targetAllStats.metrics.profitFactor}, AvgRet ${targetAllStats.metrics.avgReturnPct}%, HoldAvg ${targetAllStats.metrics.avgHoldingDays} bars`
+  );
+  lines.push(
+    `Time-to-target (only trades that hit TARGET): median ${ttt.days.med} bars (avg ${ttt.days.avg}, p90 ${ttt.days.p90})`
+  );
+  lines.push(
+    `Never-hit (END exits): n=${targetEnd.length}, Hold med ${targetEndStats.holdStats.med} bars`
+  );
 
   fs.writeFileSync(mdPath, lines.join("\n"), "utf8");
   console.log(`[write] Markdown report -> ${mdPath}`);
