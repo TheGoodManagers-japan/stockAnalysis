@@ -786,16 +786,25 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     return Math.round(px / tick) * tick;
   }
 
-  // ---- NEW PROFILE: target-only (no stop) ----
+  // Hard stop for target_only: -15% from entry
+  const HARD_STOP_PCT_TARGET_ONLY = 0.15;
+
   const TARGET_ONLY_PROFILE = {
     id: "target_only",
-    label: "Target only (no stop)",
-    compute: ({ entry, sig }) => ({
-      // we must return a numeric stop for plumbing; set to 0 but it will be ignored
-      stop: 0,
-      target: Number(sig?.smartPriceTarget ?? sig?.priceTarget),
-    }),
-    // no advance(): never trails;
+    label: "Target only (target + 15% hard stop)",
+
+    compute: ({ entry, sig }) => {
+      const tgt = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+      const hardStop = Number(entry) * (1 - HARD_STOP_PCT_TARGET_ONLY); // entry * 0.85
+
+      return {
+        stop: hardStop, // <-- now a real stop
+        target: tgt,
+      };
+    },
+
+    // still no trailing logic for this profile
+    // no advance()
   };
 
   const ATR_TRAIL_PROFILE = {
@@ -1648,8 +1657,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   entryIdx: entryBarIdx,
                   entry,
 
-                  stop: isTargetOnly ? null : qStop,
-                  stopInit: isTargetOnly ? null : qStop,
+                  // always set stop & stopInit for every profile now, including target_only
+                  stop: qStop,
+                  stopInit: qStop,
                   target: qTarget,
 
                   // ladder / trail fields
@@ -1669,8 +1679,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   entryATR,
                   trailArmed: false,
 
+                  // skipTarget only for atr_trail (because it ladders instead of taking profit at the first target)
                   skipTarget: p.id === "atr_trail",
-                  noStop: isTargetOnly,
+
+                  // *** CHANGED: target_only now DOES have a stop, so noStop is always false
+                  noStop: false,
+
                   ignoreTimeExit: false,
 
                   ST,
@@ -1689,6 +1703,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   // NEW: store sector for later exit reporting
                   sector: tickerInfoMap[code]?.sector || null,
                 });
+                
 
                 globalOpenCount++;
                 signalsExecuted++;
@@ -1778,39 +1793,38 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             Number.isFinite(st.crossLag) &&
             st.crossLag <= 3;
 
-            const trade = {
-              ticker: code,
-              profile: p.id,
-              strategy: st.kind || "DIP",
+          const trade = {
+            ticker: code,
+            profile: p.id,
+            strategy: st.kind || "DIP",
 
-              entryDate: toISO(candles[st.entryIdx].date),
-              exitDate: toISO(lastBar.date),
-              returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
-              result: endResult,
+            entryDate: toISO(candles[st.entryIdx].date),
+            exitDate: toISO(lastBar.date),
+            returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
+            result: endResult,
 
-              holdingDays: holdingBarsFinal,
-              exitType: exitTypeFinal,
+            holdingDays: holdingBarsFinal,
+            exitType: exitTypeFinal,
 
-              entry: r2(st.entry),
-              exit: r2(lastClose),
-              stop: st.stopInit,
-              target: st.target,
-              R: Rval,
+            entry: r2(st.entry),
+            exit: r2(lastClose),
+            stop: st.stopInit,
+            target: st.target,
+            R: Rval,
 
-              ST: st.ST,
-              LT: st.LT,
-              regime: st.regime || "RANGE",
-              crossType: st.crossType || null,
-              crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-              analytics: st.analytics || null,
-              score: Number.isFinite(st.score) ? st.score : null,
+            ST: st.ST,
+            LT: st.LT,
+            regime: st.regime || "RANGE",
+            crossType: st.crossType || null,
+            crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+            analytics: st.analytics || null,
+            score: Number.isFinite(st.score) ? st.score : null,
 
-              // NEW for diagnose_backtest.js
-              sector: tickerInfoMap[code]?.sector || st.sector || null,
+            // NEW for diagnose_backtest.js
+            sector: tickerInfoMap[code]?.sector || st.sector || null,
 
-              dipAfterFreshCross: isDipAfterFreshCrossSignal,
-            };
-          
+            dipAfterFreshCross: isDipAfterFreshCrossSignal,
+          };
 
           trade.entryArchetype = trade.dipAfterFreshCross
             ? "DIP_AFTER_FRESH_CROSS"
@@ -2009,7 +2023,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
-  
+
   // With a single profile, "best" is trivially that profile:
   function pickBest(by) {
     let bestId = null,
