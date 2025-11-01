@@ -547,12 +547,12 @@ function computeAnalytics(candles, idx, entry) {
 
 // === SCORING (uses your observed lifts; higher is better) ===
 // Weights reflect your analysis:
-// - Regime: DOWN > UP (STRONG_UP/RANGE neutral)
+// - Regime: STRONG_UP best (+2), DOWN next (+1), UP/RANGE = 0
 // - Cross-lag: WEEKLY lag>=2 strong; DAILY lag>=4 helpful
 // - Sentiment: LT in 3–5 (bullish), ST in 6–7 (bearish = pullback)
 // - Analytics: gap>0, RSI>=60 (top-ish tercile), pxVsMA25Pct<=+4% (not extended)
 // - Small penalty if pxVsMA25Pct is very extended (>+6%)
-function computeScore({
+function computeScoreBase({
   analytics,
   regime,
   crossType,
@@ -563,13 +563,7 @@ function computeScore({
 }) {
   let s = 0;
 
-  // ---------------------------------
-  // 1. Regime
-  //
-  // Backtest PF:
-  // STRONG_UP (1.41) > DOWN (1.30) > UP (1.16) ~ RANGE (1.13)
-  // We'll reward STRONG_UP and DOWN, neutral the rest.
-  // ---------------------------------
+  // 1. Regime weighting
   if (regime === "STRONG_UP") {
     s += 2;
   } else if (regime === "DOWN") {
@@ -580,25 +574,18 @@ function computeScore({
     s += 0;
   }
 
-  // ---------------------------------
   // 2. Cross lag / timing after flip
-  //
-  // WEEKLY lag 2-3 bars after the flip is your sweet spot (PF ~1.4-1.48).
-  // After ~3 bars it's still okay but weaker.
-  // DAILY only really shines once lag >=4.
-  // ---------------------------------
   const lag = Number.isFinite(crossLag) ? crossLag : null;
 
   if (crossType === "WEEKLY" || crossType === "BOTH") {
     if (lag !== null) {
       if (lag >= 2 && lag <= 3) {
-        // ideal "mid flip"
+        // mid flip (sweet spot)
         s += 2;
       } else if (lag > 3) {
-        // still acceptable, but slightly cooler
         s += 1;
       }
-      // lag <2 gets nothing (too early / "tooEarlyAfterFlip")
+      // lag <2 gets 0
     }
   } else if (crossType === "DAILY") {
     if (lag !== null && lag >= 4) {
@@ -606,111 +593,136 @@ function computeScore({
     }
   }
 
-  // ---------------------------------
   // 3. Sentiment
-  //
-  // Best combos in your data are:
-  //   LT1/LT2 (very bullish long-term)
-  // + ST6/ST7 (short-term fear / dip)
-  //
-  // Also LT3-5 is fine, so we say:
-  // - LT 1-5 is generally good
-  // - ST 6-7 is good
-  // - EXTRA bonus if (LT <=2 AND ST >=6)
-  // This directly attacks "notRealPanic" (ST<6) which is your top loser.
-  // ---------------------------------
-  const ltOk = Number.isFinite(LT) && LT >= 1 && LT <= 5;
-  const stPullbackFear = Number.isFinite(ST) && ST >= 6 && ST <= 7;
-
-  if (ltOk) s += 1;
-  if (stPullbackFear) s += 1;
-
-  if (ltOk && stPullbackFear && LT <= 2) {
-    // perfect "panic dip in strong uptrend" combo
+  // LT 1-5 is generally bullish structure
+  if (Number.isFinite(LT) && LT >= 1 && LT <= 5) {
     s += 1;
   }
 
-  // ---------------------------------
-  // 4. Analytics (entry quality, momentum, stretch, volatility)
-  // ---------------------------------
+  if (Number.isFinite(ST)) {
+    if (ST <= 2) {
+      // capitulation flush
+      s += 1;
+    } else if (ST >= 6 && ST <= 7) {
+      // fear pullback after strength
+      s += 1;
+    } else if (ST >= 3 && ST <= 5) {
+      // "meh dip" aka notRealPanic
+      s -= 1;
+    }
+  }
+
+  // bonus: panic dip in strong long-term tape
+  if (
+    Number.isFinite(LT) &&
+    LT <= 2 &&
+    Number.isFinite(ST) &&
+    (ST <= 2 || (ST >= 6 && ST <= 7))
+  ) {
+    s += 1;
+  }
+
+  // 4. Analytics / tape quality
   const a = analytics || {};
 
-  // (Optional style choice) Momentum pop / gap up
-  // If you find this makes you chase extended breakouts too often,
-  // you can comment this out or even invert it.
-  if (Number.isFinite(a.gapPct) && a.gapPct > 0) {
-    s += 1;
-  }
-
-  // RSI strong-ish
-  if (Number.isFinite(a.rsi) && a.rsi >= 60) {
-    s += 1;
-  }
-
-  // Extension vs MA25:
-  // PF ranking in your buckets:
-  //   best = below MA25,
-  //   then 0-2% above,
-  //   worst = 2-6% above,
-  //   then >6% above (still bad).
-  //
-  // We'll tier it properly:
+  // Distance vs MA25 (pullback good, chase bad)
   if (Number.isFinite(a.pxVsMA25Pct)) {
-    const ext = a.pxVsMA25Pct; // price % vs MA25
-
+    const ext = a.pxVsMA25Pct;
     if (ext < 0) {
-      // pullback under MA25 = gold
-      s += 2;
+      s += 2; // below MA25 = gold
     } else if (ext <= 2) {
-      // near MA25, still healthy
-      s += 1;
+      s += 1; // 0-2% above = fine
     } else if (ext > 2 && ext <= 6) {
-      // kind of stretched and statistically meh
-      s -= 1;
+      s -= 1; // stretched
     } else if (ext > 6) {
-      // full-on FOMO chase, big loser pattern
-      s -= 2;
+      s -= 2; // full FOMO
     }
   }
 
-  // Volatility / ATR%
-  // Your data actually says high ATR (>3%) still prints good PF (~1.37),
-  // but huge ATR also means fatter tail risk.
-  //
-  // We'll reward "tradable" ATR 1-4, lightly,
-  // and nuke crazy >6.
+  // Volatility / ATR band
   if (Number.isFinite(a.atrPct)) {
-    if (a.atrPct >= 1 && a.atrPct <= 4) {
+    if (a.atrPct >= 1 && a.atrPct <= 3) {
+      // "medium vol (1-3%)" = best PF zone
       s += 1;
-    }
-    if (a.atrPct > 6) {
+    } else if (a.atrPct < 1 || a.atrPct > 6) {
+      // dead or insane
       s -= 1;
     }
   }
 
+  // Sector bias (soft, not absolute)
   const SECTOR_BOOST = new Set([
-    "Financial Services", // PF ~1.52
-    "Real Estate",        // PF ~1.62
-    "Industrials",        // PF ~1.46
+    "Financial Services",
+    "Real Estate",
+    "Industrials",
   ]);
-  
+
   const SECTOR_PENALTY = new Set([
-    "Healthcare",         // PF ~0.94
-    "Consumer Defensive", // PF ~1.08
-    "Basic Materials",    // PF ~1.10
+    "Healthcare",
+    "Consumer Defensive",
+    "Basic Materials",
   ]);
-  
+
   if (typeof sector === "string") {
     if (SECTOR_BOOST.has(sector)) {
       s += 1;
     } else if (SECTOR_PENALTY.has(sector)) {
-      s -= 2;
+      s -= 1; // soft now, not -2
     }
   }
-      // neutral otherwise
 
   return s;
 }
+
+// Wrapper that enforces "score = 0 if it's structurally bad"
+function computeScore(params) {
+  const { analytics = {}, regime, crossType, crossLag, ST } = params;
+
+  // Step 1: get the base score
+  let score = computeScoreBase(params);
+
+  // We'll define helper booleans for clarity
+  const liquidityBad =
+    Number.isFinite(analytics.turnoverJPY) &&
+    analytics.turnoverJPY < 200_000_000;
+
+
+  const chasingExtended =
+    Number.isFinite(analytics.pxVsMA25Pct) && analytics.pxVsMA25Pct > 6;
+
+  const tooEarlyAfterFlip =
+    (crossType === "WEEKLY" || crossType === "BOTH") &&
+    Number.isFinite(crossLag) &&
+    crossLag < 2;
+
+  // "Dip-buy style" means we are buying weakness, not breakouts.
+  // We only care about ST quality in that context.
+  const isDipBuy =
+    Number.isFinite(analytics.pxVsMA25Pct) && analytics.pxVsMA25Pct <= 0;
+
+
+  const fakeDipSentiment =
+    isDipBuy && Number.isFinite(ST) && ST >= 3 && ST <= 5;
+
+  // Nuke rules:
+  // If any of these are true, force score to 0.
+  if (
+    liquidityBad ||
+    chasingExtended ||
+    tooEarlyAfterFlip ||
+    fakeDipSentiment
+  ) {
+    score = 0;
+  }
+
+  // Regime threshold logic will NOT change the score,
+  // but you'll use it downstream when deciding to enter.
+  // We keep score "pure" here.
+
+  return score;
+}
+
+
 
 
 
