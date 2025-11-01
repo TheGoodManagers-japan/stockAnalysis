@@ -902,8 +902,8 @@ const pxMA25TierStats = summarizeTierAverages(pxMA25Buckets);
 // -------------------- FINAL EXPORT --------------------
 const exportObj = {
   window: {
-    from: raw?.window?.from || raw?.startDate || null,
-    to: raw?.window?.to || raw?.endDate || null,
+    from: raw?.from || raw?.window?.from || raw?.startDate || null,
+    to: raw?.to || raw?.window?.to || raw?.endDate || null,
   },
 
   // Global performance of everything we actually traded
@@ -915,13 +915,16 @@ const exportObj = {
     avgHoldBars: overall.avgHoldingDays,
   },
 
-  // Flow / capacity / filter strictness
   flow: {
-    tradesPerDay: r2(raw?.tradesPerDay),
+    // we no longer get tradesPerDay from backtest.js,
+    // so we'll surface signal density instead
+    signalsPerDay: raw?.signals?.perDay != null ? r2(raw.signals.perDay) : null,
+
     tradingDays: raw?.tradingDays,
     signalsTotal: raw?.signals?.total,
     signalsExecuted: raw?.signals?.executed,
     blocked: raw?.signals?.blocked || null,
+
     gates: raw?.telemetry?.gates || null,
     rrAcceptedBuckets: raw?.telemetry?.rr?.accepted || null,
     rrRejectedBuckets: raw?.telemetry?.rr?.rejected || null,

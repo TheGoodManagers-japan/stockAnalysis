@@ -1703,7 +1703,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   // NEW: store sector for later exit reporting
                   sector: tickerInfoMap[code]?.sector || null,
                 });
-                
 
                 globalOpenCount++;
                 signalsExecuted++;
@@ -1879,33 +1878,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   } // <-- end of per-ticker loop: for (let ti = 0; ti < codes.length; ti++)
 
   // ---- final metrics ----
+
+  // all trades across all tickers & profiles
   const all = byTicker.length
     ? byTicker.flatMap((t) => t.trades)
     : globalTrades;
-  const totalTrades = all.length;
-  const wins = all.filter((t) => t.result === "WIN").length;
-  const winRate = totalTrades ? r2((wins / totalTrades) * 100) : 0;
-  const avgReturnPct = totalTrades
-    ? r2(all.reduce((a, b) => a + (b.returnPct || 0), 0) / totalTrades)
-    : 0;
-  const avgHoldingDays = totalTrades
-    ? r2(all.reduce((a, b) => a + (b.holdingDays || 0), 0) / totalTrades)
-    : 0;
 
-  const hitTargetCount = all.filter((t) => t.exitType === "TARGET").length;
-  const hitStopCount = all.filter((t) => t.exitType === "STOP").length;
-  const timeExitCount = all.filter((t) => t.exitType === "TIME").length;
-  const timeWins = all.filter(
-    (t) => t.exitType === "TIME" && t.result === "WIN"
-  ).length;
-  const timeLosses = all.filter(
-    (t) => t.exitType === "TIME" && t.result === "LOSS"
-  ).length;
-
-  const endExitCount = all.filter((t) => t.exitType === "END").length;
-
+  // we still need days, targetTPD, etc. but those are now computed without implying one "main profile"
   const days = tradingDays.size;
-  const tradesPerDay = days ? totalTrades / days : 0;
   const targetTPD =
     Number.isFinite(opts.targetTradesPerDay) && opts.targetTradesPerDay > 0
       ? Number(opts.targetTradesPerDay)
@@ -2023,6 +2003,36 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ...(INCLUDE_PROFILE_SAMPLES ? { samples: list.slice(0, 8) } : {}),
     };
   }
+
+  // Compact summary per profile for frontend tables
+  const profilesSummary = Object.fromEntries(
+    Object.entries(profiles).map(([id, obj]) => {
+      const m = obj.metrics || {};
+      const e = obj.exits || {};
+
+      return [
+        id,
+        {
+          label: obj.label,
+          trades: m.trades,
+          winRate: m.winRate,
+          profitFactor: m.profitFactor,
+          avgReturnPct: m.avgReturnPct,
+          avgHoldingDays: m.avgHoldingDays,
+          avgWinPct: m.avgWinPct,
+          avgLossPct: m.avgLossPct,
+          expR: m.expR,
+          exits: {
+            target: e.target,
+            stop: e.stop,
+            time: e.time,
+            end: e.end,
+          },
+          lossTail: m.lossTail, // includes p90LossPct etc.
+        },
+      ];
+    })
+  );
 
   // With a single profile, "best" is trivially that profile:
   function pickBest(by) {
@@ -2318,6 +2328,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   return {
     from: FROM,
     to: TO,
+
     params: {
       holdBars: HOLD_BARS,
       warmupBars: WARMUP,
@@ -2330,9 +2341,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       topRejectedReasons: TOP_K,
       examplesCap: EX_CAP,
       includeProfileSamples: INCLUDE_PROFILE_SAMPLES,
-      // profiles actually simulated this run
       profileIds: activeProfiles.map((p) => p.id),
-      // trailing config (atr_trail is only active if useTrailing=true)
+
+      // trailing / risk config
       useTrailing: USE_TRAIL,
       atrMult: 3.5,
       trailStartAfterBars: 0,
@@ -2342,9 +2353,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
     },
-    totalTrades,
-    winRate,
-    avgReturnPct,
+
+    // global context, not tied to one profile
+    tradingDays: days,
+
     scoring: {
       schema: {
         regime: { DOWN: 2, UP: 1 },
@@ -2356,28 +2368,18 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           pxVsMA25Le4: 1,
           pxVsMA25Gt6_penalty: -1,
         },
-        // 🔥 NEW: volatility section documents how atrPct is scored
         volatility: {
           atrPct_1to4: 1,
           atrPct_gt6_penalty: -1,
         },
       },
-      byScore: scoreLevels, // score -> PF, WR, etc.
-      correlation: scoreCorr, // Pearson corr(score, win%) and score vs returnPct
+      byScore: scoreLevels,
+      correlation: scoreCorr,
     },
 
     spotlight,
-    avgHoldingDays,
-    tradesPerDay,
-    tradingDays: days,
-    exitCounts: {
-      target: hitTargetCount,
-      stop: hitStopCount,
-      time: timeExitCount,
-      end: endExitCount,
-      timeWins,
-      timeLosses,
-    },
+
+    // signal engine stats (still global)
     signals: {
       total: signalsTotal,
       afterWarmup: signalsAfterWarmup,
@@ -2385,64 +2387,71 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       executed: signalsExecuted,
       invalid: signalsInvalid,
       riskStopGtePx: signalsRiskBad,
-      perDay: +signalsPerDayRaw.toFixed(2),
+      perDay: +(
+        Array.from(signalsByDay.values()).reduce((a, b) => a + b, 0) /
+        (signalsByDay.size || days || 1)
+      ).toFixed(2),
       blocked: {
         inTrade: blockedInTrade,
         cooldown: blockedCooldown,
         warmup: blockedWarmup,
       },
     },
+
     strategy: {
       all: computeMetrics(all),
       dip: dipMetrics,
       ...strategyBreakdown,
     },
+
     telemetry,
     parallel,
     sentiment: {
-      // Full LT/ST combo stats (same as before)
       combos: {
         actual: sentiActual.combos,
         rejected: sentiRejected.combos,
-        bestByWinRate: sentiment.bestByWinRate, // top LT/ST pairs
+        bestByWinRate: sentiment.bestByWinRate,
       },
-
-      // NEW: LT-only breakdown
       byLT: {
-        actual: sentiActualLT.combos, // e.g. LT3: {count, winRate, ...}
+        actual: sentiActualLT.combos,
         rejected: sentiRejectedLT.combos,
         bestByWinRateActual: sentiActualLT.bestByWinRate,
         bestByWinRateRejected: sentiRejectedLT.bestByWinRate,
       },
-
-      // NEW: ST-only breakdown
       byST: {
-        actual: sentiActualST.combos, // e.g. ST7: {count, winRate, ...}
+        actual: sentiActualST.combos,
         rejected: sentiRejectedST.combos,
         bestByWinRateActual: sentiActualST.bestByWinRate,
         bestByWinRateRejected: sentiRejectedST.bestByWinRate,
       },
     },
 
-    profiles,
-    bestProfiles,
     regime: {
       ticker: REGIME_TICKER,
       metrics: regimeMetrics,
     },
+
     crossing: {
-      byLag: crossingByLag, // { WEEKLY: {lag: metrics}, DAILY: {lag: metrics} }
+      byLag: crossingByLag,
     },
+
     dipAfterFreshCrossing: {
-      WEEKLY: dipAfterMetrics.WEEKLY, // DIP entries after fresh WEEKLY flip
-      DAILY: dipAfterMetrics.DAILY, // DIP entries after fresh DAILY flip
+      WEEKLY: dipAfterMetrics.WEEKLY,
+      DAILY: dipAfterMetrics.DAILY,
     },
+
     volatility: {
-      byAtrPctBucket: volatilityBuckets, // e.g. "<2%": { winRate, PF, ... }
+      byAtrPctBucket: volatilityBuckets,
     },
+
+    // 🔥 the important part:
+    profiles, // detailed per-profile object
+    profilesSummary, // flat per-profile stats for UI
+    bestProfiles, // you can keep using this or ignore it in UI
 
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
+  
 }
 
 
