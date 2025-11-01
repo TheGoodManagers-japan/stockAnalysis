@@ -1071,16 +1071,24 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // detect signal
-        const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
-        const sig = analyseCrossing(stock, hist, {
-          debug: true,
-          debugLevel: "verbose",
-          dataForGates: gatesData,
-        });
+        // ==== SIGNAL GENERATION (guarded by history length) ====
+        let sig = null;
+        let ST = null;
+        let LT = null;
+        let teleSig = null;
 
-        const teleSig = sig?.telemetry || {};
-        const { ST, LT } = getShortLongSentiment(stock, hist) || {};
+        if (hist.length >= 75) {
+          // only once we have enough candles (analyseCrossing needs ~75 bars)
+          const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
+          sig = analyseCrossing(stock, hist, {
+            debug: true,
+            debugLevel: "verbose",
+            dataForGates: gatesData,
+          });
+
+          teleSig = sig?.telemetry || {};
+          ({ ST, LT } = getShortLongSentiment(stock, hist) || {});
+        }
 
         // bookkeeping for raw signal counts
         if (sig?.buyNow) {
@@ -1101,7 +1109,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         if (!sig?.buyNow) {
           // record rejection reasons & simulate "what if we ignored the no?"
-          const reasonsArr = Array.isArray(teleSig.reasons)
+          const reasonsArr = Array.isArray(teleSig?.reasons)
             ? teleSig.reasons.slice(0, 2)
             : [sig?.reason || "unspecified"];
 
@@ -1142,7 +1150,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
 
           // simulate rejected trade (counterfactual)
-          if (SIM_REJECTED) {
+          if (SIM_REJECTED && sig) {
             const entry = today.close;
 
             // planned target/stop using floor stop
@@ -1238,7 +1246,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
           // estimated RR for telemetry
           let rRatio = Number(teleSig?.rr?.ratio);
-          if (!Number.isFinite(rRatio)) {
+          if (!Number.isFinite(rRatio) && sig) {
             const pxNow = today.close;
             const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
             const rawStop = pxNow * (1 - HARD_STOP_PCT);
