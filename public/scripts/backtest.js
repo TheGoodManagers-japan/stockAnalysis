@@ -1,20 +1,4 @@
-// /scripts/backtest.js — swing-period backtest (browser) — RAW LEVELS + REGIME
-// Next-bar-open entries, optional time-based exit,
-// optional ATR trailing stop (no lookahead),
-// sentiment gates, and Nikkei-based market regime tagging & metrics.
-//
-// Options you may pass to window.backtest(..., opts):
-//   - holdBars: 30
-//   - maxConcurrent: 0 (default = unlimited global positions)
-//   - simulateRejectedBuys: true
-//   - months/from/to/limit/warmupBars/cooldownDays/appendTickers/... (unchanged)
-//   - regimeTicker: "1321.T" (default Nikkei 225 ETF proxy)
-//   - allowedRegimes: ["UP","STRONG_UP"] to only trade in those regimes
-//
-// NOTE: We now run ONE unified profile (previously `target_only`):
-// - We enter with target + a hard max-loss floor (~15% below entry as safety).
-// - Profiles/best profile logic removed.
-// - Scoring logic removed.
+// /scripts/backtest.js — swing-period backtest (browser)
 
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
@@ -448,8 +432,8 @@ function sentiFinalize(agg) {
   };
 }
 
-/* ---------------------- REGIME HELPERS (Nikkei-based) ---------------------- */
-const DEFAULT_REGIME_TICKER = "1321.T"; // Nikkei 225 ETF
+/* ---------------------- REGIME HELPERS (topixi-based) ---------------------- */
+const DEFAULT_REGIME_TICKER = "1306.T"; // TOPIX ETF proxy
 
 function smaArr(arr, p) {
   if (arr.length < p) return Array(arr.length).fill(NaN);
@@ -620,7 +604,7 @@ function computeAnalytics(candles, idx, entry) {
 }
 
 /**
- * Compute regime labels for Nikkei proxy candles.
+ * Compute regime labels for Topix proxy candles.
  */
 function computeRegimeLabels(candles) {
   if (!Array.isArray(candles) || candles.length < 30) {
@@ -730,12 +714,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
-    : 0; // 0 = unlimited
+    : 0; // 0 = unlimited (kept for telemetry only, but now ignored for blocking)
 
   // volatility max gate
   const MAX_ATR_PCT = Number.isFinite(opts.maxAtrPct)
     ? opts.maxAtrPct
-    : Infinity;
+    : Infinity; // kept for telemetry, not used to block any entry anymore
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
   if (!tickers.length) tickers = allTickers.map((t) => t.code);
@@ -777,21 +761,22 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     Array.isArray(opts.allowedRegimes) && opts.allowedRegimes.length
       ? new Set(opts.allowedRegimes.map(String))
       : null;
+  // NOTE: allowedRegimes is NO LONGER ENFORCED for blocking. Only warmup can block live entries now.
 
-  // fetch Nikkei proxy safely
-  const nikkeiRef = await fetchHistory(REGIME_TICKER, FROM, TO);
-  if (!nikkeiRef || !nikkeiRef.length) {
+  // fetch topix proxy safely
+  const topixRef = await fetchHistory(REGIME_TICKER, FROM, TO);
+  if (!topixRef || !topixRef.length) {
     console.warn(
       `[BT] Regime fetch failed or empty for ${REGIME_TICKER} (${FROM}→${TO})`
     );
   }
   const regimeMap =
-    nikkeiRef && nikkeiRef.length
-      ? buildRegimeMap(nikkeiRef)
+    topixRef && topixRef.length
+      ? buildRegimeMap(topixRef)
       : Object.create(null);
   console.log(
     `[BT] Regime ready from ${REGIME_TICKER} with ${
-      nikkeiRef ? nikkeiRef.length : 0
+      topixRef ? topixRef.length : 0
     } bars`
   );
 
@@ -836,8 +821,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       priceActionGateFailed: 0,
       structureGateFailed: 0,
       stackedGateFailed: 0,
-      tooWildAtr: 0,
-      regimeFiltered: 0,
+      tooWildAtr: 0, // will still count but will NOT block
+      regimeFiltered: 0, // will still count but will NOT block
     },
 
     dip: {
@@ -886,6 +871,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const pct2 = (n) => Math.round(n * 100) / 100;
 
   // global position cap
+  // We keep this for telemetry but DO NOT use it to block anymore.
   let globalOpenCount = 0;
 
   for (let ti = 0; ti < codes.length; ti++) {
@@ -895,7 +881,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     try {
       // single-profile state
       let openPositions = [];
-      let cooldownUntil = -1;
+      let cooldownUntil = -1; // kept but no longer enforced for blocking
 
       const candles = await fetchHistory(code, FROM, TO);
       if (candles.length < WARMUP + 2) {
@@ -1079,7 +1065,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
 
               openPositions.splice(k, 1);
-              cooldownUntil = i + COOLDOWN;
+              cooldownUntil = i + COOLDOWN; // kept for telemetry but won't block new entries
               globalOpenCount = Math.max(0, globalOpenCount - 1);
             }
           }
@@ -1225,22 +1211,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         } else {
           // buyNow path
-          const atCapacity =
-            MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
 
-          const eligibleNow = i >= WARMUP && i > cooldownUntil && !atCapacity;
+          // Before change:
+          // - We used to enforce global cap, cooldown, regime gate, ATR %, etc.
+          // NOW the rule is:
+          //   If buyNow===true and we're past warmupBars, we ENTER.
+          //   Warmup is the ONLY blocker.
+          //
+          // We'll keep telemetry fields but we won't block for any other reason.
 
-          if (eligibleNow) {
-            signalsWhileFlat++;
-          } else {
-            if (COUNT_BLOCKED) {
-              if (atCapacity) blockedInTrade++;
-              if (i < WARMUP) blockedWarmup++;
-              if (i <= cooldownUntil) blockedCooldown++;
-            }
-          }
-
-          // rr telemetry
+          // telemetry.rr.accepted:
           let rRatio = Number(sig?.debug?.rr?.ratio);
           if (!Number.isFinite(rRatio)) {
             const pxNow = today.close;
@@ -1270,101 +1250,125 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             });
           }
 
-          if (eligibleNow) {
-            // regime gate
-            if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
-              telemetry.gates.regimeFiltered++;
-            } else {
-              // ENTRY next bar open (or same close fallback)
-              const hasNext = i + 1 < candles.length;
-              const entryBarIdx = hasNext ? i + 1 : i;
-              const entryBar = hasNext ? candles[i + 1] : today;
-              const entry = hasNext ? entryBar.open : today.close;
+          // NEW eligibleNow logic:
+          const eligibleNow = i >= WARMUP;
 
-              // compute planned stop/target
-              const planned = computePlannedLevels({
-                entry,
-                sig,
-              });
-              const stop = Number(planned.stop);
-              const target = Number(planned.target);
+          if (eligibleNow) {
+            signalsWhileFlat++;
+          } else {
+            if (COUNT_BLOCKED) {
+              if (i < WARMUP) blockedWarmup++;
+              // we DO NOT count inTrade/cooldown anymore as blockers,
+              // but we leave vars for backward compatibility.
+            }
+          }
+
+          if (eligibleNow) {
+            // ENTRY next bar open (or same close fallback)
+            const hasNext = i + 1 < candles.length;
+            const entryBarIdx = hasNext ? i + 1 : i;
+            const entryBar = hasNext ? candles[i + 1] : today;
+            const entry = hasNext ? entryBar.open : today.close;
+
+            // compute planned stop/target (15% floor stop)
+            const planned = computePlannedLevels({
+              entry,
+              sig,
+            });
+            const stop = Number(planned.stop);
+            const target = Number(planned.target);
+
+            if (
+              !Number.isFinite(stop) ||
+              !Number.isFinite(target) ||
+              stop >= entry
+            ) {
+              signalsInvalid++;
+            } else {
+              const qStop = toTick(stop, stock);
+              const qTarget = toTick(target, stock);
+
+              // cross meta
+              const cm = sig?.meta?.cross || {};
+              const selected =
+                cm?.selected ||
+                (cm?.weekly && cm?.daily
+                  ? "BOTH"
+                  : cm?.weekly
+                  ? "WEEKLY"
+                  : cm?.daily
+                  ? "DAILY"
+                  : null);
+              const lag =
+                selected === "WEEKLY" && cm.weekly
+                  ? cm.weekly.barsAgo
+                  : selected === "DAILY" && cm.daily
+                  ? cm.daily.barsAgo
+                  : selected === "BOTH"
+                  ? Math.min(
+                      cm.weekly ? cm.weekly.barsAgo : Infinity,
+                      cm.daily ? cm.daily.barsAgo : Infinity
+                    )
+                  : null;
+
+              const analytics = computeAnalytics(candles, entryBarIdx, entry);
+
+              // ATR / volatility info is still computed for analytics/telemetry only.
+              const entryATR =
+                (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[ // expensive but fine
+                  entryBarIdx
+                ] || 0;
+              const atrPctNow =
+                analytics.atrPct ??
+                (entryATR && entry ? (entryATR / entry) * 100 : 0);
+
+              const tooWild =
+                Number.isFinite(atrPctNow) && atrPctNow > MAX_ATR_PCT;
+              if (tooWild) {
+                telemetry.gates.tooWildAtr++;
+              }
+
+              // We USED TO block if:
+              // - regime not allowed
+              // - too wild ATR
+              // - cooldown
+              // - max concurrent
+              // NOW we DO NOT block. We ALWAYS open if warmup passed and stop/target valid.
 
               if (
-                !Number.isFinite(stop) ||
-                !Number.isFinite(target) ||
-                stop >= entry
+                allowedRegimes &&
+                !allowedRegimes.has(dayRegime) &&
+                COUNT_BLOCKED
               ) {
-                signalsInvalid++;
-              } else {
-                const qStop = toTick(stop, stock);
-                const qTarget = toTick(target, stock);
-
-                // cross meta
-                const cm = sig?.meta?.cross || {};
-                const selected =
-                  cm?.selected ||
-                  (cm?.weekly && cm?.daily
-                    ? "BOTH"
-                    : cm?.weekly
-                    ? "WEEKLY"
-                    : cm?.daily
-                    ? "DAILY"
-                    : null);
-                const lag =
-                  selected === "WEEKLY" && cm.weekly
-                    ? cm.weekly.barsAgo
-                    : selected === "DAILY" && cm.daily
-                    ? cm.daily.barsAgo
-                    : selected === "BOTH"
-                    ? Math.min(
-                        cm.weekly ? cm.weekly.barsAgo : Infinity,
-                        cm.daily ? cm.daily.barsAgo : Infinity
-                      )
-                    : null;
-
-                const analytics = computeAnalytics(candles, entryBarIdx, entry);
-
-                const entryATR =
-                  (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[
-                    entryBarIdx
-                  ] || 0;
-                const atrPctNow =
-                  analytics.atrPct ??
-                  (entryATR && entry ? (entryATR / entry) * 100 : 0);
-
-                const tooWild =
-                  Number.isFinite(atrPctNow) && atrPctNow > MAX_ATR_PCT;
-                if (tooWild) {
-                  telemetry.gates.tooWildAtr++;
-                } else {
-                  // open position
-                  openPositions.push({
-                    entryIdx: entryBarIdx,
-                    entry,
-                    stop: qStop,
-                    initialStop: qStop,
-                    target: qTarget,
-
-                    maxLossFloor: qStop, // our 15% safety
-
-                    ST,
-                    LT,
-                    regime: dayRegime,
-                    kind:
-                      String(sig?.debug?.chosen || sig?.reason || "")
-                        .split(":")[0]
-                        .trim() || "UNKNOWN",
-                    crossType: selected,
-                    crossLag: Number.isFinite(lag) ? lag : null,
-
-                    analytics,
-                    sector: tickerInfoMap[code]?.sector || null,
-                  });
-
-                  globalOpenCount++;
-                  signalsExecuted++;
-                }
+                telemetry.gates.regimeFiltered++;
+                // NOTE: no block anyway.
               }
+
+              openPositions.push({
+                entryIdx: entryBarIdx,
+                entry,
+                stop: qStop,
+                initialStop: qStop,
+                target: qTarget,
+
+                maxLossFloor: qStop, // 15% safety
+
+                ST,
+                LT,
+                regime: dayRegime,
+                kind:
+                  String(sig?.debug?.chosen || sig?.reason || "")
+                    .split(":")[0]
+                    .trim() || "UNKNOWN",
+                crossType: selected,
+                crossLag: Number.isFinite(lag) ? lag : null,
+
+                analytics,
+                sector: tickerInfoMap[code]?.sector || null,
+              });
+
+              globalOpenCount++; // still track for telemetry
+              signalsExecuted++;
             }
           }
         }
@@ -1729,7 +1733,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     tradesPerDay: tradesPerDay,
     tradingDays: days,
 
-    skippedTickers, // <--- NEW: tickers we couldn't process
+    skippedTickers, // <--- tickers we couldn't process
 
     params: {
       holdBars: HOLD_BARS,
@@ -1746,7 +1750,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       breakevenR: opts.breakevenR ?? 0.8,
 
-      maxConcurrent: MAX_CONCURRENT,
+      maxConcurrent: MAX_CONCURRENT, // kept for telemetry only
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
     },
