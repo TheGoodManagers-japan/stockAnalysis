@@ -604,7 +604,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   let ratio = reward / risk;
 
   // 4) RR floors (use DIP-specific if applicable)
-  // 4) RR floors (use DIP-specific if applicable)
   let need = cfg.minRRbase ?? 1.5;
   if (ctx?.kind === "DIP" && Number.isFinite(cfg.dipMinRR)) {
     need = Math.max(need, cfg.dipMinRR);
@@ -1392,14 +1391,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     );
     return { label, rr };
   };
-  
 
   // Fresh WEEKLY
   if (crossW.trigger && structureGateOk) {
     const p = planCross("WEEKLY");
 
     if (p.rr.acceptable) {
-      // NEW: guard veto for crosses too
       const gv = guardVeto(
         stock,
         dataAll,
@@ -1407,9 +1404,17 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         p.rr,
         msFull,
         cfg,
-        undefined, // nearestRes not easily known here, ok to pass undefined
-        "FIRST_WEEKLY" // <--- PATCH
+        undefined, // we don't have a single "nearestRes" level handy here
+        "FIRST_WEEKLY"
       );
+
+      // NEW: record guard result in telemetry
+      tele.guard = {
+        checked: true,
+        veto: gv.veto,
+        reason: gv.reason,
+        details: gv.details,
+      };
 
       if (!gv.veto) {
         candidates.push({
@@ -1433,7 +1438,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       });
     }
   }
-  
 
   // Fresh DAILY
   if (crossD.trigger && structureGateOk) {
@@ -1448,8 +1452,16 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         msFull,
         cfg,
         undefined,
-        "FIRST_DAILY" // <--- PATCH
+        "FIRST_DAILY"
       );
+
+      // NEW: record guard result in telemetry
+      tele.guard = {
+        checked: true,
+        veto: gv.veto,
+        reason: gv.reason,
+        details: gv.details,
+      };
 
       if (!gv.veto) {
         candidates.push({
@@ -1473,7 +1485,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       });
     }
   }
-  
 
   /* ---------------- DIP lane (SECOND-CHANCE ENTRY ONLY, matched by timeframe) ---------------- */
   /*
@@ -1648,6 +1659,15 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         activeDip.nearestRes,
         "DIP"
       );
+
+      // NEW: record guard result in telemetry
+      tele.guard = {
+        checked: true,
+        veto: gv.veto,
+        reason: gv.reason,
+        details: gv.details,
+      };
+
       if (!gv.veto) {
         candidates.push({
           kind: dipLane === "WEEKLY" ? "DIP AFTER WEEKLY" : "DIP AFTER DAILY",
@@ -1668,6 +1688,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         { stop: rrD.stop, target: rrD.target }
       );
     }
+    
   } else if (activeDip?.trigger && !dipGatePass) {
     // Trend/MA reclaim gate failed
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
