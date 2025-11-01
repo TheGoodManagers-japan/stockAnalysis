@@ -19,7 +19,7 @@
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import {
   enrichForTechnicalScore,
-  getComprehensiveMarketSentiment,
+  getSentimentCombinationRank,
 } from "./main.js";
 import { allTickers } from "./tickers.js";
 
@@ -1078,7 +1078,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           dataForGates: gatesData,
         });
 
-        const senti = getComprehensiveMarketSentiment(stock, hist);
+        const senti = getSentimentCombinationRank(stock, hist);
         const ST = senti?.shortTerm?.score ?? 4;
         const LT = senti?.longTerm?.score ?? 4;
 
