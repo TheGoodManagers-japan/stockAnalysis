@@ -1676,6 +1676,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     )) {
       const lag = +lagStr;
       out[lag] = computeMetrics(buckets[lagStr]);
+      // lag -> {trades, winRate, ...}
     }
     return out;
   }
@@ -1778,6 +1779,117 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         : null,
   };
 
+  /* ---------------- BUCKET CLASSIFICATION (S, A, B, C) ----------------
+     Heuristic mapping of each trade to a tier bucket:
+
+     S Tier:
+       - S1: DOWN regime panic reversal confirmed
+             => regime === "DOWN", strategy is DIP-like, and dipAfterFreshCross is true
+       - S2: STRONG_UP pullback reload in good sectors (Industrials/Utilities/Energy),
+             DIP-like, cross lag 1-3 bars, not chasing.
+             => regime === "STRONG_UP", DIP-like, good sector, lag between 1 and 3
+
+     A Tier:
+       - Strong but not god mode:
+         DIP-like in STRONG_UP or RANGE (even if not ideal sector / lag)
+
+     B Tier:
+       - Continuation structures:
+         Non-DIP entries that come from WEEKLY/DAILY/BOTH crossType
+         (trend-follow / confirmation trades)
+
+     C Tier:
+       - Allowed but meh / speculative:
+         High ATR (>3%) OR weak sector (Healthcare, Basic Materials, Consumer Defensive)
+         These are still trades we technically take, but lower priority.
+
+     If nothing matches, "UNCLASSIFIED".
+  --------------------------------------------------------------------- */
+
+  function classifyBucket(trade) {
+    const sector = trade.sector || "";
+    const atrPct = trade.analytics?.atrPct;
+    const isDip = /DIP/i.test(trade.strategy || "");
+    const isFreshDip = !!trade.dipAfterFreshCross;
+    const lag = Number.isFinite(trade.crossLag) ? trade.crossLag : Infinity;
+    const crossLike =
+      trade.crossType === "WEEKLY" ||
+      trade.crossType === "DAILY" ||
+      trade.crossType === "BOTH";
+
+    const goodSectorRegex = /(Industrials|Utilities|Energy)/i;
+    const weakSectorRegex =
+      /(Healthcare|Health Care|Basic Materials|Consumer Defensive)/i;
+
+    const inGoodSector = goodSectorRegex.test(sector);
+    const inWeakSector = weakSectorRegex.test(sector);
+
+    // --- S1: DOWN panic reversal after fresh cross
+    if (trade.regime === "DOWN" && isDip && isFreshDip) {
+      return "S";
+    }
+
+    // --- S2: STRONG_UP controlled reload in good sector, 1-3 bar lag
+    if (
+      trade.regime === "STRONG_UP" &&
+      isDip &&
+      inGoodSector &&
+      lag >= 1 &&
+      lag <= 3
+    ) {
+      return "S";
+    }
+
+    // --- A Tier:
+    // DIP-style entries in STRONG_UP or RANGE (decent but not perfect sector/lag)
+    if (isDip && (trade.regime === "STRONG_UP" || trade.regime === "RANGE")) {
+      return "A";
+    }
+
+    // --- B Tier:
+    // Non-DIP, continuation / confirmation style (weekly/daily/both cross)
+    if (!isDip && crossLike) {
+      return "B";
+    }
+
+    // --- C Tier:
+    // High ATR (>3%) OR weak sectors
+    if ((Number.isFinite(atrPct) && atrPct > 3) || inWeakSector) {
+      return "C";
+    }
+
+    return "UNCLASSIFIED";
+  }
+
+  // bucket all trades
+  const bucketLists = {
+    S: [],
+    A: [],
+    B: [],
+    C: [],
+    UNCLASSIFIED: [],
+  };
+
+  for (const t of all) {
+    const b = classifyBucket(t);
+    if (!bucketLists[b]) bucketLists[b] = [];
+    bucketLists[b].push(t);
+  }
+
+  // build bucket metrics + %share
+  const totalAllTrades = all.length || 1;
+  const bucketMetrics = {};
+  for (const bName of Object.keys(bucketLists)) {
+    const list = bucketLists[bName];
+    const mets = computeMetrics(list);
+    const sharePct = +((list.length / totalAllTrades) * 100).toFixed(2);
+    bucketMetrics[bName] = {
+      metrics: mets,
+      sharePct,
+    };
+  }
+
+  // ---------------- return payload ----------------
   return {
     from: FROM,
     to: TO,
@@ -1836,6 +1948,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       dip: dipMetrics,
       ...strategyBreakdown,
     },
+
+    // NEW SECTION: performance by tier bucket
+    buckets: bucketMetrics,
 
     telemetry,
     parallel,
