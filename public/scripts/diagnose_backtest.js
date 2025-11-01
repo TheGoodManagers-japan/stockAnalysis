@@ -13,6 +13,7 @@
  *    - performance / flow / regime
  *    - bestSetup (playbook slice with best PF)
  *    - lossAnalysis / lossReasons
+ *    - stopRisk (NEW: stop tightness guidance)
  *    - missedOpportunities (what we blocked that would've worked)
  *    - tickers.focus & tickers.avoid
  *    - bucket tiers (sector, liquidity, px extension, etc.)
@@ -248,6 +249,104 @@ function bucketPrice(entryPx) {
   return "px:3k+";
 }
 
+/* -------------------- NEW HELPERS FOR STOP TIGHTNESS -------------------- */
+
+// Bucket loss magnitude so we can see how "deep" losers go
+function bucketLossSize(pct) {
+  // pct is negative or zero for losers
+  if (!Number.isFinite(pct)) return "n/a";
+  if (pct > -5) return "0% to -5%";
+  if (pct > -8) return "-5% to -8%";
+  if (pct > -10) return "-8% to -10%";
+  if (pct > -12) return "-10% to -12%";
+  if (pct > -15) return "-12% to -15%";
+  return "<= -15%";
+}
+
+// Analyze how painful STOP exits are under the current ~15% floor
+function analyzeStopSeverity(losersArr) {
+  const out = {
+    allLosingTrades: losersArr.length,
+    stopLosses: 0,
+    timeLosses: 0,
+    endLosses: 0,
+    bucketsAll: {}, // distribution of all loss % magnitudes
+    bucketsStopOnly: {}, // distribution just for STOP exits
+    tail: {
+      p90LossPct: null,
+      p95LossPct: null,
+      worstLossPct: null,
+    },
+    stopProfile: {
+      shallowStopsUnder10pct: 0,
+      deepStopsOver10pct: 0,
+      shallowSharePct: 0,
+      deepSharePct: 0,
+    },
+  };
+
+  const lossPcts = [];
+
+  for (const t of losersArr) {
+    const lp = +t.returnPct || 0; // negative
+    lossPcts.push(lp);
+
+    // classify loss exits
+    if (t.exitType === "STOP") out.stopLosses++;
+    else if (t.exitType === "TIME") out.timeLosses++;
+    else if (t.exitType === "END") out.endLosses++;
+
+    // bucket all losers
+    const bAll = bucketLossSize(lp);
+    out.bucketsAll[bAll] = (out.bucketsAll[bAll] || 0) + 1;
+
+    // bucket stop-only losers
+    if (t.exitType === "STOP") {
+      const bStop = bucketLossSize(lp);
+      out.bucketsStopOnly[bStop] = (out.bucketsStopOnly[bStop] || 0) + 1;
+    }
+  }
+
+  // tail stats for total losses
+  const sorted = lossPcts.filter(Number.isFinite).sort((a, b) => a - b); // ascending = more negative first
+  function pctileLocal(p) {
+    if (!sorted.length) return null;
+    const idx = (sorted.length - 1) * p;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    const w = idx - lo;
+    return sorted[lo] * (1 - w) + sorted[hi] * w;
+  }
+
+  out.tail.p90LossPct = r2(pctileLocal(0.1)); // "typical bad"
+  out.tail.p95LossPct = r2(pctileLocal(0.05)); // "disaster zone"
+  out.tail.worstLossPct = r2(sorted[0] || 0); // most negative
+
+  // shallow vs deep stop-loss characterization
+  let shallowStopCount = 0;
+  let deepStopCount = 0;
+  for (const t of losersArr) {
+    if (t.exitType !== "STOP") continue;
+    const lp = +t.returnPct || 0;
+    if (lp > -10) shallowStopCount++;
+    else deepStopCount++;
+  }
+
+  out.stopProfile = {
+    shallowStopsUnder10pct: shallowStopCount,
+    deepStopsOver10pct: deepStopCount,
+    shallowSharePct: out.stopLosses
+      ? r2((100 * shallowStopCount) / out.stopLosses)
+      : 0,
+    deepSharePct: out.stopLosses
+      ? r2((100 * deepStopCount) / out.stopLosses)
+      : 0,
+  };
+
+  return out;
+}
+
 /* -------------------- LOAD & PREP DATA -------------------- */
 
 const raw = JSON.parse(fs.readFileSync(inputPath, "utf8"));
@@ -328,7 +427,7 @@ const hasScore = withAnalytics.some((t) => Number.isFinite(t.score));
 const scoreInfo = hasScore ? metricsByScore(withAnalytics) : { scored: [] };
 const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
 
-/* -------------------- PLAYBOOK SLICES (updated: no score dependency) -------------------- */
+/* -------------------- PLAYBOOK SLICES (no score dependency) -------------------- */
 
 /**
  * We define two slices that match your live strategy logic:
@@ -343,7 +442,6 @@ const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
  *    - we saw a bullish gap up (>0%)
  *    - but price is still close to MA25 (≤4% above), i.e. controlled bounce not full chase
  */
-
 function slice_DOWN_regime_ST_panic_weekly_flip(t) {
   return (
     t.regime === "DOWN" &&
@@ -499,6 +597,9 @@ const lossReasons = {
   badRegime: losers.filter(isBadRegime).length,
   weakPullback: losers.filter(weakPullback).length,
 };
+
+// NEW: derive stop tightness insight from losers
+const stopTightnessInsight = analyzeStopSeverity(losers);
 
 /* -------------------- PER-TICKER COMBOS / bestSetups -------------------- */
 
@@ -972,7 +1073,6 @@ if (raw.singleProfile) {
  * - targetOnlyAll = all trades
  * - lossTail & catastrophicStopSuggestion come from raw.singleProfile
  */
-
 const targetOnlyAll = withAnalytics.slice(); // all trades in new world
 
 const targetAllStats = summarizeSubset(targetOnlyAll);
@@ -1054,6 +1154,27 @@ const exportObj = {
   // Why we lose money (patterns among actual losers we entered)
   lossAnalysis: losingPatterns,
   lossReasons,
+
+  // 🔴 NEW: stop tightness insight
+  stopRisk: {
+    summary: {
+      totalLosingTrades: stopTightnessInsight.allLosingTrades,
+      stopLosses: stopTightnessInsight.stopLosses,
+      timeLosses: stopTightnessInsight.timeLosses,
+      endLosses: stopTightnessInsight.endLosses,
+    },
+    distributionAllLosses: stopTightnessInsight.bucketsAll,
+    distributionStopLossesOnly: stopTightnessInsight.bucketsStopOnly,
+
+    tailLossPct: stopTightnessInsight.tail, // { p90LossPct, p95LossPct, worstLossPct }
+
+    stopProfile: stopTightnessInsight.stopProfile,
+    guidance:
+      "If most STOP losses sit in '-8% to -10%' instead of '-12% to -15%', you can likely tighten max stop below 15%. " +
+      "If shallowStopsUnder10pct is high and shallowSharePct is high, a ~10% kill-stop will behave almost the same as 15%, " +
+      "just earlier. If deepStopsOver10pct dominates and p95LossPct is very negative, cutting earlier will materially change behavior; " +
+      "you may need to filter those setups/tickers instead of only tightening.",
+  },
 
   missedOpportunities: missedOpportunities,
 

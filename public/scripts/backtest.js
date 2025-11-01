@@ -714,12 +714,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
-    : 0; // 0 = unlimited (kept for telemetry only, but now ignored for blocking)
+    : 0; // telemetry only
 
-  // volatility max gate
+  // volatility cap (telemetry only)
   const MAX_ATR_PCT = Number.isFinite(opts.maxAtrPct)
     ? opts.maxAtrPct
-    : Infinity; // kept for telemetry, not used to block any entry anymore
+    : Infinity;
 
   const append = Array.isArray(opts.appendTickers) ? opts.appendTickers : [];
   if (!tickers.length) tickers = allTickers.map((t) => t.code);
@@ -739,8 +739,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     tickerInfoMap[t.code.toUpperCase()] = t;
   }
 
-  // ---- SINGLE PROFILE LOGIC ----
-  // Hard stop floor: 15% below entry
+  // ---- PROFILE LOGIC ----
+  // hard stop floor: 15% below entry
   const HARD_STOP_PCT = 0.15;
   function computePlannedLevels({ entry, sig }) {
     const tgt = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
@@ -761,9 +761,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     Array.isArray(opts.allowedRegimes) && opts.allowedRegimes.length
       ? new Set(opts.allowedRegimes.map(String))
       : null;
-  // NOTE: allowedRegimes is NO LONGER ENFORCED for blocking. Only warmup can block live entries now.
+  // allowedRegimes is NOT used to block, just logged
 
-  // fetch topix proxy safely
   const topixRef = await fetchHistory(REGIME_TICKER, FROM, TO);
   if (!topixRef || !topixRef.length) {
     console.warn(
@@ -788,7 +787,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     DOWN: [],
   };
 
-  // Aggregation for DIP after fresh crosses
+  // Aggregation for "DIP AFTER WEEKLY"/"DIP AFTER DAILY" following fresh cross
   const dipAfterAgg = {
     WEEKLY: [],
     DAILY: [],
@@ -804,7 +803,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   let signalsAfterWarmup = 0;
   let signalsWhileFlat = 0;
   let signalsInvalid = 0;
-  let signalsRiskBad = 0; // present for debug counters
+  let signalsRiskBad = 0;
   let signalsExecuted = 0;
   const signalsByDay = new Map(); // ISO date -> count of buyNow signals
 
@@ -818,11 +817,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0, RANGE: 0 },
 
     gates: {
+      // these are legacy counters; keep shape
       priceActionGateFailed: 0,
       structureGateFailed: 0,
       stackedGateFailed: 0,
-      tooWildAtr: 0, // will still count but will NOT block
-      regimeFiltered: 0, // will still count but will NOT block
+      tooWildAtr: 0, // not blocking
+      regimeFiltered: 0, // not blocking
     },
 
     dip: {
@@ -870,8 +870,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const pct2 = (n) => Math.round(n * 100) / 100;
 
-  // global position cap
-  // We keep this for telemetry but DO NOT use it to block anymore.
+  // position cap telemetry
   let globalOpenCount = 0;
 
   for (let ti = 0; ti < codes.length; ti++) {
@@ -879,9 +878,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
 
     try {
-      // single-profile state
+      // per-stock state
       let openPositions = [];
-      let cooldownUntil = -1; // kept but no longer enforced for blocking
+      let cooldownUntil = -1; // tracked, but no longer enforced
 
       const candles = await fetchHistory(code, FROM, TO);
       if (candles.length < WARMUP + 2) {
@@ -925,7 +924,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // manage existing open position(s)
+        // manage open positions
         if (openPositions.length) {
           for (let k = openPositions.length - 1; k >= 0; k--) {
             const st = openPositions[k];
@@ -940,7 +939,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   ? today.open
                   : Math.min(st.stop, today.high);
 
-              // enforce 15% max-loss floor safety
+              // enforce 15% floor
               if (Number.isFinite(st.maxLossFloor)) {
                 stopFill = Math.max(stopFill, st.maxLossFloor);
               }
@@ -1019,6 +1018,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               trades.push(trade);
               globalTrades.push(trade);
 
+              // sentiment aggregation
               const kKey = sentiKey(st.ST, st.LT);
               if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
               sentiUpdate(sentiment.actual[kKey], {
@@ -1065,13 +1065,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
 
               openPositions.splice(k, 1);
-              cooldownUntil = i + COOLDOWN; // kept for telemetry but won't block new entries
+              cooldownUntil = i + COOLDOWN; // telemetry only
               globalOpenCount = Math.max(0, globalOpenCount - 1);
             }
           }
         }
 
-        // detect signals
+        // detect signal
         const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
         const sig = analyseCrossing(stock, hist, {
           debug: true,
@@ -1079,8 +1079,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           dataForGates: gatesData,
         });
 
+        const teleSig = sig?.telemetry || {};
         const { ST, LT } = getShortLongSentiment(stock, hist) || {};
 
+        // bookkeeping for raw signal counts
         if (sig?.buyNow) {
           signalsTotal++;
           if (i >= WARMUP) signalsAfterWarmup++;
@@ -1091,49 +1093,60 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           );
         }
 
-        const trend = sig?.debug?.ms?.trend;
-        if (trend && telemetry.trends.hasOwnProperty(trend))
-          telemetry.trends[trend]++;
+        // trend telemetry from new output
+        const trendNow = teleSig?.context?.trend;
+        if (trendNow && telemetry.trends.hasOwnProperty(trendNow)) {
+          telemetry.trends[trendNow]++;
+        }
 
         if (!sig?.buyNow) {
-          const dbg = sig?.debug || {};
-          if (dbg && dbg.priceActionGate === false) {
-            telemetry.gates.priceActionGateFailed++;
-          }
-          if (Array.isArray(dbg.reasons)) {
-            for (const r of dbg.reasons) {
-              if (typeof r === "string" && r.startsWith("DIP not ready:")) {
-                const why = afterColon(r, "DIP not ready:").replace(
-                  /^[:\s]+/,
-                  ""
-                );
-                inc(telemetry.dip.notReadyReasons, why || "unspecified");
-              }
-              if (r === "Structure gate: trend not up or price < MA5.") {
-                telemetry.gates.structureGateFailed++;
-              }
-              if (
-                r === "DIP blocked (Perfect gate): MAs not stacked bullishly."
-              ) {
-                telemetry.gates.stackedGateFailed++;
-              }
-              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
-                const reason = extractGuardReason(r);
-                inc(telemetry.dip.guardVetoReasons, reason || "guard");
-              }
-              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
-                const m = r.match(/need\s+([0-9.]+)/i);
-                const need = m ? parseFloat(m[1]) : NaN;
-                inc(telemetry.rr.rejected, bucketize(need));
-              }
+          // record rejection reasons & simulate "what if we ignored the no?"
+          const reasonsArr = Array.isArray(teleSig.reasons)
+            ? teleSig.reasons.slice(0, 2)
+            : [sig?.reason || "unspecified"];
+
+          // structure gate fail?
+          if (teleSig?.gates && teleSig.gates.structure) {
+            if (!teleSig.gates.structure.pass) {
+              telemetry.gates.structureGateFailed++;
             }
           }
 
+          // gather dip/guard/RR stats from reasons text
+          for (const r of reasonsArr) {
+            if (typeof r !== "string") continue;
+
+            // dip not ready / waitReason
+            if (r.startsWith("DIP not ready:")) {
+              const why = afterColon(r, "DIP not ready:").replace(
+                /^[:\s]+/,
+                ""
+              );
+              inc(telemetry.dip.notReadyReasons, why || "unspecified");
+            }
+
+            if (r === "Structure gate: trend not up or price < MA5.") {
+              telemetry.gates.structureGateFailed++;
+            }
+
+            if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
+              const gr = extractGuardReason(r);
+              inc(telemetry.dip.guardVetoReasons, gr || "guard");
+            }
+
+            if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
+              const m = r.match(/need\s+([0-9.]+)/i);
+              const need = m ? parseFloat(m[1]) : NaN;
+              inc(telemetry.rr.rejected, bucketize(need));
+            }
+          }
+
+          // simulate rejected trade (counterfactual)
           if (SIM_REJECTED) {
             const entry = today.close;
-            const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
 
-            // hard 15% stop assumption
+            // planned target/stop using floor stop
+            const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
             const simStop = entry * (1 - HARD_STOP_PCT);
 
             if (
@@ -1149,12 +1162,15 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 simTarget
               );
 
-              const k = sentiKey(ST, LT);
-              if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
+              const kKey = sentiKey(ST, LT);
+              if (!sentiment.rejected[kKey])
+                sentiment.rejected[kKey] = sentiInit();
               if (outcome.result !== "OPEN") {
-                sentiUpdate(sentiment.rejected[k], outcome);
+                sentiUpdate(sentiment.rejected[kKey], outcome);
                 parallel.rejectedBuys.totalSimulated++;
-                if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+                if (outcome.result === "WIN") {
+                  parallel.rejectedBuys.winners++;
+                }
               }
 
               if (Number.isFinite(LT)) {
@@ -1175,12 +1191,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 }
               }
 
-              const reasonsRaw = Array.isArray(sig?.debug?.reasons)
-                ? sig.debug.reasons.slice(0, 2)
-                : [sig?.reason || "unspecified"];
-
-              for (const rr of reasonsRaw) {
-                const norm = normalizeRejectedReason(rr);
+              for (const rawReason of reasonsArr) {
+                const norm = normalizeRejectedReason(rawReason);
                 if (!parallel.rejectedBuys.byReasonRaw[norm]) {
                   parallel.rejectedBuys.byReasonRaw[norm] = cfInitAgg();
                 }
@@ -1209,19 +1221,23 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               }
             }
           }
+
+          // also stash examples of "rejected" for debugging
+          if (
+            telemetry.examples.rejected.length < EXAMPLE_MAX &&
+            reasonsArr.length
+          ) {
+            telemetry.examples.rejected.push({
+              ticker: code,
+              date: toISO(today.date),
+              reasons: reasonsArr,
+            });
+          }
         } else {
-          // buyNow path
+          // buyNow === true
 
-          // Before change:
-          // - We used to enforce global cap, cooldown, regime gate, ATR %, etc.
-          // NOW the rule is:
-          //   If buyNow===true and we're past warmupBars, we ENTER.
-          //   Warmup is the ONLY blocker.
-          //
-          // We'll keep telemetry fields but we won't block for any other reason.
-
-          // telemetry.rr.accepted:
-          let rRatio = Number(sig?.debug?.rr?.ratio);
+          // estimated RR for telemetry
+          let rRatio = Number(teleSig?.rr?.ratio);
           if (!Number.isFinite(rRatio)) {
             const pxNow = today.close;
             const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
@@ -1250,7 +1266,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             });
           }
 
-          // NEW eligibleNow logic:
+          // warmup is the only blocker now
           const eligibleNow = i >= WARMUP;
 
           if (eligibleNow) {
@@ -1258,19 +1274,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           } else {
             if (COUNT_BLOCKED) {
               if (i < WARMUP) blockedWarmup++;
-              // we DO NOT count inTrade/cooldown anymore as blockers,
-              // but we leave vars for backward compatibility.
             }
           }
 
           if (eligibleNow) {
-            // ENTRY next bar open (or same close fallback)
+            // Enter next bar open (or same bar if no next bar)
             const hasNext = i + 1 < candles.length;
             const entryBarIdx = hasNext ? i + 1 : i;
             const entryBar = hasNext ? candles[i + 1] : today;
             const entry = hasNext ? entryBar.open : today.close;
 
-            // compute planned stop/target (15% floor stop)
+            // planned stop/target (15% floor stop)
             const planned = computePlannedLevels({
               entry,
               sig,
@@ -1288,34 +1302,61 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const qStop = toTick(stop, stock);
               const qTarget = toTick(target, stock);
 
-              // cross meta
+              // cross meta from new API
               const cm = sig?.meta?.cross || {};
-              const selected =
-                cm?.selected ||
-                (cm?.weekly && cm?.daily
-                  ? "BOTH"
-                  : cm?.weekly
-                  ? "WEEKLY"
-                  : cm?.daily
-                  ? "DAILY"
-                  : null);
-              const lag =
-                selected === "WEEKLY" && cm.weekly
-                  ? cm.weekly.barsAgo
-                  : selected === "DAILY" && cm.daily
-                  ? cm.daily.barsAgo
-                  : selected === "BOTH"
-                  ? Math.min(
-                      cm.weekly ? cm.weekly.barsAgo : Infinity,
-                      cm.daily ? cm.daily.barsAgo : Infinity
-                    )
-                  : null;
+              // selected could now be WEEKLY, DAILY, BOTH, DIP_WEEKLY, DIP_DAILY, or NONE
+              const selectedRaw = cm?.selected || null;
 
+              // pick crossType we store in trade:
+              // - WEEKLY / DAILY / BOTH => keep that
+              // - DIP_WEEKLY => treat as WEEKLY for attribution
+              // - DIP_DAILY  => treat as DAILY for attribution
+              // - NONE or anything else => "OTHER"
+              let crossTypeForTrade = null;
+              if (
+                selectedRaw === "WEEKLY" ||
+                selectedRaw === "DAILY" ||
+                selectedRaw === "BOTH"
+              ) {
+                crossTypeForTrade = selectedRaw;
+              } else if (selectedRaw === "DIP_WEEKLY") {
+                crossTypeForTrade = "WEEKLY";
+              } else if (selectedRaw === "DIP_DAILY") {
+                crossTypeForTrade = "DAILY";
+              } else {
+                crossTypeForTrade = "OTHER";
+              }
+
+              // lag:
+              // WEEKLY => weeksAgo
+              // DAILY => daysAgo
+              // BOTH  => min of both
+              // DIP_WEEKLY -> use weekly.weeksAgo
+              // DIP_DAILY -> use daily.daysAgo
+              // OTHER/NONE -> null
+              let lag = null;
+              if (selectedRaw === "WEEKLY" && cm.weekly) {
+                lag = cm.weekly.barsAgo ?? cm.weekly.weeksAgo ?? null;
+              } else if (selectedRaw === "DAILY" && cm.daily) {
+                lag = cm.daily.barsAgo ?? cm.daily.daysAgo ?? null;
+              } else if (selectedRaw === "BOTH") {
+                const wLag =
+                  cm.weekly?.barsAgo ?? cm.weekly?.weeksAgo ?? Infinity;
+                const dLag = cm.daily?.barsAgo ?? cm.daily?.daysAgo ?? Infinity;
+                const bestLag = Math.min(wLag, dLag);
+                lag = Number.isFinite(bestLag) ? bestLag : null;
+              } else if (selectedRaw === "DIP_WEEKLY" && cm.weekly) {
+                lag = cm.weekly.barsAgo ?? cm.weekly.weeksAgo ?? null;
+              } else if (selectedRaw === "DIP_DAILY" && cm.daily) {
+                lag = cm.daily.barsAgo ?? cm.daily.daysAgo ?? null;
+              }
+
+              // analytics snapshot
               const analytics = computeAnalytics(candles, entryBarIdx, entry);
 
-              // ATR / volatility info is still computed for analytics/telemetry only.
+              // ATR % telemetry only
               const entryATR =
-                (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[ // expensive but fine
+                (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[ // expensive but ok
                   entryBarIdx
                 ] || 0;
               const atrPctNow =
@@ -1328,20 +1369,24 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 telemetry.gates.tooWildAtr++;
               }
 
-              // We USED TO block if:
-              // - regime not allowed
-              // - too wild ATR
-              // - cooldown
-              // - max concurrent
-              // NOW we DO NOT block. We ALWAYS open if warmup passed and stop/target valid.
-
+              // regimeFiltered telemetry only
               if (
                 allowedRegimes &&
                 !allowedRegimes.has(dayRegime) &&
                 COUNT_BLOCKED
               ) {
                 telemetry.gates.regimeFiltered++;
-                // NOTE: no block anyway.
+              }
+
+              // build "kind" label for trade from sig.reason prefix
+              // e.g. "WEEKLY CROSS: 1.8:1 ..." -> "WEEKLY CROSS"
+              let kindLabel = "UNKNOWN";
+              if (typeof sig?.reason === "string" && sig.reason.length) {
+                const firstColon = sig.reason.indexOf(":");
+                kindLabel =
+                  firstColon === -1
+                    ? sig.reason.trim()
+                    : sig.reason.slice(0, firstColon).trim();
               }
 
               openPositions.push({
@@ -1351,30 +1396,27 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 initialStop: qStop,
                 target: qTarget,
 
-                maxLossFloor: qStop, // 15% safety
+                maxLossFloor: qStop, // 15% floor
 
                 ST,
                 LT,
                 regime: dayRegime,
-                kind:
-                  String(sig?.debug?.chosen || sig?.reason || "")
-                    .split(":")[0]
-                    .trim() || "UNKNOWN",
-                crossType: selected,
+                kind: kindLabel,
+                crossType: crossTypeForTrade,
                 crossLag: Number.isFinite(lag) ? lag : null,
 
                 analytics,
                 sector: tickerInfoMap[code]?.sector || null,
               });
 
-              globalOpenCount++; // still track for telemetry
+              globalOpenCount++;
               signalsExecuted++;
             }
           }
         }
       } // candle loop
 
-      // force close at end of data
+      // force close leftovers at the end
       if (openPositions.length) {
         const lastIdx = candles.length - 1;
         const lastBar = candles[lastIdx];
@@ -1448,7 +1490,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         openPositions = [];
       }
 
-      // per-ticker snapshot
+      // per-ticker summary
       const m = computeMetrics(trades);
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${
@@ -1473,7 +1515,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     }
   } // tickers loop
 
-  // ---- final metrics ----
+  // ---- final aggregation ----
   const all = byTicker.length
     ? byTicker.flatMap((t) => t.trades)
     : globalTrades;
@@ -1557,11 +1599,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const sentiActualST = finalizeSentiTable(sentiment.actualST);
   const sentiRejectedST = finalizeSentiTable(sentiment.rejectedST);
 
-  // single-profile metrics == just "all"
+  // "profile" == everything
   const thisProfileTrades = all;
   const thisProfileMetrics = computeMetrics(thisProfileTrades);
 
-  // Catastrophic kill-stop suggestion
+  // catastrophic stop suggestion
   let catastrophicStopSuggestion = null;
   if (
     thisProfileMetrics.lossTail &&
@@ -1575,7 +1617,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     };
   }
 
-  // strategy breakdown (DIP/SPC/OXR/...)
+  // strategy breakdown (WEEKLY CROSS, DAILY CROSS, DIP AFTER WEEKLY, etc.)
   const byKind = {};
   for (const t of all) {
     const k = t.strategy || "DIP";
@@ -1600,6 +1642,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // CROSSING by lag
   const crossLagBuckets = { WEEKLY: {}, DAILY: {} };
+
   for (const t of all) {
     const typ = t.crossType;
     if (typ === "WEEKLY" || typ === "DAILY") {
@@ -1608,11 +1651,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       crossLagBuckets[typ][lag].push(t);
     } else if (typ === "BOTH") {
       const lag = Number.isFinite(t.crossLag) ? t.crossLag : -1;
-      if (!crossLagBuckets[typ][lag]) crossLagBuckets[typ][lag] = [];
+
+      if (!crossLagBuckets.WEEKLY[lag]) crossLagBuckets.WEEKLY[lag] = [];
       if (!crossLagBuckets.DAILY[lag]) crossLagBuckets.DAILY[lag] = [];
-      crossLagBuckets[typ][lag].push(t);
+
+      crossLagBuckets.WEEKLY[lag].push(t);
       crossLagBuckets.DAILY[lag].push(t);
     }
+    // "OTHER" we don't bucket by lag
   }
 
   function toMetricsMap(buckets) {
@@ -1697,7 +1743,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const dipMetrics = strategyBreakdown.DIP || computeMetrics(all);
   const signalsDayCount = signalsByDay.size || days || 1;
+  void signalsDayCount; // (kept for any future per-day calc)
 
+  // spotlight best/worst ticker by PF
   const spotlightRankBase = byTicker.filter((r) => r.trades && r.trades.length);
   const ranked = [...spotlightRankBase].sort(
     (a, b) => b.metrics.profitFactor - a.metrics.profitFactor
@@ -1750,7 +1798,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       breakevenR: opts.breakevenR ?? 0.8,
 
-      maxConcurrent: MAX_CONCURRENT, // kept for telemetry only
+      maxConcurrent: MAX_CONCURRENT, // telemetry only
       regimeTicker: REGIME_TICKER,
       allowedRegimes: allowedRegimes ? Array.from(allowedRegimes) : [],
     },
@@ -1937,7 +1985,7 @@ function sum(arr) {
 
 /* --------------------------- expose for Bubble -------------------------- */
 window.backtest = async (tickersOrOpts, maybeOpts) => {
-  // No try/catch here on purpose: caller should see if runBacktest itself fails
+  // let it throw if runBacktest throws
   return Array.isArray(tickersOrOpts)
     ? await runBacktest(tickersOrOpts, { ...maybeOpts })
     : await runBacktest({ ...(tickersOrOpts || {}) });
