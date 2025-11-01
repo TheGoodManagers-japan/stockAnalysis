@@ -488,6 +488,7 @@ function weakPullback(t) {
 }
 
 const losers = withAnalytics.filter((t) => t.result === "LOSS");
+const losingPatterns = summarizeLosingPatterns(losers);
 const lossReasons = {
   extendedPx: losers.filter(isExtendedPx).length,
   earlyLag: losers.filter(isEarlyLag).length,
@@ -898,6 +899,122 @@ const atrTierStats = summarizeTierAverages(atrBuckets);
 const pxMA25TierStats = summarizeTierAverages(pxMA25Buckets);
 
 
+// -------- missedOpportunities: what we skipped but would've worked --------
+let missedOpportunities = null;
+if (raw?.parallel?.rejectedBuys) {
+  const rb = raw.parallel.rejectedBuys;
+
+  // High-level: how often the rejects would have printed
+  const headline = {
+    simulatedTotal: rb.summary?.total ?? 0,
+    simulatedWinners: rb.summary?.winners ?? 0,
+    simulatedWinRate: rb.summary?.winRate ?? 0, // %
+  };
+
+  // Which gate / veto reason is costing us the most upside
+  // Sort by "winners" desc to see biggest pain sources
+  const topReasons = [];
+  if (rb.byReason) {
+    Object.entries(rb.byReason).forEach(([reason, stats]) => {
+      topReasons.push({
+        reason, // e.g. "guard veto", "RR too low", "perfect-mode gate"
+        total: stats.total,
+        winners: stats.winners,
+        winRate: stats.winRate,
+        expR: stats.expR,
+        profitFactor: stats.profitFactor,
+      });
+    });
+
+    topReasons.sort((a, b) => {
+      // prioritize lots of winners, then PF
+      if (b.winners !== a.winners) return b.winners - a.winners;
+      return (b.profitFactor || 0) - (a.profitFactor || 0);
+    });
+  }
+
+  // sentiment combos of "rejected but would have worked"
+  // you collected that as sentiment.rejected[...] in backtest -> diagnose builds "sentiment" but
+  // we can summarize the best LT/ST combos for rejected
+  const bestRejectedCombos =
+    raw?.sentiment?.bestByWinRate?.rejected ||
+    (raw?.sentiment?.combos?.bestByWinRate?.rejected ?? []);
+
+  missedOpportunities = {
+    headline,
+    // gate/veto patterns that are giving up the most winners
+    painReasons: topReasons.slice(0, 5),
+    // market mood profiles we shouldn't be auto-blocking so hard
+    sentimentCombos: bestRejectedCombos.slice(0, 5),
+  };
+}
+
+
+function summarizeLosingPatterns(losersArr) {
+  const totalL = losersArr.length || 1;
+
+  // reuse the same tests diagnose already defined
+  function isExtendedPx(t) {
+    const a = t.analytics || {};
+    return Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
+  }
+  function isEarlyLag(t) {
+    return (
+      (t.crossType === "WEEKLY" ||
+        t.crossType === "DAILY" ||
+        t.crossType === "BOTH") &&
+      Number.isFinite(t.crossLag) &&
+      t.crossLag < 2
+    );
+  }
+  function isBadRegime(t) {
+    return t.regime === "STRONG_UP";
+  }
+  function weakPullback(t) {
+    return Number.isFinite(t.ST) && t.ST < 6;
+  }
+
+  const buckets = [
+    {
+      key: "chasingExtended",
+      desc: "Entry was >6% above MA25 (chasing stretched price / breakout FOMO).",
+      count: losersArr.filter(isExtendedPx).length,
+    },
+    {
+      key: "tooEarlyAfterFlip",
+      desc: "We bought <2 bars after a cross flip (jumped in before letting it settle).",
+      count: losersArr.filter(isEarlyLag).length,
+    },
+    {
+      key: "blowoffRegime",
+      desc: "We bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
+      count: losersArr.filter(isBadRegime).length,
+    },
+    {
+      key: "notRealPanic",
+      desc: "Short-term sentiment ST<6 (not an actual panic dip, just meh pullback).",
+      count: losersArr.filter(weakPullback).length,
+    },
+  ];
+
+  // Decorate with percentages and sort biggest offender first
+  const ranked = buckets
+    .map((b) => ({
+      key: b.key,
+      desc: b.desc,
+      count: b.count,
+      shareOfLossesPct: r2((b.count / totalL) * 100),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalLosingTrades: losersArr.length,
+    topLossPatterns: ranked.slice(0, 5),
+  };
+}
+
+
+
 
 // -------------------- FINAL EXPORT --------------------
 const exportObj = {
@@ -943,8 +1060,10 @@ const exportObj = {
   },
 
   // Why do we lose money (pattern of losers)
-  riskFlags: lossReasons, // { extendedPx, earlyLag, badRegime, weakPullback }
+  // Why we lose money (pattern of losers we actually entered)
+  lossAnalysis: losingPatterns,
 
+  missedOpportunities: missedOpportunities,
   // Market context
   regime: raw?.regime?.metrics || regimeMetrics || {},
   dipAfterFreshCrossing: raw?.dipAfterFreshCrossing || null,

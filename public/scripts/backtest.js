@@ -2253,6 +2253,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     );
   }
 
+  // --- summary stats for pretty console logs ---
+  const globalMetrics = computeMetrics(all);
+
+  const totalTrades = globalMetrics.trades;
+  const winRate = globalMetrics.winRate;
+  const avgReturnPct = globalMetrics.avgReturnPct;
+  const avgHoldingDays = globalMetrics.avgHoldingDays;
+
+  const hitTargetCount = globalMetrics.exits.target;
+  const hitStopCount = globalMetrics.exits.stop;
+  const timeExitCount = globalMetrics.exits.time;
+  // (we also have globalMetrics.exits.end if you want it)
+
+  const tradesPerDay = days ? totalTrades / days : 0;
+
   // logs
   console.log(
     `[BT] COMPLETE | trades=${totalTrades} | winRate=${winRate}% | avgReturn=${avgReturnPct}% | avgHold=${avgHoldingDays} bars | exits — target:${hitTargetCount} stop:${hitStopCount} time:${timeExitCount}`
@@ -2328,6 +2343,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   return {
     from: FROM,
     to: TO,
+
+    // 👇 add these 6 lines if you want Bubble to get the headline too
+    totalTrades: totalTrades,
+    winRate: winRate,
+    avgReturnPct: avgReturnPct,
+    avgHoldingDays: avgHoldingDays,
+    tradesPerDay: tradesPerDay,
+    tradingDays: days,
 
     params: {
       holdBars: HOLD_BARS,
@@ -2451,7 +2474,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
     ...(INCLUDE_BY_TICKER ? { byTicker } : {}),
   };
-  
 }
 
 
