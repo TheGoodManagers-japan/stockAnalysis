@@ -853,7 +853,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 30;
+  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 20;
   const COOLDOWN = 0;
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -1277,17 +1277,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const stopTouched = canStop && today.low <= st.stop;
 
             if (stopTouched) {
-              const stopFill =
+              let stopFill =
                 today.open < st.stop
                   ? today.open
                   : Math.min(st.stop, today.high);
-
+            
+              // 🔒 enforce max 15% drawdown for target_only
+              if (
+                st.profileId === "target_only" &&
+                Number.isFinite(st.maxLossFloor)
+              ) {
+                // Never allow reporting an exit worse than the 15% floor
+                stopFill = Math.max(stopFill, st.maxLossFloor);
+              }
+            
               const isProfit = stopFill >= st.entry;
               exit = {
                 type: "STOP",
                 price: stopFill,
                 result: isProfit ? "WIN" : "LOSS",
               };
+            
+            
             } else if (
               !st.skipTarget &&
               Number.isFinite(st.target) &&
@@ -1778,15 +1789,20 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 if (!openByProfile[p.id]) openByProfile[p.id] = [];
 
                 const isTargetOnly = p.id === "target_only";
-
                 openByProfile[p.id].push({
                   entryIdx: entryBarIdx,
                   entry,
+
+                  // who owns this position (we need this later to know if it's target_only)
+                  profileId: p.id,
 
                   // always set stop & stopInit for every profile now, including target_only
                   stop: qStop,
                   stopInit: qStop,
                   target: qTarget,
+
+                  // hard floor for max loss in target_only
+                  maxLossFloor: p.id === "target_only" ? qStop : null,
 
                   // ladder / trail fields
                   rung: p.id === "atr_trail" ? 0 : null,
@@ -1808,7 +1824,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   // skipTarget only for atr_trail (because it ladders instead of taking profit at the first target)
                   skipTarget: p.id === "atr_trail",
 
-                  // *** CHANGED: target_only now DOES have a stop, so noStop is always false
+                  // target_only now DOES have a stop, so noStop always false
                   noStop: false,
 
                   ignoreTimeExit: false,
@@ -1829,6 +1845,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   // NEW: store sector for later exit reporting
                   sector: tickerInfoMap[code]?.sector || null,
                 });
+                
 
                 globalOpenCount++;
                 signalsExecuted++;
@@ -1838,7 +1855,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         } // <-- end of if (!sig?.buyNow) { ... } else { ... }
       } // <-- end of per-candle loop: for (let i = 0; i < candles.length; i++)
 
-      // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
+
       // --- Force-close any remaining open positions at end-of-data (bookkeeping only)
       for (const p of activeProfiles) {
         const list = openByProfile[p.id] || [];
@@ -1846,70 +1863,73 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         const lastIdx = candles.length - 1;
         const lastBar = candles[lastIdx];
-        const lastClose = lastBar.close;
+        const rawLastClose = lastBar.close;
 
         for (const st of list) {
           const ageBars = lastIdx - st.entryIdx;
           const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
 
+          // Start with the raw final close
+          let realizedExitPx = rawLastClose;
+
+          // 🔒 enforce max 15% drawdown for target_only on forced exits too
+          if (
+            (st.profileId === "target_only" || p.id === "target_only") &&
+            Number.isFinite(st.maxLossFloor)
+          ) {
+            // Don't allow worse than maxLossFloor in the reported result
+            realizedExitPx = Math.max(realizedExitPx, st.maxLossFloor);
+          }
+
           let exitTypeFinal;
           let endResult;
 
           if (p.id === "atr_trail") {
-            // firstTarget = the original first target we stored on entry
             const firstTarget = Number(st.target);
-
-            // breakevenFloor = where we ratcheted the stop after promotion.
-            // if stop >= entry, that means we locked profit at/above breakeven+buffer.
             const breakevenFloor = Number.isFinite(st.stop)
               ? st.stop
               : st.entry;
 
-            if (Number.isFinite(firstTarget) && lastClose >= firstTarget) {
-              // finished above or equal to first target -> treat like TARGET
+            if (Number.isFinite(firstTarget) && realizedExitPx >= firstTarget) {
               exitTypeFinal = "TARGET";
               endResult = "WIN";
             } else if (
-              lastClose >= breakevenFloor &&
+              realizedExitPx >= breakevenFloor &&
               breakevenFloor >= st.entry
             ) {
-              // between locked-in breakeven+buffer and first target -> TIME (profit timeout)
               exitTypeFinal = "TIME";
               endResult = "WIN";
             } else {
-              // below breakeven lock or never promoted
               if (overMaxHold) {
                 exitTypeFinal = "TIME";
-                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+                endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
               } else {
                 exitTypeFinal = "END";
-                endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+                endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
               }
             }
           } else {
-            // non-trail profiles keep old logic
             if (overMaxHold) {
               exitTypeFinal = "TIME";
-              endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
             } else {
               exitTypeFinal = "END";
-              endResult = lastClose >= st.entry ? "WIN" : "LOSS";
+              endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
             }
           }
 
-          // holdingDays at exit for reporting
           const holdingBarsFinal =
             HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
 
-          // R math
           const baseRisk = Number.isFinite(st.stopInit)
             ? st.entry - st.stopInit
             : 0.01;
           const risk = Math.max(0.01, baseRisk);
 
-          const Rval = st.noStop ? null : r2((lastClose - st.entry) / risk);
+          const Rval = st.noStop
+            ? null
+            : r2((realizedExitPx - st.entry) / risk);
 
-          // DIP-after-fresh-cross flag
           const isDipAfterFreshCrossSignal =
             /DIP/i.test(st.kind || "") &&
             (st.crossType === "WEEKLY" ||
@@ -1925,14 +1945,14 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
             entryDate: toISO(candles[st.entryIdx].date),
             exitDate: toISO(lastBar.date),
-            returnPct: r2(((lastClose - st.entry) / st.entry) * 100),
+            returnPct: r2(((realizedExitPx - st.entry) / st.entry) * 100),
             result: endResult,
 
             holdingDays: holdingBarsFinal,
             exitType: exitTypeFinal,
 
             entry: r2(st.entry),
-            exit: r2(lastClose),
+            exit: r2(realizedExitPx),
             stop: st.stopInit,
             target: st.target,
             R: Rval,
@@ -1945,7 +1965,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             analytics: st.analytics || null,
             score: Number.isFinite(st.score) ? st.score : null,
 
-            // NEW for diagnose_backtest.js
             sector: tickerInfoMap[code]?.sector || st.sector || null,
 
             dipAfterFreshCross: isDipAfterFreshCrossSignal,
@@ -1959,6 +1978,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           trades.push(trade);
           globalTrades.push(trade);
         }
+        
 
         // these positions are now closed, so reduce the open count
         globalOpenCount = Math.max(0, globalOpenCount - list.length);
