@@ -604,6 +604,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   let ratio = reward / risk;
 
   // 4) RR floors (use DIP-specific if applicable)
+  // 4) RR floors (use DIP-specific if applicable)
   let need = cfg.minRRbase ?? 1.5;
   if (ctx?.kind === "DIP" && Number.isFinite(cfg.dipMinRR)) {
     need = Math.max(need, cfg.dipMinRR);
@@ -616,6 +617,17 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.0) need = Math.max(need - 0.1, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
+
+  // *** NEW: relax RR for first-chance weekly and daily crosses ***
+  // Rationale:
+  // - FIRST_WEEKLY = historically monster PF (~1.56) even for ones we skipped.
+  //   Let slightly weaker RR through.
+  // - FIRST_DAILY  = slightly above baseline PF (~1.32), allow mild leniency.
+  if (ctx?.flavor === "FIRST_WEEKLY") {
+    need = Math.max(need - 0.15, 1.25); // was maybe ~1.45+ → let ~1.3-1.35 through
+  } else if (ctx?.flavor === "FIRST_DAILY") {
+    need = Math.max(need - 0.05, 1.3); // tiny nudge, still keeps trash out
+  }
 
   // 5) SCOOT: bounded target lifts to nearby clustered resistances
   if (cfg.scootEnabled) {
@@ -653,16 +665,36 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 
   // 6) Acceptable / probation
   let acceptable = ratio >= need;
+
   const allowProb = !!cfg.allowProbation;
   const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
-  const probation =
+
+  // base probation
+  let probation =
     allowProb &&
     !acceptable &&
     ratio >= need - 0.02 &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < 58;
 
+  // *** NEW: slightly widen probation band for FIRST_WEEKLY and FIRST_DAILY ***
+  if (
+    !acceptable &&
+    allowProb &&
+    (ctx?.flavor === "FIRST_WEEKLY" || ctx?.flavor === "FIRST_DAILY")
+  ) {
+    const extraBand = ctx.flavor === "FIRST_WEEKLY" ? 0.07 : 0.04;
+    // let us accept if we're close-ish to need, AND trend isn't horrible
+    if (
+      ratio >= need - extraBand &&
+      (ms.trend === "STRONG_UP" || ms.trend === "UP")
+    ) {
+      probation = true;
+    }
+  }
+
   acceptable = acceptable || probation;
+
 
   return {
     acceptable,
@@ -688,12 +720,19 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   try {
     if (isFiniteN(rsi)) teleGlobal._lastRSI = rsi;
   } catch {}
-  if (rsi >= cfg.hardRSI)
+  if (!(_kind === "FIRST_WEEKLY") && rsi >= cfg.hardRSI) {
     return {
       veto: true,
       reason: `RSI ${rsi.toFixed(1)} ≥ ${cfg.hardRSI}`,
       details,
     };
+  }
+  // For FIRST_WEEKLY, we *don't* instantly veto on hardRSI.
+  // We just record it in details and continue.
+  if (_kind === "FIRST_WEEKLY" && rsi >= cfg.hardRSI) {
+    details.note = "RSI high but FIRST_WEEKLY allowed";
+  }
+
 
   // headroom
   const resList = findResistancesAbove(data, px, stock);
@@ -717,11 +756,12 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
       });
     } catch {}
 
-    if (
+    const tooTightHeadroom =
       (headroomATR < (cfg.nearResVetoATR ?? 0.35) ||
         headroomPct < (cfg.nearResVetoPct ?? 0.8)) &&
-      rr.ratio < rr.need
-    ) {
+      rr.ratio < rr.need;
+
+    if (tooTightHeadroom && _kind !== "FIRST_WEEKLY") {
       return {
         veto: true,
         reason: `Headroom too small (${headroomATR.toFixed(
@@ -730,6 +770,10 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
         details,
       };
     }
+    if (tooTightHeadroom && _kind === "FIRST_WEEKLY") {
+      details.note = "Tight headroom but FIRST_WEEKLY allowed";
+    }
+
   }
 
   // distance above MA25
@@ -747,13 +791,19 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
       });
     } catch {}
     const cap = cfg.maxATRfromMA25;
-    if (distMA25 > (cap ?? 2.4) + 0.2) {
+    const tooFar = distMA25 > (cap ?? 2.4) + 0.2;
+
+    if (tooFar && _kind !== "FIRST_WEEKLY") {
       return {
         veto: true,
         reason: `Too far above MA25 (${distMA25.toFixed(2)} ATR)`,
         details,
       };
     }
+    if (tooFar && _kind === "FIRST_WEEKLY") {
+      details.note = "Extended vs MA25 but FIRST_WEEKLY allowed";
+    }
+
   }
 
   // streak guard
@@ -1322,6 +1372,15 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
 
   const planCross = (label) => {
     const baseATR = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
+
+    // NEW: flavor so downstream logic can loosen rules
+    const flavor =
+      label === "WEEKLY"
+        ? "FIRST_WEEKLY"
+        : label === "DAILY"
+        ? "FIRST_DAILY"
+        : "GENERIC_CROSS";
+
     const rr = analyzeRR(
       px,
       Math.max(1, px - 1.2 * baseATR),
@@ -1329,23 +1388,41 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       stock,
       msFull,
       { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
-      { kind: "CROSS", data: completedDaily }
+      { kind: "CROSS", flavor, data: completedDaily } // <--- PATCH
     );
     return { label, rr };
   };
+  
 
   // Fresh WEEKLY
   if (crossW.trigger && structureGateOk) {
     const p = planCross("WEEKLY");
-    if (p.rr.acceptable)
-      candidates.push({
-        kind: "WEEKLY CROSS",
-        why: crossW.why,
-        rr: p.rr,
-        stop: p.rr.stop,
-        target: p.rr.target,
-      });
-    else
+
+    if (p.rr.acceptable) {
+      // NEW: guard veto for crosses too
+      const gv = guardVeto(
+        stock,
+        dataAll,
+        px,
+        p.rr,
+        msFull,
+        cfg,
+        undefined, // nearestRes not easily known here, ok to pass undefined
+        "FIRST_WEEKLY" // <--- PATCH
+      );
+
+      if (!gv.veto) {
+        candidates.push({
+          kind: "WEEKLY CROSS",
+          why: crossW.why,
+          rr: p.rr,
+          stop: p.rr.stop,
+          target: p.rr.target,
+        });
+      } else {
+        pushBlock(tele, "VETO_WEEKLY", "guard", gv.reason, gv.details);
+      }
+    } else {
       tele.histos.rrShortfall.push({
         need: +p.rr.need.toFixed(2),
         have: +p.rr.ratio.toFixed(2),
@@ -1354,20 +1431,38 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         trend: msFull.trend,
         ticker: stock?.ticker,
       });
+    }
   }
+  
 
   // Fresh DAILY
   if (crossD.trigger && structureGateOk) {
     const p = planCross("DAILY");
-    if (p.rr.acceptable)
-      candidates.push({
-        kind: "DAILY CROSS",
-        why: crossD.why,
-        rr: p.rr,
-        stop: p.rr.stop,
-        target: p.rr.target,
-      });
-    else
+
+    if (p.rr.acceptable) {
+      const gv = guardVeto(
+        stock,
+        dataAll,
+        px,
+        p.rr,
+        msFull,
+        cfg,
+        undefined,
+        "FIRST_DAILY" // <--- PATCH
+      );
+
+      if (!gv.veto) {
+        candidates.push({
+          kind: "DAILY CROSS",
+          why: crossD.why,
+          rr: p.rr,
+          stop: p.rr.stop,
+          target: p.rr.target,
+        });
+      } else {
+        pushBlock(tele, "VETO_DAILY", "guard", gv.reason, gv.details);
+      }
+    } else {
       tele.histos.rrShortfall.push({
         need: +p.rr.need.toFixed(2),
         have: +p.rr.ratio.toFixed(2),
@@ -1376,7 +1471,9 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         trend: msFull.trend,
         ticker: stock?.ticker,
       });
+    }
   }
+  
 
   /* ---------------- DIP lane (SECOND-CHANCE ENTRY ONLY, matched by timeframe) ---------------- */
   /*
