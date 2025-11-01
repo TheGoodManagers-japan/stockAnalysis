@@ -688,38 +688,26 @@ function computeScore({
     }
   }
 
-  // ---------------------------------
-  // 5. Sector quality
-  //
-  // Good sectors = PF ~2+
-  // Bad sectors = PF <1
-  // ---------------------------------
-  const GOOD_SECTORS = new Set([
-    "Warehousing",
-    "Trading Companies",
-    "Rubber",
-    "Nonferrous Metals",
-    "Construction",
-    "Securities",
-    "Banking",
-    "Machinery",
+  const SECTOR_BOOST = new Set([
+    "Financial Services", // PF ~1.52
+    "Real Estate",        // PF ~1.62
+    "Industrials",        // PF ~1.46
   ]);
-
-  const BAD_SECTORS = new Set([
-    "Air Transport",
-    "Pharmaceuticals",
-    "Automobiles & Auto parts",
-    "Other Manufacturing",
+  
+  const SECTOR_PENALTY = new Set([
+    "Healthcare",         // PF ~0.94
+    "Consumer Defensive", // PF ~1.08
+    "Basic Materials",    // PF ~1.10
   ]);
-
+  
   if (typeof sector === "string") {
-    if (GOOD_SECTORS.has(sector)) {
+    if (SECTOR_BOOST.has(sector)) {
       s += 1;
-    } else if (BAD_SECTORS.has(sector)) {
+    } else if (SECTOR_PENALTY.has(sector)) {
       s -= 2;
     }
-    // neutral otherwise
   }
+      // neutral otherwise
 
   return s;
 }
