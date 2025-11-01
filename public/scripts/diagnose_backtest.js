@@ -1,28 +1,35 @@
 #!/usr/bin/env node
 /**
- * diagnose_backtest.js (compact JSON version)
+ * diagnose_backtest.js (updated for new backtest.js shape)
  *
  * Usage:
  *   node diagnose_backtest.js path/to/backtest.json
  *
+ * Input:
+ *   The JSON returned by runBacktest(...) in your new /scripts/backtest.js
+ *
  * Output:
  *   ONE clean JSON with:
  *    - performance / flow / regime
- *    - bestSetup (playbook slice #1)
- *    - riskFlags (why losers lose)
- *    - scoreQuality
- *    - tickers.focus & tickers.avoid (top 5 each)
- *    - sectorBuckets / priceBuckets / liquidityBuckets / lagBuckets / atrBuckets / pxMA25Buckets
- *      (each split into top / ok / weak / losing tiers)
- *    - bestSetups (human-readable “what works” patterns)
- *    - targetOnly stats
+ *    - bestSetup (playbook slice with best PF)
+ *    - lossAnalysis / lossReasons
+ *    - missedOpportunities (what we blocked that would've worked)
+ *    - tickers.focus & tickers.avoid
+ *    - bucket tiers (sector, liquidity, px extension, etc.)
+ *    - bestSetups (human-readable situational edges)
+ *    - singleProfile summary (your unified "target_only (with 15% floor)")
+ *    - targetOnly (fast scalp style = basically entire strategy now)
  *
- * No per-ticker spam.
+ * Notes vs old version:
+ *    - Removed dependency on per-trade `score`
+ *    - Removed `profiles[...]` loop — we now consume `raw.singleProfile`
+ *    - Removed `t.profile === "target_only"` filter; now everything is that style
+ *    - `bestSetup` slices no longer use `score`
  */
 
 const fs = require("fs");
 
-// -------------------- CLI --------------------
+/* -------------------- CLI -------------------- */
 const args = process.argv.slice(2);
 if (args.length === 0) {
   console.error("Usage: node diagnose_backtest.js path/to/backtest.json");
@@ -30,16 +37,19 @@ if (args.length === 0) {
 }
 const inputPath = args[0];
 
-// -------------------- utils --------------------
+/* -------------------- utils -------------------- */
 const r2 = (v) => Math.round((+v || 0) * 100) / 100;
 
 function safeGetAllTrades(obj) {
+  // Preferred: byTicker[].trades (since new backtest always includes byTicker)
   if (Array.isArray(obj?.byTicker) && obj.byTicker.length) {
     return obj.byTicker.flatMap((t) =>
       Array.isArray(t.trades) ? t.trades : []
     );
   }
+  // fallback if you ever add globalTrades to backtest output
   if (Array.isArray(obj?.globalTrades)) return obj.globalTrades;
+
   console.warn(
     "[info] No byTicker/globalTrades array found. This analyzer expects trades with `analytics`."
   );
@@ -159,7 +169,6 @@ function summarizeTimeToTarget(trades) {
   const dayStats = basicStats(daysArr);
   const retStats = basicStats(retArr);
 
-
   const wr = hits.length
     ? r2(
         (100 *
@@ -178,8 +187,7 @@ function summarizeTimeToTarget(trades) {
   };
 }
 
-// -------------------- NEW BUCKET HELPERS --------------------
-
+/* -------------------- BUCKET HELPERS -------------------- */
 
 // Volume Z-score at entry: how "loud" was the candle
 function bucketVolZ(z) {
@@ -240,7 +248,8 @@ function bucketPrice(entryPx) {
   return "px:3k+";
 }
 
-// -------------------- LOAD & PREP DATA --------------------
+/* -------------------- LOAD & PREP DATA -------------------- */
+
 const raw = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 const allTradesRaw = safeGetAllTrades(raw);
 
@@ -262,13 +271,17 @@ if (!withAnalytics.length) {
   process.exit(0);
 }
 
-// -------------------- OVERALL / HIGH-LEVEL STATS --------------------
+/* -------------------- OVERALL / HIGH-LEVEL STATS -------------------- */
+
 const overall = summarizeMetrics(withAnalytics);
 
-// regime (already pre-summarized in backtest output)
+// regime metrics come from backtest
 const regimeMetrics = raw?.regime?.metrics || {};
 
-// score correlation / ladder
+/**
+ * We keep score-related helpers for backward compatibility,
+ * but we won't assume `t.score` exists in new backtest output.
+ */
 function metricsByScore(allTrades) {
   const buckets = {}; // score -> trades[]
   for (const t of allTrades) {
@@ -310,13 +323,27 @@ function corrScore(allTrades) {
   };
 }
 
-const scoreInfo = metricsByScore(withAnalytics);
-const scoreCorr = corrScore(withAnalytics);
+// check if there's any `score` at all
+const hasScore = withAnalytics.some((t) => Number.isFinite(t.score));
+const scoreInfo = hasScore ? metricsByScore(withAnalytics) : { scored: [] };
+const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
 
-// -------------------- PLAYBOOK SLICES --------------------
-function slice_HIGH_SCORE_6plus(t) {
-  return Number.isFinite(t.score) && t.score >= 6;
-}
+/* -------------------- PLAYBOOK SLICES (updated: no score dependency) -------------------- */
+
+/**
+ * We define two slices that match your live strategy logic:
+ *
+ * 1. DOWN_regime_ST_panic_weekly_flip:
+ *    - market regime "DOWN"
+ *    - strong short-term panic ST>=6
+ *    - we enter only after a MA cross flip that's not immediate (lag>=2)
+ *
+ * 2. RANGE_regime_gap_up_near_MA25:
+ *    - market regime "RANGE"
+ *    - we saw a bullish gap up (>0%)
+ *    - but price is still close to MA25 (≤4% above), i.e. controlled bounce not full chase
+ */
+
 function slice_DOWN_regime_ST_panic_weekly_flip(t) {
   return (
     t.regime === "DOWN" &&
@@ -329,6 +356,7 @@ function slice_DOWN_regime_ST_panic_weekly_flip(t) {
     t.crossLag >= 2
   );
 }
+
 function slice_RANGE_regime_gap_up_near_MA25(t) {
   const a = t.analytics || {};
   return (
@@ -342,18 +370,13 @@ function slice_RANGE_regime_gap_up_near_MA25(t) {
 
 const SLICES = [
   {
-    name: "HIGH_SCORE_6plus",
-    desc: "Composite score >= 6",
-    fn: slice_HIGH_SCORE_6plus,
-  },
-  {
     name: "DOWN_regime_ST_panic_weekly_flip",
-    desc: "Regime DOWN, ST>=6 (panic pullback), WEEKLY/DAILY/BOTH crossLag>=2",
+    desc: "Regime DOWN, ST>=6 panic dip, WEEKLY/DAILY/BOTH crossLag>=2",
     fn: slice_DOWN_regime_ST_panic_weekly_flip,
   },
   {
     name: "RANGE_regime_gap_up_near_MA25",
-    desc: "Regime RANGE, gap up >0%, px ≤4% above MA25",
+    desc: "RANGE regime, gap up >0%, entry ≤4% above MA25 (controlled bounce not chased)",
     fn: slice_RANGE_regime_gap_up_near_MA25,
   },
 ];
@@ -391,102 +414,21 @@ const sliceResults = SLICES.map((s) => {
   return analyzeSlice(s.name, s.desc, subset, tradingDaysGuess);
 });
 
+// pick best slice by PF, then winRate
+const rankedSlices = [...sliceResults].sort((a, b) => {
+  const pfA = Number.isFinite(a.metrics.profitFactor)
+    ? a.metrics.profitFactor
+    : -1;
+  const pfB = Number.isFinite(b.metrics.profitFactor)
+    ? b.metrics.profitFactor
+    : -1;
+  if (pfB !== pfA) return pfB - pfA;
+  return b.metrics.winRate - a.metrics.winRate;
+});
+const topSlice = rankedSlices[0] || null;
 
-// ---- NEW: profile summary (raw_signal_levels / atr_trail / target_only)
-const profilesSummary = {};
-if (raw.profiles && typeof raw.profiles === "object") {
-  for (const [pid, pdata] of Object.entries(raw.profiles)) {
-    // gather trades actually tagged with this profile
-    const tradesForProfile = withAnalytics.filter((t) => t.profile === pid);
+/* -------------------- LOSS AUTOPSY -------------------- */
 
-    // generic performance metrics (winRate, PF, etc.) computed fresh
-    const profMetrics = summarizeMetrics(tradesForProfile);
-
-    // --- HIGH SCORE (6+) FILTER FOR THIS PROFILE ---
-    const highScoreTradesForProfile = tradesForProfile.filter(
-      (t) => Number.isFinite(t.score) && t.score >= 6
-    );
-    const highScoreMetrics = summarizeMetrics(highScoreTradesForProfile);
-
-    // exits breakdown (TARGET / STOP / TIME / END) from backtest output
-    const exits = pdata.exits || {};
-
-    // time-to-target behavior for this profile
-    const tttProfile = summarizeTimeToTarget(tradesForProfile);
-
-    // per-profile score ladder / correlation
-    const profScoreInfo = metricsByScore(tradesForProfile);
-    const profScoreCorr = corrScore(tradesForProfile);
-
-    // pull risk tail info from backtest profile.metrics.lossTail
-    const lossTail =
-      pdata.metrics && pdata.metrics.lossTail
-        ? {
-            minLossPct: pdata.metrics.lossTail.minLossPct,
-            maxLossPct: pdata.metrics.lossTail.maxLossPct,
-            p90LossPct: pdata.metrics.lossTail.p90LossPct,
-            p95LossPct: pdata.metrics.lossTail.p95LossPct,
-            countLosses: pdata.metrics.lossTail.countLosses,
-          }
-        : null;
-
-    // catastrophic stop suggestion (only present for target_only)
-    const catastrophicStopSuggestion = pdata.catastrophicStopSuggestion
-      ? {
-          killAtPct: pdata.catastrophicStopSuggestion.killAtPct,
-          comment: pdata.catastrophicStopSuggestion.comment,
-        }
-      : null;
-
-    profilesSummary[pid] = {
-      label: pdata.label,
-
-      trades: profMetrics.trades,
-      winRate: profMetrics.winRate,
-      profitFactor: profMetrics.profitFactor,
-      avgReturnPct: profMetrics.avgReturnPct,
-      avgHoldBars: profMetrics.avgHoldingDays,
-
-      // >>> NEW: performance when score >= 6 within THIS profile
-      highScore6plus: {
-        trades: highScoreMetrics.trades,
-        winRate: highScoreMetrics.winRate,
-        profitFactor: highScoreMetrics.profitFactor,
-        avgReturnPct: highScoreMetrics.avgReturnPct,
-        avgHoldBars: highScoreMetrics.avgHoldingDays,
-      },
-
-      exits,
-
-      timeToTarget: {
-        count: tttProfile.count,
-        winRateOnTargets: tttProfile.winRate,
-        medianBars: tttProfile.days.med,
-        p90Bars: tttProfile.days.p90,
-      },
-
-      lossTail, // downside shape for this profile
-
-      catastrophicStopSuggestion, // only for target_only
-
-      scoreQuality: {
-        corrWin: r2(profScoreCorr.win),
-        corrRet: r2(profScoreCorr.ret),
-        ladder: profScoreInfo.scored,
-        ladderTop: profScoreInfo.scored.slice(-10).reverse(),
-      },
-    };
-  }
-}
-
-
-
-
-// bestProfiles comes straight from backtest
-const bestProfilesSummary = raw.bestProfiles || {};
-
-
-// -------------------- LOSS AUTOPSY --------------------
 function isExtendedPx(t) {
   const a = t.analytics || {};
   return Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
@@ -501,11 +443,52 @@ function isEarlyLag(t) {
   );
 }
 function isBadRegime(t) {
-  // "badRegime" here = chasing blowoff in STRONG_UP
+  // "badRegime" here = chasing blowoff in STRONG_UP regime
   return t.regime === "STRONG_UP";
 }
 function weakPullback(t) {
   return Number.isFinite(t.ST) && t.ST < 6;
+}
+
+function summarizeLosingPatterns(losersArr) {
+  const totalL = losersArr.length || 1;
+
+  const buckets = [
+    {
+      key: "chasingExtended",
+      desc: "Entry was >6% above MA25 (chasing stretched price / breakout FOMO).",
+      count: losersArr.filter(isExtendedPx).length,
+    },
+    {
+      key: "tooEarlyAfterFlip",
+      desc: "We bought <2 bars after a cross flip (jumped in before letting it settle).",
+      count: losersArr.filter(isEarlyLag).length,
+    },
+    {
+      key: "blowoffRegime",
+      desc: "We bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
+      count: losersArr.filter(isBadRegime).length,
+    },
+    {
+      key: "notRealPanic",
+      desc: "Short-term sentiment ST<6 (not an actual panic dip, just meh pullback).",
+      count: losersArr.filter(weakPullback).length,
+    },
+  ];
+
+  const ranked = buckets
+    .map((b) => ({
+      key: b.key,
+      desc: b.desc,
+      count: b.count,
+      shareOfLossesPct: r2((b.count / totalL) * 100),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalLosingTrades: losersArr.length,
+    topLossPatterns: ranked.slice(0, 5),
+  };
 }
 
 const losers = withAnalytics.filter((t) => t.result === "LOSS");
@@ -517,7 +500,8 @@ const lossReasons = {
   weakPullback: losers.filter(weakPullback).length,
 };
 
-// -------------------- PER-TICKER COMBOS (for bestSetups + ladder) --------------------
+/* -------------------- PER-TICKER COMBOS / bestSetups -------------------- */
+
 function makeComboRow(t) {
   const a = t.analytics || {};
   return {
@@ -601,7 +585,7 @@ function summarizeCombos(rows) {
   return list;
 }
 
-// build perTickerCombos and tickerPF ladders
+// group trades per ticker
 const perTickerRaw = {};
 withAnalytics.forEach((t) => {
   const tick = t.ticker || t.symbol || "UNKNOWN";
@@ -609,6 +593,7 @@ withAnalytics.forEach((t) => {
   perTickerRaw[tick].push(t);
 });
 
+// build combos per ticker
 const perTickerCombosTmp = {};
 Object.entries(perTickerRaw).forEach(([ticker, trades]) => {
   const rows = trades.map(makeComboRow);
@@ -622,7 +607,7 @@ Object.entries(perTickerRaw).forEach(([ticker, trades]) => {
   };
 });
 
-// ticker PF ladder
+// ticker PF ladder (for focus/avoid)
 const tickerPF = [];
 if (Array.isArray(raw.byTicker)) {
   for (const rec of raw.byTicker) {
@@ -650,7 +635,8 @@ const bestTickers = [...tickerPF]
   .sort((a, b) => (b.pf || 0) - (a.pf || 0))
   .slice(0, 15);
 
-// -------------------- bestSetups (human readable patterns) --------------------
+/* -------------------- Human-readable best setups -------------------- */
+
 function humanLabelLag(lagBucket) {
   if (lagBucket.startsWith("lag:early")) return "early flip (<2 bars)";
   if (lagBucket.startsWith("lag:mid")) return "mid flip (2-5 bars after cross)";
@@ -693,7 +679,7 @@ function buildBestSetups(perTickerCombosTmp) {
     (rec.bestCombos || []).forEach((c) => flat.push(c));
   });
 
-  // rank by approxPF, winRate, avgRet
+  // rank by approxPF, then winRate, then avgRet
   flat.sort((a, b) => {
     const pfA = Number.isFinite(a.approxPF) ? a.approxPF : -1;
     const pfB = Number.isFinite(b.approxPF) ? b.approxPF : -1;
@@ -702,10 +688,10 @@ function buildBestSetups(perTickerCombosTmp) {
     return b.avgRet - a.avgRet;
   });
 
-  // keep ~5 best patterns only
+  // top ~5 patterns only
   const topCombos = flat.slice(0, 5);
 
-  // transform into human-readable playbook
+  // transform into human-readable playbook entries
   return topCombos.map((c) => ({
     sector: c.sectorBucket.replace("sector:", ""),
     regime: c.regime,
@@ -725,15 +711,7 @@ function buildBestSetups(perTickerCombosTmp) {
 
 const bestSetups = buildBestSetups(perTickerCombosTmp);
 
-// -------------------- target_only deep dive --------------------
-const targetOnlyAll = withAnalytics.filter((t) => t.profile === "target_only");
-
-const targetAllStats = summarizeSubset(targetOnlyAll);
-const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target
-
-
-// -------------------- GLOBAL BUCKET SUMMARIES --------------------
-// generic category summarizer and quartile splitter
+/* -------------------- GLOBAL BUCKET SUMMARIES -------------------- */
 
 function summarizeCategoryPerformance(tradesArrByKey) {
   const rows = [];
@@ -802,9 +780,7 @@ function splitIntoQuartileBuckets(rows, minTrades = 50) {
   };
 }
 
-
 function summarizeTierAverages(tiersObj) {
-  // tiersObj = { top: [...], ok: [...], weak: [...], losing: [...] }
   function avgOne(arr) {
     if (!arr || !arr.length) {
       return { trades: 0, winRate: 0, pf: 0, avgRet: 0 };
@@ -816,8 +792,7 @@ function summarizeTierAverages(tiersObj) {
     const n = arr.length;
 
     return {
-      // trades here is the *average per sector in that tier*, not total.
-      trades: r2(sumTrades / n),
+      trades: r2(sumTrades / n), // avg trades per bucket in that tier
       winRate: r2(sumWR / n),
       pf: r2(sumPF / n),
       avgRet: r2(sumRet / n),
@@ -831,7 +806,6 @@ function summarizeTierAverages(tiersObj) {
     losing: avgOne(tiersObj.losing),
   };
 }
-
 
 // sectorBuckets
 const tradesBySector = {};
@@ -865,7 +839,7 @@ withAnalytics.forEach((t) => {
 const liqRows = summarizeCategoryPerformance(tradesByLiqBucket);
 const liquidityBuckets = splitIntoQuartileBuckets(liqRows, 50);
 
-// lagBuckets
+// lagBuckets (freshness after cross)
 const tradesByLagBucket = {};
 withAnalytics.forEach((t) => {
   const lagB = bucketLag(t.crossLag);
@@ -875,7 +849,7 @@ withAnalytics.forEach((t) => {
 const lagRows = summarizeCategoryPerformance(tradesByLagBucket);
 const lagBuckets = splitIntoQuartileBuckets(lagRows, 50);
 
-// atrBuckets
+// atrBuckets (volatility style)
 const tradesByAtrBucket = {};
 withAnalytics.forEach((t) => {
   const a = t.analytics || {};
@@ -886,7 +860,7 @@ withAnalytics.forEach((t) => {
 const atrRows = summarizeCategoryPerformance(tradesByAtrBucket);
 const atrBuckets = splitIntoQuartileBuckets(atrRows, 50);
 
-// pxMA25Buckets
+// pxMA25Buckets (extension/chasing)
 const tradesByPxMA25Bucket = {};
 withAnalytics.forEach((t) => {
   const a = t.analytics || {};
@@ -897,8 +871,7 @@ withAnalytics.forEach((t) => {
 const pxMA25Rows = summarizeCategoryPerformance(tradesByPxMA25Bucket);
 const pxMA25Buckets = splitIntoQuartileBuckets(pxMA25Rows, 50);
 
-
-// ---- NEW: volZBuckets (volume attention / quiet pullback quality)
+// volZBuckets (volume attention / quiet pullback quality)
 const tradesByVolZBucket = {};
 withAnalytics.forEach((t) => {
   const z = t.analytics?.volZ;
@@ -909,7 +882,7 @@ withAnalytics.forEach((t) => {
 const volZRows = summarizeCategoryPerformance(tradesByVolZBucket);
 const volZBuckets = splitIntoQuartileBuckets(volZRows, 50);
 
-
+// Tier averages for quick reading
 const sectorTierStats = summarizeTierAverages(sectorBuckets);
 const priceTierStats = summarizeTierAverages(priceBuckets);
 const liquidityTierStats = summarizeTierAverages(liquidityBuckets);
@@ -918,26 +891,23 @@ const lagTierStats = summarizeTierAverages(lagBuckets);
 const atrTierStats = summarizeTierAverages(atrBuckets);
 const pxMA25TierStats = summarizeTierAverages(pxMA25Buckets);
 
+/* -------------------- missedOpportunities (from rejectedBuys sim) -------------------- */
 
-// -------- missedOpportunities: what we skipped but would've worked --------
 let missedOpportunities = null;
 if (raw?.parallel?.rejectedBuys) {
   const rb = raw.parallel.rejectedBuys;
 
-  // High-level: how often the rejects would have printed
   const headline = {
     simulatedTotal: rb.summary?.total ?? 0,
     simulatedWinners: rb.summary?.winners ?? 0,
     simulatedWinRate: rb.summary?.winRate ?? 0, // %
   };
 
-  // Which gate / veto reason is costing us the most upside
-  // Sort by "winners" desc to see biggest pain sources
   const topReasons = [];
   if (rb.byReason) {
     Object.entries(rb.byReason).forEach(([reason, stats]) => {
       topReasons.push({
-        reason, // e.g. "guard veto", "RR too low", "perfect-mode gate"
+        reason,
         total: stats.total,
         winners: stats.winners,
         winRate: stats.winRate,
@@ -947,96 +917,99 @@ if (raw?.parallel?.rejectedBuys) {
     });
 
     topReasons.sort((a, b) => {
-      // prioritize lots of winners, then PF
       if (b.winners !== a.winners) return b.winners - a.winners;
       return (b.profitFactor || 0) - (a.profitFactor || 0);
     });
   }
 
-  // sentiment combos of "rejected but would have worked"
-  // you collected that as sentiment.rejected[...] in backtest -> diagnose builds "sentiment" but
-  // we can summarize the best LT/ST combos for rejected
   const bestRejectedCombos =
     raw?.sentiment?.bestByWinRate?.rejected ||
     (raw?.sentiment?.combos?.bestByWinRate?.rejected ?? []);
 
   missedOpportunities = {
     headline,
-    // gate/veto patterns that are giving up the most winners
     painReasons: topReasons.slice(0, 5),
-    // market mood profiles we shouldn't be auto-blocking so hard
     sentimentCombos: bestRejectedCombos.slice(0, 5),
   };
 }
 
-
-function summarizeLosingPatterns(losersArr) {
-  const totalL = losersArr.length || 1;
-
-  // reuse the same tests diagnose already defined
-  function isExtendedPx(t) {
-    const a = t.analytics || {};
-    return Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
-  }
-  function isEarlyLag(t) {
-    return (
-      (t.crossType === "WEEKLY" ||
-        t.crossType === "DAILY" ||
-        t.crossType === "BOTH") &&
-      Number.isFinite(t.crossLag) &&
-      t.crossLag < 2
-    );
-  }
-  function isBadRegime(t) {
-    return t.regime === "STRONG_UP";
-  }
-  function weakPullback(t) {
-    return Number.isFinite(t.ST) && t.ST < 6;
-  }
-
-  const buckets = [
-    {
-      key: "chasingExtended",
-      desc: "Entry was >6% above MA25 (chasing stretched price / breakout FOMO).",
-      count: losersArr.filter(isExtendedPx).length,
-    },
-    {
-      key: "tooEarlyAfterFlip",
-      desc: "We bought <2 bars after a cross flip (jumped in before letting it settle).",
-      count: losersArr.filter(isEarlyLag).length,
-    },
-    {
-      key: "blowoffRegime",
-      desc: "We bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
-      count: losersArr.filter(isBadRegime).length,
-    },
-    {
-      key: "notRealPanic",
-      desc: "Short-term sentiment ST<6 (not an actual panic dip, just meh pullback).",
-      count: losersArr.filter(weakPullback).length,
-    },
-  ];
-
-  // Decorate with percentages and sort biggest offender first
-  const ranked = buckets
-    .map((b) => ({
-      key: b.key,
-      desc: b.desc,
-      count: b.count,
-      shareOfLossesPct: r2((b.count / totalL) * 100),
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  return {
-    totalLosingTrades: losersArr.length,
-    topLossPatterns: ranked.slice(0, 5),
+/* -------------------- singleProfile summary -------------------- */
+/**
+ * New backtest returns only one profile block: raw.singleProfile
+ * Shape:
+ * singleProfile: {
+ *   label,
+ *   metrics: { trades, winRate, ... , lossTail },
+ *   exits: { target, stop, time, end },
+ *   catastrophicStopSuggestion: { killAtPct, comment } | null,
+ *   samples? [...]
+ * }
+ */
+const profilesSummary = {};
+if (raw.singleProfile) {
+  const sp = raw.singleProfile;
+  profilesSummary.singleProfile = {
+    label: sp.label,
+    trades: sp.metrics?.trades,
+    winRate: sp.metrics?.winRate,
+    profitFactor: sp.metrics?.profitFactor,
+    avgReturnPct: sp.metrics?.avgReturnPct,
+    avgHoldBars: sp.metrics?.avgHoldingDays,
+    exits: sp.exits || null,
+    catastrophicStopSuggestion: sp.catastrophicStopSuggestion || null,
+    lossTail: sp.metrics?.lossTail || null,
   };
 }
 
+/* -------------------- targetOnly block -------------------- */
+/**
+ * Old diagnose assumed we had multiple profiles and specifically profiled
+ * "target_only".
+ * In the new engine, *everything* is effectively that style:
+ *   - one unified profile with 15% floor stop
+ *
+ * So:
+ * - targetOnlyAll = all trades
+ * - lossTail & catastrophicStopSuggestion come from raw.singleProfile
+ */
 
+const targetOnlyAll = withAnalytics.slice(); // all trades in new world
 
+const targetAllStats = summarizeSubset(targetOnlyAll);
+const ttt = summarizeTimeToTarget(targetOnlyAll);
 
-// -------------------- FINAL EXPORT --------------------
+const sp = raw.singleProfile || null;
+
+const targetOnlyExport = {
+  trades: targetOnlyAll.length,
+  winRate: targetAllStats.metrics.winRate,
+  pf: targetAllStats.metrics.profitFactor,
+  avgRet: targetAllStats.metrics.avgReturnPct,
+  holdAvgBars: targetAllStats.metrics.avgHoldingDays,
+
+  timeToTargetMedianBars: ttt.days.med,
+  timeToTargetP90Bars: ttt.days.p90,
+
+  lossTail: sp?.metrics?.lossTail
+    ? {
+        minLossPct: sp.metrics.lossTail.minLossPct,
+        maxLossPct: sp.metrics.lossTail.maxLossPct,
+        p90LossPct: sp.metrics.lossTail.p90LossPct,
+        p95LossPct: sp.metrics.lossTail.p95LossPct,
+        countLosses: sp.metrics.lossTail.countLosses,
+      }
+    : null,
+
+  catastrophicStopSuggestion: sp?.catastrophicStopSuggestion
+    ? {
+        killAtPct: sp.catastrophicStopSuggestion.killAtPct,
+        comment: sp.catastrophicStopSuggestion.comment,
+      }
+    : null,
+};
+
+/* -------------------- FINAL EXPORT -------------------- */
+
 const exportObj = {
   window: {
     from: raw?.from || raw?.window?.from || raw?.startDate || null,
@@ -1053,10 +1026,7 @@ const exportObj = {
   },
 
   flow: {
-    // we no longer get tradesPerDay from backtest.js,
-    // so we'll surface signal density instead
     signalsPerDay: raw?.signals?.perDay != null ? r2(raw.signals.perDay) : null,
-
     tradingDays: raw?.tradingDays,
     signalsTotal: raw?.signals?.total,
     signalsExecuted: raw?.signals?.executed,
@@ -1067,53 +1037,56 @@ const exportObj = {
     rrRejectedBuckets: raw?.telemetry?.rr?.rejected || null,
   },
 
-  // The single best slice (playbook-style)
-  bestSetup: {
-    name: sliceResults[0]?.name,
-    desc: sliceResults[0]?.desc,
-    trades: sliceResults[0]?.n,
-    tradesPerDay: sliceResults[0]?.perDay,
-    winRate: sliceResults[0]?.metrics?.winRate,
-    profitFactor: sliceResults[0]?.metrics?.profitFactor,
-    avgRet: sliceResults[0]?.metrics?.avgReturnPct,
-    holdAvgBars: sliceResults[0]?.metrics?.avgHoldingDays,
-  },
+  // The best slice (playbook-style) we can detect right now
+  bestSetup: topSlice
+    ? {
+        name: topSlice.name,
+        desc: topSlice.desc,
+        trades: topSlice.n,
+        tradesPerDay: topSlice.perDay,
+        winRate: topSlice.metrics.winRate,
+        profitFactor: topSlice.metrics.profitFactor,
+        avgRet: topSlice.metrics.avgReturnPct,
+        holdAvgBars: topSlice.metrics.avgHoldingDays,
+      }
+    : null,
 
-  // Why do we lose money (pattern of losers)
-  // Why we lose money (pattern of losers we actually entered)
+  // Why we lose money (patterns among actual losers we entered)
   lossAnalysis: losingPatterns,
   lossReasons,
 
   missedOpportunities: missedOpportunities,
-  // Market context
-  regime: raw?.regime?.metrics || regimeMetrics || {},
+
+  // Market context & structural performance
+  regime: regimeMetrics,
   dipAfterFreshCrossing: raw?.dipAfterFreshCrossing || null,
   crossingByLag: raw?.crossing?.byLag || null,
 
-  // Score system health
-  scoreQuality: {
-    corrWin: r2(scoreCorr.win),
-    corrRet: r2(scoreCorr.ret),
-    ladder: scoreInfo.scored, // full ladder [{score,n,winRate,pf,avgRet}]
-    ladderTop: scoreInfo.scored.slice(-10).reverse(), // highest score buckets
-  },
+  // Score system health (may be null if we removed score from trades)
+  scoreQuality: hasScore
+    ? {
+        corrWin: r2(scoreCorr.win),
+        corrRet: r2(scoreCorr.ret),
+        ladder: scoreInfo.scored,
+        ladderTop: scoreInfo.scored.slice(-10).reverse(),
+      }
+    : null,
 
-  // Which tickers tend to help/hurt (still global-only, filtered >=30 trades)
+  // Which tickers tend to help/hurt (global-only, filtered >=30 trades)
   tickers: {
     focus: bestTickers.slice(0, 5),
     avoid: worstTickers.slice(0, 5),
   },
 
-  // Profile comparisons (raw_signal_levels / atr_trail / target_only etc.)
+  // singleProfile summary (your unified "target_only (with 15% floor)")
   profiles: profilesSummary,
-  bestProfiles: bestProfilesSummary,
 
   // Bucket performance tiers (quartiles based on PF/winRate/avgRet),
-  // plus raw rows so we can see exact PF per bucket.
+  // plus tier averages to get a feel for where edge clusters.
   buckets: {
     sector: {
-      tiers: sectorBuckets, // names of tiers with each sector inside
-      tierAverages: sectorTierStats, // avg stats for top/ok/weak/losing
+      tiers: sectorBuckets,
+      tierAverages: sectorTierStats,
     },
     price: {
       tiers: priceBuckets,
@@ -1144,42 +1117,9 @@ const exportObj = {
   // Repeated high-performing situational patterns
   bestSetups,
 
-  // Deep dive for target_only flavor (fast scalp profile)
-  // Deep dive for target_only flavor (fast scalp / no-stop profile)
-  targetOnly: {
-    trades: targetOnlyAll.length,
-    winRate: targetAllStats.metrics.winRate,
-    pf: targetAllStats.metrics.profitFactor,
-    avgRet: targetAllStats.metrics.avgReturnPct,
-    holdAvgBars: targetAllStats.metrics.avgHoldingDays,
-
-    // how fast winners usually hit target in this profile
-    timeToTargetMedianBars: ttt.days.med,
-    timeToTargetP90Bars: ttt.days.p90,
-
-    // NEW: downside diagnostics from backtest.profiles.target_only.metrics.lossTail
-    lossTail: raw?.profiles?.target_only?.metrics?.lossTail
-      ? {
-          minLossPct: raw.profiles.target_only.metrics.lossTail.minLossPct,
-          maxLossPct: raw.profiles.target_only.metrics.lossTail.maxLossPct,
-          p90LossPct: raw.profiles.target_only.metrics.lossTail.p90LossPct,
-          p95LossPct: raw.profiles.target_only.metrics.lossTail.p95LossPct,
-          countLosses: raw.profiles.target_only.metrics.lossTail.countLosses,
-        }
-      : null,
-
-    // NEW: proposal for a universal kill stop for target_only
-    catastrophicStopSuggestion: raw?.profiles?.target_only
-      ?.catastrophicStopSuggestion
-      ? {
-          killAtPct:
-            raw.profiles.target_only.catastrophicStopSuggestion.killAtPct,
-          comment: raw.profiles.target_only.catastrophicStopSuggestion.comment,
-        }
-      : null,
-  },
+  // Deep dive for "target_only style" (the only style now)
+  targetOnly: targetOnlyExport,
 };
 
-
-// -------------------- PRINT --------------------
+/* -------------------- PRINT -------------------- */
 console.log(JSON.stringify(exportObj, null, 2));

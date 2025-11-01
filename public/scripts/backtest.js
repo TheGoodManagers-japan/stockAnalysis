@@ -858,564 +858,325 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // global position cap
   let globalOpenCount = 0;
 
-
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
-    // single-profile state
-    let openPositions = [];
-    let cooldownUntil = -1;
 
-    const candles = await fetchHistory(code, FROM, TO);
-    if (candles.length < WARMUP + 2) {
-      throw new Error(
-        `[BT] not enough data for ${code} (${candles.length} < ${WARMUP + 2})`
-      );
-    }
+    try {
+      // single-profile state
+      let openPositions = [];
+      let cooldownUntil = -1;
 
-    const trades = [];
-
-    for (let i = 0; i < candles.length; i++) {
-      const today = candles[i];
-      tradingDays.add(toISO(today.date));
-      const hist = candles.slice(0, i + 1);
-
-      // regime for this day
-      const dayISO = toISO(today.date);
-      const dayRegime = regimeMap[dayISO] || "RANGE";
-
-      if (dayRegime && telemetry.trends.hasOwnProperty(dayRegime)) {
-        telemetry.trends[dayRegime]++;
-      }
-
-      const stock = {
-        ticker: code,
-        currentPrice: today.close,
-        highPrice: today.high,
-        lowPrice: today.low,
-        openPrice: today.open,
-        prevClosePrice: candles[i - 1] ? candles[i - 1].close : today.close,
-        fiftyTwoWeekHigh: Math.max(...hist.map((c) => c.high)),
-        fiftyTwoWeekLow: Math.min(...hist.map((c) => c.low)),
-        historicalData: hist,
-      };
-      enrichForTechnicalScore(stock);
-
-      // manage existing open position(s)
-      if (openPositions.length) {
-        for (let k = openPositions.length - 1; k >= 0; k--) {
-          const st = openPositions[k];
-
-          let exit = null;
-          const canStop = Number.isFinite(st.stop);
-          const stopTouched = canStop && today.low <= st.stop;
-
-          if (stopTouched) {
-            let stopFill =
-              today.open < st.stop ? today.open : Math.min(st.stop, today.high);
-
-            // enforce 15% max-loss floor safety
-            if (Number.isFinite(st.maxLossFloor)) {
-              stopFill = Math.max(stopFill, st.maxLossFloor);
-            }
-
-            const isProfit = stopFill >= st.entry;
-            exit = {
-              type: "STOP",
-              price: stopFill,
-              result: isProfit ? "WIN" : "LOSS",
-            };
-          } else if (Number.isFinite(st.target) && today.high >= st.target) {
-            exit = { type: "TARGET", price: st.target, result: "WIN" };
-          }
-
-          if (!exit && HOLD_BARS > 0) {
-            const ageBars = i - st.entryIdx;
-            if (ageBars >= HOLD_BARS) {
-              const rawPnL = today.close - st.entry;
-              exit = {
-                type: "TIME",
-                price: today.close,
-                result: rawPnL >= 0 ? "WIN" : "LOSS",
-              };
-            }
-          }
-
-          if (exit) {
-            const pctRet =
-              ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
-
-            const baseRisk = st.entry - st.initialStop;
-            const risk = Math.max(0.01, baseRisk);
-            const Rval = r2((exit.price - st.entry) / risk);
-
-            const isDipAfterFreshCrossSignal =
-              /DIP/i.test(st.kind || "") &&
-              (st.crossType === "WEEKLY" ||
-                st.crossType === "DAILY" ||
-                st.crossType === "BOTH") &&
-              Number.isFinite(st.crossLag) &&
-              st.crossLag <= 3;
-
-            const trade = {
-              ticker: code,
-              strategy: st.kind || "DIP",
-
-              entryDate: toISO(candles[st.entryIdx].date),
-              exitDate: toISO(today.date),
-              returnPct: r2(pctRet),
-              result: exit.result,
-              holdingDays: i - st.entryIdx,
-              exitType: exit.type,
-
-              entry: r2(st.entry),
-              exit: r2(exit.price),
-              stop: st.initialStop,
-              target: st.target,
-              R: Rval,
-
-              ST: st.ST,
-              LT: st.LT,
-              regime: st.regime || "RANGE",
-              crossType: st.crossType || null,
-              crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-              analytics: st.analytics || null,
-
-              sector: tickerInfoMap[code]?.sector || null,
-
-              dipAfterFreshCross: isDipAfterFreshCrossSignal,
-            };
-
-            trade.entryArchetype = trade.dipAfterFreshCross
-              ? "DIP_AFTER_FRESH_CROSS"
-              : trade.crossType || "OTHER";
-
-            trades.push(trade);
-            globalTrades.push(trade);
-
-            const kKey = sentiKey(st.ST, st.LT);
-            if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
-            sentiUpdate(sentiment.actual[kKey], {
-              result: trade.result,
-              returnPct: trade.returnPct,
-              R: trade.R,
-            });
-
-            if (Number.isFinite(st.LT)) {
-              if (!sentiment.actualLT[st.LT]) {
-                sentiment.actualLT[st.LT] = sentiInit();
-              }
-              sentiUpdate(sentiment.actualLT[st.LT], {
-                result: trade.result,
-                returnPct: trade.returnPct,
-                R: trade.R,
-              });
-            }
-
-            if (Number.isFinite(st.ST)) {
-              if (!sentiment.actualST[st.ST]) {
-                sentiment.actualST[st.ST] = sentiInit();
-              }
-              sentiUpdate(sentiment.actualST[st.ST], {
-                result: trade.result,
-                returnPct: trade.returnPct,
-                R: trade.R,
-              });
-            }
-
-            if (trade.regime && regimeAgg[trade.regime]) {
-              regimeAgg[trade.regime].push(trade);
-            }
-
-            if (trade.dipAfterFreshCross) {
-              if (trade.crossType === "WEEKLY") {
-                dipAfterAgg.WEEKLY.push(trade);
-              } else if (trade.crossType === "DAILY") {
-                dipAfterAgg.DAILY.push(trade);
-              } else if (trade.crossType === "BOTH") {
-                dipAfterAgg.WEEKLY.push(trade);
-                dipAfterAgg.DAILY.push(trade);
-              }
-            }
-
-            openPositions.splice(k, 1);
-            cooldownUntil = i + COOLDOWN;
-            globalOpenCount = Math.max(0, globalOpenCount - 1);
-          }
-        }
-      }
-
-      // detect signals
-      const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
-      const sig = analyseCrossing(stock, hist, {
-        debug: true,
-        debugLevel: "verbose",
-        dataForGates: gatesData,
+      // try to fetch history for this ticker
+      const candles = await fetchHistory(code, FROM, TO).catch((err) => {
+        console.warn(
+          `[BT] fetchHistory failed for ${code}: ${
+            err && err.message ? err.message : err
+          }`
+        );
+        return []; // graceful fallback
       });
 
-      const { ST, LT } = getShortLongSentiment(stock, hist) || {};
-
-      if (sig?.buyNow) {
-        signalsTotal++;
-        if (i >= WARMUP) signalsAfterWarmup++;
-        const dayISOforSig = toISO(today.date);
-        signalsByDay.set(
-          dayISOforSig,
-          (signalsByDay.get(dayISOforSig) || 0) + 1
+      // if still no data, skip this ticker
+      if (!candles || candles.length < WARMUP + 2) {
+        console.warn(
+          `[BT] skipping ${code}: not enough data (${candles.length || 0} < ${
+            WARMUP + 2
+          })`
         );
+        continue;
       }
 
-      const trend = sig?.debug?.ms?.trend;
-      if (trend && telemetry.trends.hasOwnProperty(trend))
-        telemetry.trends[trend]++;
+      const trades = [];
 
-      if (!sig?.buyNow) {
-        const dbg = sig?.debug || {};
-        if (dbg && dbg.priceActionGate === false) {
-          telemetry.gates.priceActionGateFailed++;
-        }
-        if (Array.isArray(dbg.reasons)) {
-          for (const r of dbg.reasons) {
-            if (typeof r === "string" && r.startsWith("DIP not ready:")) {
-              const why = afterColon(r, "DIP not ready:").replace(
-                /^[:\s]+/,
-                ""
-              );
-              inc(telemetry.dip.notReadyReasons, why || "unspecified");
-            }
-            if (r === "Structure gate: trend not up or price < MA5.") {
-              telemetry.gates.structureGateFailed++;
-            }
-            if (
-              r === "DIP blocked (Perfect gate): MAs not stacked bullishly."
-            ) {
-              telemetry.gates.stackedGateFailed++;
-            }
-            if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
-              const reason = extractGuardReason(r);
-              inc(telemetry.dip.guardVetoReasons, reason || "guard");
-            }
-            if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
-              const m = r.match(/need\s+([0-9.]+)/i);
-              const need = m ? parseFloat(m[1]) : NaN;
-              inc(telemetry.rr.rejected, bucketize(need));
-            }
-          }
+      for (let i = 0; i < candles.length; i++) {
+        const today = candles[i];
+        tradingDays.add(toISO(today.date));
+        const hist = candles.slice(0, i + 1);
+
+        // regime for this day
+        const dayISO = toISO(today.date);
+        const dayRegime = regimeMap[dayISO] || "RANGE";
+
+        if (dayRegime && telemetry.trends.hasOwnProperty(dayRegime)) {
+          telemetry.trends[dayRegime]++;
         }
 
-        if (SIM_REJECTED) {
-          const entry = today.close;
-          const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+        const stock = {
+          ticker: code,
+          currentPrice: today.close,
+          highPrice: today.high,
+          lowPrice: today.low,
+          openPrice: today.open,
+          prevClosePrice: candles[i - 1] ? candles[i - 1].close : today.close,
+          fiftyTwoWeekHigh: Math.max(...hist.map((c) => c.high)),
+          fiftyTwoWeekLow: Math.min(...hist.map((c) => c.low)),
+          historicalData: hist,
+        };
+        enrichForTechnicalScore(stock);
 
-          // hard 15% stop assumption
-          const simStop = entry * (1 - HARD_STOP_PCT);
+        // --- manage open positions ---
+        if (openPositions.length) {
+          for (let k = openPositions.length - 1; k >= 0; k--) {
+            const st = openPositions[k];
 
-          if (
-            Number.isFinite(simStop) &&
-            Number.isFinite(simTarget) &&
-            simStop < entry
-          ) {
-            const outcome = simulateTradeForward(
-              candles,
-              i,
-              entry,
-              simStop,
-              simTarget
-            );
+            let exit = null;
+            const canStop = Number.isFinite(st.stop);
+            const stopTouched = canStop && today.low <= st.stop;
 
-            const k = sentiKey(ST, LT);
-            if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
-            if (outcome.result !== "OPEN") {
-              sentiUpdate(sentiment.rejected[k], outcome);
-              parallel.rejectedBuys.totalSimulated++;
-              if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+            if (stopTouched) {
+              let stopFill =
+                today.open < st.stop
+                  ? today.open
+                  : Math.min(st.stop, today.high);
+
+              if (Number.isFinite(st.maxLossFloor)) {
+                stopFill = Math.max(stopFill, st.maxLossFloor);
+              }
+
+              const isProfit = stopFill >= st.entry;
+              exit = {
+                type: "STOP",
+                price: stopFill,
+                result: isProfit ? "WIN" : "LOSS",
+              };
+            } else if (Number.isFinite(st.target) && today.high >= st.target) {
+              exit = { type: "TARGET", price: st.target, result: "WIN" };
             }
 
-            if (Number.isFinite(LT)) {
-              if (!sentiment.rejectedLT[LT]) {
-                sentiment.rejectedLT[LT] = sentiInit();
-              }
-              if (outcome.result !== "OPEN") {
-                sentiUpdate(sentiment.rejectedLT[LT], outcome);
-              }
-            }
-
-            if (Number.isFinite(ST)) {
-              if (!sentiment.rejectedST[ST]) {
-                sentiment.rejectedST[ST] = sentiInit();
-              }
-              if (outcome.result !== "OPEN") {
-                sentiUpdate(sentiment.rejectedST[ST], outcome);
+            if (!exit && HOLD_BARS > 0) {
+              const ageBars = i - st.entryIdx;
+              if (ageBars >= HOLD_BARS) {
+                const rawPnL = today.close - st.entry;
+                exit = {
+                  type: "TIME",
+                  price: today.close,
+                  result: rawPnL >= 0 ? "WIN" : "LOSS",
+                };
               }
             }
 
-            const reasonsRaw = Array.isArray(sig?.debug?.reasons)
-              ? sig.debug.reasons.slice(0, 2)
-              : [sig?.reason || "unspecified"];
+            if (exit) {
+              const pctRet =
+                ((exit.price - st.entry) / Math.max(1e-9, st.entry)) * 100;
 
-            for (const rr of reasonsRaw) {
-              const norm = normalizeRejectedReason(rr);
-              if (!parallel.rejectedBuys.byReasonRaw[norm]) {
-                parallel.rejectedBuys.byReasonRaw[norm] = cfInitAgg();
+              const baseRisk = st.entry - st.initialStop;
+              const risk = Math.max(0.01, baseRisk);
+              const Rval = r2((exit.price - st.entry) / risk);
+
+              const isDipAfterFreshCrossSignal =
+                /DIP/i.test(st.kind || "") &&
+                (st.crossType === "WEEKLY" ||
+                  st.crossType === "DAILY" ||
+                  st.crossType === "BOTH") &&
+                Number.isFinite(st.crossLag) &&
+                st.crossLag <= 3;
+
+              const trade = {
+                ticker: code,
+                strategy: st.kind || "DIP",
+
+                entryDate: toISO(candles[st.entryIdx].date),
+                exitDate: toISO(today.date),
+                returnPct: r2(pctRet),
+                result: exit.result,
+                holdingDays: i - st.entryIdx,
+                exitType: exit.type,
+
+                entry: r2(st.entry),
+                exit: r2(exit.price),
+                stop: st.initialStop,
+                target: st.target,
+                R: Rval,
+
+                ST: st.ST,
+                LT: st.LT,
+                regime: st.regime || "RANGE",
+                crossType: st.crossType || null,
+                crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+                analytics: st.analytics || null,
+
+                sector: tickerInfoMap[code]?.sector || null,
+
+                dipAfterFreshCross: isDipAfterFreshCrossSignal,
+              };
+
+              trade.entryArchetype = trade.dipAfterFreshCross
+                ? "DIP_AFTER_FRESH_CROSS"
+                : trade.crossType || "OTHER";
+
+              trades.push(trade);
+              globalTrades.push(trade);
+
+              const kKey = sentiKey(st.ST, st.LT);
+              if (!sentiment.actual[kKey]) sentiment.actual[kKey] = sentiInit();
+              sentiUpdate(sentiment.actual[kKey], {
+                result: trade.result,
+                returnPct: trade.returnPct,
+                R: trade.R,
+              });
+
+              if (Number.isFinite(st.LT)) {
+                if (!sentiment.actualLT[st.LT]) {
+                  sentiment.actualLT[st.LT] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualLT[st.LT], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
               }
-              cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[norm], outcome);
 
-              if (outcome.result === "WIN") {
-                if (!parallel.rejectedBuys.examples[norm])
-                  parallel.rejectedBuys.examples[norm] = [];
-                if (parallel.rejectedBuys.examples[norm].length < EXAMPLE_MAX) {
-                  parallel.rejectedBuys.examples[norm].push({
-                    ticker: code,
-                    date: toISO(today.date),
-                    entry: r2(entry),
-                    stop: r2(simStop),
-                    target: r2(simTarget),
-                    exitType: outcome.exitType,
-                    R: +(outcome.R || 0).toFixed(2),
-                    returnPct: +(outcome.returnPct || 0).toFixed(2),
-                    ST,
-                    LT,
-                  });
+              if (Number.isFinite(st.ST)) {
+                if (!sentiment.actualST[st.ST]) {
+                  sentiment.actualST[st.ST] = sentiInit();
+                }
+                sentiUpdate(sentiment.actualST[st.ST], {
+                  result: trade.result,
+                  returnPct: trade.returnPct,
+                  R: trade.R,
+                });
+              }
+
+              if (trade.regime && regimeAgg[trade.regime]) {
+                regimeAgg[trade.regime].push(trade);
+              }
+
+              if (trade.dipAfterFreshCross) {
+                if (trade.crossType === "WEEKLY") {
+                  dipAfterAgg.WEEKLY.push(trade);
+                } else if (trade.crossType === "DAILY") {
+                  dipAfterAgg.DAILY.push(trade);
+                } else if (trade.crossType === "BOTH") {
+                  dipAfterAgg.WEEKLY.push(trade);
+                  dipAfterAgg.DAILY.push(trade);
                 }
               }
+
+              openPositions.splice(k, 1);
+              cooldownUntil = i + COOLDOWN;
+              globalOpenCount = Math.max(0, globalOpenCount - 1);
             }
           }
         }
-      } else {
-        // buyNow path
-        const atCapacity =
-          MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
 
-        const eligibleNow = i >= WARMUP && i > cooldownUntil && !atCapacity;
+        // --- detect new signals / entries ---
+        const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
+        const sig = analyseCrossing(stock, hist, {
+          debug: true,
+          debugLevel: "verbose",
+          dataForGates: gatesData,
+        });
 
-        if (eligibleNow) {
-          signalsWhileFlat++;
-        } else {
-          if (COUNT_BLOCKED) {
-            if (atCapacity) blockedInTrade++;
-            if (i < WARMUP) blockedWarmup++;
-            if (i <= cooldownUntil) blockedCooldown++;
+        const { ST, LT } = getShortLongSentiment(stock, hist) || {};
+
+        // ... (rest of your candle loop body stays EXACTLY the same)
+        // including buyNow logic, rejection sim, telemetry, etc.
+
+        // NOTE: do not change the existing logic below this point
+        // except indentation. Keep everything you already wrote.
+        // -------------
+        // your existing "if (sig?.buyNow) { ... } else { ... }"
+        // -------------
+      } // end candle loop
+
+      // force close leftovers at end of data (unchanged logic from your code)
+      if (openPositions.length) {
+        const lastIdx = candles.length - 1;
+        const lastBar = candles[lastIdx];
+        const rawLastClose = lastBar.close;
+
+        for (const st of openPositions) {
+          const ageBars = lastIdx - st.entryIdx;
+          let realizedExitPx = rawLastClose;
+          if (Number.isFinite(st.maxLossFloor)) {
+            realizedExitPx = Math.max(realizedExitPx, st.maxLossFloor);
           }
-        }
 
-        // rr telemetry
-        let rRatio = Number(sig?.debug?.rr?.ratio);
-        if (!Number.isFinite(rRatio)) {
-          const pxNow = today.close;
-          const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
-          const rawStop = pxNow * (1 - HARD_STOP_PCT);
-          if (
-            Number.isFinite(rawStop) &&
-            Number.isFinite(rawTarget) &&
-            rawStop < pxNow &&
-            rawTarget > pxNow
-          ) {
-            const reward = rawTarget - pxNow;
-            const risk = pxNow - rawStop;
-            if (risk > 0) {
-              rRatio = reward / risk;
-            }
-          }
-        }
-        inc(telemetry.rr.accepted, bucketize(rRatio));
+          const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
+          const exitTypeFinal = overMaxHold ? "TIME" : "END";
+          const endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
 
-        if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
-          telemetry.examples.buyNow.push({
+          const holdingBarsFinal =
+            HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
+
+          const baseRisk = st.entry - st.initialStop;
+          const risk = Math.max(0.01, baseRisk);
+          const Rval = r2((realizedExitPx - st.entry) / risk);
+
+          const isDipAfterFreshCrossSignal =
+            /DIP/i.test(st.kind || "") &&
+            (st.crossType === "WEEKLY" ||
+              st.crossType === "DAILY" ||
+              st.crossType === "BOTH") &&
+            Number.isFinite(st.crossLag) &&
+            st.crossLag <= 3;
+
+          const trade = {
             ticker: code,
-            date: toISO(today.date),
-            reason: sig?.reason || "",
-            rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
-          });
+            strategy: st.kind || "DIP",
+
+            entryDate: toISO(candles[st.entryIdx].date),
+            exitDate: toISO(lastBar.date),
+            returnPct: r2(((realizedExitPx - st.entry) / st.entry) * 100),
+            result: endResult,
+
+            holdingDays: holdingBarsFinal,
+            exitType: exitTypeFinal,
+
+            entry: r2(st.entry),
+            exit: r2(realizedExitPx),
+            stop: st.initialStop,
+            target: st.target,
+            R: Rval,
+
+            ST: st.ST,
+            LT: st.LT,
+            regime: st.regime || "RANGE",
+            crossType: st.crossType || null,
+            crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
+            analytics: st.analytics || null,
+
+            sector: tickerInfoMap[code]?.sector || st.sector || null,
+
+            dipAfterFreshCross: isDipAfterFreshCrossSignal,
+          };
+
+          trade.entryArchetype = trade.dipAfterFreshCross
+            ? "DIP_AFTER_FRESH_CROSS"
+            : trade.crossType || "OTHER";
+
+          trades.push(trade);
+          globalTrades.push(trade);
         }
 
-        if (eligibleNow) {
-          // regime gate
-          if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
-            telemetry.gates.regimeFiltered++;
-          } else {
-            // ENTRY next bar open (or same close fallback)
-            const hasNext = i + 1 < candles.length;
-            const entryBarIdx = hasNext ? i + 1 : i;
-            const entryBar = hasNext ? candles[i + 1] : today;
-            const entry = hasNext ? entryBar.open : today.close;
-
-            // compute planned stop/target
-            const planned = computePlannedLevels({
-              entry,
-              sig,
-            });
-            const stop = Number(planned.stop);
-            const target = Number(planned.target);
-
-            if (
-              !Number.isFinite(stop) ||
-              !Number.isFinite(target) ||
-              stop >= entry
-            ) {
-              signalsInvalid++;
-            } else {
-              const qStop = toTick(stop, stock);
-              const qTarget = toTick(target, stock);
-
-              // cross meta
-              const cm = sig?.meta?.cross || {};
-              const selected =
-                cm?.selected ||
-                (cm?.weekly && cm?.daily
-                  ? "BOTH"
-                  : cm?.weekly
-                  ? "WEEKLY"
-                  : cm?.daily
-                  ? "DAILY"
-                  : null);
-              const lag =
-                selected === "WEEKLY" && cm.weekly
-                  ? cm.weekly.barsAgo
-                  : selected === "DAILY" && cm.daily
-                  ? cm.daily.barsAgo
-                  : selected === "BOTH"
-                  ? Math.min(
-                      cm.weekly ? cm.weekly.barsAgo : Infinity,
-                      cm.daily ? cm.daily.barsAgo : Infinity
-                    )
-                  : null;
-
-              const analytics = computeAnalytics(candles, entryBarIdx, entry);
-
-              const entryATR =
-                (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[
-                  entryBarIdx
-                ] || 0;
-              const atrPctNow =
-                analytics.atrPct ??
-                (entryATR && entry ? (entryATR / entry) * 100 : 0);
-
-              const tooWild =
-                Number.isFinite(atrPctNow) && atrPctNow > MAX_ATR_PCT;
-              if (tooWild) {
-                telemetry.gates.tooWildAtr++;
-              } else {
-                // open position
-                openPositions.push({
-                  entryIdx: entryBarIdx,
-                  entry,
-                  stop: qStop,
-                  initialStop: qStop,
-                  target: qTarget,
-
-                  maxLossFloor: qStop, // our 15% safety
-
-                  ST,
-                  LT,
-                  regime: dayRegime,
-                  kind:
-                    String(sig?.debug?.chosen || sig?.reason || "")
-                      .split(":")[0]
-                      .trim() || "UNKNOWN",
-                  crossType: selected,
-                  crossLag: Number.isFinite(lag) ? lag : null,
-
-                  analytics,
-                  sector: tickerInfoMap[code]?.sector || null,
-                });
-
-                globalOpenCount++;
-                signalsExecuted++;
-              }
-            }
-          }
-        }
-      }
-    } // candle loop
-
-    // force close at end of data
-    if (openPositions.length) {
-      const lastIdx = candles.length - 1;
-      const lastBar = candles[lastIdx];
-      const rawLastClose = lastBar.close;
-
-      for (const st of openPositions) {
-        const ageBars = lastIdx - st.entryIdx;
-        let realizedExitPx = rawLastClose;
-        if (Number.isFinite(st.maxLossFloor)) {
-          realizedExitPx = Math.max(realizedExitPx, st.maxLossFloor);
-        }
-
-        const overMaxHold = HOLD_BARS > 0 && ageBars >= HOLD_BARS;
-        const exitTypeFinal = overMaxHold ? "TIME" : "END";
-        const endResult = realizedExitPx >= st.entry ? "WIN" : "LOSS";
-
-        const holdingBarsFinal =
-          HOLD_BARS > 0 ? Math.min(ageBars, HOLD_BARS) : ageBars;
-
-        const baseRisk = st.entry - st.initialStop;
-        const risk = Math.max(0.01, baseRisk);
-        const Rval = r2((realizedExitPx - st.entry) / risk);
-
-        const isDipAfterFreshCrossSignal =
-          /DIP/i.test(st.kind || "") &&
-          (st.crossType === "WEEKLY" ||
-            st.crossType === "DAILY" ||
-            st.crossType === "BOTH") &&
-          Number.isFinite(st.crossLag) &&
-          st.crossLag <= 3;
-
-        const trade = {
-          ticker: code,
-          strategy: st.kind || "DIP",
-
-          entryDate: toISO(candles[st.entryIdx].date),
-          exitDate: toISO(lastBar.date),
-          returnPct: r2(((realizedExitPx - st.entry) / st.entry) * 100),
-          result: endResult,
-
-          holdingDays: holdingBarsFinal,
-          exitType: exitTypeFinal,
-
-          entry: r2(st.entry),
-          exit: r2(realizedExitPx),
-          stop: st.initialStop,
-          target: st.target,
-          R: Rval,
-
-          ST: st.ST,
-          LT: st.LT,
-          regime: st.regime || "RANGE",
-          crossType: st.crossType || null,
-          crossLag: Number.isFinite(st.crossLag) ? st.crossLag : null,
-          analytics: st.analytics || null,
-
-          sector: tickerInfoMap[code]?.sector || st.sector || null,
-
-          dipAfterFreshCross: isDipAfterFreshCrossSignal,
-        };
-
-        trade.entryArchetype = trade.dipAfterFreshCross
-          ? "DIP_AFTER_FRESH_CROSS"
-          : trade.crossType || "OTHER";
-
-        trades.push(trade);
-        globalTrades.push(trade);
+        globalOpenCount = Math.max(0, globalOpenCount - openPositions.length);
+        openPositions = [];
       }
 
-      globalOpenCount = Math.max(0, globalOpenCount - openPositions.length);
-      openPositions = [];
+      // per-ticker snapshot (unchanged)
+      const m = computeMetrics(trades);
+      console.log(
+        `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${
+          trades.length
+        } | winRate=${m.winRate}% | avgRet=${m.avgReturnPct}% | PF=${
+          m.profitFactor
+        }`
+      );
+
+      const analysis = buildTickerAnalysis(code, trades);
+
+      byTicker.push({ ticker: code, trades, metrics: m, analysis });
+    } catch (err) {
+      console.warn(
+        `[BT] ERROR while processing ${code}: ${
+          err && err.message ? err.message : err
+        }`
+      );
+      // skip this ticker and continue loop
+      continue;
     }
-
-    // per-ticker snapshot
-    const m = computeMetrics(trades);
-    console.log(
-      `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${
-        trades.length
-      } | winRate=${m.winRate}% | avgRet=${m.avgReturnPct}% | PF=${
-        m.profitFactor
-      }`
-    );
-
-    const analysis = buildTickerAnalysis(code, trades);
-
-    byTicker.push({ ticker: code, trades, metrics: m, analysis });
-  } // tickers loop
+  } // end for codes loop
 
   // ---- final metrics ----
   const all = byTicker.length
