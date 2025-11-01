@@ -265,9 +265,6 @@ if (!withAnalytics.length) {
 // -------------------- OVERALL / HIGH-LEVEL STATS --------------------
 const overall = summarizeMetrics(withAnalytics);
 
-// spotlight might exist in backtest.json but we don't hard rely on it anymore
-const spotlight = raw?.spotlight || {};
-
 // regime (already pre-summarized in backtest output)
 const regimeMetrics = raw?.regime?.metrics || {};
 
@@ -394,7 +391,7 @@ const sliceResults = SLICES.map((s) => {
   return analyzeSlice(s.name, s.desc, subset, tradingDaysGuess);
 });
 
-// ---- NEW: profile summary (raw_signal_levels / atr_trail / target_only)
+
 // ---- NEW: profile summary (raw_signal_levels / atr_trail / target_only)
 const profilesSummary = {};
 if (raw.profiles && typeof raw.profiles === "object") {
@@ -402,8 +399,14 @@ if (raw.profiles && typeof raw.profiles === "object") {
     // gather trades actually tagged with this profile
     const tradesForProfile = withAnalytics.filter((t) => t.profile === pid);
 
-    // generic performance metrics (winRate, PF, etc. computed here fresh)
+    // generic performance metrics (winRate, PF, etc.) computed fresh
     const profMetrics = summarizeMetrics(tradesForProfile);
+
+    // --- HIGH SCORE (6+) FILTER FOR THIS PROFILE ---
+    const highScoreTradesForProfile = tradesForProfile.filter(
+      (t) => Number.isFinite(t.score) && t.score >= 6
+    );
+    const highScoreMetrics = summarizeMetrics(highScoreTradesForProfile);
 
     // exits breakdown (TARGET / STOP / TIME / END) from backtest output
     const exits = pdata.exits || {};
@@ -411,21 +414,23 @@ if (raw.profiles && typeof raw.profiles === "object") {
     // time-to-target behavior for this profile
     const tttProfile = summarizeTimeToTarget(tradesForProfile);
 
-    // ---- NEW: pull risk tail info from backtest profile.metrics.lossTail ----
-    // raw.profiles[pid].metrics was built by computeMetrics() in backtest,
-    // so it now includes .lossTail = { minLossPct, maxLossPct, p90LossPct, p95LossPct, countLosses }
-    const lossTail = pdata.metrics && pdata.metrics.lossTail
-      ? {
-          minLossPct: pdata.metrics.lossTail.minLossPct,
-          maxLossPct: pdata.metrics.lossTail.maxLossPct,
-          p90LossPct: pdata.metrics.lossTail.p90LossPct,
-          p95LossPct: pdata.metrics.lossTail.p95LossPct,
-          countLosses: pdata.metrics.lossTail.countLosses,
-        }
-      : null;
+    // per-profile score ladder / correlation
+    const profScoreInfo = metricsByScore(tradesForProfile);
+    const profScoreCorr = corrScore(tradesForProfile);
 
-    // ---- NEW: catastrophic stop suggestion (only present for target_only) ----
-    // raw.profiles[pid].catastrophicStopSuggestion.killAtPct is the proposed "kill it if drawdown hits X%"
+    // pull risk tail info from backtest profile.metrics.lossTail
+    const lossTail =
+      pdata.metrics && pdata.metrics.lossTail
+        ? {
+            minLossPct: pdata.metrics.lossTail.minLossPct,
+            maxLossPct: pdata.metrics.lossTail.maxLossPct,
+            p90LossPct: pdata.metrics.lossTail.p90LossPct,
+            p95LossPct: pdata.metrics.lossTail.p95LossPct,
+            countLosses: pdata.metrics.lossTail.countLosses,
+          }
+        : null;
+
+    // catastrophic stop suggestion (only present for target_only)
     const catastrophicStopSuggestion = pdata.catastrophicStopSuggestion
       ? {
           killAtPct: pdata.catastrophicStopSuggestion.killAtPct,
@@ -442,6 +447,15 @@ if (raw.profiles && typeof raw.profiles === "object") {
       avgReturnPct: profMetrics.avgReturnPct,
       avgHoldBars: profMetrics.avgHoldingDays,
 
+      // >>> NEW: performance when score >= 6 within THIS profile
+      highScore6plus: {
+        trades: highScoreMetrics.trades,
+        winRate: highScoreMetrics.winRate,
+        profitFactor: highScoreMetrics.profitFactor,
+        avgReturnPct: highScoreMetrics.avgReturnPct,
+        avgHoldBars: highScoreMetrics.avgHoldingDays,
+      },
+
       exits,
 
       timeToTarget: {
@@ -451,14 +465,21 @@ if (raw.profiles && typeof raw.profiles === "object") {
         p90Bars: tttProfile.days.p90,
       },
 
-      // NEW: downside shape for this profile
-      lossTail, // may be null for profiles with no losses / no data
+      lossTail, // downside shape for this profile
 
-      // NEW: suggested portfolio-level kill stop for target_only
-      catastrophicStopSuggestion, // null for others
+      catastrophicStopSuggestion, // only for target_only
+
+      scoreQuality: {
+        corrWin: r2(profScoreCorr.win),
+        corrRet: r2(profScoreCorr.ret),
+        ladder: profScoreInfo.scored,
+        ladderTop: profScoreInfo.scored.slice(-10).reverse(),
+      },
     };
   }
 }
+
+
 
 
 // bestProfiles comes straight from backtest
@@ -706,11 +727,10 @@ const bestSetups = buildBestSetups(perTickerCombosTmp);
 
 // -------------------- target_only deep dive --------------------
 const targetOnlyAll = withAnalytics.filter((t) => t.profile === "target_only");
-const targetHits = targetOnlyAll.filter((t) => t.exitType === "TARGET");
-const targetEnd = targetOnlyAll.filter((t) => t.exitType === "END");
 
 const targetAllStats = summarizeSubset(targetOnlyAll);
 const ttt = summarizeTimeToTarget(targetOnlyAll); // time-to-target
+
 
 // -------------------- GLOBAL BUCKET SUMMARIES --------------------
 // generic category summarizer and quartile splitter
@@ -1062,6 +1082,7 @@ const exportObj = {
   // Why do we lose money (pattern of losers)
   // Why we lose money (pattern of losers we actually entered)
   lossAnalysis: losingPatterns,
+  lossReasons,
 
   missedOpportunities: missedOpportunities,
   // Market context
