@@ -44,31 +44,54 @@ function toTick(v, stock) {
 
 /* ---------------- data ---------------- */
 async function fetchHistory(ticker, fromISO, toISO) {
-  const r = await fetch(
-    `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`
-  );
-  const text = await r.text();
-  if (!r.ok)
-    throw new Error(
-      `history ${ticker} HTTP ${r.status}: ${text.slice(0, 200)}`
+  try {
+    const r = await fetch(
+      `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`
     );
-  const j = JSON.parse(text);
-  if (!j?.success || !Array.isArray(j.data))
-    throw new Error(`bad history payload for ${ticker}`);
-  return j.data
-    .map((d) => ({
-      date: new Date(d.date),
-      open: Number(d.open ?? d.close ?? 0),
-      high: Number(d.high ?? d.close ?? 0),
-      low: Number(d.low ?? d.close ?? 0),
-      close: Number(d.close ?? 0),
-      volume: Number(d.volume ?? 0),
-    }))
-    .filter(
-      (d) =>
-        (!fromISO || d.date >= new Date(fromISO)) &&
-        (!toISO || d.date <= new Date(toISO))
+    const text = await r.text();
+
+    if (!r.ok) {
+      console.warn(
+        `[BT] fetchHistory: ${ticker} HTTP ${r.status}: ${text.slice(0, 200)}`
+      );
+      return [];
+    }
+
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch (e) {
+      console.warn(
+        `[BT] fetchHistory: bad JSON for ${ticker}: ${String(e).slice(0, 200)}`
+      );
+      return [];
+    }
+
+    if (!j?.success || !Array.isArray(j.data)) {
+      console.warn(`[BT] fetchHistory: bad payload for ${ticker}`);
+      return [];
+    }
+
+    return j.data
+      .map((d) => ({
+        date: new Date(d.date),
+        open: Number(d.open ?? d.close ?? 0),
+        high: Number(d.high ?? d.close ?? 0),
+        low: Number(d.low ?? d.close ?? 0),
+        close: Number(d.close ?? 0),
+        volume: Number(d.volume ?? 0),
+      }))
+      .filter(
+        (d) =>
+          (!fromISO || d.date >= new Date(fromISO)) &&
+          (!toISO || d.date <= new Date(toISO))
+      );
+  } catch (err) {
+    console.warn(
+      `[BT] fetchHistory: exception for ${ticker}: ${String(err).slice(0, 200)}`
     );
+    return [];
+  }
 }
 
 /* ---------------- small helpers ---------------- */
@@ -755,15 +778,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ? new Set(opts.allowedRegimes.map(String))
       : null;
 
+  // fetch Nikkei proxy safely
   const nikkeiRef = await fetchHistory(REGIME_TICKER, FROM, TO);
   if (!nikkeiRef || !nikkeiRef.length) {
-    throw new Error(
+    console.warn(
       `[BT] Regime fetch failed or empty for ${REGIME_TICKER} (${FROM}→${TO})`
     );
   }
-  const regimeMap = buildRegimeMap(nikkeiRef);
+  const regimeMap =
+    nikkeiRef && nikkeiRef.length
+      ? buildRegimeMap(nikkeiRef)
+      : Object.create(null);
   console.log(
-    `[BT] Regime ready from ${REGIME_TICKER} with ${nikkeiRef.length} bars`
+    `[BT] Regime ready from ${REGIME_TICKER} with ${
+      nikkeiRef ? nikkeiRef.length : 0
+    } bars`
   );
 
   // Aggregation per regime
@@ -784,6 +813,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const byTicker = [];
   const globalTrades = [];
   const tradingDays = new Set();
+  const skippedTickers = [];
 
   let signalsTotal = 0;
   let signalsAfterWarmup = 0;
@@ -867,23 +897,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       let openPositions = [];
       let cooldownUntil = -1;
 
-      // try to fetch history for this ticker
-      const candles = await fetchHistory(code, FROM, TO).catch((err) => {
+      const candles = await fetchHistory(code, FROM, TO);
+      if (candles.length < WARMUP + 2) {
         console.warn(
-          `[BT] fetchHistory failed for ${code}: ${
-            err && err.message ? err.message : err
-          }`
-        );
-        return []; // graceful fallback
-      });
-
-      // if still no data, skip this ticker
-      if (!candles || candles.length < WARMUP + 2) {
-        console.warn(
-          `[BT] skipping ${code}: not enough data (${candles.length || 0} < ${
+          `[BT] not enough data for ${code} (${candles.length} < ${
             WARMUP + 2
-          })`
+          }) — skipping`
         );
+        skippedTickers.push({
+          ticker: code,
+          reason: `not enough data (${candles.length} bars)`,
+        });
         continue;
       }
 
@@ -915,7 +939,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         };
         enrichForTechnicalScore(stock);
 
-        // --- manage open positions ---
+        // manage existing open position(s)
         if (openPositions.length) {
           for (let k = openPositions.length - 1; k >= 0; k--) {
             const st = openPositions[k];
@@ -930,6 +954,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   ? today.open
                   : Math.min(st.stop, today.high);
 
+              // enforce 15% max-loss floor safety
               if (Number.isFinite(st.maxLossFloor)) {
                 stopFill = Math.max(stopFill, st.maxLossFloor);
               }
@@ -1060,7 +1085,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
         }
 
-        // --- detect new signals / entries ---
+        // detect signals
         const gatesData = USE_LIVE_BAR ? hist : hist.slice(0, -1);
         const sig = analyseCrossing(stock, hist, {
           debug: true,
@@ -1070,17 +1095,282 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         const { ST, LT } = getShortLongSentiment(stock, hist) || {};
 
-        // ... (rest of your candle loop body stays EXACTLY the same)
-        // including buyNow logic, rejection sim, telemetry, etc.
+        if (sig?.buyNow) {
+          signalsTotal++;
+          if (i >= WARMUP) signalsAfterWarmup++;
+          const dayISOforSig = toISO(today.date);
+          signalsByDay.set(
+            dayISOforSig,
+            (signalsByDay.get(dayISOforSig) || 0) + 1
+          );
+        }
 
-        // NOTE: do not change the existing logic below this point
-        // except indentation. Keep everything you already wrote.
-        // -------------
-        // your existing "if (sig?.buyNow) { ... } else { ... }"
-        // -------------
-      } // end candle loop
+        const trend = sig?.debug?.ms?.trend;
+        if (trend && telemetry.trends.hasOwnProperty(trend))
+          telemetry.trends[trend]++;
 
-      // force close leftovers at end of data (unchanged logic from your code)
+        if (!sig?.buyNow) {
+          const dbg = sig?.debug || {};
+          if (dbg && dbg.priceActionGate === false) {
+            telemetry.gates.priceActionGateFailed++;
+          }
+          if (Array.isArray(dbg.reasons)) {
+            for (const r of dbg.reasons) {
+              if (typeof r === "string" && r.startsWith("DIP not ready:")) {
+                const why = afterColon(r, "DIP not ready:").replace(
+                  /^[:\s]+/,
+                  ""
+                );
+                inc(telemetry.dip.notReadyReasons, why || "unspecified");
+              }
+              if (r === "Structure gate: trend not up or price < MA5.") {
+                telemetry.gates.structureGateFailed++;
+              }
+              if (
+                r === "DIP blocked (Perfect gate): MAs not stacked bullishly."
+              ) {
+                telemetry.gates.stackedGateFailed++;
+              }
+              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
+                const reason = extractGuardReason(r);
+                inc(telemetry.dip.guardVetoReasons, reason || "guard");
+              }
+              if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+RR too low:/i)) {
+                const m = r.match(/need\s+([0-9.]+)/i);
+                const need = m ? parseFloat(m[1]) : NaN;
+                inc(telemetry.rr.rejected, bucketize(need));
+              }
+            }
+          }
+
+          if (SIM_REJECTED) {
+            const entry = today.close;
+            const simTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+
+            // hard 15% stop assumption
+            const simStop = entry * (1 - HARD_STOP_PCT);
+
+            if (
+              Number.isFinite(simStop) &&
+              Number.isFinite(simTarget) &&
+              simStop < entry
+            ) {
+              const outcome = simulateTradeForward(
+                candles,
+                i,
+                entry,
+                simStop,
+                simTarget
+              );
+
+              const k = sentiKey(ST, LT);
+              if (!sentiment.rejected[k]) sentiment.rejected[k] = sentiInit();
+              if (outcome.result !== "OPEN") {
+                sentiUpdate(sentiment.rejected[k], outcome);
+                parallel.rejectedBuys.totalSimulated++;
+                if (outcome.result === "WIN") parallel.rejectedBuys.winners++;
+              }
+
+              if (Number.isFinite(LT)) {
+                if (!sentiment.rejectedLT[LT]) {
+                  sentiment.rejectedLT[LT] = sentiInit();
+                }
+                if (outcome.result !== "OPEN") {
+                  sentiUpdate(sentiment.rejectedLT[LT], outcome);
+                }
+              }
+
+              if (Number.isFinite(ST)) {
+                if (!sentiment.rejectedST[ST]) {
+                  sentiment.rejectedST[ST] = sentiInit();
+                }
+                if (outcome.result !== "OPEN") {
+                  sentiUpdate(sentiment.rejectedST[ST], outcome);
+                }
+              }
+
+              const reasonsRaw = Array.isArray(sig?.debug?.reasons)
+                ? sig.debug.reasons.slice(0, 2)
+                : [sig?.reason || "unspecified"];
+
+              for (const rr of reasonsRaw) {
+                const norm = normalizeRejectedReason(rr);
+                if (!parallel.rejectedBuys.byReasonRaw[norm]) {
+                  parallel.rejectedBuys.byReasonRaw[norm] = cfInitAgg();
+                }
+                cfUpdateAgg(parallel.rejectedBuys.byReasonRaw[norm], outcome);
+
+                if (outcome.result === "WIN") {
+                  if (!parallel.rejectedBuys.examples[norm])
+                    parallel.rejectedBuys.examples[norm] = [];
+                  if (
+                    parallel.rejectedBuys.examples[norm].length < EXAMPLE_MAX
+                  ) {
+                    parallel.rejectedBuys.examples[norm].push({
+                      ticker: code,
+                      date: toISO(today.date),
+                      entry: r2(entry),
+                      stop: r2(simStop),
+                      target: r2(simTarget),
+                      exitType: outcome.exitType,
+                      R: +(outcome.R || 0).toFixed(2),
+                      returnPct: +(outcome.returnPct || 0).toFixed(2),
+                      ST,
+                      LT,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // buyNow path
+          const atCapacity =
+            MAX_CONCURRENT > 0 && globalOpenCount >= MAX_CONCURRENT;
+
+          const eligibleNow = i >= WARMUP && i > cooldownUntil && !atCapacity;
+
+          if (eligibleNow) {
+            signalsWhileFlat++;
+          } else {
+            if (COUNT_BLOCKED) {
+              if (atCapacity) blockedInTrade++;
+              if (i < WARMUP) blockedWarmup++;
+              if (i <= cooldownUntil) blockedCooldown++;
+            }
+          }
+
+          // rr telemetry
+          let rRatio = Number(sig?.debug?.rr?.ratio);
+          if (!Number.isFinite(rRatio)) {
+            const pxNow = today.close;
+            const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+            const rawStop = pxNow * (1 - HARD_STOP_PCT);
+            if (
+              Number.isFinite(rawStop) &&
+              Number.isFinite(rawTarget) &&
+              rawStop < pxNow &&
+              rawTarget > pxNow
+            ) {
+              const reward = rawTarget - pxNow;
+              const risk = pxNow - rawStop;
+              if (risk > 0) {
+                rRatio = reward / risk;
+              }
+            }
+          }
+          inc(telemetry.rr.accepted, bucketize(rRatio));
+
+          if (telemetry.examples.buyNow.length < EXAMPLE_MAX) {
+            telemetry.examples.buyNow.push({
+              ticker: code,
+              date: toISO(today.date),
+              reason: sig?.reason || "",
+              rr: Number.isFinite(rRatio) ? r2(rRatio) : null,
+            });
+          }
+
+          if (eligibleNow) {
+            // regime gate
+            if (allowedRegimes && !allowedRegimes.has(dayRegime)) {
+              telemetry.gates.regimeFiltered++;
+            } else {
+              // ENTRY next bar open (or same close fallback)
+              const hasNext = i + 1 < candles.length;
+              const entryBarIdx = hasNext ? i + 1 : i;
+              const entryBar = hasNext ? candles[i + 1] : today;
+              const entry = hasNext ? entryBar.open : today.close;
+
+              // compute planned stop/target
+              const planned = computePlannedLevels({
+                entry,
+                sig,
+              });
+              const stop = Number(planned.stop);
+              const target = Number(planned.target);
+
+              if (
+                !Number.isFinite(stop) ||
+                !Number.isFinite(target) ||
+                stop >= entry
+              ) {
+                signalsInvalid++;
+              } else {
+                const qStop = toTick(stop, stock);
+                const qTarget = toTick(target, stock);
+
+                // cross meta
+                const cm = sig?.meta?.cross || {};
+                const selected =
+                  cm?.selected ||
+                  (cm?.weekly && cm?.daily
+                    ? "BOTH"
+                    : cm?.weekly
+                    ? "WEEKLY"
+                    : cm?.daily
+                    ? "DAILY"
+                    : null);
+                const lag =
+                  selected === "WEEKLY" && cm.weekly
+                    ? cm.weekly.barsAgo
+                    : selected === "DAILY" && cm.daily
+                    ? cm.daily.barsAgo
+                    : selected === "BOTH"
+                    ? Math.min(
+                        cm.weekly ? cm.weekly.barsAgo : Infinity,
+                        cm.daily ? cm.daily.barsAgo : Infinity
+                      )
+                    : null;
+
+                const analytics = computeAnalytics(candles, entryBarIdx, entry);
+
+                const entryATR =
+                  (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[
+                    entryBarIdx
+                  ] || 0;
+                const atrPctNow =
+                  analytics.atrPct ??
+                  (entryATR && entry ? (entryATR / entry) * 100 : 0);
+
+                const tooWild =
+                  Number.isFinite(atrPctNow) && atrPctNow > MAX_ATR_PCT;
+                if (tooWild) {
+                  telemetry.gates.tooWildAtr++;
+                } else {
+                  // open position
+                  openPositions.push({
+                    entryIdx: entryBarIdx,
+                    entry,
+                    stop: qStop,
+                    initialStop: qStop,
+                    target: qTarget,
+
+                    maxLossFloor: qStop, // our 15% safety
+
+                    ST,
+                    LT,
+                    regime: dayRegime,
+                    kind:
+                      String(sig?.debug?.chosen || sig?.reason || "")
+                        .split(":")[0]
+                        .trim() || "UNKNOWN",
+                    crossType: selected,
+                    crossLag: Number.isFinite(lag) ? lag : null,
+
+                    analytics,
+                    sector: tickerInfoMap[code]?.sector || null,
+                  });
+
+                  globalOpenCount++;
+                  signalsExecuted++;
+                }
+              }
+            }
+          }
+        }
+      } // candle loop
+
+      // force close at end of data
       if (openPositions.length) {
         const lastIdx = candles.length - 1;
         const lastBar = candles[lastIdx];
@@ -1154,7 +1444,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         openPositions = [];
       }
 
-      // per-ticker snapshot (unchanged)
+      // per-ticker snapshot
       const m = computeMetrics(trades);
       console.log(
         `[BT] finished ${ti + 1}/${codes.length}: ${code} | trades=${
@@ -1167,16 +1457,17 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       const analysis = buildTickerAnalysis(code, trades);
 
       byTicker.push({ ticker: code, trades, metrics: m, analysis });
-    } catch (err) {
+    } catch (errTicker) {
       console.warn(
-        `[BT] ERROR while processing ${code}: ${
-          err && err.message ? err.message : err
-        }`
+        `[BT] ERROR processing ${code}: ${String(errTicker).slice(0, 200)}`
       );
-      // skip this ticker and continue loop
-      continue;
+      skippedTickers.push({
+        ticker: code,
+        reason: `exception: ${String(errTicker).slice(0, 200)}`,
+      });
+      // continue loop
     }
-  } // end for codes loop
+  } // tickers loop
 
   // ---- final metrics ----
   const all = byTicker.length
@@ -1438,6 +1729,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     tradesPerDay: tradesPerDay,
     tradingDays: days,
 
+    skippedTickers, // <--- NEW: tickers we couldn't process
+
     params: {
       holdBars: HOLD_BARS,
       warmupBars: WARMUP,
@@ -1640,7 +1933,7 @@ function sum(arr) {
 
 /* --------------------------- expose for Bubble -------------------------- */
 window.backtest = async (tickersOrOpts, maybeOpts) => {
-  // No try/catch fallback: surface real errors
+  // No try/catch here on purpose: caller should see if runBacktest itself fails
   return Array.isArray(tickersOrOpts)
     ? await runBacktest(tickersOrOpts, { ...maybeOpts })
     : await runBacktest({ ...(tickersOrOpts || {}) });
