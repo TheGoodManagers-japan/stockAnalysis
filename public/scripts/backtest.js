@@ -858,13 +858,13 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   // global position cap
   let globalOpenCount = 0;
 
-  // single-profile state
-  let openPositions = [];
-  let cooldownUntil = -1;
 
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
     console.log(`[BT] processing stock ${ti + 1}/${codes.length}: ${code}`);
+    // single-profile state
+    let openPositions = [];
+    let cooldownUntil = -1;
 
     const candles = await fetchHistory(code, FROM, TO);
     if (candles.length < WARMUP + 2) {
