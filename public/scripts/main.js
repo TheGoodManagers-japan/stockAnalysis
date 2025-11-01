@@ -174,6 +174,16 @@ function rankFromScore(score) {
   return 5;                  // avoid
 }
 
+export function getShortLongSentiment(stock, historicalData) {
+  const horizons = getComprehensiveMarketSentiment(stock, historicalData);
+  return {
+    ST: horizons.shortTerm.score, // number 1..7
+    LT: horizons.longTerm.score, // number 1..7
+    details: horizons, // keep full object if you want confidence / labels
+  };
+}
+
+
 export function getSentimentCombinationRank(ST, LT) {
   const key = `LT${Number(LT) || 0}-ST${Number(ST) || 0}`;
   const score = SENTIMENT_COMBO_SCORE[key];

@@ -17,10 +17,7 @@
 // - Scoring logic removed.
 
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
-import {
-  enrichForTechnicalScore,
-  getSentimentCombinationRank,
-} from "./main.js";
+import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
 import { allTickers } from "./tickers.js";
 
 const API_BASE =
@@ -1078,9 +1075,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           dataForGates: gatesData,
         });
 
-        const senti = getSentimentCombinationRank(stock, hist);
-        const ST = senti?.shortTerm?.score ?? 4;
-        const LT = senti?.longTerm?.score ?? 4;
+        const { ST, LT } = getShortLongSentiment(stock, hist) || {};
+
 
         if (sig?.buyNow) {
           signalsTotal++;
