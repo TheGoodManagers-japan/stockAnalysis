@@ -57,10 +57,30 @@ function teleInit() {
       dipRecoveryPct: [],
       rsiSample: [],
     },
+
+    // *** NEW: a high-level list of "we had something but we didn't allow it"
+    // We'll fill this via pushBlock() so we can expose it to the caller / backtest.
+    rejected: [], // [{ code, gate, why, ctx }]
   };
 }
+
+// pushBlock = register a veto / RR fail / gate fail, AND mirror it in tele.rejected
 function pushBlock(tele, code, gate, why, ctx = {}) {
-  tele.blocks.push({ code, gate, why, ctx });
+  const blk = { code, gate, why, ctx };
+  tele.blocks.push(blk);
+
+  // *** NEW: capture it as a rejected candidate for surfacing to backtest/UI
+  tele.rejected.push({
+    code,
+    gate,
+    why,
+    // keep lightweight but useful trade-ish context
+    ticker: tele?.context?.ticker,
+    lastDate: tele?.context?.gatesDataset?.lastDate,
+    trend: tele?.context?.trend,
+    px: tele?.context?.px,
+    extra: ctx,
+  });
 }
 
 /* ============================ Tracing ============================ */
@@ -102,8 +122,8 @@ function getConfig(opts = {}) {
     perfectMode: false,
 
     // --- Weekly/Daily cross gating (DIP + new playbook) ---
-    requireWeeklyUpForDIP: true, // require weekly uptrend = ≥2/3 of 13/26/52wk MAs under price
-    requireDailyReclaim25and75ForDIP: true, // require recent price reclaim of both 25d & 75d
+    requireWeeklyUpForDIP: true,
+    requireDailyReclaim25and75ForDIP: true,
     dailyReclaimLookback: 5,
     freshDailyLookbackDays: 5,
 
@@ -185,7 +205,7 @@ function getConfig(opts = {}) {
     // allow DIPs even if broader regime softened
     allowDipInDowntrend: true,
 
-    // min stop distance (used by non-DIP fallbacks; DIP stop logic handled in dip.js)
+    // min stop distance
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
@@ -207,7 +227,6 @@ function getConfig(opts = {}) {
 
 /* ========= Helpers for "how old is the bullish flip?" ========= */
 
-// Return age of the MOST RECENT bullish daily 5>25>75 flip (no freshness cap).
 function lastDailyStackedCrossAge(data) {
   const smaD = (n, i) => {
     if (i + 1 < n) return 0;
@@ -241,7 +260,6 @@ function lastDailyStackedCrossAge(data) {
   return { found: false };
 }
 
-// Return age of the MOST RECENT bullish weekly 13>26>52 flip (no freshness cap).
 function lastWeeklyStackedCrossAge(data) {
   const weeksAll = resampleToWeeks(data);
 
@@ -251,7 +269,7 @@ function lastWeeklyStackedCrossAge(data) {
       Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate())
     );
     const dayNum = t.getUTCDay() || 7;
-    t.setUTCDate(t.getUTCDate() + 4 - dayNum); // go to Thu of that ISO week
+    t.setUTCDate(t.getUTCDate() + 4 - dayNum); // Thu of that ISO week
     const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
     const weekNo = Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
     return t.getUTCFullYear() + "-" + weekNo;
@@ -940,6 +958,7 @@ function withNo(reason, ctx = {}) {
   const stock = ctx.stock || {};
   const data = Array.isArray(ctx.data) ? ctx.data : [];
   const cfg = ctx.cfg || getConfig({});
+
   const out = {
     buyNow: false,
     reason,
@@ -947,7 +966,7 @@ function withNo(reason, ctx = {}) {
     timeline: [],
     debug: ctx,
   };
-  out.telemetry = undefined;
+  out.telemetry = undefined; // we still overwrite later in analyseCrossing
   return out;
 }
 function toTeleRR(rr) {
@@ -994,6 +1013,8 @@ function summarizeTelemetryForLog(tele) {
     blocks: tele?.blocks,
     histos: tele?.histos,
     distros: tele?.distros,
+    // *** NEW: also expose rejected summary here so logging sees it
+    rejected: tele?.rejected,
   };
 }
 
@@ -1211,6 +1232,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       reasons: [r],
       trace: T.logs,
     };
+
+    // *** NEW: also surface what was rejected (will be empty here but consistent shape)
+    out.rejectedCandidates = tele.rejected.slice();
+
     throw new Error(
       `[analyseCrossing] Not enough history to classify ${
         stock?.ticker || "UNK"
@@ -1231,6 +1256,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       reasons: [r],
       trace: T.logs,
     };
+
+    // *** NEW
+    out.rejectedCandidates = tele.rejected.slice();
+
     throw new Error(
       `[analyseCrossing] Invalid last bar OHLCV for ${stock?.ticker || "UNK"}`
     );
@@ -1430,6 +1459,21 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         trend: msFull.trend,
         ticker: stock?.ticker,
       });
+
+      // *** NEW: log this "almost" opportunity
+      pushBlock(
+        tele,
+        "RR_FAIL_WEEKLY",
+        "rr",
+        `RR ${fmt(p.rr.ratio)} < need ${fmt(p.rr.need)}`,
+        {
+          kind: "WEEKLY CROSS",
+          stop: p.rr.stop,
+          target: p.rr.target,
+          rrRatio: p.rr.ratio,
+          rrNeed: p.rr.need,
+        }
+      );
     }
   }
 
@@ -1493,6 +1537,21 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         trend: msFull.trend,
         ticker: stock?.ticker,
       });
+
+      // *** NEW
+      pushBlock(
+        tele,
+        "RR_FAIL_DAILY",
+        "rr",
+        `RR ${fmt(p.rr.ratio)} < need ${fmt(p.rr.need)}`,
+        {
+          kind: "DAILY CROSS",
+          stop: p.rr.stop,
+          target: p.rr.target,
+          rrRatio: p.rr.ratio,
+          rrNeed: p.rr.need,
+        }
+      );
     }
   }
 
@@ -1665,7 +1724,13 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         "RR_FAIL_DIP",
         "rr",
         `RR ${fmt(rrD.ratio)} < need ${fmt(rrD.need)}`,
-        { stop: rrD.stop, target: rrD.target }
+        {
+          kind: dipLane === "WEEKLY" ? "DIP AFTER WEEKLY" : "DIP AFTER DAILY",
+          stop: rrD.stop,
+          target: rrD.target,
+          rrRatio: rrD.ratio,
+          rrNeed: rrD.need,
+        }
       );
     }
   } else if (activeDip?.trigger && !dipGatePass) {
@@ -1747,6 +1812,9 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
 
     out.volatility = volatilityInfo;
 
+    // *** NEW: expose what got rejected / vetoed / failed RR
+    out.rejectedCandidates = tele.rejected.slice();
+
     return out;
   }
 
@@ -1787,7 +1855,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     dipLane,
   });
 
-  return {
+  const result = {
     buyNow: true,
     reason: `${pref.kind}: ${pref.rr.ratio.toFixed(2)}:1. ${pref.why}`,
     stopLoss: stop,
@@ -1817,5 +1885,11 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       },
     },
     telemetry: { ...tele, trace: T.logs },
+
+    // *** NEW: surface rejected ones EVEN IF we did take a trade,
+    // so backtest can still analyze what we skipped alongside what we took.
+    rejectedCandidates: tele.rejected.slice(),
   };
+
+  return result;
 }

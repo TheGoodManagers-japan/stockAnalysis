@@ -1,31 +1,26 @@
 #!/usr/bin/env node
 /**
- * diagnose_backtest.js (updated for new backtest.js shape)
+ * diagnose_backtest.js (enhanced with per-playbook strategy breakdown)
  *
  * Usage:
  *   node diagnose_backtest.js path/to/backtest.json
  *
  * Input:
- *   The JSON returned by runBacktest(...) in your new /scripts/backtest.js
+ *   The JSON returned by runBacktest(...) in /scripts/backtest.js
  *
  * Output:
  *   ONE clean JSON with:
  *    - performance / flow / regime
- *    - bestSetup (playbook slice with best PF)
+ *    - bestSetup (playbook-ish slice with best PF)
  *    - lossAnalysis / lossReasons
- *    - stopRisk (NEW: stop tightness guidance)
+ *    - stopRisk (stop tightness guidance)
  *    - missedOpportunities (what we blocked that would've worked)
  *    - tickers.focus & tickers.avoid
  *    - bucket tiers (sector, liquidity, px extension, etc.)
  *    - bestSetups (human-readable situational edges)
  *    - singleProfile summary (your unified "target_only (with 15% floor)")
- *    - targetOnly (fast scalp style = basically entire strategy now)
- *
- * Notes vs old version:
- *    - Removed dependency on per-trade `score`
- *    - Removed `profiles[...]` loop — we now consume `raw.singleProfile`
- *    - Removed `t.profile === "target_only"` filter; now everything is that style
- *    - `bestSetup` slices no longer use `score`
+ *    - targetOnly (basically entire strategy now)
+ *    - strategyBreakdown (NEW: PF / WR per playbook name like "WEEKLY CROSS +VOLUME")
  */
 
 const fs = require("fs");
@@ -42,13 +37,13 @@ const inputPath = args[0];
 const r2 = (v) => Math.round((+v || 0) * 100) / 100;
 
 function safeGetAllTrades(obj) {
-  // Preferred: byTicker[].trades (since new backtest always includes byTicker)
+  // Preferred: byTicker[].trades
   if (Array.isArray(obj?.byTicker) && obj.byTicker.length) {
     return obj.byTicker.flatMap((t) =>
       Array.isArray(t.trades) ? t.trades : []
     );
   }
-  // fallback if you ever add globalTrades to backtest output
+  // Fallback if you ever expose a globalTrades array
   if (Array.isArray(obj?.globalTrades)) return obj.globalTrades;
 
   console.warn(
@@ -190,7 +185,7 @@ function summarizeTimeToTarget(trades) {
 
 /* -------------------- BUCKET HELPERS -------------------- */
 
-// Volume Z-score at entry: how "loud" was the candle
+// Volume Z-score at entry (how loud the day was)
 function bucketVolZ(z) {
   if (!Number.isFinite(z)) return "volZ:n/a";
   if (z < 0) return "volZ:quiet(<0)";
@@ -199,7 +194,7 @@ function bucketVolZ(z) {
   return "volZ:hot(>2)";
 }
 
-// Cross lag bucket: how "stale" the cross was
+// Cross lag bucket (fresh vs stale)
 function bucketLag(lagVal) {
   if (!Number.isFinite(lagVal)) return "lag:n/a";
   if (lagVal < 2) return "lag:early(<2)";
@@ -207,7 +202,7 @@ function bucketLag(lagVal) {
   return "lag:late(>5)";
 }
 
-// ATR% at entry bucket (volatility style)
+// ATR% bucket (volatility style)
 function bucketAtrPct(v) {
   if (!Number.isFinite(v)) return "ATR:n/a";
   if (v < 1.0) return "ATR:low(<1%)";
@@ -215,7 +210,7 @@ function bucketAtrPct(v) {
   return "ATR:high(>3%)";
 }
 
-// Distance above MA25 bucket (extension / chase risk)
+// Distance above MA25 bucket (extension/chase risk)
 function bucketPxVsMA25(distPct) {
   if (!Number.isFinite(distPct)) return "pxMA25:n/a";
   if (distPct < 0) return "pxMA25:below";
@@ -239,7 +234,7 @@ function bucketLiquidity(turnoverJPY) {
   return "liq:200M+";
 }
 
-// Price bucket (cash price per share)
+// Price bucket (absolute share price)
 function bucketPrice(entryPx) {
   if (!Number.isFinite(entryPx)) return "px:n/a";
   if (entryPx < 200) return "px:<200";
@@ -249,9 +244,9 @@ function bucketPrice(entryPx) {
   return "px:3k+";
 }
 
-/* -------------------- NEW HELPERS FOR STOP TIGHTNESS -------------------- */
+/* -------------------- STOP TIGHTNESS ANALYSIS -------------------- */
 
-// Bucket loss magnitude so we can see how "deep" losers go
+// Bucket loss magnitude so we can see depth of losers
 function bucketLossSize(pct) {
   // pct is negative or zero for losers
   if (!Number.isFinite(pct)) return "n/a";
@@ -263,15 +258,15 @@ function bucketLossSize(pct) {
   return "<= -15%";
 }
 
-// Analyze how painful STOP exits are under the current ~15% floor
+// Analyze how painful STOP exits are under the ~15% floor
 function analyzeStopSeverity(losersArr) {
   const out = {
     allLosingTrades: losersArr.length,
     stopLosses: 0,
     timeLosses: 0,
     endLosses: 0,
-    bucketsAll: {}, // distribution of all loss % magnitudes
-    bucketsStopOnly: {}, // distribution just for STOP exits
+    bucketsAll: {},
+    bucketsStopOnly: {},
     tail: {
       p90LossPct: null,
       p95LossPct: null,
@@ -291,24 +286,21 @@ function analyzeStopSeverity(losersArr) {
     const lp = +t.returnPct || 0; // negative
     lossPcts.push(lp);
 
-    // classify loss exits
     if (t.exitType === "STOP") out.stopLosses++;
     else if (t.exitType === "TIME") out.timeLosses++;
     else if (t.exitType === "END") out.endLosses++;
 
-    // bucket all losers
     const bAll = bucketLossSize(lp);
     out.bucketsAll[bAll] = (out.bucketsAll[bAll] || 0) + 1;
 
-    // bucket stop-only losers
     if (t.exitType === "STOP") {
       const bStop = bucketLossSize(lp);
       out.bucketsStopOnly[bStop] = (out.bucketsStopOnly[bStop] || 0) + 1;
     }
   }
 
-  // tail stats for total losses
-  const sorted = lossPcts.filter(Number.isFinite).sort((a, b) => a - b); // ascending = more negative first
+  const sorted = lossPcts.filter(Number.isFinite).sort((a, b) => a - b); // most negative first
+
   function pctileLocal(p) {
     if (!sorted.length) return null;
     const idx = (sorted.length - 1) * p;
@@ -319,11 +311,10 @@ function analyzeStopSeverity(losersArr) {
     return sorted[lo] * (1 - w) + sorted[hi] * w;
   }
 
-  out.tail.p90LossPct = r2(pctileLocal(0.1)); // "typical bad"
-  out.tail.p95LossPct = r2(pctileLocal(0.05)); // "disaster zone"
-  out.tail.worstLossPct = r2(sorted[0] || 0); // most negative
+  out.tail.p90LossPct = r2(pctileLocal(0.1));
+  out.tail.p95LossPct = r2(pctileLocal(0.05));
+  out.tail.worstLossPct = r2(sorted[0] || 0);
 
-  // shallow vs deep stop-loss characterization
   let shallowStopCount = 0;
   let deepStopCount = 0;
   for (const t of losersArr) {
@@ -356,6 +347,7 @@ const allTradesRaw = safeGetAllTrades(raw);
 const withAnalytics = allTradesRaw.filter(
   (t) => t && t.analytics && typeof t.analytics === "object"
 );
+
 if (!withAnalytics.length) {
   console.log(
     JSON.stringify(
@@ -374,12 +366,12 @@ if (!withAnalytics.length) {
 
 const overall = summarizeMetrics(withAnalytics);
 
-// regime metrics come from backtest
+// regime metrics come straight from backtest
 const regimeMetrics = raw?.regime?.metrics || {};
 
 /**
- * We keep score-related helpers for backward compatibility,
- * but we won't assume `t.score` exists in new backtest output.
+ * Score correlation stuff stays for backward compat,
+ * but score may not exist anymore.
  */
 function metricsByScore(allTrades) {
   const buckets = {}; // score -> trades[]
@@ -422,26 +414,17 @@ function corrScore(allTrades) {
   };
 }
 
-// check if there's any `score` at all
 const hasScore = withAnalytics.some((t) => Number.isFinite(t.score));
 const scoreInfo = hasScore ? metricsByScore(withAnalytics) : { scored: [] };
 const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
 
-/* -------------------- PLAYBOOK SLICES (no score dependency) -------------------- */
+/* -------------------- PLAYBOOK SLICES (macro situational edges) -------------------- */
 
 /**
- * We define two slices that match your live strategy logic:
- *
- * 1. DOWN_regime_ST_panic_weekly_flip:
- *    - market regime "DOWN"
- *    - strong short-term panic ST>=6
- *    - we enter only after a MA cross flip that's not immediate (lag>=2)
- *
- * 2. RANGE_regime_gap_up_near_MA25:
- *    - market regime "RANGE"
- *    - we saw a bullish gap up (>0%)
- *    - but price is still close to MA25 (≤4% above), i.e. controlled bounce not full chase
+ * Slices model 'conditions we like' rather than literal playbook strings.
+ * You can add more slices here as you learn patterns.
  */
+
 function slice_DOWN_regime_ST_panic_weekly_flip(t) {
   return (
     t.regime === "DOWN" &&
@@ -512,7 +495,7 @@ const sliceResults = SLICES.map((s) => {
   return analyzeSlice(s.name, s.desc, subset, tradingDaysGuess);
 });
 
-// pick best slice by PF, then winRate
+// pick best slice by PF then winRate
 const rankedSlices = [...sliceResults].sort((a, b) => {
   const pfA = Number.isFinite(a.metrics.profitFactor)
     ? a.metrics.profitFactor
@@ -541,7 +524,7 @@ function isEarlyLag(t) {
   );
 }
 function isBadRegime(t) {
-  // "badRegime" here = chasing blowoff in STRONG_UP regime
+  // "badRegime" here: blowoff entries in STRONG_UP, where pullbacks don't stick
   return t.regime === "STRONG_UP";
 }
 function weakPullback(t) {
@@ -559,17 +542,17 @@ function summarizeLosingPatterns(losersArr) {
     },
     {
       key: "tooEarlyAfterFlip",
-      desc: "We bought <2 bars after a cross flip (jumped in before letting it settle).",
+      desc: "Bought <2 bars after a cross flip (jumped in before letting it settle).",
       count: losersArr.filter(isEarlyLag).length,
     },
     {
       key: "blowoffRegime",
-      desc: "We bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
+      desc: "Bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
       count: losersArr.filter(isBadRegime).length,
     },
     {
       key: "notRealPanic",
-      desc: "Short-term sentiment ST<6 (not an actual panic dip, just meh pullback).",
+      desc: "Short-term sentiment ST<6 (not a true panic, just meh pullback).",
       count: losersArr.filter(weakPullback).length,
     },
   ];
@@ -598,7 +581,7 @@ const lossReasons = {
   weakPullback: losers.filter(weakPullback).length,
 };
 
-// NEW: derive stop tightness insight from losers
+// stop tightness insight from losers
 const stopTightnessInsight = analyzeStopSeverity(losers);
 
 /* -------------------- PER-TICKER COMBOS / bestSetups -------------------- */
@@ -674,7 +657,6 @@ function summarizeCombos(rows) {
     });
   }
 
-  // sort good first
   list.sort((a, b) => {
     const pfA = Number.isFinite(a.approxPF) ? a.approxPF : -1;
     const pfB = Number.isFinite(b.approxPF) ? b.approxPF : -1;
@@ -893,7 +875,7 @@ function summarizeTierAverages(tiersObj) {
     const n = arr.length;
 
     return {
-      trades: r2(sumTrades / n), // avg trades per bucket in that tier
+      trades: r2(sumTrades / n),
       winRate: r2(sumWR / n),
       pf: r2(sumPF / n),
       avgRet: r2(sumRet / n),
@@ -917,6 +899,7 @@ withAnalytics.forEach((t) => {
 });
 const sectorRows = summarizeCategoryPerformance(tradesBySector);
 const sectorBuckets = splitIntoQuartileBuckets(sectorRows, 50);
+const sectorTierStats = summarizeTierAverages(sectorBuckets);
 
 // priceBuckets
 const tradesByPriceBucket = {};
@@ -928,6 +911,7 @@ withAnalytics.forEach((t) => {
 });
 const priceRows = summarizeCategoryPerformance(tradesByPriceBucket);
 const priceBuckets = splitIntoQuartileBuckets(priceRows, 50);
+const priceTierStats = summarizeTierAverages(priceBuckets);
 
 // liquidityBuckets
 const tradesByLiqBucket = {};
@@ -939,6 +923,7 @@ withAnalytics.forEach((t) => {
 });
 const liqRows = summarizeCategoryPerformance(tradesByLiqBucket);
 const liquidityBuckets = splitIntoQuartileBuckets(liqRows, 50);
+const liquidityTierStats = summarizeTierAverages(liquidityBuckets);
 
 // lagBuckets (freshness after cross)
 const tradesByLagBucket = {};
@@ -949,6 +934,7 @@ withAnalytics.forEach((t) => {
 });
 const lagRows = summarizeCategoryPerformance(tradesByLagBucket);
 const lagBuckets = splitIntoQuartileBuckets(lagRows, 50);
+const lagTierStats = summarizeTierAverages(lagBuckets);
 
 // atrBuckets (volatility style)
 const tradesByAtrBucket = {};
@@ -959,7 +945,8 @@ withAnalytics.forEach((t) => {
   tradesByAtrBucket[atrB].push(t);
 });
 const atrRows = summarizeCategoryPerformance(tradesByAtrBucket);
-const atrBuckets = splitIntoQuartileBuckets(atrRows, 50);
+theAtrBuckets = splitIntoQuartileBuckets(atrRows, 50);
+const atrTierStats = summarizeTierAverages(theAtrBuckets);
 
 // pxMA25Buckets (extension/chasing)
 const tradesByPxMA25Bucket = {};
@@ -971,6 +958,7 @@ withAnalytics.forEach((t) => {
 });
 const pxMA25Rows = summarizeCategoryPerformance(tradesByPxMA25Bucket);
 const pxMA25Buckets = splitIntoQuartileBuckets(pxMA25Rows, 50);
+const pxMA25TierStats = summarizeTierAverages(pxMA25Buckets);
 
 // volZBuckets (volume attention / quiet pullback quality)
 const tradesByVolZBucket = {};
@@ -982,17 +970,9 @@ withAnalytics.forEach((t) => {
 });
 const volZRows = summarizeCategoryPerformance(tradesByVolZBucket);
 const volZBuckets = splitIntoQuartileBuckets(volZRows, 50);
-
-// Tier averages for quick reading
-const sectorTierStats = summarizeTierAverages(sectorBuckets);
-const priceTierStats = summarizeTierAverages(priceBuckets);
-const liquidityTierStats = summarizeTierAverages(liquidityBuckets);
 const volZTierStats = summarizeTierAverages(volZBuckets);
-const lagTierStats = summarizeTierAverages(lagBuckets);
-const atrTierStats = summarizeTierAverages(atrBuckets);
-const pxMA25TierStats = summarizeTierAverages(pxMA25Buckets);
 
-/* -------------------- missedOpportunities (from rejectedBuys sim) -------------------- */
+/* -------------------- missedOpportunities (rejectedBuys sim) -------------------- */
 
 let missedOpportunities = null;
 if (raw?.parallel?.rejectedBuys) {
@@ -1001,7 +981,7 @@ if (raw?.parallel?.rejectedBuys) {
   const headline = {
     simulatedTotal: rb.summary?.total ?? 0,
     simulatedWinners: rb.summary?.winners ?? 0,
-    simulatedWinRate: rb.summary?.winRate ?? 0, // %
+    simulatedWinRate: rb.summary?.winRate ?? 0,
   };
 
   const topReasons = [];
@@ -1035,17 +1015,7 @@ if (raw?.parallel?.rejectedBuys) {
 }
 
 /* -------------------- singleProfile summary -------------------- */
-/**
- * New backtest returns only one profile block: raw.singleProfile
- * Shape:
- * singleProfile: {
- *   label,
- *   metrics: { trades, winRate, ... , lossTail },
- *   exits: { target, stop, time, end },
- *   catastrophicStopSuggestion: { killAtPct, comment } | null,
- *   samples? [...]
- * }
- */
+
 const profilesSummary = {};
 if (raw.singleProfile) {
   const sp = raw.singleProfile;
@@ -1064,16 +1034,11 @@ if (raw.singleProfile) {
 
 /* -------------------- targetOnly block -------------------- */
 /**
- * Old diagnose assumed we had multiple profiles and specifically profiled
- * "target_only".
- * In the new engine, *everything* is effectively that style:
- *   - one unified profile with 15% floor stop
- *
- * So:
- * - targetOnlyAll = all trades
- * - lossTail & catastrophicStopSuggestion come from raw.singleProfile
+ * In the new engine, the whole strategy is basically "target_only style"
+ * with a 15% floor stop. So we just treat all trades as targetOnlyAll.
  */
-const targetOnlyAll = withAnalytics.slice(); // all trades in new world
+
+const targetOnlyAll = withAnalytics.slice(); // all trades
 
 const targetAllStats = summarizeSubset(targetOnlyAll);
 const ttt = summarizeTimeToTarget(targetOnlyAll);
@@ -1108,6 +1073,48 @@ const targetOnlyExport = {
     : null,
 };
 
+/* -------------------- strategyBreakdown (NEW) -------------------- */
+/**
+ * Group trades by literal playbook string (`trade.strategy`),
+ * e.g. "WEEKLY CROSS", "WEEKLY CROSS +VOLUME", "DIP AFTER WEEKLY", etc.
+ * This preserves the distinct candidate types from analyseCrossing().
+ */
+
+const tradesByStrategy = {};
+withAnalytics.forEach((t) => {
+  const s = t.strategy || "UNKNOWN";
+  if (!tradesByStrategy[s]) tradesByStrategy[s] = [];
+  tradesByStrategy[s].push(t);
+});
+
+const strategyRowsRaw = Object.entries(tradesByStrategy).map(
+  ([strategyName, arr]) => {
+    const m = summarizeMetrics(arr);
+    return {
+      strategy: strategyName,
+      trades: m.trades,
+      winRate: m.winRate,
+      pf: m.profitFactor,
+      avgRet: m.avgReturnPct,
+      avgHoldBars: m.avgHoldingDays,
+    };
+  }
+);
+
+// rank strategies by PF, then winRate, then avgRet
+strategyRowsRaw.sort((a, b) => {
+  const pfA = Number.isFinite(a.pf) ? a.pf : -1;
+  const pfB = Number.isFinite(b.pf) ? b.pf : -1;
+  if (pfB !== pfA) return pfB - pfA;
+  if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+  return b.avgRet - a.avgRet;
+});
+
+const strategyBreakdown = {
+  perPlaybook: strategyRowsRaw,
+  topPlaybooks: strategyRowsRaw.slice(0, 5),
+};
+
 /* -------------------- FINAL EXPORT -------------------- */
 
 const exportObj = {
@@ -1137,7 +1144,7 @@ const exportObj = {
     rrRejectedBuckets: raw?.telemetry?.rr?.rejected || null,
   },
 
-  // The best slice (playbook-style) we can detect right now
+  // The best situational slice (macro condition) we detected
   bestSetup: topSlice
     ? {
         name: topSlice.name,
@@ -1151,11 +1158,11 @@ const exportObj = {
       }
     : null,
 
-  // Why we lose money (patterns among actual losers we entered)
+  // Why we lose money (patterns among losers we *did* take)
   lossAnalysis: losingPatterns,
   lossReasons,
 
-  // 🔴 NEW: stop tightness insight
+  // Stop tightness / catastrophic tail behavior
   stopRisk: {
     summary: {
       totalLosingTrades: stopTightnessInsight.allLosingTrades,
@@ -1183,7 +1190,7 @@ const exportObj = {
   dipAfterFreshCrossing: raw?.dipAfterFreshCrossing || null,
   crossingByLag: raw?.crossing?.byLag || null,
 
-  // Score system health (may be null if we removed score from trades)
+  // Score system health (if score still exists in trades)
   scoreQuality: hasScore
     ? {
         corrWin: r2(scoreCorr.win),
@@ -1199,11 +1206,14 @@ const exportObj = {
     avoid: worstTickers.slice(0, 5),
   },
 
+  // Per-playbook PF / WR leaderboard (NEW)
+  strategyBreakdown,
+
   // singleProfile summary (your unified "target_only (with 15% floor)")
   profiles: profilesSummary,
 
   // Bucket performance tiers (quartiles based on PF/winRate/avgRet),
-  // plus tier averages to get a feel for where edge clusters.
+  // plus tier averages to understand edge clusters.
   buckets: {
     sector: {
       tiers: sectorBuckets,
@@ -1226,7 +1236,7 @@ const exportObj = {
       tierAverages: lagTierStats,
     },
     atrVolatility: {
-      tiers: atrBuckets,
+      tiers: theAtrBuckets,
       tierAverages: atrTierStats,
     },
     pxExtensionVsMA25: {
@@ -1235,10 +1245,10 @@ const exportObj = {
     },
   },
 
-  // Repeated high-performing situational patterns
+  // Repeated high-performing situational patterns (human readable)
   bestSetups,
 
-  // Deep dive for "target_only style" (the only style now)
+  // Deep dive for the unified style (aka "target_only" legacy name)
   targetOnly: targetOnlyExport,
 };
 
