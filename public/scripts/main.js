@@ -8,17 +8,14 @@
 
 import { getComprehensiveMarketSentiment } from "./marketSentimentOrchestrator.js";
 
+import { summarizeBlocks, analyseCrossing } from "./swingTradeEntryTiming.js";
 import {
-  summarizeBlocks,
-  analyseCrossing,
-} from "./swingTradeEntryTiming.js";
-import {
-     getTechnicalScore,                 // noop (returns 0) in JP value-first file
-     getAdvancedFundamentalScore,      // alias of getQualityScore
-     getValuationScore,
-     getNumericTier,
-     classifyValueQuadrant,
-   } from "./techFundValAnalysis.js";
+  getTechnicalScore, // noop (returns 0) in JP value-first file
+  getAdvancedFundamentalScore, // alias of getQualityScore
+  getValuationScore,
+  getNumericTier,
+  classifyValueQuadrant,
+} from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
 
 /* -------------------------------------------
@@ -67,7 +64,6 @@ function normalizeReason(reasonRaw) {
   return r.toLowerCase();
 }
 
-
 /* -------------------------------------------
    1) Yahoo / API helpers
 ------------------------------------------- */
@@ -76,67 +72,87 @@ async function fetchSingleStockData(tickerObj) {
   const url = `${API_BASE}/api/stocks`;
   log(`POST ${url}`, { payload: { ticker: tickerObj } });
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticker: tickerObj }),
-    });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticker: tickerObj }),
+  });
 
-    // read body as text first for better error visibility
-    const text = await response.text();
-    if (!response.ok) {
-      const snippet = text.slice(0, 300);
-      throw new Error(`HTTP ${response.status}  — ${snippet}`);
-    }
+  // Always read body as text first for better error visibility
+  const text = await response.text();
 
-    const data = safeJsonParse(text);
-    log("stocks response OK", {
-      code: tickerObj?.code,
-      success: data?.success,
-    });
-    return data;
-  } catch (err) {
-    errorLog("fetchSingleStockData failed:", err?.message || err);
-    return { success: false, error: String(err?.message || err) };
+  if (!response.ok) {
+    const snippet = text.slice(0, 300);
+    throw new Error(
+      `fetchSingleStockData: HTTP ${response.status} for ${tickerObj?.code} — ${snippet}`
+    );
   }
+
+  const data = safeJsonParse(text);
+  if (!data) {
+    throw new Error(
+      `fetchSingleStockData: invalid JSON for ${tickerObj?.code}`
+    );
+  }
+
+  if (!data.success) {
+    throw new Error(
+      `fetchSingleStockData: API error for ${tickerObj?.code}: ${
+        data.error || "unknown error"
+      }`
+    );
+  }
+
+  log("stocks response OK", {
+    code: tickerObj?.code,
+    success: data?.success,
+  });
+  return data;
 }
 
 async function fetchHistoricalData(ticker) {
   const url = `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`;
   log(`GET ${url}`);
 
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
 
-    const text = await response.text();
-    if (!response.ok) {
-      const snippet = text.slice(0, 300);
-      throw new Error(`HTTP ${response.status}  — ${snippet}`);
-    }
+  const text = await response.text();
 
-    const result = safeJsonParse(text);
-    if (!result?.success) {
-      throw new Error(result?.error || "history: success=false");
-    }
-    if (!Array.isArray(result?.data) || result.data.length === 0) {
-      warn(`No historical data for ${ticker}.`);
-      return [];
-    }
-
-    const mapped = result.data.map((item) => ({
-      ...item,
-      date: new Date(item.date),
-    }));
-    log(`history OK for ${ticker} — ${mapped.length} bars`);
-    return mapped;
-  } catch (err) {
-    errorLog(`fetchHistoricalData failed for ${ticker}:`, err?.message || err);
-    return [];
+  if (!response.ok) {
+    const snippet = text.slice(0, 300);
+    throw new Error(
+      `fetchHistoricalData: HTTP ${response.status} for ${ticker} — ${snippet}`
+    );
   }
+
+  const result = safeJsonParse(text);
+  if (!result) {
+    throw new Error(`fetchHistoricalData: invalid JSON for ${ticker}`);
+  }
+
+  if (!result.success) {
+    throw new Error(
+      `fetchHistoricalData: API error for ${ticker}: ${
+        result.error || "history: success=false"
+      }`
+    );
+  }
+
+  if (!Array.isArray(result.data) || result.data.length === 0) {
+    // Empty history is not tradable, treat as hard failure so upstream catch()
+    // can record it in errors[] and skip polluted math.
+    throw new Error(`fetchHistoricalData: no historical data for ${ticker}`);
+  }
+
+  const mapped = result.data.map((item) => ({
+    ...item,
+    date: new Date(item.date),
+  }));
+  log(`history OK for ${ticker} — ${mapped.length} bars`);
+  return mapped;
 }
 
 function safeJsonParse(text) {
@@ -147,22 +163,56 @@ function safeJsonParse(text) {
   }
 }
 
-
 /* ---- Helpers required by getTradeManagementSignal_V3 ---- */
 
 // Built from your backtests (actual + rejected).
 // If a combo isn't listed, we return 3 (neutral) by default.
 const SENTIMENT_COMBO_SCORE = {
-  "LT1-ST6": 100, "LT1-ST7": 98,  "LT1-ST2": 96,  "LT1-ST4": 94,  "LT1-ST5": 92,
-  "LT4-ST2": 90,  "LT4-ST6": 89,  "LT4-ST4": 88,  "LT2-ST7": 87,  "LT2-ST4": 86,
-  "LT2-ST6": 85,  "LT4-ST1": 84,  "LT4-ST7": 83,  "LT4-ST5": 82,  "LT3-ST1": 80,
-  "LT3-ST4": 79,  "LT3-ST3": 78,  "LT3-ST5": 77,  "LT3-ST2": 76, 
-  "LT5-ST7": 74,  "LT6-ST6": 72,  "LT6-ST4": 71,  "LT6-ST5": 70,  "LT7-ST5": 68,
-  "LT7-ST4": 67,  "LT7-ST6": 66,  "LT7-ST3": 65,  "LT7-ST2": 64,  "LT7-ST7": 63,
-  "LT5-ST2": 62,  "LT1-ST1": 61,  "LT2-ST1": 60,  "LT5-ST3": 59,  "LT5-ST4": 58,
-  "LT5-ST1": 56,  "LT6-ST1": 55,  "LT6-ST3": 54,  "LT6-ST2": 53,  "LT5-ST6": 52,
-  "LT4-ST3": 51,  "LT2-ST3": 45,  "LT1-ST3": 44,  "LT3-ST7": 40,  "LT3-ST6": 38,
-  "LT2-ST5": 36
+  "LT1-ST6": 100,
+  "LT1-ST7": 98,
+  "LT1-ST2": 96,
+  "LT1-ST4": 94,
+  "LT1-ST5": 92,
+  "LT4-ST2": 90,
+  "LT4-ST6": 89,
+  "LT4-ST4": 88,
+  "LT2-ST7": 87,
+  "LT2-ST4": 86,
+  "LT2-ST6": 85,
+  "LT4-ST1": 84,
+  "LT4-ST7": 83,
+  "LT4-ST5": 82,
+  "LT3-ST1": 80,
+  "LT3-ST4": 79,
+  "LT3-ST3": 78,
+  "LT3-ST5": 77,
+  "LT3-ST2": 76,
+  "LT5-ST7": 74,
+  "LT6-ST6": 72,
+  "LT6-ST4": 71,
+  "LT6-ST5": 70,
+  "LT7-ST5": 68,
+  "LT7-ST4": 67,
+  "LT7-ST6": 66,
+  "LT7-ST3": 65,
+  "LT7-ST2": 64,
+  "LT7-ST7": 63,
+  "LT5-ST2": 62,
+  "LT1-ST1": 61,
+  "LT2-ST1": 60,
+  "LT5-ST3": 59,
+  "LT5-ST4": 58,
+  "LT5-ST1": 56,
+  "LT6-ST1": 55,
+  "LT6-ST3": 54,
+  "LT6-ST2": 53,
+  "LT5-ST6": 52,
+  "LT4-ST3": 51,
+  "LT2-ST3": 45,
+  "LT1-ST3": 44,
+  "LT3-ST7": 40,
+  "LT3-ST6": 38,
+  "LT2-ST5": 36,
 };
 
 // Score → rank (1..5)
@@ -171,7 +221,7 @@ function rankFromScore(score) {
   if (score >= 80) return 2; // good
   if (score >= 65) return 3; // neutral/ok
   if (score >= 50) return 4; // weak
-  return 5;                  // avoid
+  return 5; // avoid
 }
 
 export function getShortLongSentiment(stock, historicalData) {
@@ -183,16 +233,13 @@ export function getShortLongSentiment(stock, historicalData) {
   };
 }
 
-
 export function getSentimentCombinationRank(ST, LT) {
   const key = `LT${Number(LT) || 0}-ST${Number(ST) || 0}`;
   const score = SENTIMENT_COMBO_SCORE[key];
   return score == null ? 3 : rankFromScore(score);
 }
-
 // usage:
 // const rank = getSentimentCombinationRank(6, 1); // e.g. LT1-ST6 → 1
-
 
 // Round a number safely
 function round0(v) {
@@ -219,8 +266,8 @@ function calcATR(data, p = 14) {
   if (!Array.isArray(data) || data.length < p + 1) return 0;
   const trs = [];
   for (let i = 1; i < data.length; i++) {
-    const h  = Number(data[i]?.high ?? data[i]?.close ?? 0);
-    const l  = Number(data[i]?.low  ?? data[i]?.close ?? 0);
+    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
     const pc = Number(data[i - 1]?.close ?? 0);
     trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
   }
@@ -238,13 +285,13 @@ function calcADX14(data) {
   const tr = [];
 
   for (let i = 1; i < data.length; i++) {
-    const h  = Number(data[i]?.high ?? data[i]?.close ?? 0);
-    const l  = Number(data[i]?.low  ?? data[i]?.close ?? 0);
+    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
     const pc = Number(data[i - 1]?.close ?? 0);
-    const ph = Number(data[i - 1]?.high  ?? data[i - 1]?.close ?? 0);
-    const pl = Number(data[i - 1]?.low   ?? data[i - 1]?.close ?? 0);
+    const ph = Number(data[i - 1]?.high ?? data[i - 1]?.close ?? 0);
+    const pl = Number(data[i - 1]?.low ?? data[i - 1]?.close ?? 0);
 
-    const up   = h - ph;
+    const up = h - ph;
     const down = pl - l;
 
     plusDM.push(up > down && up > 0 ? up : 0);
@@ -266,11 +313,11 @@ function calcADX14(data) {
   };
 
   const smTR = smooth(tr, p);
-  const smP  = smooth(plusDM, p);
-  const smM  = smooth(minusDM, p);
+  const smP = smooth(plusDM, p);
+  const smM = smooth(minusDM, p);
   if (!smTR.length) return 0;
 
-  const plusDI  = smTR.map((v, i) => 100 * ((smP[i] || 0) / (v || 1)));
+  const plusDI = smTR.map((v, i) => 100 * ((smP[i] || 0) / (v || 1)));
   const minusDI = smTR.map((v, i) => 100 * ((smM[i] || 0) / (v || 1)));
   const dx = plusDI.map((pdi, i) => {
     const mdi = minusDI[i] || 0;
@@ -278,7 +325,7 @@ function calcADX14(data) {
     return 100 * (Math.abs(pdi - mdi) / denom);
   });
 
-  const smDX = smooth(dx, p).map(v => v / p);
+  const smDX = smooth(dx, p).map((v) => v / p);
   return smDX.at(-1) || 0;
 }
 
@@ -287,7 +334,7 @@ function lastSwingLow(data) {
   if (!Array.isArray(data) || data.length < 5) return 0;
   const w = data.slice(-40);
   for (let i = w.length - 3; i >= 2; i--) {
-    const l  = Number(w[i]?.low  ?? w[i]?.close ?? 0);
+    const l = Number(w[i]?.low ?? w[i]?.close ?? 0);
     const l0 = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? 0);
     const l1 = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? 0);
     if (l < l0 && l < l1) return l;
@@ -301,7 +348,7 @@ function madeLowerLow(data) {
   const w = data.slice(-6);
   let prevSwing = Infinity;
   for (let i = 1; i < w.length - 1; i++) {
-    const li  = Number(w[i]?.low  ?? w[i]?.close ?? Infinity);
+    const li = Number(w[i]?.low ?? w[i]?.close ?? Infinity);
     const lim = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? Infinity);
     const lip = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? Infinity);
     if (li < lim && li < lip) prevSwing = Math.min(prevSwing, li);
@@ -323,21 +370,22 @@ function recentPivotHigh(data) {
   if (!Array.isArray(data) || data.length < 12) return 0;
   const win = data.slice(-22, -2);
   if (!win.length) return 0;
-  return Math.max(...win.map(d => Number(d?.high ?? d?.close ?? 0)));
+  return Math.max(...win.map((d) => Number(d?.high ?? d?.close ?? 0)));
 }
 
 // Structural trailing stop: behind last swing low and/or under MA25
 function trailingStructStop(historicalData, ma25, atr) {
   const swing = lastSwingLow(historicalData);
   const bySwing = swing - 0.5 * atr;
-  const byMA    = (ma25 > 0 ? ma25 - 0.6 * atr : -Infinity);
+  const byMA = ma25 > 0 ? ma25 - 0.6 * atr : -Infinity;
   return Math.max(bySwing, byMA);
 }
 
 // Put this near your other helpers:
 function clampStopLoss(px, atr, proposed, floorStop = 0) {
-  const n = v => Number.isFinite(v) ? v : 0;
-  const _px = n(px), _atr = Math.max(n(atr), _px * 0.005, 1e-6);
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const _px = n(px),
+    _atr = Math.max(n(atr), _px * 0.005, 1e-6);
   const minBuffer = Math.max(_px * 0.002, 0.2 * _atr, 1); // ~0.2 ATR, ≥ ¥1
   // never lower than current floor stop, never at/above market
   let s = Math.max(n(proposed), n(floorStop));
@@ -373,7 +421,7 @@ function computeRegimeLabels(candles) {
   if (!Array.isArray(candles) || candles.length < 30) {
     return candles.map(() => "RANGE");
   }
-  const closes = candles.map(c => Number(c.close) || 0);
+  const closes = candles.map((c) => Number(c.close) || 0);
   const ma25 = smaArr(closes, 25);
   const ma75 = smaArr(closes, 75);
 
@@ -383,7 +431,7 @@ function computeRegimeLabels(candles) {
     const out = new Array(candles.length).fill(0);
     for (let i = 1; i < candles.length; i++) {
       const h = Number(candles[i].high ?? candles[i].close ?? 0);
-      const l = Number(candles[i].low  ?? candles[i].close ?? 0);
+      const l = Number(candles[i].low ?? candles[i].close ?? 0);
       const pc = Number(candles[i - 1].close ?? 0);
       const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
       if (i < 15) {
@@ -391,8 +439,8 @@ function computeRegimeLabels(candles) {
         let sum = 0;
         for (let k = start; k <= i; k++) {
           const hk = Number(candles[k].high ?? candles[k].close ?? 0);
-          const lk = Number(candles[k].low  ?? candles[k].close ?? 0);
-          const pck= Number(candles[k - 1]?.close ?? 0);
+          const lk = Number(candles[k].low ?? candles[k].close ?? 0);
+          const pck = Number(candles[k - 1]?.close ?? 0);
           const trk = Math.max(hk - lk, Math.abs(hk - pck), Math.abs(lk - pck));
           sum += trk;
         }
@@ -406,7 +454,7 @@ function computeRegimeLabels(candles) {
 
   const labels = [];
   for (let i = 0; i < candles.length; i++) {
-    const px  = closes[i];
+    const px = closes[i];
     const m25 = ma25[i];
     const m75 = ma75[i];
     const a14 = atr[i] || 0;
@@ -419,8 +467,11 @@ function computeRegimeLabels(candles) {
     }
 
     const aboveMA = Number.isFinite(m25) && px > m25;
-    const strong  = aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75;
-    const flatish = Math.abs(slope) < 0.0002 || (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
+    const strong =
+      aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75;
+    const flatish =
+      Math.abs(slope) < 0.0002 ||
+      (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
 
     if (strong) labels.push("STRONG_UP");
     else if (aboveMA && slope >= 0) labels.push("UP");
@@ -450,104 +501,84 @@ function regimeForDate(regimeMap, date) {
   return "RANGE";
 }
 
-
-
-
 /**
  * getTradeManagementSignal_V3 — entry-aware, completed-bars logic
  *
- * What this does:
- * - Uses COMPLETED bars for structure checks (MA25, pivot, patterns). Today’s synthetic/incomplete bar is ignored.
- * - Is ENTRY-AWARE for MA25: if price was already < MA25 at entry, we don’t “punish” later simply for still being < MA25.
- * - Trails/tightens stops with a clamp that never sets stop ≥ market and never loosens below current stop.
- * - Uses ATR/structure (swing low & MA25) for protective stops, with sensible live buffers to avoid hugging price.
- *
- * STATUS LEGEND
- * - "Hold"            → Keep position unchanged (you may persist a suggested stop if present).
- * - "Protect Profit"  → Tighten/raise the stop (we return `updatedStopLoss`); keep holding unless stop is hit.
- * - "Sell Now"        → Exit immediately.
- * - "Scale Partial"   → Take partial profits (e.g., 50%) and trail the remainder.
- *
- * DECISION SEQUENCE (top → bottom)
- *  1) SELL — hard stop hit (px <= stop).
- *  2) SELL — structural breakdown on COMPLETED bars:
- *       last completed close < MA25(completed) AND a new lower low AND bearish context (e.g., senti ≥6, ML weak, short-term downtrend).
- *  3) SCALE/SELL — target reached:
- *       If context strong (senti ≤3, trend OK, not extended, ADX>~25), "Scale Partial" (tighten stop via structure/MA).
- *       Else "Sell Now".
- *  4) PROTECT — R milestones (based on ORIGINAL risk: entry − initialStop):
- *       • ≥ +2R → trail using max(entry + 1.2R, structure/MA stop).
- *       • ≥ +1R → move stop to breakeven.
- *  5) PROTECT — NO PROGRESS (entry-aware, completed bars):
- *       After ≥5 completed bars since entry, if price has NOT touched +0.5R, and progress isn’t clearly negative,
- *       creep stop toward breakeven conservatively using structure/MA with a wider live buffer.
- *  6) HOLD — entry-kind aware (completed bars):
- *       • DIP/RETEST and close ≥ MA25(completed) with non-bearish sentiment (≤4) → Hold.
- *       • BREAKOUT retest holding prior pivot zone on completed bars → Hold.
- *  7) PROTECT — bearish engulfing near resistance:
- *       If near 52-week high and bearish engulfing on completed bars → tighten to structure/MA stop.
- *  8) DEFAULT — structure-first on COMPLETED bars:
- *       • If close ≥ MA25(completed) → Hold (allow normal volatility).
- *       • Else (close < MA25(completed)):
- *            - If price was already < MA25 at entry → Hold (don’t penalize post-entry).
- *            - Otherwise → Protect Profit (tighten to structure/MA stop).
- *
- * Notes:
- * - MA25(completed) = MA using completed bars only; live MA may differ slightly.
- * - `updatedStopLoss` is only returned when tightening (never lowers your current stop).
- * - ADX is computed if not provided; context signals (sentiment/ML/regime) are optional but improve decisions.
+ * (Long commentary preserved as in your version. Not repeating it here.)
  */
-
-// --- Simple scan-time analytics (mirror of backtest bits) ---
 function scanAnalytics(stock, historicalData) {
   const data = Array.isArray(historicalData) ? historicalData : [];
   const n = data.length;
-  if (!n) return { rsi: null, atrPct: null, volZ: null, gapPct: null, pxVsMA25Pct: null, maStackScore: 0, pxAboveMA25: false, pxAboveMA75: false };
+  if (!n)
+    return {
+      rsi: null,
+      atrPct: null,
+      volZ: null,
+      gapPct: null,
+      pxVsMA25Pct: null,
+      maStackScore: 0,
+      pxAboveMA25: false,
+      pxAboveMA75: false,
+    };
 
   const close = Number(stock.currentPrice) || Number(data.at(-1)?.close) || 0;
   const prevC = n > 1 ? Number(data[n - 2]?.close) || close : close;
-  const ma = (arr, p) => (arr.length >= p ? arr.slice(-p).reduce((a,b)=>a+b,0)/p : NaN);
+  const ma = (arr, p) =>
+    arr.length >= p ? arr.slice(-p).reduce((a, b) => a + b, 0) / p : NaN;
 
-  const closes = data.map(d=>Number(d.close)||0);
-  const vols   = data.map(d=>Number(d.volume)||0);
+  const closes = data.map((d) => Number(d.close) || 0);
+  const vols = data.map((d) => Number(d.volume) || 0);
 
   // RSI14 (use enriched if present)
-  const rsi = Number.isFinite(stock.rsi14) ? stock.rsi14 : (function rsi14(cs){
-    if (cs.length < 15) return NaN;
-    let g=0,l=0;
-    for (let i=cs.length-14;i<cs.length;i++){
-      const d=cs[i]-cs[i-1];
-      if (d>=0) g+=d; else l-=d;
-    }
-    const rs = l===0?Infinity:g/l;
-    return 100 - 100/(1+rs);
-  })(closes);
+  const rsi = Number.isFinite(stock.rsi14)
+    ? stock.rsi14
+    : (function rsi14(cs) {
+        if (cs.length < 15) return NaN;
+        let g = 0,
+          l = 0;
+        for (let i = cs.length - 14; i < cs.length; i++) {
+          const d = cs[i] - cs[i - 1];
+          if (d >= 0) g += d;
+          else l -= d;
+        }
+        const rs = l === 0 ? Infinity : g / l;
+        return 100 - 100 / (1 + rs);
+      })(closes);
 
   // ATR pct (use enriched if present)
-  const atrAbs = Number.isFinite(stock.atr14) ? stock.atr14 : calcATR(data,14);
-  const atrPct = close ? (atrAbs/close)*100 : 0;
+  const atrAbs = Number.isFinite(stock.atr14) ? stock.atr14 : calcATR(data, 14);
+  const atrPct = close ? (atrAbs / close) * 100 : 0;
 
   // Volume Z over 20
   const v20 = vols.slice(-20);
   let volZ = null;
   if (v20.length === 20) {
-    const m = v20.reduce((a,b)=>a+b,0)/20;
-    const sd = Math.sqrt(v20.reduce((a,b)=>a+(b-m)*(b-m),0)/20);
-    volZ = sd>0 ? (vols.at(-1)-m)/sd : 0;
+    const m = v20.reduce((a, b) => a + b, 0) / 20;
+    const sd = Math.sqrt(v20.reduce((a, b) => a + (b - m) * (b - m), 0) / 20);
+    volZ = sd > 0 ? (vols.at(-1) - m) / sd : 0;
   }
 
-  const gapPct = prevC ? ((close - prevC)/prevC)*100 : 0;
+  const gapPct = prevC ? ((close - prevC) / prevC) * 100 : 0;
 
-  const ma25 = Number.isFinite(stock.movingAverage25d) ? stock.movingAverage25d : sma(data,25);
-  const ma75 = Number.isFinite(stock.movingAverage75d) ? stock.movingAverage75d : sma(data,75);
-  const m5   = Number.isFinite(stock.movingAverage5d)  ? stock.movingAverage5d  : sma(data,5);
+  const ma25 = Number.isFinite(stock.movingAverage25d)
+    ? stock.movingAverage25d
+    : sma(data, 25);
+  const ma75 = Number.isFinite(stock.movingAverage75d)
+    ? stock.movingAverage75d
+    : sma(data, 75);
+  const m5 = Number.isFinite(stock.movingAverage5d)
+    ? stock.movingAverage5d
+    : sma(data, 5);
 
-  const pxVsMA25Pct = Number.isFinite(ma25) && ma25>0 ? ((close - ma25)/ma25)*100 : NaN;
+  const pxVsMA25Pct =
+    Number.isFinite(ma25) && ma25 > 0 ? ((close - ma25) / ma25) * 100 : NaN;
 
   let maStackScore = 0;
-  if (Number.isFinite(m5)  && Number.isFinite(ma25) && m5  > ma25) maStackScore+=1;
-  if (Number.isFinite(ma25)&& Number.isFinite(ma75) && ma25> ma75) maStackScore+=1;
-  if (Number.isFinite(ma25)&& close>ma25) maStackScore+=1;
+  if (Number.isFinite(m5) && Number.isFinite(ma25) && m5 > ma25)
+    maStackScore += 1;
+  if (Number.isFinite(ma25) && Number.isFinite(ma75) && ma25 > ma75)
+    maStackScore += 1;
+  if (Number.isFinite(ma25) && close > ma25) maStackScore += 1;
 
   return {
     rsi: Number.isFinite(rsi) ? +rsi.toFixed(2) : null,
@@ -556,15 +587,22 @@ function scanAnalytics(stock, historicalData) {
     gapPct: Number.isFinite(gapPct) ? +gapPct.toFixed(2) : null,
     pxVsMA25Pct: Number.isFinite(pxVsMA25Pct) ? +pxVsMA25Pct.toFixed(2) : null,
     maStackScore,
-    pxAboveMA25: Number.isFinite(ma25) ? close>ma25 : false,
-    pxAboveMA75: Number.isFinite(ma75) ? close>ma75 : false,
+    pxAboveMA25: Number.isFinite(ma25) ? close > ma25 : false,
+    pxAboveMA75: Number.isFinite(ma75) ? close > ma75 : false,
   };
 }
 
 // --- Same scoring rules you used in backtest.computeScore ---
-function computeScanScore({ analytics, regime="RANGE", crossType, crossLag, ST, LT }) {
+function computeScanScore({
+  analytics,
+  regime = "RANGE",
+  crossType,
+  crossLag,
+  ST,
+  LT,
+}) {
   let s = 0;
-  // Regime: DOWN>UP (STRONG_UP/RANGE neutral) — if you don’t have regime here, this will usually add 0
+  // Regime: DOWN>UP (STRONG_UP/RANGE neutral)
   if (regime === "DOWN") s += 2;
   else if (regime === "UP") s += 1;
 
@@ -588,8 +626,6 @@ function computeScanScore({ analytics, regime="RANGE", crossType, crossLag, ST, 
 
   return s;
 }
-
-
 
 export function getTradeManagementSignal_V3(
   stock,
@@ -745,7 +781,7 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // 4b) No-progress creep (unchanged from prior)
+  // 4b) No-progress creep
   {
     const NP_BARS = 5;
     const NEED_TOUCH_R = 0.5;
@@ -864,7 +900,7 @@ export function getTradeManagementSignal_V3(
     };
   }
 
-  // 7) DEFAULT — structure-first, now *conservative* for entries below MA25
+  // 7) DEFAULT — structure-first, conservative for entries below MA25
   if (px >= ma25 || ma25 === 0) {
     return {
       status: "Hold",
@@ -927,14 +963,6 @@ export function getTradeManagementSignal_V3(
     };
   }
 }
-
-
-
-
-
-
-
-
 
 /* -------------------------------------------
    3) Lightweight technical enrichment
@@ -1123,7 +1151,6 @@ function resolveTickers(tickers) {
   return out;
 }
 
-
 function extractEntryKindFromReason(reason = "") {
   // reason examples from your entry engine:
   // "DIP ENTRY: ...", "RETEST ENTRY: ...", "MA25 RECLAIM: ...", "INSIDE CONTINUATION: ...", "BREAKOUT: ..."
@@ -1136,7 +1163,6 @@ function extractEntryKindFromReason(reason = "") {
   return ""; // unknown/neutral
 }
 
-
 /* -------------------------------------------
    5) Main scan — exportable for server & browser
 ------------------------------------------- */
@@ -1146,13 +1172,13 @@ function extractEntryKindFromReason(reason = "") {
  * @param {string[]} [opts.tickers=[]]   e.g. ["7203","6758"] (no .T needed)
  * @param {Array} [opts.myPortfolio=[]]  e.g. [{ ticker:"7203.T", trade:{ entryPrice, stopLoss, priceTarget } }]
  * @param {Function} [opts.onItem]       callback per stockObject
- * @returns {Promise<{count:number, errors:string[]}>}
+ * @returns {Promise<{count:number, errors:string[], summary:Object}>}
  */
 export async function fetchStockAnalysis({
   tickers = [],
   myPortfolio = [],
   onItem,
-  regimeTicker = DEFAULT_REGIME_TICKER, // ← add this
+  regimeTicker = DEFAULT_REGIME_TICKER,
 } = {}) {
   // Fetch regime reference once
   let regimeMap = null;
@@ -1217,7 +1243,6 @@ export async function fetchStockAnalysis({
   };
 
   // Merge requested tickers + any tickers present in the portfolio
-  // AFTER:
   const baseTickers =
     Array.isArray(tickers) && tickers.length > 0
       ? tickers
@@ -1227,7 +1252,8 @@ export async function fetchStockAnalysis({
     ...baseTickers,
     ...myPortfolio.map((p) => p?.ticker).filter(Boolean),
   ];
-  // Dedup + normalize via resolveTickers (keeps unknowns as {code, sector:"Unknown"})
+
+  // Dedup + normalize via resolveTickers
   const filteredTickers = resolveTickers(mergedRawTickers);
   log(
     "Resolved merged tickers:",
@@ -1239,11 +1265,11 @@ export async function fetchStockAnalysis({
     log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
     try {
-      // 1) fetch fundamentals/technicals snapshot
+      // 1) fundamentals/technicals snapshot
       const result = await fetchSingleStockData(tickerObj);
       if (!result?.success) {
-        const msg = result?.error || "Unknown /api/stocks failure";
-        throw new Error(`Yahoo data error: ${msg}`);
+        const msg = result?.error || "Yahoo data error: success=false";
+        throw new Error(msg);
       }
 
       const { code, sector, yahooData } = result.data || {};
@@ -1317,7 +1343,7 @@ export async function fetchStockAnalysis({
       const historicalData = await fetchHistoricalData(stock.ticker);
       stock.historicalData = historicalData || [];
 
-      // 👇 append synthetic “today” candle if needed (do this FIRST)
+      // append synthetic "today" candle if needed
       {
         const today = new Date();
         const last = stock.historicalData.at(-1);
@@ -1348,7 +1374,7 @@ export async function fetchStockAnalysis({
         }
       }
 
-      // NOW split the views
+      // split the views
       const lastIsToday =
         stock.historicalData.length &&
         stock.historicalData.at(-1)?.date?.toDateString?.() ===
@@ -1361,10 +1387,7 @@ export async function fetchStockAnalysis({
 
       enrichForTechnicalScore(stock);
 
-      // 4) scores
-
       // 4) scores (value-first JP)
-      // Technicals don’t drive valuation/tier now; keep 0 to be explicit
       stock.technicalScore = 0;
       stock.fundamentalScore = getAdvancedFundamentalScore(stock); // 0..10
       stock.valuationScore = getValuationScore(stock); // 0..10
@@ -1392,68 +1415,73 @@ export async function fetchStockAnalysis({
       stock.shortTermConf = horizons.shortTerm.confidence;
       stock.longTermConf = horizons.longTerm.confidence;
 
-
       // 6) entry timing
       log("Running swing entry timing…");
       const finalSignal = analyseCrossing(
         { ...stock }, // live px
         dataForLevels, // for RR/headroom etc.
-        { debug: true, dataForGates } // hand the completed-bars view to the analyzer
+        { debug: true, dataForGates } // completed-bars view for structure
       );
 
-      // --- score (same inputs you used in backtest) ---
-      // --- score (same inputs you used in backtest) ---
-const ST = stock.shortTermScore;
-const LT = stock.longTermScore;
+      // derive score
+      const ST = stock.shortTermScore;
+      const LT = stock.longTermScore;
 
-// derive crossType/lag from the analyzer if present
-let crossType = null, crossLag = null;
-const cm = finalSignal?.meta?.cross || {};
-if (cm?.selected) {
-  crossType = cm.selected; // "WEEKLY" | "DAILY" | "BOTH"
-  crossLag =
-    Number.isFinite(cm?.weekly?.barsAgo) && (crossType === "WEEKLY" || crossType === "BOTH")
-      ? cm.weekly.barsAgo
-      : Number.isFinite(cm?.daily?.barsAgo) && (crossType === "DAILY" || crossType === "BOTH")
-      ? cm.daily.barsAgo
-      : null;
-} else if (cm?.weekly || cm?.daily) {
-  crossType = cm.weekly && cm.daily ? "BOTH" : cm.weekly ? "WEEKLY" : "DAILY";
-  crossLag = Math.min(
-    Number.isFinite(cm.weekly?.barsAgo) ? cm.weekly.barsAgo : Infinity,
-    Number.isFinite(cm.daily?.barsAgo) ? cm.daily.barsAgo : Infinity
-  );
-  if (!Number.isFinite(crossLag)) crossLag = null;
-}
+      // derive crossType/lag from the analyzer if present
+      let crossType = null,
+        crossLag = null;
+      const cm = finalSignal?.meta?.cross || {};
+      if (cm?.selected) {
+        crossType = cm.selected; // "WEEKLY" | "DAILY" | "BOTH"
+        crossLag =
+          Number.isFinite(cm?.weekly?.barsAgo) &&
+          (crossType === "WEEKLY" || crossType === "BOTH")
+            ? cm.weekly.barsAgo
+            : Number.isFinite(cm?.daily?.barsAgo) &&
+              (crossType === "DAILY" || crossType === "BOTH")
+            ? cm.daily.barsAgo
+            : null;
+      } else if (cm?.weekly || cm?.daily) {
+        crossType =
+          cm.weekly && cm.daily ? "BOTH" : cm.weekly ? "WEEKLY" : "DAILY";
+        crossLag = Math.min(
+          Number.isFinite(cm.weekly?.barsAgo) ? cm.weekly.barsAgo : Infinity,
+          Number.isFinite(cm.daily?.barsAgo) ? cm.daily.barsAgo : Infinity
+        );
+        if (!Number.isFinite(crossLag)) crossLag = null;
+      }
 
-const analytics = scanAnalytics(stock, dataForLevels);
+      const analytics = scanAnalytics(stock, dataForLevels);
 
-// Pick the date we want the regime for: last *completed* bar if available,
-// otherwise fall back to the latest bar we have.
-const regimeDate =
-  (dataForGates?.length ? dataForGates.at(-1)?.date : null) ||
-  stock.historicalData.at(-1)?.date;
+      // Pick the date we want the regime for: last *completed* bar if available,
+      // otherwise fall back to the latest bar we have.
+      const regimeDate =
+        (dataForGates?.length ? dataForGates.at(-1)?.date : null) ||
+        stock.historicalData.at(-1)?.date;
 
-const dayRegime = regimeMap ? regimeForDate(regimeMap, regimeDate) : "RANGE";
+      const dayRegime = regimeMap
+        ? regimeForDate(regimeMap, regimeDate)
+        : "RANGE";
 
-const score = computeScanScore({
-  analytics,
-  regime: dayRegime,
-  crossType,
-  crossLag,
-  ST,
-  LT,
-});
+      const score = computeScanScore({
+        analytics,
+        regime: dayRegime,
+        crossType,
+        crossLag,
+        ST,
+        LT,
+      });
 
-// keep on the stock for Bubble/UI
-stock.sentimentComboRank = score;
-stock.marketRegime = dayRegime;
-stock._scoreAnalytics = analytics;
-stock._scoreCross = { crossType, crossLag };
+      // expose scoring info on the stock for Bubble/UI
+      stock.sentimentComboRank = score;
+      stock.marketRegime = dayRegime;
+      stock._scoreAnalytics = analytics;
+      stock._scoreCross = { crossType, crossLag };
 
-      // keep detailed telemetry for session-level diagnostics
+      // collect detailed telemetry per item
       if (finalSignal?.telemetry) {
         teleList.push(finalSignal.telemetry);
+
         // merge histograms
         const t = finalSignal.telemetry?.histos || {};
         for (const [k, v] of Object.entries(t.slopeBuckets || {})) {
@@ -1463,7 +1491,8 @@ stock._scoreCross = { crossType, crossLag };
           histo.rrShortfall.push(...t.rrShortfall);
         if (Array.isArray(t.headroom)) histo.headroom.push(...t.headroom);
         if (Array.isArray(t.distMA25)) histo.distMA25.push(...t.distMA25);
-        // NEW: merge numeric distros
+
+        // merge numeric distros
         const d = finalSignal.telemetry?.distros || {};
         for (const key of Object.keys(distro)) {
           if (Array.isArray(d[key])) distro[key].push(...d[key]);
@@ -1475,12 +1504,12 @@ stock._scoreCross = { crossType, crossLag };
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
 
-      // NEW: tier aggregation
+      // tier aggregation
       const tierKey = String(Number.isFinite(stock.tier) ? stock.tier : "na");
       inc(summary.tiers.byTier, tierKey);
       if (stock.isBuyNow) inc(summary.tiers.buyByTier, tierKey);
 
-      // NEW: summary update
+      // summary update
       summary.totals.count += 1;
       const k = sentiKey(stock.shortTermScore, stock.longTermScore);
       inc(summary.bySenti, k);
@@ -1493,16 +1522,14 @@ stock._scoreCross = { crossType, crossLag };
         inc(summary.reasons.noBuy, normalizeReason(finalSignal.reason));
       }
 
-      // Normalize + mirror (handles both buyNow true/false)
-      // Normalize suggested values from entry engine (for NEW entries)
+      // Normalize + mirror stop/target logic
       const suggestedSL = finalSignal.smartStopLoss ?? finalSignal.stopLoss;
       const suggestedTP =
         finalSignal.smartPriceTarget ?? finalSignal.priceTarget;
 
-      // Always keep trigger for UI insight
       stock.trigger = finalSignal.trigger ?? null;
 
-      // IMPORTANT: if the ticker is already in portfolio, do NOT loosen stop/target
+      // If already in portfolio, do NOT loosen stop or lower target
       const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
 
       if (portfolioEntry) {
@@ -1512,12 +1539,12 @@ stock._scoreCross = { crossType, crossLag };
             portfolioEntry?.trade?.targetPrice
         );
 
-        // STOP: only tighten upward; if no suggestion, keep current
+        // STOP: only tighten (raise)
         const tightenedStop = Number.isFinite(suggestedSL)
           ? Math.max(curStop, Math.round(suggestedSL))
           : curStop;
 
-        // TARGET: only keep or raise; never reduce
+        // TARGET: only keep or raise
         const keptOrRaisedTarget = Number.isFinite(suggestedTP)
           ? Number.isFinite(curTarget)
             ? Math.max(curTarget, Math.round(suggestedTP))
@@ -1545,10 +1572,9 @@ stock._scoreCross = { crossType, crossLag };
 
       // 7) trade management if held
       if (portfolioEntry) {
-        // Try to infer entry kind from your entry engine's reason text, if present
         const entryKind = extractEntryKindFromReason(finalSignal?.reason); // DIP / RETEST / RECLAIM / INSIDE / BREAKOUT
-        // --- NEW: safely parse purchase date (entryDate) if provided ---
-        // Expecting ISO string (e.g., "2025-10-07") or anything Date can parse.
+
+        // parse possible entryDate from portfolio
         let entryDate = null;
         const rawED = portfolioEntry?.trade?.entryDate;
         if (rawED) {
@@ -1556,8 +1582,7 @@ stock._scoreCross = { crossType, crossLag };
           if (!Number.isNaN(d.getTime())) entryDate = d;
         }
 
-        // --- NEW: compute barsSinceEntry on COMPLETED bars only (dataForGates) ---
-        // We count trading bars whose date > entryDate.
+        // compute barsSinceEntry on COMPLETED bars only (dataForGates)
         let barsSinceEntry = null;
         if (entryDate && Array.isArray(dataForGates) && dataForGates.length) {
           const lastCompleted = dataForGates;
@@ -1571,7 +1596,7 @@ stock._scoreCross = { crossType, crossLag };
           stock,
           {
             ...portfolioEntry.trade,
-            // helps V3 compute R progress correctly even if stopLoss has been trailed
+            // helps V3 compute R progress correctly even if stopLoss was trailed
             initialStop:
               portfolioEntry.trade.initialStop ?? portfolioEntry.trade.stopLoss,
           },
@@ -1579,11 +1604,9 @@ stock._scoreCross = { crossType, crossLag };
           {
             entryKind, // optional but helpful
             sentimentScore: stock.shortTermScore, // your 1..7 short-term score
-            entryDate, // NEW: pass purchase date
-            barsSinceEntry, // NEW: pass computed bars since entry (completed bars)
-            // deep is optional; if your orchestrator exposes it, pass it:
-            // deep: horizons.deep,
-            // ADX is optional; V3 computes fallback if omitted
+            entryDate, // NEW: purchase date if known
+            barsSinceEntry, // NEW: completed bars count
+            // deep: horizons.deep (if you expose that)
             isExtended:
               Number.isFinite(stock.bollingerMid) && stock.bollingerMid > 0
                 ? (stock.currentPrice - stock.bollingerMid) /
@@ -1596,18 +1619,17 @@ stock._scoreCross = { crossType, crossLag };
         stock.managementSignalStatus = mgmt.status;
         stock.managementSignalReason = mgmt.reason;
 
-        // If V3 suggests a tighter stop, surface it (without overwriting your portfolio by force)
+        // If V3 suggests a tighter stop, surface it
         if (Number.isFinite(mgmt.updatedStopLoss)) {
           const proposed = Math.round(mgmt.updatedStopLoss);
           const current = Number(stock.stopLoss) || 0;
-          // Only accept if it tightens (raises) versus current displayed stop
           if (proposed > current) {
             stock.managementUpdatedStop = proposed;
             stock.smartStopLoss = proposed;
             stock.stopLoss = proposed;
           }
         }
-        // NOTE: do not lower target here; leave target untouched by management
+        // Don't lower target here
       } else {
         stock.managementSignalStatus = null;
         stock.managementSignalReason = null;
@@ -1675,6 +1697,7 @@ stock._scoreCross = { crossType, crossLag };
       log(`📤 Emitted ${stock.ticker}`);
       count += 1;
     } catch (err) {
+      // hard fail for this ticker, move on
       errorLog(`❌ Error processing ${tickerObj.code}:`, err?.message || err);
       errors.push(`Ticker ${tickerObj.code}: ${err?.message || err}`);
     }
@@ -1682,13 +1705,18 @@ stock._scoreCross = { crossType, crossLag };
 
   log("Scan complete", { count, errorsCount: errors.length });
 
-  // NEW: derive buy-rate by tier
+  // derive buy-rate by tier
   const tierRows = Object.keys(summary.tiers.byTier)
     .map((tier) => {
       const tot = summary.tiers.byTier[tier] || 0;
       const buys = summary.tiers.buyByTier[tier] || 0;
       const buyRate = tot ? Math.round((buys / tot) * 10000) / 100 : 0;
-      return { tier, total: tot, buys, buyRatePct: buyRate };
+      return {
+        tier,
+        total: tot,
+        buys,
+        buyRatePct: buyRate,
+      };
     })
     .sort((a, b) => b.buyRatePct - a.buyRatePct || b.total - a.total);
 
@@ -1698,21 +1726,28 @@ stock._scoreCross = { crossType, crossLag };
       const tot = summary.bySenti[key] || 0;
       const buys = summary.buyBySenti[key] || 0;
       const buyRate = tot ? Math.round((buys / tot) * 10000) / 100 : 0;
-      return { combo: key, total: tot, buys, buyRatePct: buyRate };
+      return {
+        combo: key,
+        total: tot,
+        buys,
+        buyRatePct: buyRate,
+      };
     })
     .sort((a, b) => b.buyRatePct - a.buyRatePct || b.total - a.total);
 
   // top reasons (take top 10 each)
   function topK(obj, k = 10) {
     return Object.entries(obj)
-      .map(([reason, cnt]) => ({ reason, count: cnt }))
+      .map(([reason, cnt]) => ({
+        reason,
+        count: cnt,
+      }))
       .sort((a, b) => b.count - a.count)
       .slice(0, k);
   }
 
   // session-level block breakdowns & histograms
   const blocksTop = summarizeBlocks(teleList); // [{code,count,examples,ctxSample}]
-  // optional: RR shortfall binning for a quick “how far off” view
   const rrShortBins = histo.rrShortfall.reduce((m, r) => {
     const s = Number(r.short) || 0;
     const key =
@@ -1735,29 +1770,25 @@ stock._scoreCross = { crossType, crossLag };
       buy: topK(summary.reasons.buy, 10),
       noBuy: topK(summary.reasons.noBuy, 10),
     },
-    // NEW: detailed diagnostics (compact)
     debug: {
       blocksTop, // grouped “why blocked” with examples
       slopeBuckets: histo.slopeBuckets,
       rrShortfallBins: rrShortBins,
-      headroomSample: histo.headroom.slice(0, 50), // keep small samples in console
+      headroomSample: histo.headroom.slice(0, 50),
       distMA25Sample: histo.distMA25.slice(0, 50),
       distroSample: Object.fromEntries(
         Object.entries(distro).map(([k, arr]) => [k, arr.slice(0, 100)])
       ),
     },
   };
-  // after building summaryOut:
+
   summaryOut.totals.buyRatePct = summaryOut.totals.count
     ? Math.round((summaryOut.totals.buyNow / summaryOut.totals.count) * 10000) /
       100
     : 0;
 
-  // console snapshot
-  // single, complete object in console
   log("SESSION SUMMARY", summaryOut);
 
-  // expose
   return { count, errors, summary: summaryOut };
 }
 

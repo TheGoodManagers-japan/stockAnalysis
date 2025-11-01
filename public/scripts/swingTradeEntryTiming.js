@@ -12,7 +12,6 @@ import { detectDipBounce, detectDipBounceWeekly } from "./dip.js";
 // to push directly into a per-call tele instead of teleGlobal.
 const teleGlobal = { histos: { headroom: [], distMA25: [] } };
 
-
 /* ============================ Telemetry ============================ */
 function teleInit() {
   return {
@@ -75,9 +74,10 @@ function mkTracer(opts = {}) {
   };
   const emit = (e) => {
     logs.push(e);
-    try {
-      opts.onTrace?.(e);
-    } catch {}
+    // no try/catch here anymore:
+    if (opts.onTrace) {
+      opts.onTrace(e);
+    }
   };
   const T = (module, step, ok, msg, ctx = {}, lvl = "info") => {
     if (!should(lvl)) return;
@@ -101,9 +101,6 @@ These functions enforce:
   RANGE_regime_gap_up_near_MA25).
 - Auto-block common loser patterns (too extended, too early, weak ST, pure chase in STRONG_UP).
 */
-
-
-
 
 /* ============================ Config ============================ */
 function getConfig(opts = {}) {
@@ -215,8 +212,6 @@ function getConfig(opts = {}) {
   };
 }
 
-
-
 // Return age of the MOST RECENT bullish daily 5>25>75 flip (no freshness cap).
 function lastDailyStackedCrossAge(data) {
   const smaD = (n, i) => {
@@ -228,10 +223,13 @@ function lastDailyStackedCrossAge(data) {
   const last = data.length - 1;
   if (last < 75) return { found: false };
   for (let i = last; i >= 1; i--) {
-    const m5 = smaD(5, i), m25 = smaD(25, i), m75 = smaD(75, i);
-    const pm5 = smaD(5, i - 1), pm25 = smaD(25, i - 1), pm75 = smaD(75, i - 1);
-    const nowStacked =
-      m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
+    const m5 = smaD(5, i),
+      m25 = smaD(25, i),
+      m75 = smaD(75, i);
+    const pm5 = smaD(5, i - 1),
+      pm25 = smaD(25, i - 1),
+      pm75 = smaD(75, i - 1);
+    const nowStacked = m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
     const prevStacked =
       pm5 > 0 && pm25 > 0 && pm75 > 0 && pm5 > pm25 && pm25 > pm75;
     if (nowStacked && !prevStacked) {
@@ -274,12 +272,9 @@ function lastWeeklyStackedCrossAge(data) {
       barsInLastDailyWeek++;
     }
   }
-  const dropLastWeekly =
-    barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
+  const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
   const weeks =
-    weeksAll.length >= 1 && dropLastWeekly
-      ? weeksAll.slice(0, -1)
-      : weeksAll;
+    weeksAll.length >= 1 && dropLastWeekly ? weeksAll.slice(0, -1) : weeksAll;
 
   if (weeks.length < 52) return { found: false };
 
@@ -321,8 +316,6 @@ function lastWeeklyStackedCrossAge(data) {
   }
   return { found: false };
 }
-
-
 
 function resampleToWeeks(daily) {
   const out = [];
@@ -397,7 +390,6 @@ function recentPriceReclaim25and75(data, lookback = 3) {
     ma75Now = dailyMA(data, 75);
   const ma25Prev = dailyMA(data.slice(0, -1), 25),
     ma75Prev = dailyMA(data.slice(0, -1), 75);
-  // Guard: if either MA is not computable yet (==0), we cannot validate a reclaim
   if (!(ma25Now > 0 && ma75Now > 0 && ma25Prev > 0 && ma75Prev > 0)) {
     return {
       pass: false,
@@ -436,8 +428,6 @@ function recentPriceReclaim25and75(data, lookback = 3) {
 function recentMA25Over75Cross(data, maxAge = 5) {
   const i = data.length - 1;
   if (i < 1) return { pass: false };
-  // Find the most recent bar t (within maxAge) where MA25 crossed above MA75 between t-1 -> t
-  // Age is (i - t). If the cross is on the latest bar, age = 0.
   let lastCrossAge = Infinity;
   for (let t = i; t >= Math.max(1, i - maxAge); t--) {
     const snapPrev = data.slice(0, t); // up to t-1 inclusive
@@ -617,25 +607,20 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   if (atrPct <= 1.0) need = Math.max(need - 0.1, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, 1.6);
 
-  // *** NEW: relax RR for first-chance weekly and daily crosses ***
-  // Rationale:
-  // - FIRST_WEEKLY = historically monster PF (~1.56) even for ones we skipped.
-  //   Let slightly weaker RR through.
-  // - FIRST_DAILY  = slightly above baseline PF (~1.32), allow mild leniency.
+  // relax RR for first-chance weekly/daily
   if (ctx?.flavor === "FIRST_WEEKLY") {
-    need = Math.max(need - 0.15, 1.25); // was maybe ~1.45+ → let ~1.3-1.35 through
+    need = Math.max(need - 0.15, 1.25);
   } else if (ctx?.flavor === "FIRST_DAILY") {
-    need = Math.max(need - 0.05, 1.3); // tiny nudge, still keeps trash out
+    need = Math.max(need - 0.05, 1.3);
   }
 
-  // 5) SCOOT: bounded target lifts to nearby clustered resistances
+  // 5) SCOOT logic
   if (cfg.scootEnabled) {
     const atrCap =
       ctx?.kind === "DIP"
         ? cfg.scootATRCapDIP ?? 4.2
         : cfg.scootATRCapNonDIP ?? 3.5;
 
-    // First hop: try resList[1]
     if (ratio < need && Array.isArray(resList) && resList.length >= 2) {
       const nextRes = resList[1];
       const lifted = Math.min(nextRes, entryPx + atrCap * atr);
@@ -646,7 +631,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
       }
     }
 
-    // Second hop: only if still within 0.25 of the floor and we have resList[2]
     if (
       ratio < need &&
       need - ratio <= (cfg.scootNearMissBand ?? 0.25) &&
@@ -676,14 +660,13 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < 58;
 
-  // *** NEW: slightly widen probation band for FIRST_WEEKLY and FIRST_DAILY ***
+  // widen probation for FIRST_WEEKLY / FIRST_DAILY
   if (
     !acceptable &&
     allowProb &&
     (ctx?.flavor === "FIRST_WEEKLY" || ctx?.flavor === "FIRST_DAILY")
   ) {
     const extraBand = ctx.flavor === "FIRST_WEEKLY" ? 0.07 : 0.04;
-    // let us accept if we're close-ish to need, AND trend isn't horrible
     if (
       ratio >= need - extraBand &&
       (ms.trend === "STRONG_UP" || ms.trend === "UP")
@@ -693,7 +676,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   }
 
   acceptable = acceptable || probation;
-
 
   return {
     acceptable,
@@ -716,9 +698,10 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
   // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
   details.rsi = rsi;
-  try {
-    if (isFiniteN(rsi)) teleGlobal._lastRSI = rsi;
-  } catch {}
+
+  // record last RSI in global without try/catch
+  teleGlobal._lastRSI = rsi;
+
   if (!(_kind === "FIRST_WEEKLY") && rsi >= cfg.hardRSI) {
     return {
       veto: true,
@@ -726,12 +709,9 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
       details,
     };
   }
-  // For FIRST_WEEKLY, we *don't* instantly veto on hardRSI.
-  // We just record it in details and continue.
   if (_kind === "FIRST_WEEKLY" && rsi >= cfg.hardRSI) {
     details.note = "RSI high but FIRST_WEEKLY allowed";
   }
-
 
   // headroom
   const resList = findResistancesAbove(data, px, stock);
@@ -745,15 +725,14 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     details.nearestRes = effRes;
     details.headroomATR = headroomATR;
     details.headroomPct = headroomPct;
-    // stash for histograms
-    try {
-      teleGlobal.histos.headroom.push({
-        atr: headroomATR,
-        pct: headroomPct,
-        nearestRes: effRes,
-        ticker: stock?.ticker,
-      });
-    } catch {}
+
+    // push to teleGlobal without try/catch
+    teleGlobal.histos.headroom.push({
+      atr: headroomATR,
+      pct: headroomPct,
+      nearestRes: effRes,
+      ticker: stock?.ticker,
+    });
 
     const tooTightHeadroom =
       (headroomATR < (cfg.nearResVetoATR ?? 0.35) ||
@@ -772,7 +751,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     if (tooTightHeadroom && _kind === "FIRST_WEEKLY") {
       details.note = "Tight headroom but FIRST_WEEKLY allowed";
     }
-
   }
 
   // distance above MA25
@@ -781,14 +759,15 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     const distMA25 = (px - ma25) / atr;
     details.ma25 = ma25;
     details.distFromMA25_ATR = distMA25;
-    try {
-      teleGlobal.histos.distMA25.push({
-        distATR: distMA25,
-        ma25,
-        px,
-        ticker: stock?.ticker,
-      });
-    } catch {}
+
+    // push to teleGlobal without try/catch
+    teleGlobal.histos.distMA25.push({
+      distATR: distMA25,
+      ma25,
+      px,
+      ticker: stock?.ticker,
+    });
+
     const cap = cfg.maxATRfromMA25;
     const tooFar = distMA25 > (cap ?? 2.4) + 0.2;
 
@@ -802,7 +781,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
     if (tooFar && _kind === "FIRST_WEEKLY") {
       details.note = "Extended vs MA25 but FIRST_WEEKLY allowed";
     }
-
   }
 
   // streak guard
@@ -818,7 +796,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
 
   return { veto: false, reason: "", details };
 }
-
 
 /* ============================ Helpers & Fallback ============================ */
 function buildSwingTimeline(entryPx, candidate, rr, ms) {
@@ -1058,38 +1035,35 @@ function toTeleRR(rr) {
 
 /* Optional: compact summary for console logs in callers */
 function summarizeTelemetryForLog(tele) {
-  try {
-    const g = tele?.gates || {};
-    const rr = tele?.rr || {};
-    const guard = tele?.guard || {};
-    return {
-      gates: {
-        regime: { pass: true, why: "" }, // regime disabled; keep shape
-        structure: { pass: g.structure?.pass, why: g.structure?.why },
-      },
-      rr: {
-        checked: rr.checked,
-        acceptable: rr.acceptable,
-        ratio: rr.ratio,
-        need: rr.need,
-        stop: rr.stop,
-        target: rr.target,
-        probation: rr.probation,
-      },
-      guard: {
-        checked: guard.checked,
-        veto: guard.veto,
-        reason: guard.reason,
-        details: guard.details,
-      },
-      context: tele?.context,
-      blocks: tele?.blocks,
-      histos: tele?.histos,
-      distros: tele?.distros,
-    };
-  } catch {
-    return {};
-  }
+  // no try/catch: if tele is malformed I want it to explode
+  const g = tele?.gates || {};
+  const rr = tele?.rr || {};
+  const guard = tele?.guard || {};
+  return {
+    gates: {
+      regime: { pass: true, why: "" }, // regime disabled; keep shape
+      structure: { pass: g.structure?.pass, why: g.structure?.why },
+    },
+    rr: {
+      checked: rr.checked,
+      acceptable: rr.acceptable,
+      ratio: rr.ratio,
+      need: rr.need,
+      stop: rr.stop,
+      target: rr.target,
+      probation: rr.probation,
+    },
+    guard: {
+      checked: guard.checked,
+      veto: guard.veto,
+      reason: guard.reason,
+      details: guard.details,
+    },
+    context: tele?.context,
+    blocks: tele?.blocks,
+    histos: tele?.histos,
+    distros: tele?.distros,
+  };
 }
 
 /* Batch-friendly grouper for blocks */
@@ -1123,24 +1097,22 @@ export function summarizeBlocks(teleList = []) {
 
 export { getConfig, summarizeTelemetryForLog };
 
-
-
 /* ========= 13/26/52 weekly “fresh flip ONLY” detector ========= */
 function detectWeeklyStackedCross(data, lookbackBars = 5) {
-  // 1) Build weekly closes, and drop the last week ONLY if it's really incomplete
   const weeksAll = resampleToWeeks(data);
 
   // ISO week helpers
   const isoKey = (d) => {
     const dt = new Date(d);
-    const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
-    const dayNum = t.getUTCDay() || 7;         // 1..7 (Mon..Sun)
+    const t = new Date(
+      Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate())
+    );
+    const dayNum = t.getUTCDay() || 7; // 1..7 (Mon..Sun)
     t.setUTCDate(t.getUTCDate() + 4 - dayNum); // Thu of this week
     const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
-    const weekNo = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
-    return t.getUTCFullYear() + "-" + weekNo;  // e.g. "2025-42"
+    const weekNo = Math.ceil(((t - yearStart) / 86400000 + 1) / 7);
+    return t.getUTCFullYear() + "-" + weekNo; // e.g. "2025-42"
   };
-
 
   // How many daily bars do we actually have in the last daily week?
   const lastDaily = data.at(-1);
@@ -1154,7 +1126,8 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
   }
   // Consider a week "complete" if we saw at least 4 trading days (holidays tolerated).
   const dropLastWeekly = barsInLastDailyWeek > 0 && barsInLastDailyWeek < 4;
-  const weeks = (weeksAll.length >= 1 && dropLastWeekly) ? weeksAll.slice(0, -1) : weeksAll;
+  const weeks =
+    weeksAll.length >= 1 && dropLastWeekly ? weeksAll.slice(0, -1) : weeksAll;
 
   if (weeks.length < 52) {
     return { trigger: false, why: "Insufficient weekly history (need ≥52)" };
@@ -1172,9 +1145,13 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
   const eps = 0.0015; // ~0.15% margin to avoid micro-jitters
 
   const getTriplet = (i) => {
-    const m13 = smaW(13, i), m26 = smaW(26, i), m52 = smaW(52, i);
+    const m13 = smaW(13, i),
+      m26 = smaW(26, i),
+      m52 = smaW(52, i);
     const stacked =
-      m13 > 0 && m26 > 0 && m52 > 0 &&
+      m13 > 0 &&
+      m26 > 0 &&
+      m52 > 0 &&
       m13 >= m26 * (1 + eps) &&
       m26 >= m52 * (1 + eps);
     return { m13, m26, m52, stacked };
@@ -1189,7 +1166,9 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
         trigger: true,
         weeksAgo: last - i,
         index: i,
-        m13: cur.m13, m26: cur.m26, m52: cur.m52,
+        m13: cur.m13,
+        m26: cur.m26,
+        m52: cur.m52,
         why: `Weekly MAs freshly flipped to 13>26>52 within last ${lookbackBars} weeks`,
       };
     }
@@ -1201,10 +1180,8 @@ function detectWeeklyStackedCross(data, lookbackBars = 5) {
   };
 }
 
-
 /* ========= Daily 5/25/75 “fresh flip ONLY” engine (completed daily bars) ========= */
 function detectDailyStackedCross(data, lookbackBars = 5) {
-  // Use completed-daily bars only (caller passes them)
   const smaD = (n, i) => {
     if (i + 1 < n) return 0;
     let s = 0;
@@ -1212,28 +1189,41 @@ function detectDailyStackedCross(data, lookbackBars = 5) {
     return s / n;
   };
   const last = data.length - 1;
-  if (last < 75) return { trigger: false, why: "Insufficient daily history (need ≥75 bars)" };
+  if (last < 75)
+    return {
+      trigger: false,
+      why: "Insufficient daily history (need ≥75 bars)",
+    };
 
   for (let i = last; i >= Math.max(1, last - lookbackBars + 1); i--) {
-    const m5 = smaD(5, i), m25 = smaD(25, i), m75 = smaD(75, i);
+    const m5 = smaD(5, i),
+      m25 = smaD(25, i),
+      m75 = smaD(75, i);
     const nowStacked = m5 > 0 && m25 > 0 && m75 > 0 && m5 > m25 && m25 > m75;
 
-    const pm5 = smaD(5, i - 1), pm25 = smaD(25, i - 1), pm75 = smaD(75, i - 1);
-    const prevStacked = pm5 > 0 && pm25 > 0 && pm75 > 0 && pm5 > pm25 && pm25 > pm75;
+    const pm5 = smaD(5, i - 1),
+      pm25 = smaD(25, i - 1),
+      pm75 = smaD(75, i - 1);
+    const prevStacked =
+      pm5 > 0 && pm25 > 0 && pm75 > 0 && pm5 > pm25 && pm25 > pm75;
 
     if (nowStacked && !prevStacked) {
       return {
         trigger: true,
         daysAgo: last - i,
         index: i,
-        m5, m25, m75,
+        m5,
+        m25,
+        m75,
         why: `Daily MAs freshly flipped to 5>25>75 within last ${lookbackBars} days`,
       };
     }
   }
-  return { trigger: false, why: `No fresh daily 5>25>75 cross in ≤${lookbackBars} days` };
+  return {
+    trigger: false,
+    why: `No fresh daily 5>25>75 cross in ≤${lookbackBars} days`,
+  };
 }
-
 
 /**
  * analyseCrossing — detects BOTH playbooks (fresh-only):
@@ -1294,7 +1284,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     volBucket = "high";
   }
 
-  // we'll reuse this later in the return
   const volatilityInfo = {
     atr: atrRaw,
     atrPct,
@@ -1372,7 +1361,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const planCross = (label) => {
     const baseATR = Math.max(Number(stock.atr14) || 0, px * 0.005, 1e-6);
 
-    // NEW: flavor so downstream logic can loosen rules
     const flavor =
       label === "WEEKLY"
         ? "FIRST_WEEKLY"
@@ -1387,7 +1375,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       stock,
       msFull,
       { ...cfg, minRRbase: Math.max(cfg.minRRbase, cfg.crossMinRR) },
-      { kind: "CROSS", flavor, data: completedDaily } // <--- PATCH
+      { kind: "CROSS", flavor, data: completedDaily }
     );
     return { label, rr };
   };
@@ -1404,11 +1392,10 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         p.rr,
         msFull,
         cfg,
-        undefined, // we don't have a single "nearestRes" level handy here
+        undefined,
         "FIRST_WEEKLY"
       );
 
-      // NEW: record guard result in telemetry
       tele.guard = {
         checked: true,
         veto: gv.veto,
@@ -1455,7 +1442,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         "FIRST_DAILY"
       );
 
-      // NEW: record guard result in telemetry
       tele.guard = {
         checked: true,
         veto: gv.veto,
@@ -1487,20 +1473,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   }
 
   /* ---------------- DIP lane (SECOND-CHANCE ENTRY ONLY, matched by timeframe) ---------------- */
-  /*
-    Rules:
-    - We DO NOT allow a dip entry while there's still a fresh cross today (crossW.trigger or crossD.trigger).
-      That's the "first chance" phase.
-    - After that fresh window expires, we allow exactly ONE second-chance setup:
-        * If the WEEKLY flip is stale-but-valid (freshW < weeksAgo ≤ maxStaleW),
-          then we look ONLY for a WEEKLY dip bounce (bigger pullback). We ignore daily dips here.
-        * If the DAILY flip is stale-but-valid (freshD < barsAgo ≤ maxStaleD),
-          and weeklyWindowOK is NOT true (weekly takes priority),
-          then we look ONLY for a DAILY dip bounce.
-    - We will not mix "weekly window" with "daily dip", or "daily window" with "weekly dip".
-  */
-
-  // Utilities passed into dip detectors
   const U = {
     num,
     avg,
@@ -1538,7 +1510,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   }
 
   // 2. Are we still in a fresh flip window *today*?
-  //    If yes => first-chance mode still on => DIP not allowed yet.
   const haveFreshCrossNow = !!(crossW.trigger || crossD.trigger);
 
   // 3. Measure ages of the LAST bullish flips (daily / weekly)
@@ -1553,20 +1524,16 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const maxStaleD = cfg.staleDailyCrossMaxAgeBars ?? 20;
   const maxStaleW = cfg.staleWeeklyCrossMaxAgeWeeks ?? 10;
 
-  // Does the DAILY flip qualify as "stale but still valid" second-chance?
   const dailyWindowOK =
     !!lastDailyFlip.found &&
     lastDailyFlip.barsAgo > freshD &&
     lastDailyFlip.barsAgo <= maxStaleD;
 
-  // Does the WEEKLY flip qualify as "stale but still valid" second-chance?
   const weeklyWindowOK =
     !!lastWeeklyFlip.found &&
     lastWeeklyFlip.weeksAgo > freshW &&
     lastWeeklyFlip.weeksAgo <= maxStaleW;
 
-  // Which lane are we in?
-  // WEEKLY takes priority if both technically match.
   let dipLane = null;
   if (!haveFreshCrossNow) {
     if (weeklyWindowOK) {
@@ -1576,9 +1543,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     }
   }
 
-  // 4. Detect the appropriate dip bounce ONLY for the chosen lane.
-  //    - WEEKLY lane -> detectDipBounceWeekly()
-  //    - DAILY lane  -> detectDipBounce()   (the daily version)
   let activeDip = null;
   if (dipLane === "WEEKLY") {
     activeDip = detectDipBounceWeekly(stock, dataAll, cfg, U);
@@ -1586,7 +1550,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     activeDip = detectDipBounce(stock, dataAll, cfg, U);
   }
 
-  // Store diagnostics in telemetry no matter what (helps debug later)
   tele.dip = {
     trigger: !!activeDip?.trigger,
     waitReason: activeDip?.waitReason || "",
@@ -1607,10 +1570,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     );
   }
 
-  // 5. "Has it just dipped" freshness (bounce recency)
-  //    We respect the appropriate recency check:
-  //    - DAILY lane uses staleDipMaxAgeBars (bars)
-  //    - WEEKLY lane uses staleDipMaxAgeWeeklyWeeks (weeks)
+  // freshness of bounce
   let dipStillFreshEnough = false;
   if (dipLane === "DAILY") {
     const ageBars = activeDip?.diagnostics?.bounceAgeBars;
@@ -1623,16 +1583,14 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       ageWeeks <= (cfg.staleDipMaxAgeWeeklyWeeks ?? 2);
   }
 
-  // 6. Final gate for the DIP second-chance entry
   const dipSecondChanceOK =
-    !!dipLane && // we are actually in a stale-but-valid lane
+    !!dipLane &&
     activeDip?.trigger &&
     structureGateOk &&
     dipGatePass &&
     dipStillFreshEnough;
 
   if (dipSecondChanceOK) {
-    // Risk/Reward for this specific dip plan
     const rrD = analyzeRR(
       px,
       activeDip.stop,
@@ -1648,7 +1606,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     tele.rr = tele.rr?.checked ? tele.rr : toTeleRR(rrD);
 
     if (rrD.acceptable) {
-      // Guard veto (RSI too hot, too extended, no headroom, etc.)
       const gv = guardVeto(
         stock,
         dataAll,
@@ -1660,7 +1617,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         "DIP"
       );
 
-      // NEW: record guard result in telemetry
       tele.guard = {
         checked: true,
         veto: gv.veto,
@@ -1688,9 +1644,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         { stop: rrD.stop, target: rrD.target }
       );
     }
-    
   } else if (activeDip?.trigger && !dipGatePass) {
-    // Trend/MA reclaim gate failed
     pushBlock(tele, "DIP_GATE", "dip", `DIP gated: ${dipGateWhy.join("; ")}`, {
       wkGate,
       reclaimGate,
@@ -1698,7 +1652,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       dipLane,
     });
   } else if (activeDip?.trigger && haveFreshCrossNow) {
-    // We tried DIP even though first-chance is still active. Not allowed.
     pushBlock(
       tele,
       "DIP_TOO_EARLY",
@@ -1711,8 +1664,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       }
     );
   } else if (activeDip?.trigger && !dipLane) {
-    // We had a dip bounce, but we are NOT in any stale-but-valid window.
-    // (Either truly too old, or still within 'fresh' which is handled above.)
     pushBlock(
       tele,
       "DIP_OUTSIDE_STALE_WINDOW",
@@ -1730,7 +1681,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   }
 
   /* ------------------------ Decide & return ------------------------ */
-  // attach global guard histos
   tele.histos.headroom = tele.histos.headroom.concat(
     teleGlobal.histos.headroom
   );
@@ -1769,13 +1719,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       },
     };
 
-    // ✅ attach volatility for backtest logging
     out.volatility = volatilityInfo;
 
     return out;
   }
 
-  // Preference: if any fresh cross passed, prefer WEEKLY > DAILY > others; otherwise pick best RR
+  // Choose preferred candidate
   const pref =
     candidates.find((c) => c.kind === "WEEKLY CROSS") ||
     candidates.find((c) => c.kind === "DAILY CROSS") ||
@@ -1783,7 +1732,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
     )[0];
 
-  // (optional telemetry polish)
   if (!tele.rr.checked && pref?.rr) {
     tele.rr = toTeleRR(pref.rr);
   }
@@ -1816,7 +1764,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       msFull
     ),
 
-    // ✅ NEW
     volatility: volatilityInfo,
 
     meta: {
