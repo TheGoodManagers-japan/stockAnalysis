@@ -1361,6 +1361,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               stop >= entry
             ) {
               signalsInvalid++;
+              if (stop >= entry) {
+                signalsRiskBad++;
+              }
             } else {
               const qStop = toTick(stop, stock);
               const qTarget = toTick(target, stock);
@@ -2102,10 +2105,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     crossing: {
       byLag: crossingByLag,
     },
-
     dipAfterFreshCrossing: {
       WEEKLY: dipAfterMetrics.WEEKLY,
-      DAILY: dipAfterDevices: dipAfterMetrics.DAILY,
+      DAILY: dipAfterMetrics.DAILY,
     },
 
     volatility: {
@@ -2116,8 +2118,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       label: "target_only (with 15% floor)",
       metrics: thisProfileMetrics,
       exits: {
-        target: thisProfileTrades.filter((t) => t.exitType === "TARGET")
-          .length,
+        target: thisProfileTrades.filter((t) => t.exitType === "TARGET").length,
         stop: thisProfileTrades.filter((t) => t.exitType === "STOP").length,
         time: thisProfileTrades.filter((t) => t.exitType === "TIME").length,
         end: thisProfileTrades.filter((t) => t.exitType === "END").length,
