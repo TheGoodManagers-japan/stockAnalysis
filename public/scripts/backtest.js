@@ -46,7 +46,10 @@ async function fetchHistory(ticker, fromISO, toISO) {
       j = JSON.parse(text);
     } catch (e) {
       console.warn(
-        `[BT] fetchHistory: bad JSON for ${ticker}: ${String(e).slice(0, 200)}`
+        `[BT] fetchHistory: bad JSON for ${ticker}: ${String(e).slice(
+          0,
+          200
+        )}`
       );
       return [];
     }
@@ -72,7 +75,10 @@ async function fetchHistory(ticker, fromISO, toISO) {
       );
   } catch (err) {
     console.warn(
-      `[BT] fetchHistory: exception for ${ticker}: ${String(err).slice(0, 200)}`
+      `[BT] fetchHistory: exception for ${ticker}: ${String(err).slice(
+        0,
+        200
+      )}`
     );
     return [];
   }
@@ -304,8 +310,17 @@ function buildTickerAnalysis(ticker, trades) {
 /* ---------------- counterfactual lane helpers ---------------- */
 function simulateTradeForward(candles, startIdx, entry, stop, target) {
   const risk = Math.max(0.01, entry - stop);
+
+  // track excursions for sim (not stored in output yet, but could)
+  let lowestSeenPx = entry;
+  let highestSeenPx = entry;
+
   for (let j = startIdx + 1; j < candles.length; j++) {
     const bar = candles[j];
+
+    lowestSeenPx = Math.min(lowestSeenPx, bar.low);
+    highestSeenPx = Math.max(highestSeenPx, bar.high);
+
     if (bar.low <= stop) {
       return {
         exitType: "STOP",
@@ -314,6 +329,8 @@ function simulateTradeForward(candles, startIdx, entry, stop, target) {
         result: "LOSS",
         R: (stop - entry) / risk,
         returnPct: ((stop - entry) / entry) * 100,
+        maePct: ((lowestSeenPx - entry) / entry) * 100,
+        mfePct: ((highestSeenPx - entry) / entry) * 100,
       };
     }
     if (bar.high >= target) {
@@ -324,10 +341,15 @@ function simulateTradeForward(candles, startIdx, entry, stop, target) {
         result: "WIN",
         R: (target - entry) / risk,
         returnPct: ((target - entry) / entry) * 100,
+        maePct: ((lowestSeenPx - entry) / entry) * 100,
+        mfePct: ((highestSeenPx - entry) / entry) * 100,
       };
     }
   }
   const last = candles[candles.length - 1];
+  lowestSeenPx = Math.min(lowestSeenPx, last.low);
+  highestSeenPx = Math.max(highestSeenPx, last.high);
+
   return {
     exitType: "OPEN",
     exitPrice: last.close,
@@ -335,6 +357,8 @@ function simulateTradeForward(candles, startIdx, entry, stop, target) {
     result: "OPEN",
     R: 0,
     returnPct: ((last.close - entry) / entry) * 100,
+    maePct: ((lowestSeenPx - entry) / entry) * 100,
+    mfePct: ((highestSeenPx - entry) / entry) * 100,
   };
 }
 function cfInitAgg() {
@@ -599,7 +623,9 @@ function computeAnalytics(candles, idx, entry) {
     pxAboveMA75,
 
     entryPx: px,
-    turnoverJPY: Number.isFinite(turnoverJPY) ? +turnoverJPY.toFixed(2) : null,
+    turnoverJPY: Number.isFinite(turnoverJPY)
+      ? +turnoverJPY.toFixed(2)
+      : null,
   };
 }
 
@@ -632,7 +658,11 @@ function computeRegimeLabels(candles) {
           const h2 = Number(candles[idx].high ?? candles[idx].close ?? 0);
           const l2 = Number(candles[idx].low ?? candles[idx].close ?? 0);
           const pc2 = Number(candles[idx - 1]?.close ?? 0);
-          const tr2 = Math.max(h2 - l2, Math.abs(h2 - pc2), Math.abs(l2 - pc2));
+          const tr2 = Math.max(
+            h2 - l2,
+            Math.abs(h2 - pc2),
+            Math.abs(l2 - pc2)
+          );
           return s + tr2;
         }, 0);
         out[i] = sum / Math.min(14, i);
@@ -929,6 +959,16 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           for (let k = openPositions.length - 1; k >= 0; k--) {
             const st = openPositions[k];
 
+            // --- NEW: track excursions for this still-open trade
+            st.lowestSeenPx = Math.min(
+              st.lowestSeenPx,
+              Number(today.low) || st.lowestSeenPx
+            );
+            st.highestSeenPx = Math.max(
+              st.highestSeenPx,
+              Number(today.high) || st.highestSeenPx
+            );
+
             let exit = null;
             const canStop = Number.isFinite(st.stop);
             const stopTouched = canStop && today.low <= st.stop;
@@ -950,7 +990,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 price: stopFill,
                 result: isProfit ? "WIN" : "LOSS",
               };
-            } else if (Number.isFinite(st.target) && today.high >= st.target) {
+            } else if (
+              Number.isFinite(st.target) &&
+              today.high >= st.target
+            ) {
               exit = { type: "TARGET", price: st.target, result: "WIN" };
             }
 
@@ -973,6 +1016,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const baseRisk = st.entry - st.initialStop;
               const risk = Math.max(0.01, baseRisk);
               const Rval = r2((exit.price - st.entry) / risk);
+
+              // --- NEW: excursion stats for this finished trade
+              const maePct =
+                ((st.lowestSeenPx - st.entry) / st.entry) * 100 || 0;
+              const mfePct =
+                ((st.highestSeenPx - st.entry) / st.entry) * 100 || 0;
 
               const isDipAfterFreshCrossSignal =
                 /DIP/i.test(st.kind || "") &&
@@ -1009,6 +1058,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 sector: tickerInfoMap[code]?.sector || null,
 
                 dipAfterFreshCross: isDipAfterFreshCrossSignal,
+
+                // NEW:
+                maePct: r2(maePct),
+                mfePct: r2(mfePct),
               };
 
               trade.entryArchetype = trade.dipAfterFreshCross
@@ -1248,7 +1301,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           let rRatio = Number(teleSig?.rr?.ratio);
           if (!Number.isFinite(rRatio) && sig) {
             const pxNow = today.close;
-            const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
+            const rawTarget = Number(
+              sig?.smartPriceTarget ?? sig?.priceTarget
+            );
             const rawStop = pxNow * (1 - HARD_STOP_PCT);
             if (
               Number.isFinite(rawStop) &&
@@ -1350,7 +1405,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               } else if (selectedRaw === "BOTH") {
                 const wLag =
                   cm.weekly?.barsAgo ?? cm.weekly?.weeksAgo ?? Infinity;
-                const dLag = cm.daily?.barsAgo ?? cm.daily?.daysAgo ?? Infinity;
+                const dLag =
+                  cm.daily?.barsAgo ?? cm.daily?.daysAgo ?? Infinity;
                 const bestLag = Math.min(wLag, dLag);
                 lag = Number.isFinite(bestLag) ? bestLag : null;
               } else if (selectedRaw === "DIP_WEEKLY" && cm.weekly) {
@@ -1415,6 +1471,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
                 analytics,
                 sector: tickerInfoMap[code]?.sector || null,
+
+                // NEW: excursion trackers init
+                lowestSeenPx: entry,
+                highestSeenPx: entry,
               });
 
               globalOpenCount++;
@@ -1447,6 +1507,21 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           const baseRisk = st.entry - st.initialStop;
           const risk = Math.max(0.01, baseRisk);
           const Rval = r2((realizedExitPx - st.entry) / risk);
+
+          // make sure excursions are updated with final bar (defensive)
+          st.lowestSeenPx = Math.min(
+            st.lowestSeenPx,
+            Number(lastBar.low) || st.lowestSeenPx
+          );
+          st.highestSeenPx = Math.max(
+            st.highestSeenPx,
+            Number(lastBar.high) || st.highestSeenPx
+          );
+
+          const maePct =
+            ((st.lowestSeenPx - st.entry) / st.entry) * 100 || 0;
+          const mfePct =
+            ((st.highestSeenPx - st.entry) / st.entry) * 100 || 0;
 
           const isDipAfterFreshCrossSignal =
             /DIP/i.test(st.kind || "") &&
@@ -1484,6 +1559,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             sector: tickerInfoMap[code]?.sector || st.sector || null,
 
             dipAfterFreshCross: isDipAfterFreshCrossSignal,
+
+            // NEW:
+            maePct: r2(maePct),
+            mfePct: r2(mfePct),
           };
 
           trade.entryArchetype = trade.dipAfterFreshCross
@@ -1783,85 +1862,126 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
      Heuristic mapping of each trade to a tier bucket:
 
      S Tier:
-       - S1: DOWN regime panic reversal confirmed
-             => regime === "DOWN", strategy is DIP-like, and dipAfterFreshCross is true
-       - S2: STRONG_UP pullback reload in good sectors (Industrials/Utilities/Energy),
-             DIP-like, cross lag 1-3 bars, not chasing.
-             => regime === "STRONG_UP", DIP-like, good sector, lag between 1 and 3
+       - DOWN regime panic reversal confirmed
+             => regime === "DOWN", strategy DIP-like, true panic, waited (lag 2-4),
+                not overextended, medium vol
+       - Elite continuation very early after WEEKLY cross, calm vol, not chased
 
      A Tier:
-       - Strong but not god mode:
-         DIP-like in STRONG_UP or RANGE (even if not ideal sector / lag)
+       - Good setups:
+         DIP-like with real panic (regardless of regime),
+         OR cross trades that are early/mid lag, not too hot, liquid enough
 
      B Tier:
-       - Continuation structures:
-         Non-DIP entries that come from WEEKLY/DAILY/BOTH crossType
-         (trend-follow / confirmation trades)
+       - It's still one of our allowed patterns (DIP / WEEKLY CROSS / DAILY CROSS)
+         but either lag is late, or vol is high, etc.
 
      C Tier:
-       - Allowed but meh / speculative:
-         High ATR (>3%) OR weak sector (Healthcare, Basic Materials, Consumer Defensive)
-         These are still trades we technically take, but lower priority.
+       - Bad patterns we identified: weak pullback (not real panic),
+         chasing extended >6% above MA25,
+         super illiquid, etc.
 
-     If nothing matches, "UNCLASSIFIED".
+     UNCLASSIFIED:
+       - Anything else.
   --------------------------------------------------------------------- */
 
   function classifyBucket(trade) {
-    const sector = trade.sector || "";
-    const atrPct = trade.analytics?.atrPct;
-    const isDip = /DIP/i.test(trade.strategy || "");
-    const isFreshDip = !!trade.dipAfterFreshCross;
-    const lag = Number.isFinite(trade.crossLag) ? trade.crossLag : Infinity;
-    const crossLike =
-      trade.crossType === "WEEKLY" ||
-      trade.crossType === "DAILY" ||
-      trade.crossType === "BOTH";
+    const strat = (trade.strategy || "").toUpperCase(); // e.g. "WEEKLY CROSS"
+    const regime = (trade.regime || "").toUpperCase(); // e.g. "DOWN"
+    const lag = Number.isFinite(trade.crossLag) ? trade.crossLag : null;
 
-    const goodSectorRegex = /(Industrials|Utilities|Energy)/i;
-    const weakSectorRegex =
-      /(Healthcare|Health Care|Basic Materials|Consumer Defensive)/i;
+    const a = trade.analytics || {};
+    const atrPct = a.atrPct; // e.g. 1.8
+    const pxVsMA25 = a.pxVsMA25Pct; // e.g. 3.2 (positive = extended)
+    const liq = a.turnoverJPY; // daily turnover in JPY
 
-    const inGoodSector = goodSectorRegex.test(sector);
-    const inWeakSector = weakSectorRegex.test(sector);
+    // We don't yet have short-term panic score persisted, so infer:
+    // If price is below MA25 (negative pxVsMA25) we treat as "pullback".
+    // You can wire real ST later.
+    const weakPullbackST =
+      Number.isFinite(pxVsMA25) && pxVsMA25 > -2 && pxVsMA25 < 2; // meh pullback
+    const panicST = Number.isFinite(pxVsMA25) && pxVsMA25 < -2; // deeper pullback
 
-    // --- S1: DOWN panic reversal after fresh cross
-    if (trade.regime === "DOWN" && isDip && isFreshDip) {
-      return "S";
-    }
+    // Helper flags
+    const isWeeklyCross = strat.includes("WEEKLY");
+    const isDailyCross = strat.includes("DAILY");
+    const isCross = isWeeklyCross || isDailyCross;
+    const isDipLike = strat.includes("DIP"); // "DIP AFTER DAILY", etc.
 
-    // --- S2: STRONG_UP controlled reload in good sector, 1-3 bar lag
+    const mediumVol =
+      Number.isFinite(atrPct) && atrPct >= 1 && atrPct <= 3;
+    const highVol = Number.isFinite(atrPct) && atrPct > 3;
+    const extended6 = Number.isFinite(pxVsMA25) && pxVsMA25 > 6;
+    const notExtended6 = Number.isFinite(pxVsMA25)
+      ? pxVsMA25 <= 6
+      : true;
+    const veryLiquid = Number.isFinite(liq) && liq >= 200_000_000;
+    const okLiquid = Number.isFinite(liq) && liq >= 50_000_000;
+    const illiquid = Number.isFinite(liq) && liq < 5_000_000;
+
+    const earlyLag = Number.isFinite(lag) && lag < 2; // 0-1 bars
+    const midLag = Number.isFinite(lag) && lag >= 2 && lag <= 4;
+    // const lateLag = Number.isFinite(lag) && lag > 4; // we don't explicitly need it below
+
+    // ---------- C TIER (bad / avoid) ----------
     if (
-      trade.regime === "STRONG_UP" &&
-      isDip &&
-      inGoodSector &&
-      lag >= 1 &&
-      lag <= 3
+      // fake dips (no real panic)
+      (isDipLike && weakPullbackST) ||
+      // blowoff chase: hype regime AND stretched price
+      (regime === "STRONG_UP" && extended6) ||
+      // FOMO right after flip in hype regime, also stretched
+      (regime === "STRONG_UP" && earlyLag && extended6) ||
+      // general "too extended" chase
+      extended6 ||
+      // super illiquid junk
+      illiquid
     ) {
-      return "S";
-    }
-
-    // --- A Tier:
-    // DIP-style entries in STRONG_UP or RANGE (decent but not perfect sector/lag)
-    if (isDip && (trade.regime === "STRONG_UP" || trade.regime === "RANGE")) {
-      return "A";
-    }
-
-    // --- B Tier:
-    // Non-DIP, continuation / confirmation style (weekly/daily/both cross)
-    if (!isDip && crossLike) {
-      return "B";
-    }
-
-    // --- C Tier:
-    // High ATR (>3%) OR weak sectors
-    if ((Number.isFinite(atrPct) && atrPct > 3) || inWeakSector) {
       return "C";
     }
 
+    // ---------- S TIER (god mode) ----------
+    const qualifiesBestSetup =
+      regime === "DOWN" &&
+      panicST &&
+      midLag && // waited for stabilization (lag 2-4)
+      notExtended6 &&
+      mediumVol;
+
+    const qualifiesEliteWeeklyContinuation =
+      isWeeklyCross &&
+      earlyLag && // lag 0-1-2 best PF
+      mediumVol &&
+      notExtended6 &&
+      (regime === "DOWN" ||
+        regime === "RANGE" ||
+        regime === "STRONG_UP");
+
+    if (qualifiesBestSetup || qualifiesEliteWeeklyContinuation) {
+      return "S";
+    }
+
+    // ---------- A TIER (strong / main size) ----------
+    if (
+      (isDipLike && panicST && notExtended6 && !highVol) ||
+      (isCross &&
+        (earlyLag || midLag) &&
+        notExtended6 &&
+        !highVol &&
+        (okLiquid || veryLiquid || !Number.isFinite(liq)))
+    ) {
+      return "A";
+    }
+
+    // ---------- B TIER (baseline / allowed but meh) ----------
+    if (isCross || isDipLike) {
+      return "B";
+    }
+
+    // ---------- UNCLASSIFIED ----------
     return "UNCLASSIFIED";
   }
 
-  // bucket all trades
+  // build bucket lists
   const bucketLists = {
     S: [],
     A: [],
@@ -1949,7 +2069,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       ...strategyBreakdown,
     },
 
-    // NEW SECTION: performance by tier bucket
+    // NEW SECTION: performance by tier bucket (S/A/B/C/UNCLASSIFIED)
     buckets: bucketMetrics,
 
     telemetry,
@@ -1985,7 +2105,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
     dipAfterFreshCrossing: {
       WEEKLY: dipAfterMetrics.WEEKLY,
-      DAILY: dipAfterMetrics.DAILY,
+      DAILY: dipAfterDevices: dipAfterMetrics.DAILY,
     },
 
     volatility: {
@@ -1996,7 +2116,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       label: "target_only (with 15% floor)",
       metrics: thisProfileMetrics,
       exits: {
-        target: thisProfileTrades.filter((t) => t.exitType === "TARGET").length,
+        target: thisProfileTrades.filter((t) => t.exitType === "TARGET")
+          .length,
         stop: thisProfileTrades.filter((t) => t.exitType === "STOP").length,
         time: thisProfileTrades.filter((t) => t.exitType === "TIME").length,
         end: thisProfileTrades.filter((t) => t.exitType === "END").length,
@@ -2080,6 +2201,21 @@ function computeMetrics(trades) {
     end: trades.filter((t) => t.exitType === "END").length,
   };
 
+  // --- NEW: drawdownStats based on MAE/MFE we added
+  const winMaeList = wins
+    .map((t) => Number(t.maePct))
+    .filter((x) => Number.isFinite(x));
+  const lossMaeList = losses
+    .map((t) => Number(t.maePct))
+    .filter((x) => Number.isFinite(x));
+
+  const medianWinMAE = winMaeList.length ? percentile(winMaeList, 50) : 0;
+  const p90WinMAE = winMaeList.length ? percentile(winMaeList, 90) : 0;
+  const p95WinMAE = winMaeList.length ? percentile(winMaeList, 95) : 0;
+
+  const medianLossMAE = lossMaeList.length ? percentile(lossMaeList, 50) : 0;
+  const p10LossMAE = lossMaeList.length ? percentile(lossMaeList, 10) : 0;
+
   return {
     trades: r2(n),
     winRate: r2(winRate),
@@ -2090,7 +2226,9 @@ function computeMetrics(trades) {
     avgRwin: r2(avgRwin),
     avgRloss: r2(avgRloss),
     expR: r2(expR),
-    profitFactor: Number.isFinite(profitFactor) ? r2(profitFactor) : "Infinity",
+    profitFactor: Number.isFinite(profitFactor)
+      ? r2(profitFactor)
+      : "Infinity",
     exits,
     lossTail: {
       minLossPct: r2(minLossPct),
@@ -2098,6 +2236,17 @@ function computeMetrics(trades) {
       p90LossPct: r2(p90LossPct),
       p95LossPct: r2(p95LossPct),
       countLosses: losses.length,
+    },
+    drawdownStats: {
+      win: {
+        medianMAE_pct: r2(medianWinMAE),
+        p90MAE_pct: r2(p90WinMAE),
+        p95MAE_pct: r2(p95WinMAE),
+      },
+      loss: {
+        medianMAE_pct: r2(medianLossMAE),
+        p10MAE_pct: r2(p10LossMAE),
+      },
     },
   };
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * diagnose_backtest.js (enhanced with per-playbook strategy breakdown)
+ * diagnose_backtest.js (enhanced)
  *
  * Usage:
  *   node diagnose_backtest.js path/to/backtest.json
@@ -11,7 +11,7 @@
  * Output:
  *   ONE clean JSON with:
  *    - performance / flow / regime
- *    - bestSetup (playbook-ish slice with best PF)
+ *    - bestSetup (macro situational slice with best PF)
  *    - lossAnalysis / lossReasons
  *    - stopRisk (stop tightness guidance)
  *    - missedOpportunities (what we blocked that would've worked)
@@ -20,7 +20,9 @@
  *    - bestSetups (human-readable situational edges)
  *    - singleProfile summary (your unified "target_only (with 15% floor)")
  *    - targetOnly (basically entire strategy now)
- *    - strategyBreakdown (NEW: PF / WR per playbook name like "WEEKLY CROSS +VOLUME")
+ *    - strategyBreakdown (PF / WR per playbook string)
+ *    - tierBuckets (S / A / B / C / UNCLASSIFIED perf from backtest.buckets)
+ *    - scoreQuality (if trades have .score: PF ladder by score, correlation)
  */
 
 const fs = require("fs");
@@ -185,7 +187,6 @@ function summarizeTimeToTarget(trades) {
 
 /* -------------------- BUCKET HELPERS -------------------- */
 
-// Volume Z-score at entry (how loud the day was)
 function bucketVolZ(z) {
   if (!Number.isFinite(z)) return "volZ:n/a";
   if (z < 0) return "volZ:quiet(<0)";
@@ -194,7 +195,6 @@ function bucketVolZ(z) {
   return "volZ:hot(>2)";
 }
 
-// Cross lag bucket (fresh vs stale)
 function bucketLag(lagVal) {
   if (!Number.isFinite(lagVal)) return "lag:n/a";
   if (lagVal < 2) return "lag:early(<2)";
@@ -202,7 +202,6 @@ function bucketLag(lagVal) {
   return "lag:late(>5)";
 }
 
-// ATR% bucket (volatility style)
 function bucketAtrPct(v) {
   if (!Number.isFinite(v)) return "ATR:n/a";
   if (v < 1.0) return "ATR:low(<1%)";
@@ -210,7 +209,6 @@ function bucketAtrPct(v) {
   return "ATR:high(>3%)";
 }
 
-// Distance above MA25 bucket (extension/chase risk)
 function bucketPxVsMA25(distPct) {
   if (!Number.isFinite(distPct)) return "pxMA25:n/a";
   if (distPct < 0) return "pxMA25:below";
@@ -219,13 +217,11 @@ function bucketPxVsMA25(distPct) {
   return "pxMA25:>6%";
 }
 
-// Sector bucket
 function bucketSector(sec) {
   if (!sec) return "sector:n/a";
   return `sector:${sec}`;
 }
 
-// Liquidity bucket (turnoverJPY ~ avgVol20 * entryPx)
 function bucketLiquidity(turnoverJPY) {
   if (!Number.isFinite(turnoverJPY)) return "liq:n/a";
   if (turnoverJPY < 5_000_000) return "liq:<5M";
@@ -234,7 +230,6 @@ function bucketLiquidity(turnoverJPY) {
   return "liq:200M+";
 }
 
-// Price bucket (absolute share price)
 function bucketPrice(entryPx) {
   if (!Number.isFinite(entryPx)) return "px:n/a";
   if (entryPx < 200) return "px:<200";
@@ -244,9 +239,8 @@ function bucketPrice(entryPx) {
   return "px:3k+";
 }
 
-/* -------------------- STOP TIGHTNESS ANALYSIS -------------------- */
+/* -------------------- STOP / LOSS ANALYSIS -------------------- */
 
-// Bucket loss magnitude so we can see depth of losers
 function bucketLossSize(pct) {
   // pct is negative or zero for losers
   if (!Number.isFinite(pct)) return "n/a";
@@ -258,7 +252,6 @@ function bucketLossSize(pct) {
   return "<= -15%";
 }
 
-// Analyze how painful STOP exits are under the ~15% floor
 function analyzeStopSeverity(losersArr) {
   const out = {
     allLosingTrades: losersArr.length,
@@ -370,8 +363,9 @@ const overall = summarizeMetrics(withAnalytics);
 const regimeMetrics = raw?.regime?.metrics || {};
 
 /**
- * Score correlation stuff stays for backward compat,
- * but score may not exist anymore.
+ * Score correlation stuff:
+ *  - requires that backtest attached a numeric `score` to each trade
+ *  - if not, scoreQuality will be null
  */
 function metricsByScore(allTrades) {
   const buckets = {}; // score -> trades[]
@@ -419,11 +413,6 @@ const scoreInfo = hasScore ? metricsByScore(withAnalytics) : { scored: [] };
 const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
 
 /* -------------------- PLAYBOOK SLICES (macro situational edges) -------------------- */
-
-/**
- * Slices model 'conditions we like' rather than literal playbook strings.
- * You can add more slices here as you learn patterns.
- */
 
 function slice_DOWN_regime_ST_panic_weekly_flip(t) {
   return (
@@ -481,7 +470,7 @@ function analyzeSlice(name, desc, trades, tradingDaysGuess = 1) {
   return {
     name,
     desc,
-    n,
+    trades: n,
     perDay,
     metrics: m,
     winStats,
@@ -495,7 +484,6 @@ const sliceResults = SLICES.map((s) => {
   return analyzeSlice(s.name, s.desc, subset, tradingDaysGuess);
 });
 
-// pick best slice by PF then winRate
 const rankedSlices = [...sliceResults].sort((a, b) => {
   const pfA = Number.isFinite(a.metrics.profitFactor)
     ? a.metrics.profitFactor
@@ -945,7 +933,7 @@ withAnalytics.forEach((t) => {
   tradesByAtrBucket[atrB].push(t);
 });
 const atrRows = summarizeCategoryPerformance(tradesByAtrBucket);
-theAtrBuckets = splitIntoQuartileBuckets(atrRows, 50);
+const theAtrBuckets = splitIntoQuartileBuckets(atrRows, 50);
 const atrTierStats = summarizeTierAverages(theAtrBuckets);
 
 // pxMA25Buckets (extension/chasing)
@@ -1073,12 +1061,7 @@ const targetOnlyExport = {
     : null,
 };
 
-/* -------------------- strategyBreakdown (NEW) -------------------- */
-/**
- * Group trades by literal playbook string (`trade.strategy`),
- * e.g. "WEEKLY CROSS", "WEEKLY CROSS +VOLUME", "DIP AFTER WEEKLY", etc.
- * This preserves the distinct candidate types from analyseCrossing().
- */
+/* -------------------- strategyBreakdown (per literal playbook) -------------------- */
 
 const tradesByStrategy = {};
 withAnalytics.forEach((t) => {
@@ -1149,7 +1132,7 @@ const exportObj = {
     ? {
         name: topSlice.name,
         desc: topSlice.desc,
-        trades: topSlice.n,
+        trades: topSlice.trades,
         tradesPerDay: topSlice.perDay,
         winRate: topSlice.metrics.winRate,
         profitFactor: topSlice.metrics.profitFactor,
@@ -1190,7 +1173,7 @@ const exportObj = {
   dipAfterFreshCrossing: raw?.dipAfterFreshCrossing || null,
   crossingByLag: raw?.crossing?.byLag || null,
 
-  // Score system health (if score still exists in trades)
+  // Score system health (only if you put .score on each trade in backtest)
   scoreQuality: hasScore
     ? {
         corrWin: r2(scoreCorr.win),
@@ -1206,7 +1189,7 @@ const exportObj = {
     avoid: worstTickers.slice(0, 5),
   },
 
-  // Per-playbook PF / WR leaderboard (NEW)
+  // Per-playbook PF / WR leaderboard
   strategyBreakdown,
 
   // singleProfile summary (your unified "target_only (with 15% floor)")
@@ -1244,6 +1227,15 @@ const exportObj = {
       tierAverages: pxMA25TierStats,
     },
   },
+
+  // The full S/A/B/C/UNCLASSIFIED quality buckets that backtest already computed
+  // raw.buckets looks like:
+  // {
+  //   S: { metrics:{...}, sharePct: ... },
+  //   A: { ... },
+  //   ...
+  // }
+  tierBuckets: raw?.buckets || null,
 
   // Repeated high-performing situational patterns (human readable)
   bestSetups,
