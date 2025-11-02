@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * diagnose_backtest.js (enhanced)
+ * diagnose_backtest.js (enhanced, synced with new backtest.js)
  *
  * Usage:
  *   node diagnose_backtest.js path/to/backtest.json
@@ -11,7 +11,7 @@
  * Output:
  *   ONE clean JSON with:
  *    - performance / flow / regime
- *    - bestSetup (macro situational slice with best PF)
+ *    - bestSetup (macro situational slice with best PF, aligned w/ S-tier logic)
  *    - lossAnalysis / lossReasons
  *    - stopRisk (stop tightness guidance)
  *    - missedOpportunities (what we blocked that would've worked)
@@ -412,18 +412,43 @@ const hasScore = withAnalytics.some((t) => Number.isFinite(t.score));
 const scoreInfo = hasScore ? metricsByScore(withAnalytics) : { scored: [] };
 const scoreCorr = hasScore ? corrScore(withAnalytics) : { win: NaN, ret: NaN };
 
-/* -------------------- PLAYBOOK SLICES (macro situational edges) -------------------- */
+/* -------------------- PLAYBOOK SLICES (macro situational edges) --------------------
+   We sync these with backtest.js S-tier logic:
 
-function slice_DOWN_regime_ST_panic_weekly_flip(t) {
+   S-tier panic reversal:
+     - regime === "DOWN"
+     - deep pullback (pxVsMA25Pct < -2)
+     - waited 2-4 bars after cross
+     - medium vol ATR% 1-3
+     - crossType WEEKLY/DAILY/BOTH
+
+   RANGE controlled bounce:
+     - regime === "RANGE"
+     - gapped up
+     - entry still ≤4% above MA25 (not chased)
+*/
+
+function slice_DOWN_regime_panic_waited(t) {
+  const a = t.analytics || {};
+  const pxVs = a.pxVsMA25Pct;
+  const atrPct = a.atrPct;
+
+  const panicPullback = Number.isFinite(pxVs) && pxVs < -2;
+  const waitedLag =
+    Number.isFinite(t.crossLag) && t.crossLag >= 2 && t.crossLag <= 4;
+  const mediumVol = Number.isFinite(atrPct) && atrPct >= 1 && atrPct <= 3;
+
+  const dipAfterCross =
+    t.crossType === "WEEKLY" ||
+    t.crossType === "DAILY" ||
+    t.crossType === "BOTH";
+
   return (
     t.regime === "DOWN" &&
-    Number.isFinite(t.ST) &&
-    t.ST >= 6 &&
-    (t.crossType === "WEEKLY" ||
-      t.crossType === "DAILY" ||
-      t.crossType === "BOTH") &&
-    Number.isFinite(t.crossLag) &&
-    t.crossLag >= 2
+    panicPullback &&
+    waitedLag &&
+    mediumVol &&
+    dipAfterCross
   );
 }
 
@@ -440,9 +465,9 @@ function slice_RANGE_regime_gap_up_near_MA25(t) {
 
 const SLICES = [
   {
-    name: "DOWN_regime_ST_panic_weekly_flip",
-    desc: "Regime DOWN, ST>=6 panic dip, WEEKLY/DAILY/BOTH crossLag>=2",
-    fn: slice_DOWN_regime_ST_panic_weekly_flip,
+    name: "DOWN_regime_panic_waited",
+    desc: "DOWN regime panic pullback (<-2% vs MA25), waited 2-4 bars after cross, medium vol (1-3% ATR).",
+    fn: slice_DOWN_regime_panic_waited,
   },
   {
     name: "RANGE_regime_gap_up_near_MA25",
@@ -496,7 +521,15 @@ const rankedSlices = [...sliceResults].sort((a, b) => {
 });
 const topSlice = rankedSlices[0] || null;
 
-/* -------------------- LOSS AUTOPSY -------------------- */
+/* -------------------- LOSS AUTOPSY --------------------
+   Sync logic with backtest.js classifyBucket S/A/B/C logic.
+   We consider a few bad behaviors:
+
+   - isExtendedPx: chased >6% above MA25 (C-tier condition)
+   - isEarlyLag: jumped in <2 bars after cross (too eager)
+   - isBadRegime: STRONG_UP + extended (pure blowoff chase)
+   - weakPullback: entry only -2%~+2% vs MA25 (not a real panic dip)
+*/
 
 function isExtendedPx(t) {
   const a = t.analytics || {};
@@ -512,11 +545,15 @@ function isEarlyLag(t) {
   );
 }
 function isBadRegime(t) {
-  // "badRegime" here: blowoff entries in STRONG_UP, where pullbacks don't stick
-  return t.regime === "STRONG_UP";
+  const a = t.analytics || {};
+  const extended = Number.isFinite(a.pxVsMA25Pct) && a.pxVsMA25Pct > 6;
+  return t.regime === "STRONG_UP" && extended;
 }
 function weakPullback(t) {
-  return Number.isFinite(t.ST) && t.ST < 6;
+  const a = t.analytics || {};
+  const dist = a.pxVsMA25Pct;
+  // "meh dip": only -2% ~ +2% vs MA25, i.e. not a real flush
+  return Number.isFinite(dist) && dist > -2 && dist < 2;
 }
 
 function summarizeLosingPatterns(losersArr) {
@@ -535,12 +572,12 @@ function summarizeLosingPatterns(losersArr) {
     },
     {
       key: "blowoffRegime",
-      desc: "Bought in STRONG_UP regime / blowoff, where pullbacks don't stick.",
+      desc: "Bought in STRONG_UP regime while already extended (>6% above MA25).",
       count: losersArr.filter(isBadRegime).length,
     },
     {
       key: "notRealPanic",
-      desc: "Short-term sentiment ST<6 (not a true panic, just meh pullback).",
+      desc: "Pullback was shallow (-2%~+2% vs MA25); not real capitulation.",
       count: losersArr.filter(weakPullback).length,
     },
   ];
@@ -718,7 +755,7 @@ function humanLabelAtr(atrBucket) {
   if (atrBucket.startsWith("ATR:low")) return "low vol (<1% ATR)";
   if (atrBucket.startsWith("ATR:med")) return "medium vol (1-3% ATR)";
   if (atrBucket.startsWith("ATR:high")) return "high vol (>3% ATR)";
-  return atrBucket;
+  return "vol n/a";
 }
 function humanLabelPxMA25(pxB) {
   if (pxB === "pxMA25:below") return "below MA25 (pullback)";
@@ -991,9 +1028,9 @@ if (raw?.parallel?.rejectedBuys) {
     });
   }
 
+  // align with new backtest: sentiment.combos.bestByWinRate.rejected
   const bestRejectedCombos =
-    raw?.sentiment?.bestByWinRate?.rejected ||
-    (raw?.sentiment?.combos?.bestByWinRate?.rejected ?? []);
+    raw?.sentiment?.combos?.bestByWinRate?.rejected || [];
 
   missedOpportunities = {
     headline,
@@ -1006,25 +1043,24 @@ if (raw?.parallel?.rejectedBuys) {
 
 const profilesSummary = {};
 if (raw.singleProfile) {
-  const sp = raw.singleProfile;
+  const sp2 = raw.singleProfile;
   profilesSummary.singleProfile = {
-    label: sp.label,
-    trades: sp.metrics?.trades,
-    winRate: sp.metrics?.winRate,
-    profitFactor: sp.metrics?.profitFactor,
-    avgReturnPct: sp.metrics?.avgReturnPct,
-    avgHoldBars: sp.metrics?.avgHoldingDays,
-    exits: sp.exits || null,
-    catastrophicStopSuggestion: sp.catastrophicStopSuggestion || null,
-    lossTail: sp.metrics?.lossTail || null,
+    label: sp2.label,
+    trades: sp2.metrics?.trades,
+    winRate: sp2.metrics?.winRate,
+    profitFactor: sp2.metrics?.profitFactor,
+    avgReturnPct: sp2.metrics?.avgReturnPct,
+    avgHoldBars: sp2.metrics?.avgHoldingDays,
+    exits: sp2.exits || null,
+    catastrophicStopSuggestion: sp2.catastrophicStopSuggestion || null,
+    lossTail: sp2.metrics?.lossTail || null,
   };
 }
 
-/* -------------------- targetOnly block -------------------- */
-/**
- * In the new engine, the whole strategy is basically "target_only style"
- * with a 15% floor stop. So we just treat all trades as targetOnlyAll.
- */
+/* -------------------- targetOnly block --------------------
+   In the new engine, the whole strategy is basically "target_only style"
+   with a 15% floor stop. So we just treat all trades as targetOnlyAll.
+*/
 
 const targetOnlyAll = withAnalytics.slice(); // all trades
 
@@ -1229,12 +1265,6 @@ const exportObj = {
   },
 
   // The full S/A/B/C/UNCLASSIFIED quality buckets that backtest already computed
-  // raw.buckets looks like:
-  // {
-  //   S: { metrics:{...}, sharePct: ... },
-  //   A: { ... },
-  //   ...
-  // }
   tierBuckets: raw?.buckets || null,
 
   // Repeated high-performing situational patterns (human readable)

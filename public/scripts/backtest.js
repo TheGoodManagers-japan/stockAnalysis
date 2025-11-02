@@ -739,7 +739,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   const limit = Number(opts.limit) || 0;
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
-  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 20;
+  const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 8;
   const COOLDOWN = 0;
 
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
@@ -771,7 +771,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // ---- PROFILE LOGIC ----
   // hard stop floor: 15% below entry
-  const HARD_STOP_PCT = 0.15;
+  const HARD_STOP_PCT = 0.10;
   function computePlannedLevels({ entry, sig }) {
     const tgt = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
     const floorStop = Number(entry) * (1 - HARD_STOP_PCT);
