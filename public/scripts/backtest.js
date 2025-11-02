@@ -1889,65 +1889,52 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   --------------------------------------------------------------------- */
 
   function classifyBucket(trade) {
-    const strat = (trade.strategy || "").toUpperCase(); // e.g. "WEEKLY CROSS", "DIP AFTER DAILY"
-    const regime = (trade.regime || "").toUpperCase(); // "DOWN", "RANGE", "STRONG_UP", "UP"
+    const strat = (trade.strategy || "").toUpperCase();
+    const regime = (trade.regime || "").toUpperCase();
     const lag = Number.isFinite(trade.crossLag) ? trade.crossLag : null;
 
     const a = trade.analytics || {};
-    const atrPct = a.atrPct; // volatility in %
-    const pxVsMA25 = a.pxVsMA25Pct; // how extended (>0 = above MA25)
-    const liq = a.turnoverJPY; // avg ~20d turnover JPY
+    const atrPct = a.atrPct;
+    const pxVsMA25 = a.pxVsMA25Pct;
+    const liq = a.turnoverJPY;
 
-    // pullback depth proxy
-    const shallowPullback =
-      Number.isFinite(pxVsMA25) && pxVsMA25 > -2 && pxVsMA25 < 2; // "not real panic"
-    const realPanicPullback = Number.isFinite(pxVsMA25) && pxVsMA25 <= -2; // below MA25 by -2% or more
-
-    // pattern class
     const isWeeklyCross = strat.includes("WEEKLY");
     const isDailyCross = strat.includes("DAILY");
     const isCross = isWeeklyCross || isDailyCross;
     const isDipLike = strat.includes("DIP");
 
-    // extension / volatility / liquidity flags
-    const extended6 = Number.isFinite(pxVsMA25) && pxVsMA25 > 6; // >6% above MA25 = chased
+    const realPanicPullback = Number.isFinite(pxVsMA25) && pxVsMA25 <= -2;
+    const shallowPullback =
+      Number.isFinite(pxVsMA25) && pxVsMA25 > -2 && pxVsMA25 < 2;
+
+    const extended6 = Number.isFinite(pxVsMA25) && pxVsMA25 > 6;
     const extended2to6 =
-      Number.isFinite(pxVsMA25) && pxVsMA25 > 2 && pxVsMA25 <= 6; // mildly stretched
-    const notExtended2 = !Number.isFinite(pxVsMA25) || pxVsMA25 <= 2; // at/below MA25 or only slightly above
+      Number.isFinite(pxVsMA25) && pxVsMA25 > 2 && pxVsMA25 <= 6;
+    const notExtended2 = !Number.isFinite(pxVsMA25) || pxVsMA25 <= 2;
+
+    const tameVol = Number.isFinite(atrPct) && atrPct < 2;
     const mediumVol = Number.isFinite(atrPct) && atrPct >= 1 && atrPct <= 3;
-    const tameVol = Number.isFinite(atrPct) && atrPct < 2; // even calmer
     const highVol = Number.isFinite(atrPct) && atrPct > 3;
 
     const veryLiquid = Number.isFinite(liq) && liq >= 200_000_000;
     const okLiquid = Number.isFinite(liq) && liq >= 50_000_000;
     const illiquid = Number.isFinite(liq) && liq < 50_000_000;
 
-    const earlyLag = Number.isFinite(lag) && lag <= 1; // 0-1 bars after cross
+    const earlyLag = Number.isFinite(lag) && lag <= 1;
     const midLag = Number.isFinite(lag) && lag >= 2 && lag <= 4;
 
-    // ===== C TIER (auto-trash) =====
-    // We push everything known to be low PF here.
+    // ---- C Tier: auto-trash
     if (
-      // fake dips: "weak pullback" / no panic
       (isDipLike && shallowPullback) ||
-      // chasing stretched price anywhere
       extended6 ||
-      // high-volatility chaos
       highVol ||
-      // illiquid junk (hard to execute, high slip)
       illiquid ||
-      // STRONG_UP FOMO breakout way above MA25 (we saw this in your lossReasons)
       (regime === "STRONG_UP" && extended2to6 && earlyLag)
     ) {
       return "C";
     }
 
-    // ===== S TIER (best PF, main money) =====
-    // 1. DOWN or RANGE regime panic-reversal / stabilization:
-    //    - real panic pullback (below MA25 by <= -2%)
-    //    - we didn't "knife catch": we waited a couple bars (midLag 2-4)
-    //    - volatility is controlled, not >3%
-    //    - stock is liquid enough to size
+    // ---- S Tier: elite
     const qualifiesPanicReversal =
       isDipLike &&
       realPanicPullback &&
@@ -1956,12 +1943,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       mediumVol &&
       veryLiquid;
 
-    // 2. WEEKLY CROSS continuation after fresh flip BUT not chased:
-    //    - lag is early or mid (0-4 bars)
-    //    - price is not stretched >2% above MA25 at entry (we buy pullback / near base, not breakout)
-    //    - volatility tame (<2)
-    //    - liquid
-    //    - AND regime is not STRONG_UP blowoff. We allow RANGE / UP / DOWN rebounds.
     const qualifiesWeeklyContinuation =
       isWeeklyCross &&
       (earlyLag || midLag) &&
@@ -1974,15 +1955,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       return "S";
     }
 
-    // ===== A TIER (still good PF, slightly looser) =====
-    // Loosen one dimension vs S, but still respect no-chase / no-garbage.
-    // We allow:
-    // - Dip-like with panic OR near-MA25 pullback in RANGE/DOWN/UP
-    // - Cross trades early/mid with not-too-stretched price
-    // - Liquidity OK (>=50M), vol <=3%
+    // ---- A Tier: strong but looser than S
     const qualifiesSolidDip =
       isDipLike &&
-      !shallowPullback && // not fake
+      !shallowPullback &&
       (regime === "DOWN" || regime === "RANGE" || regime === "UP") &&
       notExtended2 &&
       !highVol &&
@@ -1994,24 +1970,28 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       !extended6 &&
       !highVol &&
       (okLiquid || veryLiquid) &&
-      regime !== "STRONG_UP"; // we avoid STRONG_UP chase in A too
+      regime !== "STRONG_UP";
 
     if (qualifiesSolidDip || qualifiesSolidCross) {
       return "A";
     }
 
-    // ===== B TIER (tradable but meh PF) =====
-    // Anything that's still one of our allowed patterns (dip/cross),
-    // passes basic sanity (not extended6, not highVol, not illiquid),
-    // but didn't hit S/A quality gates (lag late, regime meh, etc.)
+    // ---- B Tier: allowed patterns but meh quality
     if ((isDipLike || isCross) && !extended6 && !highVol && !illiquid) {
       return "B";
     }
 
-    // ===== UNCLASSIFIED =====
     return "UNCLASSIFIED";
   }
-  
+
+  // bucketLists was missing before; add it:
+  const bucketLists = {
+    S: [],
+    A: [],
+    B: [],
+    C: [],
+    UNCLASSIFIED: [],
+  };
 
   for (const t of all) {
     const b = classifyBucket(t);
