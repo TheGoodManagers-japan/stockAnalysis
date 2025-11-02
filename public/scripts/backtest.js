@@ -771,7 +771,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   // ---- PROFILE LOGIC ----
   // hard stop floor: 15% below entry
-  const HARD_STOP_PCT = 0.10;
+  const HARD_STOP_PCT = 0.07;
   function computePlannedLevels({ entry, sig }) {
     const tgt = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
     const floorStop = Number(entry) * (1 - HARD_STOP_PCT);
@@ -1889,109 +1889,129 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   --------------------------------------------------------------------- */
 
   function classifyBucket(trade) {
-    const strat = (trade.strategy || "").toUpperCase(); // e.g. "WEEKLY CROSS"
-    const regime = (trade.regime || "").toUpperCase(); // e.g. "DOWN"
+    const strat = (trade.strategy || "").toUpperCase(); // e.g. "WEEKLY CROSS", "DIP AFTER DAILY"
+    const regime = (trade.regime || "").toUpperCase(); // "DOWN", "RANGE", "STRONG_UP", "UP"
     const lag = Number.isFinite(trade.crossLag) ? trade.crossLag : null;
 
     const a = trade.analytics || {};
-    const atrPct = a.atrPct; // e.g. 1.8
-    const pxVsMA25 = a.pxVsMA25Pct; // e.g. 3.2 (positive = extended)
-    const liq = a.turnoverJPY; // daily turnover in JPY
+    const atrPct = a.atrPct; // volatility in %
+    const pxVsMA25 = a.pxVsMA25Pct; // how extended (>0 = above MA25)
+    const liq = a.turnoverJPY; // avg ~20d turnover JPY
 
-    // We don't yet have short-term panic score persisted, so infer:
-    // If price is below MA25 (negative pxVsMA25) we treat as "pullback".
-    // You can wire real ST later.
-    const weakPullbackST =
-      Number.isFinite(pxVsMA25) && pxVsMA25 > -2 && pxVsMA25 < 2; // meh pullback
-    const panicST = Number.isFinite(pxVsMA25) && pxVsMA25 < -2; // deeper pullback
+    // pullback depth proxy
+    const shallowPullback =
+      Number.isFinite(pxVsMA25) && pxVsMA25 > -2 && pxVsMA25 < 2; // "not real panic"
+    const realPanicPullback = Number.isFinite(pxVsMA25) && pxVsMA25 <= -2; // below MA25 by -2% or more
 
-    // Helper flags
+    // pattern class
     const isWeeklyCross = strat.includes("WEEKLY");
     const isDailyCross = strat.includes("DAILY");
     const isCross = isWeeklyCross || isDailyCross;
-    const isDipLike = strat.includes("DIP"); // "DIP AFTER DAILY", etc.
+    const isDipLike = strat.includes("DIP");
 
-    const mediumVol =
-      Number.isFinite(atrPct) && atrPct >= 1 && atrPct <= 3;
+    // extension / volatility / liquidity flags
+    const extended6 = Number.isFinite(pxVsMA25) && pxVsMA25 > 6; // >6% above MA25 = chased
+    const extended2to6 =
+      Number.isFinite(pxVsMA25) && pxVsMA25 > 2 && pxVsMA25 <= 6; // mildly stretched
+    const notExtended2 = !Number.isFinite(pxVsMA25) || pxVsMA25 <= 2; // at/below MA25 or only slightly above
+    const mediumVol = Number.isFinite(atrPct) && atrPct >= 1 && atrPct <= 3;
+    const tameVol = Number.isFinite(atrPct) && atrPct < 2; // even calmer
     const highVol = Number.isFinite(atrPct) && atrPct > 3;
-    const extended6 = Number.isFinite(pxVsMA25) && pxVsMA25 > 6;
-    const notExtended6 = Number.isFinite(pxVsMA25)
-      ? pxVsMA25 <= 6
-      : true;
+
     const veryLiquid = Number.isFinite(liq) && liq >= 200_000_000;
     const okLiquid = Number.isFinite(liq) && liq >= 50_000_000;
-    const illiquid = Number.isFinite(liq) && liq < 5_000_000;
+    const illiquid = Number.isFinite(liq) && liq < 50_000_000;
 
-    const earlyLag = Number.isFinite(lag) && lag < 2; // 0-1 bars
+    const earlyLag = Number.isFinite(lag) && lag <= 1; // 0-1 bars after cross
     const midLag = Number.isFinite(lag) && lag >= 2 && lag <= 4;
-    // const lateLag = Number.isFinite(lag) && lag > 4; // we don't explicitly need it below
 
-    // ---------- C TIER (bad / avoid) ----------
+    // ===== C TIER (auto-trash) =====
+    // We push everything known to be low PF here.
     if (
-      // fake dips (no real panic)
-      (isDipLike && weakPullbackST) ||
-      // blowoff chase: hype regime AND stretched price
-      (regime === "STRONG_UP" && extended6) ||
-      // FOMO right after flip in hype regime, also stretched
-      (regime === "STRONG_UP" && earlyLag && extended6) ||
-      // general "too extended" chase
+      // fake dips: "weak pullback" / no panic
+      (isDipLike && shallowPullback) ||
+      // chasing stretched price anywhere
       extended6 ||
-      // super illiquid junk
-      illiquid
+      // high-volatility chaos
+      highVol ||
+      // illiquid junk (hard to execute, high slip)
+      illiquid ||
+      // STRONG_UP FOMO breakout way above MA25 (we saw this in your lossReasons)
+      (regime === "STRONG_UP" && extended2to6 && earlyLag)
     ) {
       return "C";
     }
 
-    // ---------- S TIER (god mode) ----------
-    const qualifiesBestSetup =
-      regime === "DOWN" &&
-      panicST &&
-      midLag && // waited for stabilization (lag 2-4)
-      notExtended6 &&
-      mediumVol;
-
-    const qualifiesEliteWeeklyContinuation =
-      isWeeklyCross &&
-      earlyLag && // lag 0-1-2 best PF
+    // ===== S TIER (best PF, main money) =====
+    // 1. DOWN or RANGE regime panic-reversal / stabilization:
+    //    - real panic pullback (below MA25 by <= -2%)
+    //    - we didn't "knife catch": we waited a couple bars (midLag 2-4)
+    //    - volatility is controlled, not >3%
+    //    - stock is liquid enough to size
+    const qualifiesPanicReversal =
+      isDipLike &&
+      realPanicPullback &&
+      (regime === "DOWN" || regime === "RANGE") &&
+      midLag &&
       mediumVol &&
-      notExtended6 &&
-      (regime === "DOWN" ||
-        regime === "RANGE" ||
-        regime === "STRONG_UP");
+      veryLiquid;
 
-    if (qualifiesBestSetup || qualifiesEliteWeeklyContinuation) {
+    // 2. WEEKLY CROSS continuation after fresh flip BUT not chased:
+    //    - lag is early or mid (0-4 bars)
+    //    - price is not stretched >2% above MA25 at entry (we buy pullback / near base, not breakout)
+    //    - volatility tame (<2)
+    //    - liquid
+    //    - AND regime is not STRONG_UP blowoff. We allow RANGE / UP / DOWN rebounds.
+    const qualifiesWeeklyContinuation =
+      isWeeklyCross &&
+      (earlyLag || midLag) &&
+      notExtended2 &&
+      tameVol &&
+      veryLiquid &&
+      regime !== "STRONG_UP";
+
+    if (qualifiesPanicReversal || qualifiesWeeklyContinuation) {
       return "S";
     }
 
-    // ---------- A TIER (strong / main size) ----------
-    if (
-      (isDipLike && panicST && notExtended6 && !highVol) ||
-      (isCross &&
-        (earlyLag || midLag) &&
-        notExtended6 &&
-        !highVol &&
-        (okLiquid || veryLiquid || !Number.isFinite(liq)))
-    ) {
+    // ===== A TIER (still good PF, slightly looser) =====
+    // Loosen one dimension vs S, but still respect no-chase / no-garbage.
+    // We allow:
+    // - Dip-like with panic OR near-MA25 pullback in RANGE/DOWN/UP
+    // - Cross trades early/mid with not-too-stretched price
+    // - Liquidity OK (>=50M), vol <=3%
+    const qualifiesSolidDip =
+      isDipLike &&
+      !shallowPullback && // not fake
+      (regime === "DOWN" || regime === "RANGE" || regime === "UP") &&
+      notExtended2 &&
+      !highVol &&
+      (okLiquid || veryLiquid);
+
+    const qualifiesSolidCross =
+      isCross &&
+      (earlyLag || midLag) &&
+      !extended6 &&
+      !highVol &&
+      (okLiquid || veryLiquid) &&
+      regime !== "STRONG_UP"; // we avoid STRONG_UP chase in A too
+
+    if (qualifiesSolidDip || qualifiesSolidCross) {
       return "A";
     }
 
-    // ---------- B TIER (baseline / allowed but meh) ----------
-    if (isCross || isDipLike) {
+    // ===== B TIER (tradable but meh PF) =====
+    // Anything that's still one of our allowed patterns (dip/cross),
+    // passes basic sanity (not extended6, not highVol, not illiquid),
+    // but didn't hit S/A quality gates (lag late, regime meh, etc.)
+    if ((isDipLike || isCross) && !extended6 && !highVol && !illiquid) {
       return "B";
     }
 
-    // ---------- UNCLASSIFIED ----------
+    // ===== UNCLASSIFIED =====
     return "UNCLASSIFIED";
   }
-
-  // build bucket lists
-  const bucketLists = {
-    S: [],
-    A: [],
-    B: [],
-    C: [],
-    UNCLASSIFIED: [],
-  };
+  
 
   for (const t of all) {
     const b = classifyBucket(t);
