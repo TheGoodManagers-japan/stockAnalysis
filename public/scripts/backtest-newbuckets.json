@@ -1,0 +1,5914 @@
+{
+  "learnWindow": "last36m",
+  "thresholds": {
+    "minTradesLearnBase": 8,
+    "minTradesWindow": 10,
+    "pfElite": 1.8,
+    "wrElite": 60,
+    "pfStrong": 1.3,
+    "wrStrong": 55,
+    "pfFloorAll": 0.95,
+    "targetCoverage": 0.95,
+    "maxCoarsenLevel": 4
+  },
+  "coverage": {
+    "learnCoverage": 0.998499645370724,
+    "learnTierTotals": {
+      "S": 3111,
+      "A": 9690,
+      "B": 22701,
+      "C": 1101
+    },
+    "learnTotal": 36658
+  },
+  "buckets": {
+    "S": [
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 8,
+          "winRate": 100,
+          "avgReturnPct": 3.46,
+          "profitFactor": 1000000000,
+          "profitFactorLabel": "Infinity"
+        },
+        "worstPF": 1000000000,
+        "perWindow": {
+          "last36m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 8
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 11,
+          "winRate": 90.91,
+          "avgReturnPct": 3.41,
+          "profitFactor": 41.72,
+          "profitFactorLabel": "41.72"
+        },
+        "worstPF": 41.72,
+        "perWindow": {
+          "last36m": {
+            "trades": 11,
+            "winRate": 90.91,
+            "avgReturnPct": 3.41,
+            "profitFactor": 41.72,
+            "profitFactorLabel": "41.72"
+          },
+          "last12m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 11
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 4,
+          "winRate": 75,
+          "avgReturnPct": 2.09,
+          "profitFactor": 6.73,
+          "profitFactorLabel": "6.73"
+        },
+        "worstPF": 6.73,
+        "perWindow": {
+          "last36m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 4
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:PANIC_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 12,
+          "winRate": 75,
+          "avgReturnPct": 4.76,
+          "profitFactor": 5.83,
+          "profitFactorLabel": "5.83"
+        },
+        "worstPF": 5.83,
+        "perWindow": {
+          "last36m": {
+            "trades": 12,
+            "winRate": 75,
+            "avgReturnPct": 4.76,
+            "profitFactor": 5.83,
+            "profitFactorLabel": "5.83"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 12
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 14,
+          "winRate": 64.29,
+          "avgReturnPct": 1.73,
+          "profitFactor": 5.75,
+          "profitFactorLabel": "5.75"
+        },
+        "worstPF": 3.66,
+        "perWindow": {
+          "last36m": {
+            "trades": 14,
+            "winRate": 64.29,
+            "avgReturnPct": 1.73,
+            "profitFactor": 5.75,
+            "profitFactorLabel": "5.75"
+          },
+          "last12m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 13,
+            "winRate": 69.23,
+            "avgReturnPct": 1.45,
+            "profitFactor": 3.66,
+            "profitFactorLabel": "3.66"
+          },
+          "last1m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 14
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 6,
+          "winRate": 83.33,
+          "avgReturnPct": 0.86,
+          "profitFactor": 5.39,
+          "profitFactorLabel": "5.39"
+        },
+        "worstPF": 5.39,
+        "perWindow": {
+          "last36m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 6
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 5,
+          "winRate": 80,
+          "avgReturnPct": 5.06,
+          "profitFactor": 4.61,
+          "profitFactorLabel": "4.61"
+        },
+        "worstPF": 4.61,
+        "perWindow": {
+          "last36m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 5
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 48,
+          "winRate": 79.17,
+          "avgReturnPct": 1.34,
+          "profitFactor": 4.34,
+          "profitFactorLabel": "4.34"
+        },
+        "worstPF": 2.65,
+        "perWindow": {
+          "last36m": {
+            "trades": 48,
+            "winRate": 79.17,
+            "avgReturnPct": 1.34,
+            "profitFactor": 4.34,
+            "profitFactorLabel": "4.34"
+          },
+          "last12m": {
+            "trades": 26,
+            "winRate": 57.69,
+            "avgReturnPct": 0.99,
+            "profitFactor": 2.65,
+            "profitFactorLabel": "2.65"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 48
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 26,
+          "winRate": 76.92,
+          "avgReturnPct": 1.54,
+          "profitFactor": 4.09,
+          "profitFactorLabel": "4.09"
+        },
+        "worstPF": 2.45,
+        "perWindow": {
+          "last36m": {
+            "trades": 26,
+            "winRate": 76.92,
+            "avgReturnPct": 1.54,
+            "profitFactor": 4.09,
+            "profitFactorLabel": "4.09"
+          },
+          "last12m": {
+            "trades": 11,
+            "winRate": 63.64,
+            "avgReturnPct": 1.03,
+            "profitFactor": 2.45,
+            "profitFactorLabel": "2.45"
+          },
+          "last6m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 26
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 32,
+          "winRate": 78.13,
+          "avgReturnPct": 1.25,
+          "profitFactor": 2.94,
+          "profitFactorLabel": "2.94"
+        },
+        "worstPF": 1.59,
+        "perWindow": {
+          "last36m": {
+            "trades": 32,
+            "winRate": 78.13,
+            "avgReturnPct": 1.25,
+            "profitFactor": 2.94,
+            "profitFactorLabel": "2.94"
+          },
+          "last12m": {
+            "trades": 17,
+            "winRate": 58.82,
+            "avgReturnPct": 0.81,
+            "profitFactor": 1.59,
+            "profitFactorLabel": "1.59"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 32
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 85,
+          "winRate": 72.94,
+          "avgReturnPct": 1.46,
+          "profitFactor": 2.84,
+          "profitFactorLabel": "2.84"
+        },
+        "worstPF": 2.56,
+        "perWindow": {
+          "last36m": {
+            "trades": 85,
+            "winRate": 72.94,
+            "avgReturnPct": 1.46,
+            "profitFactor": 2.84,
+            "profitFactorLabel": "2.84"
+          },
+          "last12m": {
+            "trades": 91,
+            "winRate": 70.33,
+            "avgReturnPct": 1.44,
+            "profitFactor": 2.56,
+            "profitFactorLabel": "2.56"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 85
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 22,
+          "winRate": 68.18,
+          "avgReturnPct": 1.34,
+          "profitFactor": 2.82,
+          "profitFactorLabel": "2.82"
+        },
+        "worstPF": 2.82,
+        "perWindow": {
+          "last36m": {
+            "trades": 22,
+            "winRate": 68.18,
+            "avgReturnPct": 1.34,
+            "profitFactor": 2.82,
+            "profitFactorLabel": "2.82"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 22
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 112,
+          "winRate": 67.86,
+          "avgReturnPct": 1.95,
+          "profitFactor": 2.67,
+          "profitFactorLabel": "2.67"
+        },
+        "worstPF": 2.67,
+        "perWindow": {
+          "last36m": {
+            "trades": 112,
+            "winRate": 67.86,
+            "avgReturnPct": 1.95,
+            "profitFactor": 2.67,
+            "profitFactorLabel": "2.67"
+          },
+          "last12m": {
+            "trades": 25,
+            "winRate": 64,
+            "avgReturnPct": 1.4,
+            "profitFactor": 2.86,
+            "profitFactorLabel": "2.86"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 112
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 163,
+          "winRate": 63.8,
+          "avgReturnPct": 1.1,
+          "profitFactor": 2.59,
+          "profitFactorLabel": "2.59"
+        },
+        "worstPF": 2.59,
+        "perWindow": {
+          "last36m": {
+            "trades": 163,
+            "winRate": 63.8,
+            "avgReturnPct": 1.1,
+            "profitFactor": 2.59,
+            "profitFactorLabel": "2.59"
+          },
+          "last12m": {
+            "trades": 180,
+            "winRate": 69.44,
+            "avgReturnPct": 1.19,
+            "profitFactor": 2.88,
+            "profitFactorLabel": "2.88"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 163
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 17,
+          "winRate": 64.71,
+          "avgReturnPct": 1.7,
+          "profitFactor": 2.15,
+          "profitFactorLabel": "2.15"
+        },
+        "worstPF": 2.15,
+        "perWindow": {
+          "last36m": {
+            "trades": 17,
+            "winRate": 64.71,
+            "avgReturnPct": 1.7,
+            "profitFactor": 2.15,
+            "profitFactorLabel": "2.15"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 17
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 152,
+          "winRate": 63.82,
+          "avgReturnPct": 0.76,
+          "profitFactor": 2.03,
+          "profitFactorLabel": "2.03"
+        },
+        "worstPF": 2.03,
+        "perWindow": {
+          "last36m": {
+            "trades": 152,
+            "winRate": 63.82,
+            "avgReturnPct": 0.76,
+            "profitFactor": 2.03,
+            "profitFactorLabel": "2.03"
+          },
+          "last12m": {
+            "trades": 48,
+            "winRate": 64.58,
+            "avgReturnPct": 0.63,
+            "profitFactor": 2.15,
+            "profitFactorLabel": "2.15"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 152
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 41,
+          "winRate": 60.98,
+          "avgReturnPct": 1.04,
+          "profitFactor": 2.02,
+          "profitFactorLabel": "2.02"
+        },
+        "worstPF": 2.02,
+        "perWindow": {
+          "last36m": {
+            "trades": 41,
+            "winRate": 60.98,
+            "avgReturnPct": 1.04,
+            "profitFactor": 2.02,
+            "profitFactorLabel": "2.02"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 41
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 27,
+          "winRate": 66.67,
+          "avgReturnPct": 1.2,
+          "profitFactor": 2.01,
+          "profitFactorLabel": "2.01"
+        },
+        "worstPF": 2.01,
+        "perWindow": {
+          "last36m": {
+            "trades": 27,
+            "winRate": 66.67,
+            "avgReturnPct": 1.2,
+            "profitFactor": 2.01,
+            "profitFactorLabel": "2.01"
+          },
+          "last12m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 27
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 126,
+          "winRate": 69.84,
+          "avgReturnPct": 0.98,
+          "profitFactor": 1.99,
+          "profitFactorLabel": "1.99"
+        },
+        "worstPF": 1.99,
+        "perWindow": {
+          "last36m": {
+            "trades": 126,
+            "winRate": 69.84,
+            "avgReturnPct": 0.98,
+            "profitFactor": 1.99,
+            "profitFactorLabel": "1.99"
+          },
+          "last12m": {
+            "trades": 60,
+            "winRate": 68.33,
+            "avgReturnPct": 1.42,
+            "profitFactor": 3.72,
+            "profitFactorLabel": "3.72"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 126
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 330,
+          "winRate": 65.15,
+          "avgReturnPct": 0.99,
+          "profitFactor": 1.98,
+          "profitFactorLabel": "1.98"
+        },
+        "worstPF": 1.98,
+        "perWindow": {
+          "last36m": {
+            "trades": 330,
+            "winRate": 65.15,
+            "avgReturnPct": 0.99,
+            "profitFactor": 1.98,
+            "profitFactorLabel": "1.98"
+          },
+          "last12m": {
+            "trades": 150,
+            "winRate": 70,
+            "avgReturnPct": 1.2,
+            "profitFactor": 2.48,
+            "profitFactorLabel": "2.48"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 330
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 519,
+          "winRate": 63.01,
+          "avgReturnPct": 1.35,
+          "profitFactor": 1.92,
+          "profitFactorLabel": "1.92"
+        },
+        "worstPF": 1.08,
+        "perWindow": {
+          "last36m": {
+            "trades": 519,
+            "winRate": 63.01,
+            "avgReturnPct": 1.35,
+            "profitFactor": 1.92,
+            "profitFactorLabel": "1.92"
+          },
+          "last12m": {
+            "trades": 77,
+            "winRate": 57.14,
+            "avgReturnPct": 0.13,
+            "profitFactor": 1.08,
+            "profitFactorLabel": "1.08"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 519
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1311,
+          "winRate": 62.4,
+          "avgReturnPct": 0.7,
+          "profitFactor": 1.83,
+          "profitFactorLabel": "1.83"
+        },
+        "worstPF": 1.42,
+        "perWindow": {
+          "last36m": {
+            "trades": 1311,
+            "winRate": 62.4,
+            "avgReturnPct": 0.7,
+            "profitFactor": 1.83,
+            "profitFactorLabel": "1.83"
+          },
+          "last12m": {
+            "trades": 424,
+            "winRate": 58.73,
+            "avgReturnPct": 0.4,
+            "profitFactor": 1.42,
+            "profitFactorLabel": "1.42"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1311
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 5,
+          "winRate": 60,
+          "avgReturnPct": 0.6,
+          "profitFactor": 1.82,
+          "profitFactorLabel": "1.82"
+        },
+        "worstPF": 1.82,
+        "perWindow": {
+          "last36m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 5
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 35,
+          "winRate": 68.57,
+          "avgReturnPct": 0.79,
+          "profitFactor": 1.81,
+          "profitFactorLabel": "1.81"
+        },
+        "worstPF": 1.81,
+        "perWindow": {
+          "last36m": {
+            "trades": 35,
+            "winRate": 68.57,
+            "avgReturnPct": 0.79,
+            "profitFactor": 1.81,
+            "profitFactorLabel": "1.81"
+          },
+          "last12m": {
+            "trades": 12,
+            "winRate": 100,
+            "avgReturnPct": 2.05,
+            "profitFactor": 1000000000,
+            "profitFactorLabel": "Infinity"
+          },
+          "last6m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 35
+      }
+    ],
+    "A": [
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 9,
+          "winRate": 55.56,
+          "avgReturnPct": 1.25,
+          "profitFactor": 3.64,
+          "profitFactorLabel": "3.64"
+        },
+        "worstPF": 3.64,
+        "perWindow": {
+          "last36m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 9
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 57.14,
+          "avgReturnPct": 0.65,
+          "profitFactor": 2.99,
+          "profitFactorLabel": "2.99"
+        },
+        "worstPF": 2.99,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 62,
+          "winRate": 56.45,
+          "avgReturnPct": 0.97,
+          "profitFactor": 2.17,
+          "profitFactorLabel": "2.17"
+        },
+        "worstPF": 1.34,
+        "perWindow": {
+          "last36m": {
+            "trades": 62,
+            "winRate": 56.45,
+            "avgReturnPct": 0.97,
+            "profitFactor": 2.17,
+            "profitFactorLabel": "2.17"
+          },
+          "last12m": {
+            "trades": 91,
+            "winRate": 52.75,
+            "avgReturnPct": 0.33,
+            "profitFactor": 1.34,
+            "profitFactorLabel": "1.34"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 62
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 659,
+          "winRate": 59.64,
+          "avgReturnPct": 1.08,
+          "profitFactor": 1.79,
+          "profitFactorLabel": "1.79"
+        },
+        "worstPF": 1.49,
+        "perWindow": {
+          "last36m": {
+            "trades": 659,
+            "winRate": 59.64,
+            "avgReturnPct": 1.08,
+            "profitFactor": 1.79,
+            "profitFactorLabel": "1.79"
+          },
+          "last12m": {
+            "trades": 166,
+            "winRate": 59.04,
+            "avgReturnPct": 0.62,
+            "profitFactor": 1.49,
+            "profitFactorLabel": "1.49"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 659
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 504,
+          "winRate": 61.31,
+          "avgReturnPct": 0.7,
+          "profitFactor": 1.7,
+          "profitFactorLabel": "1.7"
+        },
+        "worstPF": 1.7,
+        "perWindow": {
+          "last36m": {
+            "trades": 504,
+            "winRate": 61.31,
+            "avgReturnPct": 0.7,
+            "profitFactor": 1.7,
+            "profitFactorLabel": "1.7"
+          },
+          "last12m": {
+            "trades": 265,
+            "winRate": 72.08,
+            "avgReturnPct": 1.38,
+            "profitFactor": 3.11,
+            "profitFactorLabel": "3.11"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 504
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 54,
+          "winRate": 59.26,
+          "avgReturnPct": 0.72,
+          "profitFactor": 1.69,
+          "profitFactorLabel": "1.69"
+        },
+        "worstPF": 1.69,
+        "perWindow": {
+          "last36m": {
+            "trades": 54,
+            "winRate": 59.26,
+            "avgReturnPct": 0.72,
+            "profitFactor": 1.69,
+            "profitFactorLabel": "1.69"
+          },
+          "last12m": {
+            "trades": 57,
+            "winRate": 75.44,
+            "avgReturnPct": 1.94,
+            "profitFactor": 5.41,
+            "profitFactorLabel": "5.41"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 54
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 10,
+          "winRate": 60,
+          "avgReturnPct": 0.61,
+          "profitFactor": 1.66,
+          "profitFactorLabel": "1.66"
+        },
+        "worstPF": 1.66,
+        "perWindow": {
+          "last36m": {
+            "trades": 10,
+            "winRate": 60,
+            "avgReturnPct": 0.61,
+            "profitFactor": 1.66,
+            "profitFactorLabel": "1.66"
+          },
+          "last12m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 10
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 9,
+          "winRate": 55.56,
+          "avgReturnPct": 0.73,
+          "profitFactor": 1.65,
+          "profitFactorLabel": "1.65"
+        },
+        "worstPF": 1.65,
+        "perWindow": {
+          "last36m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 9
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 29,
+          "winRate": 62.07,
+          "avgReturnPct": 0.54,
+          "profitFactor": 1.59,
+          "profitFactorLabel": "1.59"
+        },
+        "worstPF": 1.59,
+        "perWindow": {
+          "last36m": {
+            "trades": 29,
+            "winRate": 62.07,
+            "avgReturnPct": 0.54,
+            "profitFactor": 1.59,
+            "profitFactorLabel": "1.59"
+          },
+          "last12m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 29
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 351,
+          "winRate": 59.54,
+          "avgReturnPct": 0.97,
+          "profitFactor": 1.59,
+          "profitFactorLabel": "1.59"
+        },
+        "worstPF": 1.21,
+        "perWindow": {
+          "last36m": {
+            "trades": 351,
+            "winRate": 59.54,
+            "avgReturnPct": 0.97,
+            "profitFactor": 1.59,
+            "profitFactorLabel": "1.59"
+          },
+          "last12m": {
+            "trades": 45,
+            "winRate": 48.89,
+            "avgReturnPct": 0.4,
+            "profitFactor": 1.21,
+            "profitFactorLabel": "1.21"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 351
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 53,
+          "winRate": 58.49,
+          "avgReturnPct": 0.95,
+          "profitFactor": 1.57,
+          "profitFactorLabel": "1.57"
+        },
+        "worstPF": 1.09,
+        "perWindow": {
+          "last36m": {
+            "trades": 53,
+            "winRate": 58.49,
+            "avgReturnPct": 0.95,
+            "profitFactor": 1.57,
+            "profitFactorLabel": "1.57"
+          },
+          "last12m": {
+            "trades": 19,
+            "winRate": 52.63,
+            "avgReturnPct": 0.19,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 53
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1480,
+          "winRate": 58.45,
+          "avgReturnPct": 0.91,
+          "profitFactor": 1.55,
+          "profitFactorLabel": "1.55"
+        },
+        "worstPF": 1.26,
+        "perWindow": {
+          "last36m": {
+            "trades": 1480,
+            "winRate": 58.45,
+            "avgReturnPct": 0.91,
+            "profitFactor": 1.55,
+            "profitFactorLabel": "1.55"
+          },
+          "last12m": {
+            "trades": 307,
+            "winRate": 49.84,
+            "avgReturnPct": 0.47,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1480
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 814,
+          "winRate": 59.58,
+          "avgReturnPct": 0.79,
+          "profitFactor": 1.46,
+          "profitFactorLabel": "1.46"
+        },
+        "worstPF": 1.46,
+        "perWindow": {
+          "last36m": {
+            "trades": 814,
+            "winRate": 59.58,
+            "avgReturnPct": 0.79,
+            "profitFactor": 1.46,
+            "profitFactorLabel": "1.46"
+          },
+          "last12m": {
+            "trades": 373,
+            "winRate": 61.13,
+            "avgReturnPct": 1.2,
+            "profitFactor": 1.83,
+            "profitFactorLabel": "1.83"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 814
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 930,
+          "winRate": 57.2,
+          "avgReturnPct": 0.72,
+          "profitFactor": 1.44,
+          "profitFactorLabel": "1.44"
+        },
+        "worstPF": 1.44,
+        "perWindow": {
+          "last36m": {
+            "trades": 930,
+            "winRate": 57.2,
+            "avgReturnPct": 0.72,
+            "profitFactor": 1.44,
+            "profitFactorLabel": "1.44"
+          },
+          "last12m": {
+            "trades": 271,
+            "winRate": 53.14,
+            "avgReturnPct": 0.82,
+            "profitFactor": 1.49,
+            "profitFactorLabel": "1.49"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 930
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 848,
+          "winRate": 56.72,
+          "avgReturnPct": 0.63,
+          "profitFactor": 1.41,
+          "profitFactorLabel": "1.41"
+        },
+        "worstPF": 1.05,
+        "perWindow": {
+          "last36m": {
+            "trades": 848,
+            "winRate": 56.72,
+            "avgReturnPct": 0.63,
+            "profitFactor": 1.41,
+            "profitFactorLabel": "1.41"
+          },
+          "last12m": {
+            "trades": 229,
+            "winRate": 53.28,
+            "avgReturnPct": 0.08,
+            "profitFactor": 1.05,
+            "profitFactorLabel": "1.05"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 848
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 399,
+          "winRate": 58.65,
+          "avgReturnPct": 0.68,
+          "profitFactor": 1.39,
+          "profitFactorLabel": "1.39"
+        },
+        "worstPF": 1.39,
+        "perWindow": {
+          "last36m": {
+            "trades": 399,
+            "winRate": 58.65,
+            "avgReturnPct": 0.68,
+            "profitFactor": 1.39,
+            "profitFactorLabel": "1.39"
+          },
+          "last12m": {
+            "trades": 106,
+            "winRate": 65.09,
+            "avgReturnPct": 2.46,
+            "profitFactor": 3.39,
+            "profitFactorLabel": "3.39"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 399
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 39,
+          "winRate": 56.41,
+          "avgReturnPct": 0.51,
+          "profitFactor": 1.39,
+          "profitFactorLabel": "1.39"
+        },
+        "worstPF": 1.39,
+        "perWindow": {
+          "last36m": {
+            "trades": 39,
+            "winRate": 56.41,
+            "avgReturnPct": 0.51,
+            "profitFactor": 1.39,
+            "profitFactorLabel": "1.39"
+          },
+          "last12m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 39
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 535,
+          "winRate": 56.26,
+          "avgReturnPct": 0.53,
+          "profitFactor": 1.39,
+          "profitFactorLabel": "1.39"
+        },
+        "worstPF": 1.39,
+        "perWindow": {
+          "last36m": {
+            "trades": 535,
+            "winRate": 56.26,
+            "avgReturnPct": 0.53,
+            "profitFactor": 1.39,
+            "profitFactorLabel": "1.39"
+          },
+          "last12m": {
+            "trades": 292,
+            "winRate": 73.97,
+            "avgReturnPct": 1.63,
+            "profitFactor": 3.34,
+            "profitFactorLabel": "3.34"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 535
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 126,
+          "winRate": 64.29,
+          "avgReturnPct": 0.57,
+          "profitFactor": 1.38,
+          "profitFactorLabel": "1.38"
+        },
+        "worstPF": 1.38,
+        "perWindow": {
+          "last36m": {
+            "trades": 126,
+            "winRate": 64.29,
+            "avgReturnPct": 0.57,
+            "profitFactor": 1.38,
+            "profitFactorLabel": "1.38"
+          },
+          "last12m": {
+            "trades": 82,
+            "winRate": 80.49,
+            "avgReturnPct": 1.84,
+            "profitFactor": 4.11,
+            "profitFactorLabel": "4.11"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 126
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 416,
+          "winRate": 58.65,
+          "avgReturnPct": 0.43,
+          "profitFactor": 1.38,
+          "profitFactorLabel": "1.38"
+        },
+        "worstPF": 1.38,
+        "perWindow": {
+          "last36m": {
+            "trades": 416,
+            "winRate": 58.65,
+            "avgReturnPct": 0.43,
+            "profitFactor": 1.38,
+            "profitFactorLabel": "1.38"
+          },
+          "last12m": {
+            "trades": 236,
+            "winRate": 68.22,
+            "avgReturnPct": 1.08,
+            "profitFactor": 3.01,
+            "profitFactorLabel": "3.01"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 416
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1457,
+          "winRate": 56.35,
+          "avgReturnPct": 0.64,
+          "profitFactor": 1.35,
+          "profitFactorLabel": "1.35"
+        },
+        "worstPF": 1.09,
+        "perWindow": {
+          "last36m": {
+            "trades": 1457,
+            "winRate": 56.35,
+            "avgReturnPct": 0.64,
+            "profitFactor": 1.35,
+            "profitFactorLabel": "1.35"
+          },
+          "last12m": {
+            "trades": 498,
+            "winRate": 55.42,
+            "avgReturnPct": 0.58,
+            "profitFactor": 1.34,
+            "profitFactorLabel": "1.34"
+          },
+          "last6m": {
+            "trades": 235,
+            "winRate": 61.7,
+            "avgReturnPct": 1.01,
+            "profitFactor": 1.74,
+            "profitFactorLabel": "1.74"
+          },
+          "last3m": {
+            "trades": 104,
+            "winRate": 53.85,
+            "avgReturnPct": 0.15,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1457
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 899,
+          "winRate": 56.62,
+          "avgReturnPct": 0.38,
+          "profitFactor": 1.33,
+          "profitFactorLabel": "1.33"
+        },
+        "worstPF": 1.33,
+        "perWindow": {
+          "last36m": {
+            "trades": 899,
+            "winRate": 56.62,
+            "avgReturnPct": 0.38,
+            "profitFactor": 1.33,
+            "profitFactorLabel": "1.33"
+          },
+          "last12m": {
+            "trades": 294,
+            "winRate": 57.82,
+            "avgReturnPct": 0.62,
+            "profitFactor": 1.66,
+            "profitFactorLabel": "1.66"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 899
+      }
+    ],
+    "B": [
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 27,
+          "winRate": 62.96,
+          "avgReturnPct": 0.95,
+          "profitFactor": 2.04,
+          "profitFactorLabel": "2.04"
+        },
+        "worstPF": 0.7,
+        "perWindow": {
+          "last36m": {
+            "trades": 27,
+            "winRate": 62.96,
+            "avgReturnPct": 0.95,
+            "profitFactor": 2.04,
+            "profitFactorLabel": "2.04"
+          },
+          "last12m": {
+            "trades": 10,
+            "winRate": 50,
+            "avgReturnPct": 0.32,
+            "profitFactor": 1.4,
+            "profitFactorLabel": "1.4"
+          },
+          "last6m": {
+            "trades": 10,
+            "winRate": 40,
+            "avgReturnPct": -0.41,
+            "profitFactor": 0.7,
+            "profitFactorLabel": "0.7"
+          },
+          "last3m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 27
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 20,
+          "winRate": 50,
+          "avgReturnPct": 0.84,
+          "profitFactor": 1.9,
+          "profitFactorLabel": "1.9"
+        },
+        "worstPF": 1.9,
+        "perWindow": {
+          "last36m": {
+            "trades": 20,
+            "winRate": 50,
+            "avgReturnPct": 0.84,
+            "profitFactor": 1.9,
+            "profitFactorLabel": "1.9"
+          },
+          "last12m": {
+            "trades": 13,
+            "winRate": 76.92,
+            "avgReturnPct": 1.89,
+            "profitFactor": 2.69,
+            "profitFactorLabel": "2.69"
+          },
+          "last6m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 20
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 689,
+          "winRate": 67.92,
+          "avgReturnPct": 0.85,
+          "profitFactor": 1.85,
+          "profitFactorLabel": "1.85"
+        },
+        "worstPF": 0.56,
+        "perWindow": {
+          "last36m": {
+            "trades": 689,
+            "winRate": 67.92,
+            "avgReturnPct": 0.85,
+            "profitFactor": 1.85,
+            "profitFactorLabel": "1.85"
+          },
+          "last12m": {
+            "trades": 288,
+            "winRate": 62.85,
+            "avgReturnPct": 0.53,
+            "profitFactor": 1.57,
+            "profitFactorLabel": "1.57"
+          },
+          "last6m": {
+            "trades": 292,
+            "winRate": 63.01,
+            "avgReturnPct": 0.87,
+            "profitFactor": 2.27,
+            "profitFactorLabel": "2.27"
+          },
+          "last3m": {
+            "trades": 201,
+            "winRate": 67.66,
+            "avgReturnPct": 0.92,
+            "profitFactor": 2.3,
+            "profitFactorLabel": "2.3"
+          },
+          "last1m": {
+            "trades": 80,
+            "winRate": 46.25,
+            "avgReturnPct": -0.46,
+            "profitFactor": 0.56,
+            "profitFactorLabel": "0.56"
+          }
+        },
+        "__learnCount": 689
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 24,
+          "winRate": 45.83,
+          "avgReturnPct": 0.38,
+          "profitFactor": 1.71,
+          "profitFactorLabel": "1.71"
+        },
+        "worstPF": 0.99,
+        "perWindow": {
+          "last36m": {
+            "trades": 24,
+            "winRate": 45.83,
+            "avgReturnPct": 0.38,
+            "profitFactor": 1.71,
+            "profitFactorLabel": "1.71"
+          },
+          "last12m": {
+            "trades": 17,
+            "winRate": 47.06,
+            "avgReturnPct": -0.01,
+            "profitFactor": 0.99,
+            "profitFactorLabel": "0.99"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 24
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 585,
+          "winRate": 62.05,
+          "avgReturnPct": 0.64,
+          "profitFactor": 1.6,
+          "profitFactorLabel": "1.6"
+        },
+        "worstPF": 0.21,
+        "perWindow": {
+          "last36m": {
+            "trades": 585,
+            "winRate": 62.05,
+            "avgReturnPct": 0.64,
+            "profitFactor": 1.6,
+            "profitFactorLabel": "1.6"
+          },
+          "last12m": {
+            "trades": 227,
+            "winRate": 56.83,
+            "avgReturnPct": 0.3,
+            "profitFactor": 1.28,
+            "profitFactorLabel": "1.28"
+          },
+          "last6m": {
+            "trades": 206,
+            "winRate": 53.88,
+            "avgReturnPct": 0.26,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last3m": {
+            "trades": 122,
+            "winRate": 49.18,
+            "avgReturnPct": -0.05,
+            "profitFactor": 0.96,
+            "profitFactorLabel": "0.96"
+          },
+          "last1m": {
+            "trades": 44,
+            "winRate": 27.27,
+            "avgReturnPct": -1.64,
+            "profitFactor": 0.21,
+            "profitFactorLabel": "0.21"
+          }
+        },
+        "__learnCount": 585
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 760,
+          "winRate": 61.58,
+          "avgReturnPct": 0.63,
+          "profitFactor": 1.6,
+          "profitFactorLabel": "1.6"
+        },
+        "worstPF": 0.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 760,
+            "winRate": 61.58,
+            "avgReturnPct": 0.63,
+            "profitFactor": 1.6,
+            "profitFactorLabel": "1.6"
+          },
+          "last12m": {
+            "trades": 275,
+            "winRate": 48.36,
+            "avgReturnPct": -0.08,
+            "profitFactor": 0.94,
+            "profitFactorLabel": "0.94"
+          },
+          "last6m": {
+            "trades": 169,
+            "winRate": 50.89,
+            "avgReturnPct": 0.13,
+            "profitFactor": 1.12,
+            "profitFactorLabel": "1.12"
+          },
+          "last3m": {
+            "trades": 50,
+            "winRate": 24,
+            "avgReturnPct": -1.56,
+            "profitFactor": 0.19,
+            "profitFactorLabel": "0.19"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 760
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1518,
+          "winRate": 61.73,
+          "avgReturnPct": 0.58,
+          "profitFactor": 1.55,
+          "profitFactorLabel": "1.55"
+        },
+        "worstPF": 0.7,
+        "perWindow": {
+          "last36m": {
+            "trades": 1518,
+            "winRate": 61.73,
+            "avgReturnPct": 0.58,
+            "profitFactor": 1.55,
+            "profitFactorLabel": "1.55"
+          },
+          "last12m": {
+            "trades": 571,
+            "winRate": 60.95,
+            "avgReturnPct": 0.63,
+            "profitFactor": 1.61,
+            "profitFactorLabel": "1.61"
+          },
+          "last6m": {
+            "trades": 358,
+            "winRate": 63.97,
+            "avgReturnPct": 0.83,
+            "profitFactor": 2.03,
+            "profitFactorLabel": "2.03"
+          },
+          "last3m": {
+            "trades": 141,
+            "winRate": 45.39,
+            "avgReturnPct": -0.44,
+            "profitFactor": 0.7,
+            "profitFactorLabel": "0.7"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1518
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 25,
+          "winRate": 48,
+          "avgReturnPct": 0.71,
+          "profitFactor": 1.5,
+          "profitFactorLabel": "1.5"
+        },
+        "worstPF": 1.5,
+        "perWindow": {
+          "last36m": {
+            "trades": 25,
+            "winRate": 48,
+            "avgReturnPct": 0.71,
+            "profitFactor": 1.5,
+            "profitFactorLabel": "1.5"
+          },
+          "last12m": {
+            "trades": 12,
+            "winRate": 66.67,
+            "avgReturnPct": 2.71,
+            "profitFactor": 4.86,
+            "profitFactorLabel": "4.86"
+          },
+          "last6m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 25
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1322,
+          "winRate": 59.38,
+          "avgReturnPct": 0.53,
+          "profitFactor": 1.47,
+          "profitFactorLabel": "1.47"
+        },
+        "worstPF": 0.72,
+        "perWindow": {
+          "last36m": {
+            "trades": 1322,
+            "winRate": 59.38,
+            "avgReturnPct": 0.53,
+            "profitFactor": 1.47,
+            "profitFactorLabel": "1.47"
+          },
+          "last12m": {
+            "trades": 471,
+            "winRate": 55.84,
+            "avgReturnPct": 0.42,
+            "profitFactor": 1.37,
+            "profitFactorLabel": "1.37"
+          },
+          "last6m": {
+            "trades": 309,
+            "winRate": 62.46,
+            "avgReturnPct": 0.83,
+            "profitFactor": 2,
+            "profitFactorLabel": "2"
+          },
+          "last3m": {
+            "trades": 120,
+            "winRate": 42.5,
+            "avgReturnPct": -0.41,
+            "profitFactor": 0.72,
+            "profitFactorLabel": "0.72"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1322
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 778,
+          "winRate": 60.03,
+          "avgReturnPct": 0.46,
+          "profitFactor": 1.35,
+          "profitFactorLabel": "1.35"
+        },
+        "worstPF": 0.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 778,
+            "winRate": 60.03,
+            "avgReturnPct": 0.46,
+            "profitFactor": 1.35,
+            "profitFactorLabel": "1.35"
+          },
+          "last12m": {
+            "trades": 279,
+            "winRate": 53.76,
+            "avgReturnPct": 0.23,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last6m": {
+            "trades": 196,
+            "winRate": 54.59,
+            "avgReturnPct": 0.64,
+            "profitFactor": 1.7,
+            "profitFactorLabel": "1.7"
+          },
+          "last3m": {
+            "trades": 150,
+            "winRate": 59.33,
+            "avgReturnPct": 0.85,
+            "profitFactor": 1.99,
+            "profitFactorLabel": "1.99"
+          },
+          "last1m": {
+            "trades": 52,
+            "winRate": 23.08,
+            "avgReturnPct": -1.48,
+            "profitFactor": 0.19,
+            "profitFactorLabel": "0.19"
+          }
+        },
+        "__learnCount": 778
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 704,
+          "winRate": 57.1,
+          "avgReturnPct": 0.42,
+          "profitFactor": 1.34,
+          "profitFactorLabel": "1.34"
+        },
+        "worstPF": 0.55,
+        "perWindow": {
+          "last36m": {
+            "trades": 704,
+            "winRate": 57.1,
+            "avgReturnPct": 0.42,
+            "profitFactor": 1.34,
+            "profitFactorLabel": "1.34"
+          },
+          "last12m": {
+            "trades": 275,
+            "winRate": 51.27,
+            "avgReturnPct": 0.13,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last6m": {
+            "trades": 159,
+            "winRate": 52.2,
+            "avgReturnPct": 0.29,
+            "profitFactor": 1.24,
+            "profitFactorLabel": "1.24"
+          },
+          "last3m": {
+            "trades": 56,
+            "winRate": 37.5,
+            "avgReturnPct": -0.78,
+            "profitFactor": 0.55,
+            "profitFactorLabel": "0.55"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 704
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 2449,
+          "winRate": 54.96,
+          "avgReturnPct": 0.54,
+          "profitFactor": 1.33,
+          "profitFactorLabel": "1.33"
+        },
+        "worstPF": 1.27,
+        "perWindow": {
+          "last36m": {
+            "trades": 2449,
+            "winRate": 54.96,
+            "avgReturnPct": 0.54,
+            "profitFactor": 1.33,
+            "profitFactorLabel": "1.33"
+          },
+          "last12m": {
+            "trades": 380,
+            "winRate": 55.26,
+            "avgReturnPct": 0.45,
+            "profitFactor": 1.27,
+            "profitFactorLabel": "1.27"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 2449
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 57.14,
+          "avgReturnPct": 0.26,
+          "profitFactor": 1.29,
+          "profitFactorLabel": "1.29"
+        },
+        "worstPF": 1.29,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 78,
+          "winRate": 46.15,
+          "avgReturnPct": 0.45,
+          "profitFactor": 1.29,
+          "profitFactorLabel": "1.29"
+        },
+        "worstPF": 1.29,
+        "perWindow": {
+          "last36m": {
+            "trades": 78,
+            "winRate": 46.15,
+            "avgReturnPct": 0.45,
+            "profitFactor": 1.29,
+            "profitFactorLabel": "1.29"
+          },
+          "last12m": {
+            "trades": 44,
+            "winRate": 63.64,
+            "avgReturnPct": 0.91,
+            "profitFactor": 1.86,
+            "profitFactorLabel": "1.86"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 78
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 60,
+          "winRate": 61.67,
+          "avgReturnPct": 0.34,
+          "profitFactor": 1.26,
+          "profitFactorLabel": "1.26"
+        },
+        "worstPF": 1.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 60,
+            "winRate": 61.67,
+            "avgReturnPct": 0.34,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last12m": {
+            "trades": 10,
+            "winRate": 50,
+            "avgReturnPct": 0.18,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last6m": {
+            "trades": 12,
+            "winRate": 66.67,
+            "avgReturnPct": 1.59,
+            "profitFactor": 3.23,
+            "profitFactorLabel": "3.23"
+          },
+          "last3m": {
+            "trades": 22,
+            "winRate": 81.82,
+            "avgReturnPct": 1.85,
+            "profitFactor": 5.98,
+            "profitFactorLabel": "5.98"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 60
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1069,
+          "winRate": 53.41,
+          "avgReturnPct": 0.42,
+          "profitFactor": 1.26,
+          "profitFactorLabel": "1.26"
+        },
+        "worstPF": 1.26,
+        "perWindow": {
+          "last36m": {
+            "trades": 1069,
+            "winRate": 53.41,
+            "avgReturnPct": 0.42,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last12m": {
+            "trades": 144,
+            "winRate": 51.39,
+            "avgReturnPct": 0.88,
+            "profitFactor": 1.53,
+            "profitFactorLabel": "1.53"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1069
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 633,
+          "winRate": 54.34,
+          "avgReturnPct": 0.44,
+          "profitFactor": 1.24,
+          "profitFactorLabel": "1.24"
+        },
+        "worstPF": 1.17,
+        "perWindow": {
+          "last36m": {
+            "trades": 633,
+            "winRate": 54.34,
+            "avgReturnPct": 0.44,
+            "profitFactor": 1.24,
+            "profitFactorLabel": "1.24"
+          },
+          "last12m": {
+            "trades": 248,
+            "winRate": 56.05,
+            "avgReturnPct": 0.45,
+            "profitFactor": 1.27,
+            "profitFactorLabel": "1.27"
+          },
+          "last6m": {
+            "trades": 199,
+            "winRate": 55.28,
+            "avgReturnPct": 0.63,
+            "profitFactor": 1.5,
+            "profitFactorLabel": "1.5"
+          },
+          "last3m": {
+            "trades": 112,
+            "winRate": 65.18,
+            "avgReturnPct": 1.38,
+            "profitFactor": 2.08,
+            "profitFactorLabel": "2.08"
+          },
+          "last1m": {
+            "trades": 58,
+            "winRate": 51.72,
+            "avgReturnPct": 0.16,
+            "profitFactor": 1.17,
+            "profitFactorLabel": "1.17"
+          }
+        },
+        "__learnCount": 633
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 326,
+          "winRate": 54.6,
+          "avgReturnPct": 0.47,
+          "profitFactor": 1.22,
+          "profitFactorLabel": "1.22"
+        },
+        "worstPF": 0.65,
+        "perWindow": {
+          "last36m": {
+            "trades": 326,
+            "winRate": 54.6,
+            "avgReturnPct": 0.47,
+            "profitFactor": 1.22,
+            "profitFactorLabel": "1.22"
+          },
+          "last12m": {
+            "trades": 123,
+            "winRate": 59.35,
+            "avgReturnPct": 0.98,
+            "profitFactor": 1.5,
+            "profitFactorLabel": "1.5"
+          },
+          "last6m": {
+            "trades": 62,
+            "winRate": 62.9,
+            "avgReturnPct": 1.22,
+            "profitFactor": 1.69,
+            "profitFactorLabel": "1.69"
+          },
+          "last3m": {
+            "trades": 18,
+            "winRate": 38.89,
+            "avgReturnPct": -1.1,
+            "profitFactor": 0.65,
+            "profitFactorLabel": "0.65"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 326
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1479,
+          "winRate": 53.62,
+          "avgReturnPct": 0.37,
+          "profitFactor": 1.2,
+          "profitFactorLabel": "1.2"
+        },
+        "worstPF": 1.1,
+        "perWindow": {
+          "last36m": {
+            "trades": 1479,
+            "winRate": 53.62,
+            "avgReturnPct": 0.37,
+            "profitFactor": 1.2,
+            "profitFactorLabel": "1.2"
+          },
+          "last12m": {
+            "trades": 571,
+            "winRate": 57.44,
+            "avgReturnPct": 0.82,
+            "profitFactor": 1.48,
+            "profitFactorLabel": "1.48"
+          },
+          "last6m": {
+            "trades": 279,
+            "winRate": 59.5,
+            "avgReturnPct": 1.04,
+            "profitFactor": 1.69,
+            "profitFactorLabel": "1.69"
+          },
+          "last3m": {
+            "trades": 112,
+            "winRate": 50,
+            "avgReturnPct": 0.18,
+            "profitFactor": 1.1,
+            "profitFactorLabel": "1.1"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1479
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 55,
+          "winRate": 58.18,
+          "avgReturnPct": 0.31,
+          "profitFactor": 1.19,
+          "profitFactorLabel": "1.19"
+        },
+        "worstPF": 1.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 55,
+            "winRate": 58.18,
+            "avgReturnPct": 0.31,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last12m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 55
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 103,
+          "winRate": 56.31,
+          "avgReturnPct": 0.35,
+          "profitFactor": 1.19,
+          "profitFactorLabel": "1.19"
+        },
+        "worstPF": 1.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 103,
+            "winRate": 56.31,
+            "avgReturnPct": 0.35,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last12m": {
+            "trades": 23,
+            "winRate": 65.22,
+            "avgReturnPct": 1.15,
+            "profitFactor": 1.68,
+            "profitFactorLabel": "1.68"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 103
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 346,
+          "winRate": 55.2,
+          "avgReturnPct": 0.26,
+          "profitFactor": 1.19,
+          "profitFactorLabel": "1.19"
+        },
+        "worstPF": 1.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 346,
+            "winRate": 55.2,
+            "avgReturnPct": 0.26,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last12m": {
+            "trades": 113,
+            "winRate": 59.29,
+            "avgReturnPct": 0.83,
+            "profitFactor": 1.66,
+            "profitFactorLabel": "1.66"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 346
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 16,
+          "winRate": 50,
+          "avgReturnPct": 0.42,
+          "profitFactor": 1.19,
+          "profitFactorLabel": "1.19"
+        },
+        "worstPF": 1.19,
+        "perWindow": {
+          "last36m": {
+            "trades": 16,
+            "winRate": 50,
+            "avgReturnPct": 0.42,
+            "profitFactor": 1.19,
+            "profitFactorLabel": "1.19"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 16
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 72,
+          "winRate": 52.78,
+          "avgReturnPct": 0.36,
+          "profitFactor": 1.18,
+          "profitFactorLabel": "1.18"
+        },
+        "worstPF": 1.18,
+        "perWindow": {
+          "last36m": {
+            "trades": 72,
+            "winRate": 52.78,
+            "avgReturnPct": 0.36,
+            "profitFactor": 1.18,
+            "profitFactorLabel": "1.18"
+          },
+          "last12m": {
+            "trades": 29,
+            "winRate": 48.28,
+            "avgReturnPct": 0.52,
+            "profitFactor": 1.27,
+            "profitFactorLabel": "1.27"
+          },
+          "last6m": {
+            "trades": 11,
+            "winRate": 45.45,
+            "avgReturnPct": 0.43,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last3m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 72
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 559,
+          "winRate": 51.52,
+          "avgReturnPct": 0.34,
+          "profitFactor": 1.17,
+          "profitFactorLabel": "1.17"
+        },
+        "worstPF": 1.06,
+        "perWindow": {
+          "last36m": {
+            "trades": 559,
+            "winRate": 51.52,
+            "avgReturnPct": 0.34,
+            "profitFactor": 1.17,
+            "profitFactorLabel": "1.17"
+          },
+          "last12m": {
+            "trades": 216,
+            "winRate": 53.24,
+            "avgReturnPct": 0.74,
+            "profitFactor": 1.44,
+            "profitFactorLabel": "1.44"
+          },
+          "last6m": {
+            "trades": 141,
+            "winRate": 50.35,
+            "avgReturnPct": 0.35,
+            "profitFactor": 1.26,
+            "profitFactorLabel": "1.26"
+          },
+          "last3m": {
+            "trades": 62,
+            "winRate": 61.29,
+            "avgReturnPct": 0.4,
+            "profitFactor": 1.27,
+            "profitFactorLabel": "1.27"
+          },
+          "last1m": {
+            "trades": 30,
+            "winRate": 56.67,
+            "avgReturnPct": 0.07,
+            "profitFactor": 1.06,
+            "profitFactorLabel": "1.06"
+          }
+        },
+        "__learnCount": 559
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 488,
+          "winRate": 57.17,
+          "avgReturnPct": 0.19,
+          "profitFactor": 1.12,
+          "profitFactorLabel": "1.12"
+        },
+        "worstPF": 0.17,
+        "perWindow": {
+          "last36m": {
+            "trades": 488,
+            "winRate": 57.17,
+            "avgReturnPct": 0.19,
+            "profitFactor": 1.12,
+            "profitFactorLabel": "1.12"
+          },
+          "last12m": {
+            "trades": 175,
+            "winRate": 48,
+            "avgReturnPct": -0.27,
+            "profitFactor": 0.84,
+            "profitFactorLabel": "0.84"
+          },
+          "last6m": {
+            "trades": 130,
+            "winRate": 56.15,
+            "avgReturnPct": 0.4,
+            "profitFactor": 1.34,
+            "profitFactorLabel": "1.34"
+          },
+          "last3m": {
+            "trades": 86,
+            "winRate": 39.53,
+            "avgReturnPct": -0.8,
+            "profitFactor": 0.55,
+            "profitFactorLabel": "0.55"
+          },
+          "last1m": {
+            "trades": 54,
+            "winRate": 25.93,
+            "avgReturnPct": -2.17,
+            "profitFactor": 0.17,
+            "profitFactorLabel": "0.17"
+          }
+        },
+        "__learnCount": 488
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 703,
+          "winRate": 54.62,
+          "avgReturnPct": 0.22,
+          "profitFactor": 1.12,
+          "profitFactorLabel": "1.12"
+        },
+        "worstPF": 1.12,
+        "perWindow": {
+          "last36m": {
+            "trades": 703,
+            "winRate": 54.62,
+            "avgReturnPct": 0.22,
+            "profitFactor": 1.12,
+            "profitFactorLabel": "1.12"
+          },
+          "last12m": {
+            "trades": 227,
+            "winRate": 66.52,
+            "avgReturnPct": 1.63,
+            "profitFactor": 2.27,
+            "profitFactorLabel": "2.27"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 703
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1521,
+          "winRate": 54.04,
+          "avgReturnPct": 0.22,
+          "profitFactor": 1.11,
+          "profitFactorLabel": "1.11"
+        },
+        "worstPF": 0.62,
+        "perWindow": {
+          "last36m": {
+            "trades": 1521,
+            "winRate": 54.04,
+            "avgReturnPct": 0.22,
+            "profitFactor": 1.11,
+            "profitFactorLabel": "1.11"
+          },
+          "last12m": {
+            "trades": 561,
+            "winRate": 53.83,
+            "avgReturnPct": 0.17,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last6m": {
+            "trades": 254,
+            "winRate": 56.3,
+            "avgReturnPct": 0.53,
+            "profitFactor": 1.33,
+            "profitFactorLabel": "1.33"
+          },
+          "last3m": {
+            "trades": 111,
+            "winRate": 46.85,
+            "avgReturnPct": -0.8,
+            "profitFactor": 0.62,
+            "profitFactorLabel": "0.62"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1521
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 869,
+          "winRate": 53.39,
+          "avgReturnPct": 0.18,
+          "profitFactor": 1.09,
+          "profitFactorLabel": "1.09"
+        },
+        "worstPF": 1.09,
+        "perWindow": {
+          "last36m": {
+            "trades": 869,
+            "winRate": 53.39,
+            "avgReturnPct": 0.18,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last12m": {
+            "trades": 195,
+            "winRate": 67.18,
+            "avgReturnPct": 1.47,
+            "profitFactor": 2.16,
+            "profitFactorLabel": "2.16"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 869
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 1520,
+          "winRate": 51.91,
+          "avgReturnPct": 0.16,
+          "profitFactor": 1.08,
+          "profitFactorLabel": "1.08"
+        },
+        "worstPF": 0.78,
+        "perWindow": {
+          "last36m": {
+            "trades": 1520,
+            "winRate": 51.91,
+            "avgReturnPct": 0.16,
+            "profitFactor": 1.08,
+            "profitFactorLabel": "1.08"
+          },
+          "last12m": {
+            "trades": 563,
+            "winRate": 50.27,
+            "avgReturnPct": 0.17,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last6m": {
+            "trades": 241,
+            "winRate": 56.02,
+            "avgReturnPct": 0.54,
+            "profitFactor": 1.29,
+            "profitFactorLabel": "1.29"
+          },
+          "last3m": {
+            "trades": 97,
+            "winRate": 45.36,
+            "avgReturnPct": -0.53,
+            "profitFactor": 0.78,
+            "profitFactorLabel": "0.78"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 1520
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 1095,
+          "winRate": 51.23,
+          "avgReturnPct": 0.14,
+          "profitFactor": 1.08,
+          "profitFactorLabel": "1.08"
+        },
+        "worstPF": 0.93,
+        "perWindow": {
+          "last36m": {
+            "trades": 1095,
+            "winRate": 51.23,
+            "avgReturnPct": 0.14,
+            "profitFactor": 1.08,
+            "profitFactorLabel": "1.08"
+          },
+          "last12m": {
+            "trades": 425,
+            "winRate": 55.53,
+            "avgReturnPct": 0.71,
+            "profitFactor": 1.44,
+            "profitFactorLabel": "1.44"
+          },
+          "last6m": {
+            "trades": 278,
+            "winRate": 56.83,
+            "avgReturnPct": 1.11,
+            "profitFactor": 1.96,
+            "profitFactorLabel": "1.96"
+          },
+          "last3m": {
+            "trades": 190,
+            "winRate": 58.95,
+            "avgReturnPct": 0.6,
+            "profitFactor": 1.47,
+            "profitFactorLabel": "1.47"
+          },
+          "last1m": {
+            "trades": 110,
+            "winRate": 56.36,
+            "avgReturnPct": -0.1,
+            "profitFactor": 0.93,
+            "profitFactorLabel": "0.93"
+          }
+        },
+        "__learnCount": 1095
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 39,
+          "winRate": 56.41,
+          "avgReturnPct": 0.07,
+          "profitFactor": 1.06,
+          "profitFactorLabel": "1.06"
+        },
+        "worstPF": 0.5,
+        "perWindow": {
+          "last36m": {
+            "trades": 39,
+            "winRate": 56.41,
+            "avgReturnPct": 0.07,
+            "profitFactor": 1.06,
+            "profitFactorLabel": "1.06"
+          },
+          "last12m": {
+            "trades": 18,
+            "winRate": 66.67,
+            "avgReturnPct": -0.09,
+            "profitFactor": 0.92,
+            "profitFactorLabel": "0.92"
+          },
+          "last6m": {
+            "trades": 10,
+            "winRate": 60,
+            "avgReturnPct": -0.59,
+            "profitFactor": 0.5,
+            "profitFactorLabel": "0.5"
+          },
+          "last3m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 39
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 393,
+          "winRate": 50.13,
+          "avgReturnPct": 0.07,
+          "profitFactor": 1.06,
+          "profitFactorLabel": "1.06"
+        },
+        "worstPF": 0.92,
+        "perWindow": {
+          "last36m": {
+            "trades": 393,
+            "winRate": 50.13,
+            "avgReturnPct": 0.07,
+            "profitFactor": 1.06,
+            "profitFactorLabel": "1.06"
+          },
+          "last12m": {
+            "trades": 101,
+            "winRate": 53.47,
+            "avgReturnPct": -0.1,
+            "profitFactor": 0.92,
+            "profitFactorLabel": "0.92"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 393
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 349,
+          "winRate": 50.72,
+          "avgReturnPct": 0.11,
+          "profitFactor": 1.05,
+          "profitFactorLabel": "1.05"
+        },
+        "worstPF": 1.05,
+        "perWindow": {
+          "last36m": {
+            "trades": 349,
+            "winRate": 50.72,
+            "avgReturnPct": 0.11,
+            "profitFactor": 1.05,
+            "profitFactorLabel": "1.05"
+          },
+          "last12m": {
+            "trades": 158,
+            "winRate": 56.96,
+            "avgReturnPct": 1.16,
+            "profitFactor": 1.67,
+            "profitFactorLabel": "1.67"
+          },
+          "last6m": {
+            "trades": 77,
+            "winRate": 66.23,
+            "avgReturnPct": 1.69,
+            "profitFactor": 2.04,
+            "profitFactorLabel": "2.04"
+          },
+          "last3m": {
+            "trades": 49,
+            "winRate": 57.14,
+            "avgReturnPct": 1.83,
+            "profitFactor": 2.15,
+            "profitFactorLabel": "2.15"
+          },
+          "last1m": {
+            "trades": 43,
+            "winRate": 79.07,
+            "avgReturnPct": 3.34,
+            "profitFactor": 6.96,
+            "profitFactorLabel": "6.96"
+          }
+        },
+        "__learnCount": 349
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 95,
+          "winRate": 54.74,
+          "avgReturnPct": 0.06,
+          "profitFactor": 1.04,
+          "profitFactorLabel": "1.04"
+        },
+        "worstPF": 1.04,
+        "perWindow": {
+          "last36m": {
+            "trades": 95,
+            "winRate": 54.74,
+            "avgReturnPct": 0.06,
+            "profitFactor": 1.04,
+            "profitFactorLabel": "1.04"
+          },
+          "last12m": {
+            "trades": 26,
+            "winRate": 61.54,
+            "avgReturnPct": 0.96,
+            "profitFactor": 2.74,
+            "profitFactorLabel": "2.74"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 95
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 389,
+          "winRate": 53.73,
+          "avgReturnPct": 0.1,
+          "profitFactor": 1.04,
+          "profitFactorLabel": "1.04"
+        },
+        "worstPF": 1.04,
+        "perWindow": {
+          "last36m": {
+            "trades": 389,
+            "winRate": 53.73,
+            "avgReturnPct": 0.1,
+            "profitFactor": 1.04,
+            "profitFactorLabel": "1.04"
+          },
+          "last12m": {
+            "trades": 86,
+            "winRate": 56.98,
+            "avgReturnPct": 0.28,
+            "profitFactor": 1.14,
+            "profitFactorLabel": "1.14"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 389
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 284,
+          "winRate": 48.59,
+          "avgReturnPct": 0.08,
+          "profitFactor": 1.04,
+          "profitFactorLabel": "1.04"
+        },
+        "worstPF": 1.04,
+        "perWindow": {
+          "last36m": {
+            "trades": 284,
+            "winRate": 48.59,
+            "avgReturnPct": 0.08,
+            "profitFactor": 1.04,
+            "profitFactorLabel": "1.04"
+          },
+          "last12m": {
+            "trades": 114,
+            "winRate": 57.89,
+            "avgReturnPct": 1.11,
+            "profitFactor": 1.67,
+            "profitFactorLabel": "1.67"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 284
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 285,
+          "winRate": 52.28,
+          "avgReturnPct": 0.06,
+          "profitFactor": 1.03,
+          "profitFactorLabel": "1.03"
+        },
+        "worstPF": 1.03,
+        "perWindow": {
+          "last36m": {
+            "trades": 285,
+            "winRate": 52.28,
+            "avgReturnPct": 0.06,
+            "profitFactor": 1.03,
+            "profitFactorLabel": "1.03"
+          },
+          "last12m": {
+            "trades": 113,
+            "winRate": 53.98,
+            "avgReturnPct": 0.51,
+            "profitFactor": 1.23,
+            "profitFactorLabel": "1.23"
+          },
+          "last6m": {
+            "trades": 44,
+            "winRate": 52.27,
+            "avgReturnPct": 0.3,
+            "profitFactor": 1.12,
+            "profitFactorLabel": "1.12"
+          },
+          "last3m": {
+            "trades": 18,
+            "winRate": 50,
+            "avgReturnPct": 0.17,
+            "profitFactor": 1.07,
+            "profitFactorLabel": "1.07"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 285
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 180,
+          "winRate": 47.78,
+          "avgReturnPct": 0.04,
+          "profitFactor": 1.02,
+          "profitFactorLabel": "1.02"
+        },
+        "worstPF": 1.02,
+        "perWindow": {
+          "last36m": {
+            "trades": 180,
+            "winRate": 47.78,
+            "avgReturnPct": 0.04,
+            "profitFactor": 1.02,
+            "profitFactorLabel": "1.02"
+          },
+          "last12m": {
+            "trades": 105,
+            "winRate": 67.62,
+            "avgReturnPct": 1.71,
+            "profitFactor": 2.45,
+            "profitFactorLabel": "2.45"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 180
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 787,
+          "winRate": 50.32,
+          "avgReturnPct": 0.03,
+          "profitFactor": 1.01,
+          "profitFactorLabel": "1.01"
+        },
+        "worstPF": 0.42,
+        "perWindow": {
+          "last36m": {
+            "trades": 787,
+            "winRate": 50.32,
+            "avgReturnPct": 0.03,
+            "profitFactor": 1.01,
+            "profitFactorLabel": "1.01"
+          },
+          "last12m": {
+            "trades": 306,
+            "winRate": 52.29,
+            "avgReturnPct": 0.44,
+            "profitFactor": 1.25,
+            "profitFactorLabel": "1.25"
+          },
+          "last6m": {
+            "trades": 201,
+            "winRate": 51.74,
+            "avgReturnPct": 0.82,
+            "profitFactor": 1.58,
+            "profitFactorLabel": "1.58"
+          },
+          "last3m": {
+            "trades": 94,
+            "winRate": 45.74,
+            "avgReturnPct": 0.17,
+            "profitFactor": 1.11,
+            "profitFactorLabel": "1.11"
+          },
+          "last1m": {
+            "trades": 54,
+            "winRate": 27.78,
+            "avgReturnPct": -1.27,
+            "profitFactor": 0.42,
+            "profitFactorLabel": "0.42"
+          }
+        },
+        "__learnCount": 787
+      }
+    ],
+    "C": [
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 23,
+          "winRate": 47.83,
+          "avgReturnPct": -0.12,
+          "profitFactor": 0.94,
+          "profitFactorLabel": "0.94"
+        },
+        "worstPF": 0.45,
+        "perWindow": {
+          "last36m": {
+            "trades": 23,
+            "winRate": 47.83,
+            "avgReturnPct": -0.12,
+            "profitFactor": 0.94,
+            "profitFactorLabel": "0.94"
+          },
+          "last12m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 10,
+            "winRate": 40,
+            "avgReturnPct": -0.6,
+            "profitFactor": 0.45,
+            "profitFactorLabel": "0.45"
+          },
+          "last3m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 23
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 5,
+          "winRate": 40,
+          "avgReturnPct": -0.08,
+          "profitFactor": 0.94,
+          "profitFactorLabel": "0.94"
+        },
+        "worstPF": 0.94,
+        "perWindow": {
+          "last36m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 5
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 412,
+          "winRate": 54.13,
+          "avgReturnPct": -0.12,
+          "profitFactor": 0.93,
+          "profitFactorLabel": "0.93"
+        },
+        "worstPF": 0.93,
+        "perWindow": {
+          "last36m": {
+            "trades": 412,
+            "winRate": 54.13,
+            "avgReturnPct": -0.12,
+            "profitFactor": 0.93,
+            "profitFactorLabel": "0.93"
+          },
+          "last12m": {
+            "trades": 62,
+            "winRate": 58.06,
+            "avgReturnPct": 0.09,
+            "profitFactor": 1.05,
+            "profitFactorLabel": "1.05"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 412
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 16,
+          "winRate": 50,
+          "avgReturnPct": -0.14,
+          "profitFactor": 0.93,
+          "profitFactorLabel": "0.93"
+        },
+        "worstPF": 0.93,
+        "perWindow": {
+          "last36m": {
+            "trades": 16,
+            "winRate": 50,
+            "avgReturnPct": -0.14,
+            "profitFactor": 0.93,
+            "profitFactorLabel": "0.93"
+          },
+          "last12m": {
+            "trades": 11,
+            "winRate": 81.82,
+            "avgReturnPct": 2.4,
+            "profitFactor": 3.52,
+            "profitFactorLabel": "3.52"
+          },
+          "last6m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 15,
+            "winRate": 40,
+            "avgReturnPct": -0.02,
+            "profitFactor": 0.99,
+            "profitFactorLabel": "0.99"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 16
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 11,
+          "winRate": 54.55,
+          "avgReturnPct": -0.27,
+          "profitFactor": 0.87,
+          "profitFactorLabel": "0.87"
+        },
+        "worstPF": 0.87,
+        "perWindow": {
+          "last36m": {
+            "trades": 11,
+            "winRate": 54.55,
+            "avgReturnPct": -0.27,
+            "profitFactor": 0.87,
+            "profitFactorLabel": "0.87"
+          },
+          "last12m": {
+            "trades": 10,
+            "winRate": 70,
+            "avgReturnPct": 1.4,
+            "profitFactor": 2.36,
+            "profitFactorLabel": "2.36"
+          },
+          "last6m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 14,
+            "winRate": 64.29,
+            "avgReturnPct": 0.89,
+            "profitFactor": 1.47,
+            "profitFactorLabel": "1.47"
+          },
+          "last1m": {
+            "trades": 11,
+            "winRate": 72.73,
+            "avgReturnPct": 1,
+            "profitFactor": 3.76,
+            "profitFactorLabel": "3.76"
+          }
+        },
+        "__learnCount": 11
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 26,
+          "winRate": 46.15,
+          "avgReturnPct": -0.23,
+          "profitFactor": 0.84,
+          "profitFactorLabel": "0.84"
+        },
+        "worstPF": 0.45,
+        "perWindow": {
+          "last36m": {
+            "trades": 26,
+            "winRate": 46.15,
+            "avgReturnPct": -0.23,
+            "profitFactor": 0.84,
+            "profitFactorLabel": "0.84"
+          },
+          "last12m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 10,
+            "winRate": 30,
+            "avgReturnPct": -1.06,
+            "profitFactor": 0.45,
+            "profitFactorLabel": "0.45"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 26
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 210,
+          "winRate": 50.48,
+          "avgReturnPct": -0.39,
+          "profitFactor": 0.83,
+          "profitFactorLabel": "0.83"
+        },
+        "worstPF": 0.4,
+        "perWindow": {
+          "last36m": {
+            "trades": 210,
+            "winRate": 50.48,
+            "avgReturnPct": -0.39,
+            "profitFactor": 0.83,
+            "profitFactorLabel": "0.83"
+          },
+          "last12m": {
+            "trades": 70,
+            "winRate": 51.43,
+            "avgReturnPct": 0.19,
+            "profitFactor": 1.09,
+            "profitFactorLabel": "1.09"
+          },
+          "last6m": {
+            "trades": 50,
+            "winRate": 50,
+            "avgReturnPct": 0.37,
+            "profitFactor": 1.2,
+            "profitFactorLabel": "1.2"
+          },
+          "last3m": {
+            "trades": 35,
+            "winRate": 40,
+            "avgReturnPct": -1.49,
+            "profitFactor": 0.4,
+            "profitFactorLabel": "0.4"
+          },
+          "last1m": {
+            "trades": 39,
+            "winRate": 61.54,
+            "avgReturnPct": 2.33,
+            "profitFactor": 3.35,
+            "profitFactorLabel": "3.35"
+          }
+        },
+        "__learnCount": 210
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 26,
+          "winRate": 42.31,
+          "avgReturnPct": -0.51,
+          "profitFactor": 0.81,
+          "profitFactorLabel": "0.81"
+        },
+        "worstPF": 0.81,
+        "perWindow": {
+          "last36m": {
+            "trades": 26,
+            "winRate": 42.31,
+            "avgReturnPct": -0.51,
+            "profitFactor": 0.81,
+            "profitFactorLabel": "0.81"
+          },
+          "last12m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 26
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 39,
+          "winRate": 41.03,
+          "avgReturnPct": -0.41,
+          "profitFactor": 0.79,
+          "profitFactorLabel": "0.79"
+        },
+        "worstPF": 0.4,
+        "perWindow": {
+          "last36m": {
+            "trades": 39,
+            "winRate": 41.03,
+            "avgReturnPct": -0.41,
+            "profitFactor": 0.79,
+            "profitFactorLabel": "0.79"
+          },
+          "last12m": {
+            "trades": 16,
+            "winRate": 62.5,
+            "avgReturnPct": 1.08,
+            "profitFactor": 2.06,
+            "profitFactorLabel": "2.06"
+          },
+          "last6m": {
+            "trades": 16,
+            "winRate": 25,
+            "avgReturnPct": -1.22,
+            "profitFactor": 0.4,
+            "profitFactorLabel": "0.4"
+          },
+          "last3m": {
+            "trades": 14,
+            "winRate": 71.43,
+            "avgReturnPct": 1.6,
+            "profitFactor": 2.45,
+            "profitFactorLabel": "2.45"
+          },
+          "last1m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 39
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 13,
+          "winRate": 38.46,
+          "avgReturnPct": -0.46,
+          "profitFactor": 0.79,
+          "profitFactorLabel": "0.79"
+        },
+        "worstPF": 0.79,
+        "perWindow": {
+          "last36m": {
+            "trades": 13,
+            "winRate": 38.46,
+            "avgReturnPct": -0.46,
+            "profitFactor": 0.79,
+            "profitFactorLabel": "0.79"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 13
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 13,
+          "winRate": 38.46,
+          "avgReturnPct": -0.7,
+          "profitFactor": 0.77,
+          "profitFactorLabel": "0.77"
+        },
+        "worstPF": 0.77,
+        "perWindow": {
+          "last36m": {
+            "trades": 13,
+            "winRate": 38.46,
+            "avgReturnPct": -0.7,
+            "profitFactor": 0.77,
+            "profitFactorLabel": "0.77"
+          },
+          "last12m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 13
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 22,
+          "winRate": 50,
+          "avgReturnPct": -0.53,
+          "profitFactor": 0.75,
+          "profitFactorLabel": "0.75"
+        },
+        "worstPF": 0.75,
+        "perWindow": {
+          "last36m": {
+            "trades": 22,
+            "winRate": 50,
+            "avgReturnPct": -0.53,
+            "profitFactor": 0.75,
+            "profitFactorLabel": "0.75"
+          },
+          "last12m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 10,
+            "winRate": 60,
+            "avgReturnPct": 0.26,
+            "profitFactor": 1.2,
+            "profitFactorLabel": "1.2"
+          },
+          "last3m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 22
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 22,
+          "winRate": 45.45,
+          "avgReturnPct": -0.43,
+          "profitFactor": 0.75,
+          "profitFactorLabel": "0.75"
+        },
+        "worstPF": 0.75,
+        "perWindow": {
+          "last36m": {
+            "trades": 22,
+            "winRate": 45.45,
+            "avgReturnPct": -0.43,
+            "profitFactor": 0.75,
+            "profitFactorLabel": "0.75"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 22
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 19,
+          "winRate": 47.37,
+          "avgReturnPct": -0.64,
+          "profitFactor": 0.71,
+          "profitFactorLabel": "0.71"
+        },
+        "worstPF": 0.71,
+        "perWindow": {
+          "last36m": {
+            "trades": 19,
+            "winRate": 47.37,
+            "avgReturnPct": -0.64,
+            "profitFactor": 0.71,
+            "profitFactorLabel": "0.71"
+          },
+          "last12m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 19
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 6,
+          "winRate": 50,
+          "avgReturnPct": -1.1,
+          "profitFactor": 0.69,
+          "profitFactorLabel": "0.69"
+        },
+        "worstPF": 0.69,
+        "perWindow": {
+          "last36m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 6
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 50,
+          "winRate": 52,
+          "avgReturnPct": -0.52,
+          "profitFactor": 0.67,
+          "profitFactorLabel": "0.67"
+        },
+        "worstPF": 0.67,
+        "perWindow": {
+          "last36m": {
+            "trades": 50,
+            "winRate": 52,
+            "avgReturnPct": -0.52,
+            "profitFactor": 0.67,
+            "profitFactorLabel": "0.67"
+          },
+          "last12m": {
+            "trades": 27,
+            "winRate": 55.56,
+            "avgReturnPct": 1.06,
+            "profitFactor": 1.62,
+            "profitFactorLabel": "1.62"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 50
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 27,
+          "winRate": 40.74,
+          "avgReturnPct": -0.79,
+          "profitFactor": 0.67,
+          "profitFactorLabel": "0.67"
+        },
+        "worstPF": 0.67,
+        "perWindow": {
+          "last36m": {
+            "trades": 27,
+            "winRate": 40.74,
+            "avgReturnPct": -0.79,
+            "profitFactor": 0.67,
+            "profitFactorLabel": "0.67"
+          },
+          "last12m": {
+            "trades": 15,
+            "winRate": 40,
+            "avgReturnPct": 0.83,
+            "profitFactor": 1.47,
+            "profitFactorLabel": "1.47"
+          },
+          "last6m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 27
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 10,
+          "winRate": 60,
+          "avgReturnPct": -0.26,
+          "profitFactor": 0.66,
+          "profitFactorLabel": "0.66"
+        },
+        "worstPF": 0.66,
+        "perWindow": {
+          "last36m": {
+            "trades": 10,
+            "winRate": 60,
+            "avgReturnPct": -0.26,
+            "profitFactor": 0.66,
+            "profitFactorLabel": "0.66"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 10
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:LIQ_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 26,
+          "winRate": 50,
+          "avgReturnPct": -0.72,
+          "profitFactor": 0.65,
+          "profitFactorLabel": "0.65"
+        },
+        "worstPF": 0.65,
+        "perWindow": {
+          "last36m": {
+            "trades": 26,
+            "winRate": 50,
+            "avgReturnPct": -0.72,
+            "profitFactor": 0.65,
+            "profitFactorLabel": "0.65"
+          },
+          "last12m": {
+            "trades": 12,
+            "winRate": 50,
+            "avgReturnPct": -0.01,
+            "profitFactor": 1,
+            "profitFactorLabel": "1"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 26
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:>6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 17,
+          "winRate": 52.94,
+          "avgReturnPct": -1.07,
+          "profitFactor": 0.62,
+          "profitFactorLabel": "0.62"
+        },
+        "worstPF": 0.62,
+        "perWindow": {
+          "last36m": {
+            "trades": 17,
+            "winRate": 52.94,
+            "avgReturnPct": -1.07,
+            "profitFactor": 0.62,
+            "profitFactorLabel": "0.62"
+          },
+          "last12m": {
+            "trades": 6,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 17
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 28.57,
+          "avgReturnPct": -1.52,
+          "profitFactor": 0.5,
+          "profitFactorLabel": "0.5"
+        },
+        "worstPF": 0.5,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 4,
+          "winRate": 50,
+          "avgReturnPct": -0.91,
+          "profitFactor": 0.48,
+          "profitFactorLabel": "0.48"
+        },
+        "worstPF": 0.48,
+        "perWindow": {
+          "last36m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 4
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 57.14,
+          "avgReturnPct": -1.18,
+          "profitFactor": 0.46,
+          "profitFactorLabel": "0.46"
+        },
+        "worstPF": 0.46,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:LIQ_LT:Lo_ST:Hi",
+        "learn": {
+          "trades": 14,
+          "winRate": 35.71,
+          "avgReturnPct": -1.71,
+          "profitFactor": 0.42,
+          "profitFactorLabel": "0.42"
+        },
+        "worstPF": 0.42,
+        "perWindow": {
+          "last36m": {
+            "trades": 14,
+            "winRate": 35.71,
+            "avgReturnPct": -1.71,
+            "profitFactor": 0.42,
+            "profitFactorLabel": "0.42"
+          },
+          "last12m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 14
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:>6_LAG:MID_VOL2:TAME_LIQ2:LIQ_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 15,
+          "winRate": 46.67,
+          "avgReturnPct": -1.39,
+          "profitFactor": 0.4,
+          "profitFactorLabel": "0.4"
+        },
+        "worstPF": 0.4,
+        "perWindow": {
+          "last36m": {
+            "trades": 15,
+            "winRate": 46.67,
+            "avgReturnPct": -1.39,
+            "profitFactor": 0.4,
+            "profitFactorLabel": "0.4"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 15
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 4,
+          "winRate": 25,
+          "avgReturnPct": -1.23,
+          "profitFactor": 0.38,
+          "profitFactorLabel": "0.38"
+        },
+        "worstPF": 0.38,
+        "perWindow": {
+          "last36m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 4
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 4,
+          "winRate": 25,
+          "avgReturnPct": -0.92,
+          "profitFactor": 0.38,
+          "profitFactorLabel": "0.38"
+        },
+        "worstPF": 0.38,
+        "perWindow": {
+          "last36m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 4
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Hi",
+        "learn": {
+          "trades": 7,
+          "winRate": 28.57,
+          "avgReturnPct": -1.04,
+          "profitFactor": 0.34,
+          "profitFactorLabel": "0.34"
+        },
+        "worstPF": 0.34,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 57.14,
+          "avgReturnPct": -1.12,
+          "profitFactor": 0.33,
+          "profitFactorLabel": "0.33"
+        },
+        "worstPF": 0.33,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 1,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:MID_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 9,
+          "winRate": 11.11,
+          "avgReturnPct": -1.98,
+          "profitFactor": 0.25,
+          "profitFactorLabel": "0.25"
+        },
+        "worstPF": 0.25,
+        "perWindow": {
+          "last36m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 9
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:NEAR_LAG:MID_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 10,
+          "winRate": 20,
+          "avgReturnPct": -2.11,
+          "profitFactor": 0.18,
+          "profitFactorLabel": "0.18"
+        },
+        "worstPF": 0.18,
+        "perWindow": {
+          "last36m": {
+            "trades": 10,
+            "winRate": 20,
+            "avgReturnPct": -2.11,
+            "profitFactor": 0.18,
+            "profitFactorLabel": "0.18"
+          },
+          "last12m": {
+            "trades": 8,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 10
+      },
+      {
+        "key": "STRAT:DAILY_EXT2:2-6_LAG:EARLY_VOL2:TAME_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 9,
+          "winRate": 22.22,
+          "avgReturnPct": -1.59,
+          "profitFactor": 0.11,
+          "profitFactorLabel": "0.11"
+        },
+        "worstPF": 0.11,
+        "perWindow": {
+          "last36m": {
+            "trades": 9,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 3,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 2,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 9
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Hi_ST:Lo",
+        "learn": {
+          "trades": 7,
+          "winRate": 14.29,
+          "avgReturnPct": -3.55,
+          "profitFactor": 0.09,
+          "profitFactorLabel": "0.09"
+        },
+        "worstPF": 0.09,
+        "perWindow": {
+          "last36m": {
+            "trades": 7,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 7
+      },
+      {
+        "key": "STRAT:WEEKLY_EXT2:2-6_LAG:EARLY_VOL2:MEDHIGH_LIQ2:ILL_LT:Lo_ST:Lo",
+        "learn": {
+          "trades": 4,
+          "winRate": 0,
+          "avgReturnPct": -3.09,
+          "profitFactor": 0,
+          "profitFactorLabel": "0"
+        },
+        "worstPF": 0,
+        "perWindow": {
+          "last36m": {
+            "trades": 4,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last12m": {
+            "trades": 5,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last6m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last3m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          },
+          "last1m": {
+            "trades": 0,
+            "winRate": 0,
+            "avgReturnPct": 0,
+            "profitFactor": 0,
+            "profitFactorLabel": "0"
+          }
+        },
+        "__learnCount": 4
+      }
+    ]
+  }
+}

@@ -750,64 +750,13 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind) {
 }
 
 /* ============================ Helpers & Fallback ============================ */
-function buildSwingTimeline(entryPx, candidate, rr, ms) {
-  const steps = [];
-  const atr = Number(rr?.atr) || 0;
-  const initialStop = Number(candidate.stop);
-  const finalTarget = Number(candidate.target);
-  const risk = Math.max(0.01, entryPx - initialStop);
-  const kind = candidate.kind || "ENTRY";
 
-  steps.push({
-    when: "T+0",
-    condition: "On fill",
-    stopLoss: initialStop,
-    priceTarget: finalTarget,
-    note: `${kind}: initial plan`,
-  });
-  steps.push({
-    when: "+1R",
-    condition: `price ≥ ${entryPx + 1 * risk}`,
-    stopLoss: entryPx,
-    priceTarget: finalTarget,
-    note: "Move stop to breakeven",
-  });
-  steps.push({
-    when: "+1.5R",
-    condition: `price ≥ ${entryPx + 1.5 * risk}`,
-    stopLoss: entryPx + 0.6 * risk,
-    priceTarget: finalTarget,
-    note: "Lock 0.6R",
-  });
-  steps.push({
-    when: "+2R",
-    condition: `price ≥ ${entryPx + 2 * risk}`,
-    stopLoss: entryPx + 1.2 * risk,
-    priceTarget: finalTarget,
-    note: "Runner: stop = entry + 1.2R",
-  });
-  steps.push({
-    when: "TRAIL",
-    condition: "After +2R",
-    stopLossRule: "max( swing low - 0.5*ATR, MA25 - 0.6*ATR )",
-    stopLossHint: Math.max(
-      ms?.ma25 ? ms.ma25 - 0.6 * atr : initialStop,
-      initialStop
-    ),
-    priceTarget: finalTarget,
-    note: "Trail by structure/MA",
-  });
-  return steps;
-}
 
 function fallbackPlan(stock, data, cfg) {
   const ms = getMarketStructure(stock, data);
   const pxNow = num(stock.currentPrice) || num(data.at?.(-1)?.close) || 1;
   const prov = provisionalPlan(stock, data, ms, pxNow, cfg);
   return {
-    stopLoss: toTick(deRound(prov.stop), stock),
-    priceTarget: toTick(deRound(prov.target), stock),
-    smartStopLoss: toTick(deRound(prov.stop), stock),
     smartPriceTarget: toTick(deRound(prov.target), stock),
   };
 }
@@ -963,7 +912,6 @@ function withNo(reason, ctx = {}) {
     buyNow: false,
     reason,
     ...fallbackPlan(stock, data, cfg),
-    timeline: [],
     debug: ctx,
   };
   out.telemetry = undefined; // we still overwrite later in analyseCrossing
@@ -1858,23 +1806,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   const result = {
     buyNow: true,
     reason: `${pref.kind}: ${pref.rr.ratio.toFixed(2)}:1. ${pref.why}`,
-    stopLoss: stop,
-    priceTarget: target,
-    smartStopLoss: stop,
     smartPriceTarget: target,
-    timeline: buildSwingTimeline(
-      px,
-      {
-        kind: pref.kind,
-        why: pref.why,
-        stop: pref.rr.stop,
-        target: pref.rr.target,
-        rr: pref.rr,
-      },
-      pref.rr,
-      msFull
-    ),
-
     volatility: volatilityInfo,
 
     meta: {
