@@ -1,8 +1,5 @@
 // /scripts/backtest.js — ultra-simplified 36m backtest that logs one big JSON
-// - Keeps your existing signal logic (analyseCrossing / getShortLongSentiment / enrichForTechnicalScore)
-// - Emits a flat "events[]" array (one per day per ticker) for BOTH buyNow=true and buyNow=false
-// - Simulates a trade for each event using a 7% floor stop and target (from signal if available, else RR≈1.5 fallback)
-// - No universe/regime summaries/telemetry—just what’s needed for downstream analysis
+// Adds per-ticker progress logs: after each ticker finishes you’ll see status in the console.
 
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
@@ -11,7 +8,6 @@ import { allTickers } from "./tickers.js";
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
 
-// ---------- small utils ----------
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const addDays = (d, n) => {
@@ -34,7 +30,6 @@ function toTick(v, stock) {
   return Math.round(x / tick) * tick;
 }
 
-// ---------- lightweight data fetch ----------
 async function fetchHistory(ticker, fromISO, toISOstr) {
   try {
     const r = await fetch(
@@ -63,7 +58,7 @@ async function fetchHistory(ticker, fromISO, toISOstr) {
   }
 }
 
-// ---------- indicators at-entry-only ----------
+// ---- indicators (snapshot-at-entry only) ----
 function smaArr(arr, p) {
   if (arr.length < p) return Array(arr.length).fill(NaN);
   const out = new Array(arr.length).fill(NaN);
@@ -152,23 +147,22 @@ function computeIndicatorsAt(candles, idx, entryPx) {
   const rsi14 = rsiArr(closes, 14);
   const atr14 = atrArr(candles, 14);
   const { mean: vMean, stdev: vStd } = rollingMeanStd(vols, 20);
+
   const px = Number(entryPx) || closes[idx];
   const prevC = idx > 0 ? closes[idx - 1] : closes[idx];
   const m25 = Number(ma25[idx]);
   const m75 = Number(ma75[idx]);
   const rsi = Number(rsi14[idx]);
   const atr = Number(atr14[idx]) || 0;
+
   const atrPct = atr && px ? (atr / px) * 100 : 0;
   const vmu = Number(vMean[idx]) || 0;
   const vsd = Number(vStd[idx]) || 0;
   const vol = Number(vols[idx]) || 0;
   const volZ = vsd > 0 ? (vol - vmu) / vsd : 0;
   const gapPct = prevC ? ((px - prevC) / prevC) * 100 : 0;
-  const vsMA25Pct =
-    Number.isFinite(m25) && m25 !== 0 ? ((px - m25) / m25) * 100 : null;
-  const vsMA75Pct =
-    Number.isFinite(m75) && m75 !== 0 ? ((px - m75) / m75) * 100 : null;
-  // simple liquidity proxy
+
+  // liquidity proxy
   let avgVol20 = 0;
   {
     const start = Math.max(0, idx - 19);
@@ -178,6 +172,11 @@ function computeIndicatorsAt(candles, idx, entryPx) {
       : 0;
   }
   const turnoverJPY = avgVol20 * px;
+
+  const vsMA25Pct =
+    Number.isFinite(m25) && m25 !== 0 ? ((px - m25) / m25) * 100 : null;
+  const vsMA75Pct =
+    Number.isFinite(m75) && m75 !== 0 ? ((px - m75) / m75) * 100 : null;
 
   return {
     rsi14: Number.isFinite(rsi) ? r2(rsi) : null,
@@ -197,7 +196,7 @@ function computeIndicatorsAt(candles, idx, entryPx) {
   };
 }
 
-// ---------- minimal market regime (TOPIX proxy) ----------
+// ---- simple regime via TOPIX proxy ----
 const DEFAULT_REGIME_TICKER = "1306.T";
 function computeRegimeLabels(candles) {
   if (!Array.isArray(candles) || candles.length < 30)
@@ -206,7 +205,7 @@ function computeRegimeLabels(candles) {
   const ma25 = smaArr(closes, 25);
   const ma75 = smaArr(closes, 75);
 
-  // cheap ATR to detect range-y days
+  // cheap ATR
   const atr = (() => {
     if (candles.length < 15) return candles.map(() => 0);
     const out = new Array(candles.length).fill(0);
@@ -263,7 +262,7 @@ function computeRegimeLabels(candles) {
   return labels;
 }
 
-// ---------- simulation ----------
+// ---- simulation ----
 function simulateTradeForward(
   candles,
   startIdx,
@@ -311,7 +310,7 @@ function simulateTradeForward(
     }
   }
 
-  // TIME exit at endIdx
+  // TIME exit
   const last = candles[endIdx];
   lowestSeenPx = Math.min(lowestSeenPx, last.low);
   highestSeenPx = Math.max(highestSeenPx, last.high);
@@ -330,7 +329,7 @@ function simulateTradeForward(
   };
 }
 
-// ---------- main (single 36m run, no options) ----------
+// ---- main (single 36m run, no options) ----
 async function runBacktest36m() {
   const VERSION = "bt-max-1";
   const MONTHS = 36;
@@ -349,7 +348,7 @@ async function runBacktest36m() {
   const FROM = toISO(fromDate);
   const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
 
-  // Regime reference for labels
+  // Regime reference
   const topix = await fetchHistory(DEFAULT_REGIME_TICKER, FROM_PREFETCH, TO);
   const topixLabels = computeRegimeLabels(topix);
   const topixDateToLabel = Object.create(null);
@@ -378,8 +377,14 @@ async function runBacktest36m() {
   const events = [];
   const skipped = [];
 
+  const total = codes.length;
+  console.log(`[BT] Starting 36m backtest: ${FROM} → ${TO} | tickers=${total}`);
+
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
+    const tStart = performance.now?.() ?? Date.now();
+    let localEvents = 0;
+
     try {
       const candles = await fetchHistory(code, FROM_PREFETCH, TO);
       if (candles.length < WARMUP + 2) {
@@ -387,6 +392,14 @@ async function runBacktest36m() {
           ticker: code,
           reason: `not enough data (${candles.length} bars)`,
         });
+        // progress log (skipped)
+        const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
+        const pct = (((ti + 1) / total) * 100).toFixed(1);
+        console.log(
+          `[BT] ${ti + 1}/${total} (${pct}%) ${code} — SKIPPED (${
+            candles.length
+          } bars) in ${tMs}ms`
+        );
         continue;
       }
 
@@ -397,9 +410,8 @@ async function runBacktest36m() {
         if (!inWindow) continue;
 
         const hist = candles.slice(0, i + 1);
-        if (hist.length < 75) continue; // ensure signal has enough bars
+        if (hist.length < 75) continue;
 
-        // Build stock-lite for signal
         const stock = {
           ticker: code,
           currentPrice: today.close,
@@ -423,7 +435,6 @@ async function runBacktest36m() {
         const dayISO = toISO(today.date);
         const regime = topixDateToLabel[dayISO] || "RANGE";
 
-        // Planned entry next bar if available, else same bar close
         const hasNext = i + 1 < candles.length;
         const entryIdx = hasNext ? i + 1 : i;
         const entryBar = hasNext ? candles[entryIdx] : today;
@@ -433,10 +444,7 @@ async function runBacktest36m() {
         const meta = tickerInfo[code] || {};
         const tickSize = Number(meta.tickSize) || inferTickFromPrice(rawEntry);
 
-        // 7% floor stop
         const rawStop = rawEntry * (1 - HARD_STOP_PCT);
-
-        // target from signal, else 1.5R fallback above entry
         const sigTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
         const risk = Math.max(0.01, rawEntry - rawStop);
         const fallbackTarget = rawEntry + 1.5 * risk;
@@ -448,18 +456,13 @@ async function runBacktest36m() {
         const stop = toTick(rawStop, { tickSize });
         const target = toTick(rawTarget, { tickSize });
 
-        // indicators snapshot at entry
         const indicators = computeIndicatorsAt(candles, entryIdx, entry);
-
-        // rr-at-entry
         const rrAtEntry = (target - entry) / Math.max(0.01, entry - stop);
 
-        // event signal summary
         const crossSel = sig?.meta?.cross?.selected ?? null;
         const reasonText =
           sig?.reason || (sig?.buyNow ? "signal: buy" : "signal: no-buy");
 
-        // simulate forward for HOLD_BARS bars
         const sim = simulateTradeForward(
           candles,
           entryIdx,
@@ -469,18 +472,14 @@ async function runBacktest36m() {
           HOLD_BARS
         );
 
-        // push event (both buyNow true & false)
         events.push({
           date: dayISO,
           ticker: code,
           name: meta.name || null,
           sector: meta.sector || null,
           tickSize,
-
-          // minimal ids for consumers
           uid: `${code}@${dayISO}`,
           barIndex: i,
-
           ohlcv: {
             open: today.open,
             high: today.high,
@@ -493,7 +492,6 @@ async function runBacktest36m() {
             high: stock.fiftyTwoWeekHigh,
             low: stock.fiftyTwoWeekLow,
           },
-
           regime,
           sentiment: {
             ST: Number.isFinite(ST) ? ST : null,
@@ -502,7 +500,6 @@ async function runBacktest36m() {
           sentimentKey: `LT${Number.isFinite(LT) ? LT : 4}-ST${
             Number.isFinite(ST) ? ST : 4
           }`,
-
           signal: {
             buyNow: !!sig?.buyNow,
             type:
@@ -529,9 +526,7 @@ async function runBacktest36m() {
               reason: sig?.telemetry?.guard?.reason || null,
             },
           },
-
           indicators,
-
           plan: {
             entry: r2(entry),
             stop: r2(stop),
@@ -539,12 +534,10 @@ async function runBacktest36m() {
             entryKind,
             tickSize,
           },
-
           risk: {
             perShare: r2(entry - stop),
             rrAtEntry: r2(rrAtEntry),
           },
-
           simulation: {
             exitType: sim.exitType,
             exitPrice: r2(sim.exitPrice),
@@ -557,12 +550,33 @@ async function runBacktest36m() {
             mfePct: r2(sim.mfePct),
           },
         });
+
+        localEvents++;
       }
+
+      // --- per-ticker progress log ---
+      const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
+      const pct = (((ti + 1) / total) * 100).toFixed(1);
+      console.log(
+        `[BT] ${
+          ti + 1
+        }/${total} (${pct}%) ${code} — events=${localEvents} • ${tMs}ms`
+      );
     } catch (e) {
       skipped.push({
         ticker: code,
         reason: `exception: ${String(e).slice(0, 120)}`,
       });
+      const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
+      const pct = (((ti + 1) / total) * 100).toFixed(1);
+      console.log(
+        `[BT] ${
+          ti + 1
+        }/${total} (${pct}%) ${code} — ERROR in ${tMs}ms: ${String(e).slice(
+          0,
+          120
+        )}`
+      );
     }
   }
 
@@ -581,8 +595,9 @@ async function runBacktest36m() {
     events,
   };
 
-  // BIG JSON to console
-  // (Stringify without loss; if too big, you can stream or chunk as needed)
+  console.log(
+    `[BT] Done. Total events=${events.length}, skipped=${skipped.length}`
+  );
   console.log(JSON.stringify(out));
   return out;
 }
