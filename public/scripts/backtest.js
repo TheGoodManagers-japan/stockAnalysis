@@ -617,15 +617,15 @@ function computeAnalytics(candles, idx, entry) {
  * Compute regime labels for Topix proxy candles.
  */
 function computeRegimeLabels(candles) {
-  if (!Array.isArray(candles) || candles.length < 30) {
-    return candles.map(() => "RANGE");
-  }
+    if (!Array.isArray(candles)) return [];
+    if (candles.length === 0) return [];
+    if (candles.length < 30) return new Array(candles.length).fill("RANGE");
 
   const closes = candles.map((c) => Number(c.close) || 0);
   const ma25 = smaArr(closes, 25);
   const ma75 = smaArr(closes, 75);
 
-  // ATR(14) approximation to judge "RANGE"
+   // ATR(14) approximation to judge "RANGE" (light bootstrap for first 14 bars)
   const atr = (() => {
     if (candles.length < 15) return candles.map(() => 0);
     const out = new Array(candles.length).fill(0);
@@ -836,7 +836,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
   let signalsTotal = 0;
   let signalsAfterWarmup = 0;
-  let signalsWhileFlat = 0;
+    let signalsEligible = 0;
+    let signalsWhileFlat = 0;
   let signalsInvalid = 0;
   let signalsRiskBad = 0;
   let signalsExecuted = 0;
@@ -849,7 +850,9 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const COUNT_BLOCKED = true;
 
   const telemetry = {
-    trends: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0, RANGE: 0 },
+        // Separate market regime (from TOPIX proxy) vs. signal trend (from strategy telemetry)
+    marketRegime: { STRONG_UP: 0, UP: 0, RANGE: 0, DOWN: 0 },
+    signalTrend: { STRONG_UP: 0, UP: 0, WEAK_UP: 0, DOWN: 0, RANGE: 0 },
 
     gates: {
       // these are legacy counters; keep shape
@@ -948,8 +951,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         const dayISO = toISO(today.date);
         const dayRegime = regimeMap[dayISO] || "RANGE";
 
-        if (dayRegime && telemetry.trends.hasOwnProperty(dayRegime)) {
-          telemetry.trends[dayRegime]++;
+        if (dayRegime && telemetry.marketRegime.hasOwnProperty(dayRegime)) {
+          telemetry.marketRegime[dayRegime]++;
         }
 
         const stock = {
@@ -1169,10 +1172,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
         }
 
         // trend telemetry from new output
-        const trendNow = teleSig?.context?.trend;
-        if (trendNow && telemetry.trends.hasOwnProperty(trendNow)) {
-          telemetry.trends[trendNow]++;
-        }
+                const trendNow = teleSig?.context?.trend;
+                if (trendNow && telemetry.signalTrend.hasOwnProperty(trendNow)) {
+                  telemetry.signalTrend[trendNow]++;
+                 }
 
         if (!sig?.buyNow) {
           // record rejection reasons & simulate "what if we ignored the no?"
@@ -1340,9 +1343,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           // warmup is the only blocker now
           const eligibleNow = i >= WARMUP && inAnalysisWindow;
 
-          if (eligibleNow) {
-            signalsWhileFlat++;
-          } else {
+                  if (eligibleNow) {
+                        signalsEligible++;
+                        if (openPositions.length === 0) signalsWhileFlat++;
+                      } else {
             if (COUNT_BLOCKED) {
               if (i < WARMUP) blockedWarmup++;
             }
@@ -1460,8 +1464,12 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                     ? sig.reason.trim()
                     : sig.reason.slice(0, firstColon).trim();
               }
-
-              openPositions.push({
+                            // --- MAX_CONCURRENT enforcement & blocked.inTrade telemetry
+                            if (MAX_CONCURRENT && globalOpenCount >= MAX_CONCURRENT) {
+                              if (COUNT_BLOCKED) blockedInTrade++;
+                              // skip entering due to position cap
+                            } else {
+                              openPositions.push({
                 entryIdx: entryBarIdx,
                 entry,
                 stop: qStop,
@@ -1483,10 +1491,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 // NEW: excursion trackers init
                 lowestSeenPx: entry,
                 highestSeenPx: entry,
-              });
-
-              globalOpenCount++;
-              signalsExecuted++;
+                                });
+                                globalOpenCount++;
+                                signalsExecuted++;
+                              }
             }
           }
         }
@@ -2054,7 +2062,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     signals: {
       total: signalsTotal,
       afterWarmup: signalsAfterWarmup,
-      whileFlat: signalsWhileFlat,
+            eligible: signalsEligible,
+            whileFlat: signalsWhileFlat,
       executed: signalsExecuted,
       invalid: signalsInvalid,
       riskStopGtePx: signalsRiskBad,
