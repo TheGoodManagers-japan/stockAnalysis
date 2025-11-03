@@ -1,5 +1,7 @@
-// /scripts/backtest.js — ultra-simplified 36m backtest that logs one big JSON
-// Adds per-ticker progress logs: after each ticker finishes you’ll see status in the console.
+// /scripts/backtest.js — ultra-simplified 36m backtest that outputs one big JSON
+// - Logs per-ticker progress
+// - Exposes window.__backtest36m for "Copy object"
+// - Auto-downloads the JSON at the end (streaming if supported)
 
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
@@ -58,7 +60,7 @@ async function fetchHistory(ticker, fromISO, toISOstr) {
   }
 }
 
-// ---- indicators (snapshot-at-entry only) ----
+/* ---------- indicators (snapshot-at-entry only) ---------- */
 function smaArr(arr, p) {
   if (arr.length < p) return Array(arr.length).fill(NaN);
   const out = new Array(arr.length).fill(NaN);
@@ -85,8 +87,8 @@ function rsiArr(closes, p = 14) {
   out[p] = 100 - 100 / (1 + (loss === 0 ? Infinity : gain / loss));
   for (let i = p + 1; i < closes.length; i++) {
     const ch = closes[i] - closes[i - 1];
-    const g = Math.max(ch, 0);
-    const l = Math.max(-ch, 0);
+    const g = Math.max(ch, 0),
+      l = Math.max(-ch, 0);
     gain = (gain * (p - 1) + g) / p;
     loss = (loss * (p - 1) + l) / p;
     const rs = loss === 0 ? Infinity : gain / loss;
@@ -162,7 +164,6 @@ function computeIndicatorsAt(candles, idx, entryPx) {
   const volZ = vsd > 0 ? (vol - vmu) / vsd : 0;
   const gapPct = prevC ? ((px - prevC) / prevC) * 100 : 0;
 
-  // liquidity proxy
   let avgVol20 = 0;
   {
     const start = Math.max(0, idx - 19);
@@ -196,7 +197,7 @@ function computeIndicatorsAt(candles, idx, entryPx) {
   };
 }
 
-// ---- simple regime via TOPIX proxy ----
+/* ---------- simple regime via TOPIX proxy ---------- */
 const DEFAULT_REGIME_TICKER = "1306.T";
 function computeRegimeLabels(candles) {
   if (!Array.isArray(candles) || candles.length < 30)
@@ -205,7 +206,6 @@ function computeRegimeLabels(candles) {
   const ma25 = smaArr(closes, 25);
   const ma75 = smaArr(closes, 75);
 
-  // cheap ATR
   const atr = (() => {
     if (candles.length < 15) return candles.map(() => 0);
     const out = new Array(candles.length).fill(0);
@@ -235,17 +235,14 @@ function computeRegimeLabels(candles) {
 
   const labels = [];
   for (let i = 0; i < candles.length; i++) {
-    const px = closes[i];
-    const m25 = ma25[i];
-    const m75 = ma75[i];
-    const a14 = atr[i] || 0;
-
+    const px = closes[i],
+      m25 = ma25[i],
+      m75 = ma75[i],
+      a14 = atr[i] || 0;
     let slope = 0;
     if (i >= 5 && Number.isFinite(m25) && m25 > 0) {
       const prev = ma25[i - 5];
-      if (Number.isFinite(prev) && prev > 0) {
-        slope = (m25 - prev) / prev / 5;
-      }
+      if (Number.isFinite(prev) && prev > 0) slope = (m25 - prev) / prev / 5;
     }
     const aboveMA = Number.isFinite(m25) && px > m25;
     const strong =
@@ -262,7 +259,7 @@ function computeRegimeLabels(candles) {
   return labels;
 }
 
-// ---- simulation ----
+/* ---------- simulation ---------- */
 function simulateTradeForward(
   candles,
   startIdx,
@@ -272,10 +269,9 @@ function simulateTradeForward(
   holdBars = 8
 ) {
   const risk = Math.max(0.01, entry - stop);
-  let lowestSeenPx = entry;
-  let highestSeenPx = entry;
-
-  const endIdx = Math.min(candles.length - 1, startIdx + holdBars); // TIME exit at holdBars
+  let lowestSeenPx = entry,
+    highestSeenPx = entry;
+  const endIdx = Math.min(candles.length - 1, startIdx + holdBars);
 
   for (let j = startIdx + 1; j <= endIdx; j++) {
     const bar = candles[j];
@@ -310,12 +306,11 @@ function simulateTradeForward(
     }
   }
 
-  // TIME exit
   const last = candles[endIdx];
   lowestSeenPx = Math.min(lowestSeenPx, last.low);
   highestSeenPx = Math.max(highestSeenPx, last.high);
-
   const rawPnL = last.close - entry;
+
   return {
     exitType: "TIME",
     exitPrice: last.close,
@@ -329,7 +324,97 @@ function simulateTradeForward(
   };
 }
 
-// ---- main (single 36m run, no options) ----
+/* ---------- Save helpers (streaming when available) ---------- */
+async function saveLargeJson(data, suggestedName = "backtest.json") {
+  const hasFS = typeof window.showSaveFilePicker === "function";
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const fname = suggestedName.replace(/\.json$/i, `_${ts}.json`);
+
+  const { events = [], ...head } = data;
+
+  if (hasFS) {
+    // File System Access API: stream to disk
+    const handle = await window.showSaveFilePicker({
+      suggestedName: fname,
+      types: [
+        { description: "JSON", accept: { "application/json": [".json"] } },
+      ],
+    });
+    const writable = await handle.createWritable();
+    const enc = new TextEncoder();
+    const write = (s) => writable.write(enc.encode(s));
+
+    // header
+    await write('{"version":');
+    await write(JSON.stringify(head.version ?? null));
+    await write(',"from":');
+    await write(JSON.stringify(head.from ?? null));
+    await write(',"to":');
+    await write(JSON.stringify(head.to ?? null));
+    await write(',"params":');
+    await write(JSON.stringify(head.params ?? {}));
+    await write(',"skipped":');
+    await write(JSON.stringify(head.skipped ?? []));
+    await write(',"events":[');
+
+    // events
+    const n = events.length;
+    for (let i = 0; i < n; i++) {
+      if (i > 0) await write(",");
+      await write(JSON.stringify(events[i]));
+      if (i % 1000 === 0) {
+        console.log(
+          `[SAVE] ${i}/${n} (${((i / Math.max(1, n)) * 100).toFixed(1)}%)`
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    await write("]}");
+    await writable.close();
+    console.log(`[SAVE] File written: ${handle.name}`);
+    return;
+  }
+
+  // Fallback: Blob download (keeps memory reasonable by using parts)
+  const parts = [];
+  const push = (s) => parts.push(s);
+
+  push('{"version":');
+  push(JSON.stringify(head.version ?? null));
+  push(',"from":');
+  push(JSON.stringify(head.from ?? null));
+  push(',"to":');
+  push(JSON.stringify(head.to ?? null));
+  push(',"params":');
+  push(JSON.stringify(head.params ?? {}));
+  push(',"skipped":');
+  push(JSON.stringify(head.skipped ?? []));
+  push(',"events":[');
+
+  for (let i = 0; i < events.length; i++) {
+    if (i > 0) push(",");
+    push(JSON.stringify(events[i]));
+    if (i % 2000 === 0) {
+      console.log(`[SAVE] (fallback) ${i}/${events.length}`);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  push("]}");
+
+  const blob = new Blob(parts, { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  console.log(`[SAVE] Fallback download started: ${fname}`);
+}
+
+/* ---------- main (single 36m run, no options) ---------- */
 async function runBacktest36m() {
   const VERSION = "bt-max-1";
   const MONTHS = 36;
@@ -392,7 +477,6 @@ async function runBacktest36m() {
           ticker: code,
           reason: `not enough data (${candles.length} bars)`,
         });
-        // progress log (skipped)
         const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
         const pct = (((ti + 1) / total) * 100).toFixed(1);
         console.log(
@@ -554,7 +638,6 @@ async function runBacktest36m() {
         localEvents++;
       }
 
-      // --- per-ticker progress log ---
       const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
       const pct = (((ti + 1) / total) * 100).toFixed(1);
       console.log(
@@ -595,15 +678,24 @@ async function runBacktest36m() {
     events,
   };
 
-  // Expose and log as an object for easy "Copy object"
-  if (typeof window !== "undefined") {
-    window.__backtest36m = out;
-  }
+  // Expose for "Copy object"
+  if (typeof window !== "undefined") window.__backtest36m = out;
+
+  console.log(
+    `[BT] Done. Total events=${events.length}, skipped=${skipped.length}`
+  );
   console.log(
     "%c✅ Backtest complete — object below.\nRight-click → Copy object, or use window.__backtest36m",
     "font-weight:bold"
   );
   console.log(out);
+
+  // Auto-download JSON (streaming if supported)
+  try {
+    await saveLargeJson(out, `backtest_${out.from}_${out.to}.json`);
+  } catch (err) {
+    console.warn("[SAVE] Failed to save automatically:", err);
+  }
 
   return out;
 }
