@@ -2257,9 +2257,118 @@ function sum(arr) {
 }
 
 /* --------------------------- expose for Bubble -------------------------- */
+
+/**
+ * Helper to normalize the input arguments like your current window.backtest does.
+ * Returns { tickers, opts } so we can reuse it for multiple periods.
+ */
+function normalizeBacktestArgs(tickersOrOpts, maybeOpts) {
+  if (Array.isArray(tickersOrOpts)) {
+    // first arg = tickers[], second arg = opts
+    return {
+      tickers: tickersOrOpts,
+      opts: { ...(maybeOpts || {}) },
+    };
+  } else {
+    // first arg = opts object
+    return {
+      tickers: null,
+      opts: { ...((tickersOrOpts || {})) },
+    };
+  }
+}
+
+/**
+ * Run a single-period backtest for a given number of months.
+ * - monthsOverride forces the window length (e.g. 36, 12, 6, 3, 1)
+ * - baseTickers / baseOpts are from normalizeBacktestArgs()
+ * - commonToDateISO is the shared "to" date for all runs
+ */
+async function runBacktestForMonths(monthsOverride, baseTickers, baseOpts, commonToDateISO) {
+  // clone opts so we don't mutate caller's object
+  const periodOpts = {
+    ...baseOpts,
+    months: monthsOverride,
+    // lock the end date so every period ends on the same bar
+    to: commonToDateISO,
+  };
+
+  if (baseTickers && Array.isArray(baseTickers)) {
+    return await runBacktest(baseTickers, periodOpts);
+  } else {
+    return await runBacktest(periodOpts);
+  }
+}
+
+/**
+ * Public API:
+ * window.backtest(...)
+ *
+ * Now returns an object with 5 periods:
+ * {
+ *   last36m: {...}, // ~3 years
+ *   last12m: {...},
+ *   last6m:  {...},
+ *   last3m:  {...},
+ *   last1m:  {...}
+ * }
+ *
+ * You can still call it the same way as before:
+ *   window.backtest(opts)
+ *   window.backtest(tickersArray, opts)
+ */
 window.backtest = async (tickersOrOpts, maybeOpts) => {
-  // let it throw if runBacktest throws
-  return Array.isArray(tickersOrOpts)
-    ? await runBacktest(tickersOrOpts, { ...maybeOpts })
-    : await runBacktest({ ...(tickersOrOpts || {}) });
+  // unify args (tickers[] or opts object)
+  const { tickers: baseTickers, opts: baseOpts } = normalizeBacktestArgs(
+    tickersOrOpts,
+    maybeOpts
+  );
+
+  // pick a single "to" date for all slices
+  // use caller's opts.to if provided, otherwise "now"
+  const now = new Date();
+  const commonToDate =
+    baseOpts && baseOpts.to ? new Date(baseOpts.to) : now;
+  const commonToDateISO = commonToDate.toISOString().slice(0, 10);
+
+  // run each window
+  const last36m = await runBacktestForMonths(
+    36,
+    baseTickers,
+    baseOpts,
+    commonToDateISO
+  );
+  const last12m = await runBacktestForMonths(
+    12,
+    baseTickers,
+    baseOpts,
+    commonToDateISO
+  );
+  const last6m = await runBacktestForMonths(
+    6,
+    baseTickers,
+    baseOpts,
+    commonToDateISO
+  );
+  const last3m = await runBacktestForMonths(
+    3,
+    baseTickers,
+    baseOpts,
+    commonToDateISO
+  );
+  const last1m = await runBacktestForMonths(
+    1,
+    baseTickers,
+    baseOpts,
+    commonToDateISO
+  );
+
+  // bundle result
+  return {
+    last36m,
+    last12m,
+    last6m,
+    last3m,
+    last1m,
+  };
 };
