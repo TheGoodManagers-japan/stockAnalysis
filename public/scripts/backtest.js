@@ -27,7 +27,7 @@ function toTick(v, stock) {
 }
 
 /* ---------------- data ---------------- */
-async function fetchHistory(ticker, fromISO, toISO) {
+async function fetchHistory(ticker, fromISO, toISOStr) {
   try {
     const r = await fetch(
       `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`
@@ -46,10 +46,7 @@ async function fetchHistory(ticker, fromISO, toISO) {
       j = JSON.parse(text);
     } catch (e) {
       console.warn(
-        `[BT] fetchHistory: bad JSON for ${ticker}: ${String(e).slice(
-          0,
-          200
-        )}`
+        `[BT] fetchHistory: bad JSON for ${ticker}: ${String(e).slice(0, 200)}`
       );
       return [];
     }
@@ -71,20 +68,25 @@ async function fetchHistory(ticker, fromISO, toISO) {
       .filter(
         (d) =>
           (!fromISO || d.date >= new Date(fromISO)) &&
-          (!toISO || d.date <= new Date(toISO))
+          (!toISOStr || d.date <= new Date(toISOStr))
       );
   } catch (err) {
     console.warn(
-      `[BT] fetchHistory: exception for ${ticker}: ${String(err).slice(
-        0,
-        200
-      )}`
+      `[BT] fetchHistory: exception for ${ticker}: ${String(err).slice(0, 200)}`
     );
     return [];
   }
 }
 
 /* ---------------- small helpers ---------------- */
+
+
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
 function inc(map, key, by = 1) {
   if (!key && key !== 0) return;
   map[key] = (map[key] || 0) + by;
@@ -97,12 +99,6 @@ function bucketize(x, edges = [1.2, 1.4, 1.6, 2.0, 3.0, 5.0]) {
   return `≥${edges[edges.length - 1]}`;
 }
 
-function highestHighSince(hist, startIdx) {
-  let hi = -Infinity;
-  for (let k = startIdx; k < hist.length; k++)
-    hi = Math.max(hi, Number(hist[k].high) || 0);
-  return hi;
-}
 
 function extractGuardReason(s) {
   if (!s) return "";
@@ -472,18 +468,6 @@ function smaArr(arr, p) {
 }
 
 /* ---------------- Analytics helpers ---------------- */
-function emaArr(arr, p) {
-  if (!arr.length) return [];
-  const k = 2 / (p + 1);
-  const out = new Array(arr.length).fill(NaN);
-  let ema = arr[0];
-  out[0] = ema;
-  for (let i = 1; i < arr.length; i++) {
-    ema = arr[i] * k + ema * (1 - k);
-    out[i] = ema;
-  }
-  return out;
-}
 
 // Wilder-style RSI(14)
 function rsiArr(closes, p = 14) {
@@ -737,10 +721,31 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   const FROM = new Date(from).toISOString().slice(0, 10);
   const TO = new Date(to).toISOString().slice(0, 10);
 
+  // Keep the real analysis window separate from the fetch window
+  const ANALYSIS_FROM = FROM; // you already have this
+  const ANALYSIS_FROM_DATE = new Date(ANALYSIS_FROM);
+  const TO_DATE = new Date(TO);
+
+
+
+
+
   const limit = Number(opts.limit) || 0;
+  // define these first
   const WARMUP = Number.isFinite(opts.warmupBars) ? opts.warmupBars : 60;
   const HOLD_BARS = Number.isFinite(opts.holdBars) ? opts.holdBars : 8;
   const COOLDOWN = 0;
+
+  const PREFETCH_WARMUP_DAYS = Number.isFinite(opts.prefetchWarmupDays)
+    ? opts.prefetchWarmupDays
+    : Math.max(90, WARMUP + 30);
+
+    const FROM_PREFETCH = addDays(
+      new Date(ANALYSIS_FROM),
+      -PREFETCH_WARMUP_DAYS
+    )
+      .toISOString()
+      .slice(0, 10);
 
   const MAX_CONCURRENT = Number.isFinite(opts.maxConcurrent)
     ? Math.max(0, opts.maxConcurrent)
@@ -770,7 +775,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
   }
 
   // ---- PROFILE LOGIC ----
-  // hard stop floor: 15% below entry
+  // hard stop floor: 7% below entry
   const HARD_STOP_PCT = 0.07;
   function computePlannedLevels({ entry, sig }) {
     const tgt = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
@@ -793,7 +798,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       : null;
   // allowedRegimes is NOT used to block, just logged
 
-  const topixRef = await fetchHistory(REGIME_TICKER, FROM, TO);
+  const topixRef = await fetchHistory(REGIME_TICKER, FROM_PREFETCH, TO);
   if (!topixRef || !topixRef.length) {
     console.warn(
       `[BT] Regime fetch failed or empty for ${REGIME_TICKER} (${FROM}→${TO})`
@@ -912,7 +917,10 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
       let openPositions = [];
       let cooldownUntil = -1; // tracked, but no longer enforced
 
-      const candles = await fetchHistory(code, FROM, TO);
+      const candles = await fetchHistory(code, FROM_PREFETCH, TO);
+      const atr14All = atrArr(candles, 14);
+
+
       if (candles.length < WARMUP + 2) {
         console.warn(
           `[BT] not enough data for ${code} (${candles.length} < ${
@@ -930,8 +938,11 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
       for (let i = 0; i < candles.length; i++) {
         const today = candles[i];
-        tradingDays.add(toISO(today.date));
         const hist = candles.slice(0, i + 1);
+         const inAnalysisWindow =
+   today.date >= ANALYSIS_FROM_DATE && today.date <= TO_DATE;
+
+        if (inAnalysisWindow) tradingDays.add(toISO(today.date));
 
         // regime for this day
         const dayISO = toISO(today.date);
@@ -979,7 +990,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                   ? today.open
                   : Math.min(st.stop, today.high);
 
-              // enforce 15% floor
+              // enforce 7% floor
               if (Number.isFinite(st.maxLossFloor)) {
                 stopFill = Math.max(stopFill, st.maxLossFloor);
               }
@@ -990,10 +1001,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 price: stopFill,
                 result: isProfit ? "WIN" : "LOSS",
               };
-            } else if (
-              Number.isFinite(st.target) &&
-              today.high >= st.target
-            ) {
+            } else if (Number.isFinite(st.target) && today.high >= st.target) {
               exit = { type: "TARGET", price: st.target, result: "WIN" };
             }
 
@@ -1145,13 +1153,19 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
 
         // bookkeeping for raw signal counts
         if (sig?.buyNow) {
-          signalsTotal++;
-          if (i >= WARMUP) signalsAfterWarmup++;
+          if (inAnalysisWindow) {
+            signalsTotal++;
+          }
+          if (i >= WARMUP)
+            if (inAnalysisWindow) {
+              signalsAfterWarmup++;
+            }
           const dayISOforSig = toISO(today.date);
-          signalsByDay.set(
+          
+           if (inAnalysisWindow) {signalsByDay.set(
             dayISOforSig,
             (signalsByDay.get(dayISOforSig) || 0) + 1
-          );
+          );}
         }
 
         // trend telemetry from new output
@@ -1184,10 +1198,6 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 ""
               );
               inc(telemetry.dip.notReadyReasons, why || "unspecified");
-            }
-
-            if (r === "Structure gate: trend not up or price < MA5.") {
-              telemetry.gates.structureGateFailed++;
             }
 
             if (r.match(/^(DIP|SPC|OXR|BPB|RRP)\s+guard veto:/i)) {
@@ -1301,9 +1311,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           let rRatio = Number(teleSig?.rr?.ratio);
           if (!Number.isFinite(rRatio) && sig) {
             const pxNow = today.close;
-            const rawTarget = Number(
-              sig?.smartPriceTarget ?? sig?.priceTarget
-            );
+            const rawTarget = Number(sig?.smartPriceTarget ?? sig?.priceTarget);
             const rawStop = pxNow * (1 - HARD_STOP_PCT);
             if (
               Number.isFinite(rawStop) &&
@@ -1330,7 +1338,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
           }
 
           // warmup is the only blocker now
-          const eligibleNow = i >= WARMUP;
+          const eligibleNow = i >= WARMUP && inAnalysisWindow;
 
           if (eligibleNow) {
             signalsWhileFlat++;
@@ -1347,7 +1355,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             const entryBar = hasNext ? candles[i + 1] : today;
             const entry = hasNext ? entryBar.open : today.close;
 
-            // planned stop/target (15% floor stop)
+            // planned stop/target (7% floor stop)
             const planned = computePlannedLevels({
               entry,
               sig,
@@ -1408,8 +1416,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               } else if (selectedRaw === "BOTH") {
                 const wLag =
                   cm.weekly?.barsAgo ?? cm.weekly?.weeksAgo ?? Infinity;
-                const dLag =
-                  cm.daily?.barsAgo ?? cm.daily?.daysAgo ?? Infinity;
+                const dLag = cm.daily?.barsAgo ?? cm.daily?.daysAgo ?? Infinity;
                 const bestLag = Math.min(wLag, dLag);
                 lag = Number.isFinite(bestLag) ? bestLag : null;
               } else if (selectedRaw === "DIP_WEEKLY" && cm.weekly) {
@@ -1422,10 +1429,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
               const analytics = computeAnalytics(candles, entryBarIdx, entry);
 
               // ATR % telemetry only
-              const entryATR =
-                (atrArr(candles.slice(0, entryBarIdx + 1), 14) || [])[ // expensive but ok
-                  entryBarIdx
-                ] || 0;
+              const entryATR = atr14All[entryBarIdx] || 0;
+
               const atrPctNow =
                 analytics.atrPct ??
                 (entryATR && entry ? (entryATR / entry) * 100 : 0);
@@ -1463,7 +1468,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
                 initialStop: qStop,
                 target: qTarget,
 
-                maxLossFloor: qStop, // 15% floor
+                maxLossFloor: qStop, // 7% floor
 
                 ST,
                 LT,
@@ -1521,10 +1526,8 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
             Number(lastBar.high) || st.highestSeenPx
           );
 
-          const maePct =
-            ((st.lowestSeenPx - st.entry) / st.entry) * 100 || 0;
-          const mfePct =
-            ((st.highestSeenPx - st.entry) / st.entry) * 100 || 0;
+          const maePct = ((st.lowestSeenPx - st.entry) / st.entry) * 100 || 0;
+          const mfePct = ((st.highestSeenPx - st.entry) / st.entry) * 100 || 0;
 
           const isDipAfterFreshCrossSignal =
             /DIP/i.test(st.kind || "") &&
@@ -2115,7 +2118,7 @@ async function runBacktest(tickersOrOpts, maybeOpts) {
     },
 
     singleProfile: {
-      label: "target_only (with 15% floor)",
+      label: "target_only (with 7% floor)",
       metrics: thisProfileMetrics,
       exits: {
         target: thisProfileTrades.filter((t) => t.exitType === "TARGET").length,
@@ -2170,8 +2173,9 @@ function computeMetrics(trades) {
     : 0;
 
   const lossPcts = losses.map((t) => t._retPctForStats);
-  const maxLossPct = lossPcts.length ? Math.min(...lossPcts) : 0;
-  const minLossPct = lossPcts.length ? Math.max(...lossPcts) : 0;
+  const worstLossPct = lossPcts.length ? Math.min(...lossPcts) : 0; // most negative
+  const leastBadLossPct = lossPcts.length ? Math.max(...lossPcts) : 0; // closest to 0
+
   const p90LossPct = lossPcts.length ? percentile(lossPcts, 10) : 0;
   const p95LossPct = lossPcts.length ? percentile(lossPcts, 5) : 0;
 
@@ -2189,7 +2193,7 @@ function computeMetrics(trades) {
 
   const grossWin = sum(wins.map((t) => t._retPctForStats));
   const grossLossAbs = Math.abs(sum(losses.map((t) => t._retPctForStats)));
-  const profitFactor = grossLossAbs
+  const profitFactorRaw = grossLossAbs
     ? grossWin / grossLossAbs
     : wins.length
     ? Infinity
@@ -2227,17 +2231,25 @@ function computeMetrics(trades) {
     avgRwin: r2(avgRwin),
     avgRloss: r2(avgRloss),
     expR: r2(expR),
-    profitFactor: Number.isFinite(profitFactor)
-      ? r2(profitFactor)
+    profitFactor: Number.isFinite(profitFactorRaw) ? r2(profitFactorRaw) : 1e9, // big number for sorting
+    profitFactorLabel: Number.isFinite(profitFactorRaw)
+      ? String(r2(profitFactorRaw))
       : "Infinity",
+
     exits,
     lossTail: {
-      minLossPct: r2(minLossPct),
-      maxLossPct: r2(maxLossPct),
+      // backward-compat keys mapped to clearer values
+      minLossPct: r2(leastBadLossPct), // (legacy) least negative
+      maxLossPct: r2(worstLossPct), // (legacy) most negative
+      // clearer duplicates
+      worstLossPct: r2(worstLossPct),
+      leastBadLossPct: r2(leastBadLossPct),
+
       p90LossPct: r2(p90LossPct),
       p95LossPct: r2(p95LossPct),
       countLosses: losses.length,
     },
+
     drawdownStats: {
       win: {
         medianMAE_pct: r2(medianWinMAE),
