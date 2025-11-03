@@ -1,7 +1,7 @@
 // /scripts/backtest.js — ultra-simplified 36m backtest that outputs one big JSON
 // - Logs per-ticker progress
 // - Exposes window.__backtest36m for "Copy object"
-// - Auto-downloads the JSON at the end (streaming if supported)
+// - Download button for JSON (picker when clicked; blob fallback otherwise)
 
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
@@ -324,137 +324,88 @@ function simulateTradeForward(
   };
 }
 
-/* ---------- Save helpers (streaming when available) ---------- */
+/* ---------- save helpers (picker if gesture, else Blob fallback) ---------- */
+function makeFilename(prefix = "backtest", ext = "json") {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${prefix}-${ts}.${ext}`;
+}
 async function saveLargeJson(data, suggestedName = "backtest.json") {
-  const hasFS = typeof window.showSaveFilePicker === "function";
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   const fname = suggestedName.replace(/\.json$/i, `_${ts}.json`);
 
+  const hasFS = typeof window.showSaveFilePicker === "function";
+  const userGesture =
+    self.isSecureContext &&
+    document.hasFocus() &&
+    navigator.userActivation &&
+    navigator.userActivation.isActive;
+
   const { events = [], ...head } = data;
 
-  if (hasFS) {
-    // File System Access API: stream to disk
-    const handle = await window.showSaveFilePicker({
-      suggestedName: fname,
-      types: [
-        { description: "JSON", accept: { "application/json": [".json"] } },
-      ],
-    });
-    const writable = await handle.createWritable();
-    const enc = new TextEncoder();
-    const write = (s) => writable.write(enc.encode(s));
+  // Path A: File picker streaming (only with real user gesture)
+  if (hasFS && userGesture) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fname,
+        types: [
+          { description: "JSON", accept: { "application/json": [".json"] } },
+        ],
+      });
+      const writable = await handle.createWritable();
+      const enc = new TextEncoder();
+      const W = (s) => writable.write(enc.encode(s));
 
-    // header
-    await write('{"version":');
-    await write(JSON.stringify(head.version ?? null));
-    await write(',"from":');
-    await write(JSON.stringify(head.from ?? null));
-    await write(',"to":');
-    await write(JSON.stringify(head.to ?? null));
-    await write(',"params":');
-    await write(JSON.stringify(head.params ?? {}));
-    await write(',"skipped":');
-    await write(JSON.stringify(head.skipped ?? []));
-    await write(',"events":[');
-
-    // events
-    const n = events.length;
-    for (let i = 0; i < n; i++) {
-      if (i > 0) await write(",");
-      await write(JSON.stringify(events[i]));
-      if (i % 1000 === 0) {
-        console.log(
-          `[SAVE] ${i}/${n} (${((i / Math.max(1, n)) * 100).toFixed(1)}%)`
-        );
-        await new Promise((r) => setTimeout(r, 0));
+      await W('{"version":');
+      await W(JSON.stringify(head.version ?? null));
+      await W(',"from":');
+      await W(JSON.stringify(head.from ?? null));
+      await W(',"to":');
+      await W(JSON.stringify(head.to ?? null));
+      await W(',"params":');
+      await W(JSON.stringify(head.params ?? {}));
+      await W(',"skipped":');
+      await W(JSON.stringify(head.skipped ?? []));
+      await W(',"events":[');
+      for (let i = 0; i < events.length; i++) {
+        if (i) await W(",");
+        await W(JSON.stringify(events[i]));
+        if (i % 1000 === 0) await new Promise((r) => setTimeout(r, 0));
       }
+      await W("]}");
+      await writable.close();
+      console.log(`[SAVE] File written: ${handle.name}`);
+      return { ok: true, method: "picker", filename: handle.name || fname };
+    } catch (e) {
+      console.warn("[SAVE] Picker path failed, falling back to Blob:", e);
     }
-
-    await write("]}");
-    await writable.close();
-    console.log(`[SAVE] File written: ${handle.name}`);
-    return;
   }
 
-  // Fallback: Blob download (keeps memory reasonable by using parts)
+  // Path B: Chunked Blob fallback
   const parts = [];
-  const push = (s) => parts.push(s);
-
-  push('{"version":');
-  push(JSON.stringify(head.version ?? null));
-  push(',"from":');
-  push(JSON.stringify(head.from ?? null));
-  push(',"to":');
-  push(JSON.stringify(head.to ?? null));
-  push(',"params":');
-  push(JSON.stringify(head.params ?? {}));
-  push(',"skipped":');
-  push(JSON.stringify(head.skipped ?? []));
-  push(',"events":[');
-
+  const P = (s) => parts.push(s);
+  P('{"version":');
+  P(JSON.stringify(head.version ?? null));
+  P(',"from":');
+  P(JSON.stringify(head.from ?? null));
+  P(',"to":');
+  P(JSON.stringify(head.to ?? null));
+  P(',"params":');
+  P(JSON.stringify(head.params ?? {}));
+  P(',"skipped":');
+  P(JSON.stringify(head.skipped ?? []));
+  P(',"events":[');
   for (let i = 0; i < events.length; i++) {
-    if (i > 0) push(",");
-    push(JSON.stringify(events[i]));
-    if (i % 2000 === 0) {
-      console.log(`[SAVE] (fallback) ${i}/${events.length}`);
-      await new Promise((r) => setTimeout(r, 0));
-    }
+    if (i) P(",");
+    P(JSON.stringify(events[i]));
+    if (i % 2000 === 0) await new Promise((r) => setTimeout(r, 0));
   }
-  push("]}");
+  P("]}");
 
   const blob = new Blob(parts, { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = fname;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  console.log(`[SAVE] Fallback download started: ${fname}`);
-}
-
-
-// --- Robust save helpers (picker if gesture, else Blob fallback) ---
-
-function makeFilename(prefix = "backtest", ext = "json") {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${prefix}-${ts}.${ext}`;
-}
-
-async function saveLargeJson(dataObj, filename = makeFilename()) {
-  const json = JSON.stringify(dataObj); // stringify once
-  const blob = new Blob([json], { type: "application/json" });
-
-  // If we have a real user activation (e.g., you clicked a button), use picker.
-  const canUsePicker =
-    typeof window.showSaveFilePicker === "function" &&
-    self.isSecureContext &&
-    document.hasFocus() &&
-    navigator.userActivation &&
-    navigator.userActivation.isActive;
-
-  if (canUsePicker) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: filename,
-        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return { ok: true, method: "picker", filename: handle.name || filename };
-    } catch (err) {
-      // fall through to Blob download if user cancels or any error
-      console.warn("[SAVE] Picker failed, falling back to Blob:", err);
-    }
-  }
-
-  // Blob fallback (programmatic <a download> click)
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
   a.rel = "noopener";
   a.style.display = "none";
   document.body.appendChild(a);
@@ -463,12 +414,11 @@ async function saveLargeJson(dataObj, filename = makeFilename()) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, 0);
-
-  return { ok: true, method: "blob", filename };
+  console.log(`[SAVE] Fallback download started: ${fname}`);
+  return { ok: true, method: "blob", filename: fname };
 }
 
-// Optional: inject a visible button so you can click (user gesture)
-// and force the Save File Picker path (nicer UX).
+// Optional: visible save button (ensures user gesture → picker path)
 function injectSaveButton(getDataFn) {
   const id = "__bt_save_btn__";
   if (document.getElementById(id)) return;
@@ -489,9 +439,14 @@ function injectSaveButton(getDataFn) {
   });
   btn.addEventListener("click", async () => {
     try {
-      const data = typeof getDataFn === "function" ? await getDataFn() : window.__backtest36m;
+      const data =
+        typeof getDataFn === "function"
+          ? await getDataFn()
+          : window.__backtest36m;
       if (!data) {
-        console.warn("No backtest data in memory yet. Run window.backtest() first.");
+        console.warn(
+          "No backtest data in memory yet. Run window.backtest() first."
+        );
         return;
       }
       const res = await saveLargeJson(data);
@@ -502,7 +457,6 @@ function injectSaveButton(getDataFn) {
   });
   document.body.appendChild(btn);
 }
-
 
 /* ---------- main (single 36m run, no options) ---------- */
 async function runBacktest36m() {
@@ -586,6 +540,19 @@ async function runBacktest36m() {
         const hist = candles.slice(0, i + 1);
         if (hist.length < 75) continue;
 
+        // Efficient rolling 52w extremes (last 252 bars)
+        const start252 = Math.max(0, hist.length - 252);
+        let fiftyTwoWeekHigh = -Infinity,
+          fiftyTwoWeekLow = Infinity;
+        for (let k = start252; k < hist.length; k++) {
+          const hh = hist[k].high,
+            ll = hist[k].low;
+          if (hh > fiftyTwoWeekHigh) fiftyTwoWeekHigh = hh;
+          if (ll < fiftyTwoWeekLow) fiftyTwoWeekLow = ll;
+        }
+        if (!Number.isFinite(fiftyTwoWeekHigh)) fiftyTwoWeekHigh = today.high;
+        if (!Number.isFinite(fiftyTwoWeekLow)) fiftyTwoWeekLow = today.low;
+
         const stock = {
           ticker: code,
           currentPrice: today.close,
@@ -593,8 +560,8 @@ async function runBacktest36m() {
           lowPrice: today.low,
           openPrice: today.open,
           prevClosePrice: candles[i - 1] ? candles[i - 1].close : today.close,
-          fiftyTwoWeekHigh: Math.max(...hist.map((c) => c.high)),
-          fiftyTwoWeekLow: Math.min(...hist.map((c) => c.low)),
+          fiftyTwoWeekHigh,
+          fiftyTwoWeekLow,
           historicalData: hist,
         };
         enrichForTechnicalScore(stock);
@@ -662,10 +629,7 @@ async function runBacktest36m() {
             volume: today.volume,
             prevClose: candles[i - 1]?.close ?? today.close,
           },
-          range52w: {
-            high: stock.fiftyTwoWeekHigh,
-            low: stock.fiftyTwoWeekLow,
-          },
+          range52w: { high: fiftyTwoWeekHigh, low: fiftyTwoWeekLow },
           regime,
           sentiment: {
             ST: Number.isFinite(ST) ? ST : null,
@@ -771,18 +735,15 @@ async function runBacktest36m() {
   // Expose for "Copy object"
   if (typeof window !== "undefined") window.__backtest36m = out;
 
+  // Compact summary (avoid logging huge object)
   console.log(
     `[BT] Done. Total events=${events.length}, skipped=${skipped.length}`
   );
-  console.log(
-    "%c✅ Backtest complete — object below.\nRight-click → Copy object, or use window.__backtest36m",
-    "font-weight:bold"
-  );
-  console.log(out);
 
-  // Auto-download JSON (streaming if supported)
+  // Auto-download JSON (uses Blob fallback if no user gesture)
   try {
-    await saveLargeJson(out, `backtest_${out.from}_${out.to}.json`);
+    const res = await saveLargeJson(out, `backtest_${out.from}_${out.to}.json`);
+    console.log(`[SAVE] Completed via ${res.method}: ${res.filename}`);
   } catch (err) {
     console.warn("[SAVE] Failed to save automatically:", err);
   }
@@ -794,3 +755,6 @@ async function runBacktest36m() {
 window.backtest = async () => {
   return await runBacktest36m();
 };
+
+// Add a visible save button (lets you force the picker with a click)
+injectSaveButton(() => window.__backtest36m);
