@@ -414,6 +414,96 @@ async function saveLargeJson(data, suggestedName = "backtest.json") {
   console.log(`[SAVE] Fallback download started: ${fname}`);
 }
 
+
+// --- Robust save helpers (picker if gesture, else Blob fallback) ---
+
+function makeFilename(prefix = "backtest", ext = "json") {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${prefix}-${ts}.${ext}`;
+}
+
+async function saveLargeJson(dataObj, filename = makeFilename()) {
+  const json = JSON.stringify(dataObj); // stringify once
+  const blob = new Blob([json], { type: "application/json" });
+
+  // If we have a real user activation (e.g., you clicked a button), use picker.
+  const canUsePicker =
+    typeof window.showSaveFilePicker === "function" &&
+    self.isSecureContext &&
+    document.hasFocus() &&
+    navigator.userActivation &&
+    navigator.userActivation.isActive;
+
+  if (canUsePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return { ok: true, method: "picker", filename: handle.name || filename };
+    } catch (err) {
+      // fall through to Blob download if user cancels or any error
+      console.warn("[SAVE] Picker failed, falling back to Blob:", err);
+    }
+  }
+
+  // Blob fallback (programmatic <a download> click)
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 0);
+
+  return { ok: true, method: "blob", filename };
+}
+
+// Optional: inject a visible button so you can click (user gesture)
+// and force the Save File Picker path (nicer UX).
+function injectSaveButton(getDataFn) {
+  const id = "__bt_save_btn__";
+  if (document.getElementById(id)) return;
+  const btn = document.createElement("button");
+  btn.id = id;
+  btn.textContent = "Download backtest JSON";
+  Object.assign(btn.style, {
+    position: "fixed",
+    right: "16px",
+    bottom: "16px",
+    zIndex: 999999,
+    padding: "10px 12px",
+    borderRadius: "10px",
+    border: "1px solid #ccc",
+    background: "#fff",
+    cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+  });
+  btn.addEventListener("click", async () => {
+    try {
+      const data = typeof getDataFn === "function" ? await getDataFn() : window.__backtest36m;
+      if (!data) {
+        console.warn("No backtest data in memory yet. Run window.backtest() first.");
+        return;
+      }
+      const res = await saveLargeJson(data);
+      console.log(`[SAVE] Done via ${res.method}: ${res.filename}`);
+    } catch (e) {
+      console.error("[SAVE] Failed:", e);
+    }
+  });
+  document.body.appendChild(btn);
+}
+
+
 /* ---------- main (single 36m run, no options) ---------- */
 async function runBacktest36m() {
   const VERSION = "bt-max-1";
