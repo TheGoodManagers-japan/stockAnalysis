@@ -460,7 +460,7 @@ function injectSaveButton(getDataFn) {
 
 /* ---------- main (single 36m run, no options) ---------- */
 async function runBacktest36m() {
-  const VERSION = "bt-max-1";
+  const VERSION = "bt-max-2"; // bumped
   const MONTHS = 36;
   const HOLD_BARS = 8;
   const HARD_STOP_PCT = 0.07;
@@ -600,9 +600,46 @@ async function runBacktest36m() {
         const indicators = computeIndicatorsAt(candles, entryIdx, entry);
         const rrAtEntry = (target - entry) / Math.max(0.01, entry - stop);
 
-        const crossSel = sig?.meta?.cross?.selected ?? null;
+        const lane = sig?.meta?.cross?.selected ?? "NONE";
         const reasonText =
           sig?.reason || (sig?.buyNow ? "signal: buy" : "signal: no-buy");
+
+        // Flip ages / lag (prefer explicit last* fields if analyseCrossing exposes them; fallback to fresh flip ages)
+        const daysSinceDailyFlip = Number.isFinite(
+          sig?.meta?.cross?.lastDailyFlipBarsAgo
+        )
+          ? sig.meta.cross.lastDailyFlipBarsAgo
+          : Number.isFinite(sig?.meta?.cross?.daily?.barsAgo)
+          ? sig.meta.cross.daily.barsAgo
+          : null;
+
+        const weeksSinceWeeklyFlip = Number.isFinite(
+          sig?.meta?.cross?.lastWeeklyFlipWeeksAgo
+        )
+          ? sig.meta.cross.lastWeeklyFlipWeeksAgo
+          : Number.isFinite(sig?.meta?.cross?.weekly?.barsAgo)
+          ? sig.meta.cross.weekly.barsAgo
+          : null;
+
+        const lagBarsSinceCross = Number.isFinite(
+          sig?.meta?.cross?.daily?.barsAgo
+        )
+          ? sig.meta.cross.daily.barsAgo
+          : null;
+
+        const guardDetails = sig?.telemetry?.guard?.details || null;
+        const dipDiag = sig?.telemetry?.dip || null;
+
+        // Compute rr shortfall (if any)
+        const rrTel = sig?.telemetry?.rr;
+        const rrShortfall =
+          rrTel && Number.isFinite(rrTel.need) && Number.isFinite(rrTel.ratio)
+            ? r2(rrTel.need - rrTel.ratio)
+            : null;
+
+        const rejectedCount = Array.isArray(sig?.rejectedCandidates)
+          ? sig.rejectedCandidates.length
+          : 0;
 
         const sim = simulateTradeForward(
           candles,
@@ -643,27 +680,115 @@ async function runBacktest36m() {
             type:
               typeof reasonText === "string" && reasonText.includes(":")
                 ? reasonText.split(":")[0]
-                : crossSel
-                ? String(crossSel)
+                : lane
+                ? String(lane)
                 : "NONE",
             reason: reasonText,
+
+            // --- NEW: richer RR snapshot (incl. probation & shortfall)
             rr: Number.isFinite(sig?.telemetry?.rr?.ratio)
               ? {
                   ratio: r2(sig.telemetry.rr.ratio),
                   need: r2(sig.telemetry.rr.need || 0),
                   acceptable: !!sig.telemetry.rr.acceptable,
+                  probation: !!sig.telemetry.rr.probation,
+                  shortfall: rrShortfall,
                 }
               : null,
+
+            // --- NEW: lane & flip metadata + lag
             crossMeta: {
-              selected: crossSel,
+              selected: lane,
               weekly: sig?.meta?.cross?.weekly || null,
               daily: sig?.meta?.cross?.daily || null,
+              lagBarsSinceCross: Number.isFinite(lagBarsSinceCross)
+                ? lagBarsSinceCross
+                : null,
+              daysSinceDailyFlip: Number.isFinite(daysSinceDailyFlip)
+                ? daysSinceDailyFlip
+                : null,
+              weeksSinceWeeklyFlip: Number.isFinite(weeksSinceWeeklyFlip)
+                ? weeksSinceWeeklyFlip
+                : null,
+              // if analyseCrossing already exposes last* fields, keep them too:
+              lastDailyFlipBarsAgo:
+                sig?.meta?.cross?.lastDailyFlipBarsAgo ?? null,
+              lastWeeklyFlipWeeksAgo:
+                sig?.meta?.cross?.lastWeeklyFlipWeeksAgo ?? null,
             },
+
+            // --- NEW: carry guard diagnostics compactly
             guard: {
               veto: !!sig?.telemetry?.guard?.veto,
               reason: sig?.telemetry?.guard?.reason || null,
+              details: guardDetails
+                ? {
+                    rsi:
+                      Number.isFinite(guardDetails.rsi) &&
+                      guardDetails.rsi !== null
+                        ? r2(guardDetails.rsi)
+                        : null,
+                    headroomATR:
+                      Number.isFinite(guardDetails.headroomATR) &&
+                      guardDetails.headroomATR !== null
+                        ? r2(guardDetails.headroomATR)
+                        : null,
+                    headroomPct:
+                      Number.isFinite(guardDetails.headroomPct) &&
+                      guardDetails.headroomPct !== null
+                        ? r2(guardDetails.headroomPct)
+                        : null,
+                    nearestRes:
+                      Number.isFinite(guardDetails.nearestRes) &&
+                      guardDetails.nearestRes !== null
+                        ? r2(guardDetails.nearestRes)
+                        : guardDetails.nearestRes ?? null,
+                    distFromMA25_ATR:
+                      Number.isFinite(guardDetails.distFromMA25_ATR) &&
+                      guardDetails.distFromMA25_ATR !== null
+                        ? r2(guardDetails.distFromMA25_ATR)
+                        : null,
+                    consecUp:
+                      Number.isFinite(guardDetails.consecUp) &&
+                      guardDetails.consecUp !== null
+                        ? guardDetails.consecUp
+                        : null,
+                  }
+                : null,
             },
+
+            // --- NEW: volatility snapshot at signal time
+            volatility: sig?.volatility
+              ? {
+                  atr: r2(sig.volatility.atr),
+                  atrPct: r2(sig.volatility.atrPct),
+                  bucket: sig.volatility.bucket,
+                }
+              : null,
+
+            // --- NEW: DIP quick diag (lane + bounce freshness if available)
+            dip: dipDiag
+              ? {
+                  lane: String(lane || "").startsWith("DIP")
+                    ? lane.includes("WEEKLY")
+                      ? "WEEKLY"
+                      : lane.includes("DAILY")
+                      ? "DAILY"
+                      : null
+                    : null,
+                  trigger: !!dipDiag.trigger,
+                  bounceAgeBars: Number.isFinite(
+                    dipDiag?.diagnostics?.bounceAgeBars
+                  )
+                    ? dipDiag.diagnostics.bounceAgeBars
+                    : null,
+                }
+              : null,
+
+            // --- NEW: how many plausible candidates were rejected upstream
+            rejected_count: rejectedCount,
           },
+
           indicators,
           plan: {
             entry: r2(entry),

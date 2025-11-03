@@ -1755,6 +1755,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         selected: selectedType,
         weekly: crossMeta.weekly,
         daily: crossMeta.daily,
+        lastDailyFlipBarsAgo: lastDailyFlip?.found
+          ? lastDailyFlip.barsAgo
+          : null,
+        lastWeeklyFlipWeeksAgo: lastWeeklyFlip?.found
+          ? lastWeeklyFlip.weeksAgo
+          : null,
       },
     };
 
@@ -1814,6 +1820,12 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
         selected: selectedType,
         weekly: crossMeta.weekly,
         daily: crossMeta.daily,
+        lastDailyFlipBarsAgo: lastDailyFlip?.found
+          ? lastDailyFlip.barsAgo
+          : null,
+        lastWeeklyFlipWeeksAgo: lastWeeklyFlip?.found
+          ? lastWeeklyFlip.weeksAgo
+          : null,
       },
     },
     telemetry: { ...tele, trace: T.logs },
