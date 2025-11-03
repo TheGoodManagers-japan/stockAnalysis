@@ -595,10 +595,16 @@ async function runBacktest36m() {
     events,
   };
 
+  // Expose and log as an object for easy "Copy object"
+  if (typeof window !== "undefined") {
+    window.__backtest36m = out;
+  }
   console.log(
-    `[BT] Done. Total events=${events.length}, skipped=${skipped.length}`
+    "%c✅ Backtest complete — object below.\nRight-click → Copy object, or use window.__backtest36m",
+    "font-weight:bold"
   );
-  console.log(JSON.stringify(out));
+  console.log(out);
+
   return out;
 }
 
