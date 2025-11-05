@@ -123,20 +123,20 @@ function getConfig(opts = {}) {
 
     dailyReclaimLookback: 7,
 
-    // Fresh flip windows
-    freshDailyLookbackDays: 5,
-    freshWeeklyLookbackWeeks: 5,
+    // Fresh flip windows — smaller "fresh" means sooner eligible as stale DIP
+    freshDailyLookbackDays: 3,
+    freshWeeklyLookbackWeeks: 4,
 
-    // Stale windows for post-flip DIP eligibility
-    staleDailyCrossMaxAgeBars: 20,
-    staleWeeklyCrossMaxAgeWeeks: 10,
+    // Stale windows (post-flip period allowed for DIP)
+    staleDailyCrossMaxAgeBars: 30, // was 20
+    staleWeeklyCrossMaxAgeWeeks: 16, // was 10
 
     // MA cross tolerance (age since 25>75)
     maCrossMaxAgeBars: 10,
 
     // DIP bounce staleness windows
-    staleDipMaxAgeBars: 7,
-    staleDipMaxAgeWeeklyWeeks: 2,
+    staleDipMaxAgeBars: 10, // was 7 (daily DIP bounce can be a bit older)
+    staleDipMaxAgeWeeklyWeeks: 4, // was 2
 
     // DIP gate intent: require (reclaim OR 25>75 cross); weekly lane relaxes these later
     requireWeeklyUpForDIP: false,
@@ -151,14 +151,14 @@ function getConfig(opts = {}) {
       minBounceStrengthATR: 0.5,
       minRR: 1.5,
     },
+    // Weekly DIP preset (softer pullback & more time to bounce)
     dipWeekly: {
-      minPullbackPct: 6.0,
-      minPullbackATR: 2.3, // WEEKLY ATR units
-      maxBounceAgeWeeks: 3,
-      minBounceStrengthATR: 0.45,
+      minPullbackPct: 4.8, // was 6.0
+      minPullbackATR: 1.9, // was 2.3 (weekly ATR units)
+      maxBounceAgeWeeks: 4, // was 3
+      minBounceStrengthATR: 0.35, // was 0.45
       minRR: 1.5,
     },
-
     // --- Cross+Volume playbook knobs ---
     crossPlaybookEnabled: true,
     crossMinVolumeFactor: 1.5, // ≥ 1.5× 20d avg volume
@@ -194,12 +194,12 @@ function getConfig(opts = {}) {
     pullbackDryFactor: 1.2,
     bounceHotFactor: 1.0,
 
-    // DIP parameters (used by dip.js)
-    dipMinPullbackPct: 4.8,
-    dipMinPullbackATR: 1.9,
-    dipMaxBounceAgeBars: 7,
-    dipMinBounceStrengthATR: 0.6,
-    dipMinRR: 1.55,
+
+    // Daily DIP parameters (slightly more permissive)
+    dipMinPullbackPct: 4.2, // was 4.8
+    dipMinPullbackATR: 1.7, // was 1.9
+    dipMaxBounceAgeBars: 10, // was 7
+    dipMinBounceStrengthATR: 0.5, // was 0.6
 
     // allow DIPs even if broader regime softened
     allowDipInDowntrend: true,
@@ -1521,9 +1521,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     dipGateWhy.push("not above 13/26/52-week MAs");
   }
 
-  // 2. Are we still in a fresh flip window *today*?
-  const haveFreshCrossNow = !!(crossW.trigger || crossD.trigger);
-
   // 3. Measure ages of the LAST bullish flips (daily / weekly)
   const lastDailyFlip = lastDailyStackedCrossAge(completedDaily);
   const lastWeeklyFlip = lastWeeklyStackedCrossAge(completedDaily);
@@ -1546,13 +1543,13 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     lastWeeklyFlip.weeksAgo > freshW &&
     lastWeeklyFlip.weeksAgo <= maxStaleW;
 
+  // Decide DIP lane purely from stale-window eligibility.
+  // Prefer WEEKLY if both windows are OK.
   let dipLane = null;
-  if (!haveFreshCrossNow) {
-    if (weeklyWindowOK) {
-      dipLane = "WEEKLY";
-    } else if (dailyWindowOK) {
-      dipLane = "DAILY";
-    }
+  if (weeklyWindowOK) {
+    dipLane = "WEEKLY";
+  } else if (dailyWindowOK) {
+    dipLane = "DAILY";
   }
 
   // Lane-aware gate relaxation: WEEKLY DIP shouldn't require DAILY reclaim/MA cross
@@ -1689,12 +1686,16 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       maCrossGate,
       dipLane,
     });
-  } else if (activeDip?.trigger && haveFreshCrossNow) {
+  } else if (
+    activeDip?.trigger &&
+    ((dipLane === "WEEKLY" && !!crossW.trigger) ||
+      (dipLane === "DAILY" && !!crossD.trigger))
+  ) {
     pushBlock(
       tele,
       "DIP_TOO_EARLY",
       "dip",
-      "DIP suppressed: fresh CROSS phase still active",
+      "DIP suppressed: fresh CROSS phase still active (same timeframe)",
       {
         crossW: { trigger: crossW.trigger, weeksAgo: crossW.weeksAgo },
         crossD: { trigger: crossD.trigger, daysAgo: crossD.daysAgo },
