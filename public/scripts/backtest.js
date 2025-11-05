@@ -393,6 +393,8 @@ function computeRegimeLabels(candles) {
     else labels.push("DOWN");
   }
 
+  
+
   return labels;
 }
 
@@ -818,6 +820,9 @@ async function runBacktest36m() {
 
   const skipped = [];
 
+    const summaries = [];
+
+
   const total = codes.length;
 
   console.log(`[BT] Starting 36m backtest: ${FROM} → ${TO} | tickers=${total}`);
@@ -856,6 +861,7 @@ async function runBacktest36m() {
       console.log(
         `[BT][PERF] ${code} — trades=${s.trades} | WinRate=${s.winRatePct}% | PF=${s.PF} | %Profit=${s.pctProfitComp}%`
       );
+      summaries.push({ ticker: code, ...s });
         continue;
       }
 
@@ -1254,6 +1260,19 @@ async function runBacktest36m() {
 
         localEvents++;
       }
+            // --- NEW: per-ticker summary (successful path)
+            {
+              const tickerEvents = events.slice(evBase);
+              const trades = tickerEvents.filter(
+                (e) => e?.signal?.buyNow && e?.simulation
+              );
+              const s = summarizeTradesQuick(trades);
+              console.log(
+                `[BT][PERF] ${code} — trades=${s.trades} | WinRate=${s.winRatePct}% | PF=${s.PF} | %Profit=${s.pctProfitComp}% | Avg=${s.avgReturnPct}%`
+              );
+              summaries.push({ ticker: code, ...s }); // <-- add this
+            }
+      
 
       const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
 
@@ -1284,32 +1303,39 @@ async function runBacktest36m() {
           120
         )}`
       );
+
+      // OPTIONAL: summarize partial results even on error
+      {
+        const tickerEvents = events.slice(evBase);
+        const trades = tickerEvents.filter(
+          (e) => e?.signal?.buyNow && e?.simulation
+        );
+        const s = summarizeTradesQuick(trades);
+        console.log(
+          `[BT][PERF][ERROR] ${code} — trades=${s.trades} | WinRate=${s.winRatePct}% | PF=${s.PF} | %Profit=${s.pctProfitComp}% | Avg=${s.avgReturnPct}%`
+        );
+        summaries.push({ ticker: code, ...s, error: String(e).slice(0, 120) });
+      }
     }
   }
 
   const out = {
     version: VERSION,
-
     from: FROM,
-
     to: TO,
-
     params: {
       months: MONTHS,
-
       holdBars: HOLD_BARS,
-
       hardStopPct: HARD_STOP_PCT,
-
       warmupBars: WARMUP,
-
       prefetchWarmupDays: PREFETCH_WARMUP_DAYS,
     },
-
     skipped,
-
     events,
+    summaries, // already added
   };
+  
+
 
   // Expose for "Copy object"
 
