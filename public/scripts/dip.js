@@ -1,3 +1,4 @@
+
 // /scripts/dip.js — DIP detector (pullback + bounce) — tighter but keeps A+ setups
 export function detectDipBounce(stock, data, cfg, U) {
   const { num, avg, near, sma, findResistancesAbove } = U;
@@ -45,9 +46,8 @@ export function detectDipBounce(stock, data, cfg, U) {
     recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
   const pullbackATR = (recentHigh - dipLow) / Math.max(atr, 1e-9);
   const hadPullback =
-    pullbackPct >= (cfg.dipMinPullbackPct ?? 4.2) ||
-    pullbackATR >= Math.max(cfg.dipMinPullbackATR ?? 1.7, 0.4);
-
+    pullbackPct >= Math.min(cfg.dipMinPullbackPct, 1.0) ||
+    pullbackATR >= Math.max(cfg.dipMinPullbackATR, 0.4);
 
   if (!hadPullback) {
     const why = `no meaningful pullback (${pullbackPct.toFixed(
@@ -278,8 +278,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   }
 
   // 2) basic bounce quality baselines
-  const minStr = cfg.dipMinBounceStrengthATR ?? 0.6;
-
+  const minStr = Math.max(cfg.dipMinBounceStrengthATR ?? 0.72, 0.72);
 
   const closeAboveYHigh =
     num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
@@ -627,7 +626,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   if (px - stop < minRiskATR * atr) stop = px - minRiskATR * atr;
 
   // 10) micro-stop guard (nudge)
-  if (px - stop < 1.35 * atr) stop = px - 1.35 * atr;
+  if (px - stop < 1.45 * atr) stop = px - 1.45 * atr;
 
   // Grow target; skip too-near first resistance when second is reasonable
   let target = Math.max(px + Math.max(2.8 * atr, px * 0.024), recentHigh20);
