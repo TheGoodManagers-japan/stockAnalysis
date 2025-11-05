@@ -121,43 +121,65 @@ function getConfig(opts = {}) {
     // general
     perfectMode: false,
 
-    // --- Fresh & stale windows ---
-    dailyReclaimLookback: 7,
-    freshDailyLookbackDays: 5, // strict fresh
-    freshWeeklyLookbackWeeks: 5, // strict fresh
-    staleDailyCrossMaxAgeBars: 30, // loosened (INTENDED)
-    staleWeeklyCrossMaxAgeWeeks: 14, // loosened (INTENDED)
-    maCrossMaxAgeBars: 14, // loosened (INTENDED)
-    staleDipMaxAgeBars: 10, // loosened (INTENDED)
-    staleDipMaxAgeWeeklyWeeks: 3, // loosened (INTENDED)
-    allowStaleCrossDip: true,
+    // --- Weekly/Daily cross gating (DIP + new playbook) ---
+    requireWeeklyUpForDIP: true,
+    requireDailyReclaim25and75ForDIP: true,
+    dailyReclaimLookback: 5,
+    freshDailyLookbackDays: 5,
 
-    // DIP gating intent: require (reclaim OR 25>75 cross), not both
-    requireWeeklyUpForDIP: true, // keep explicit
-    requireDailyReclaim25and75ForDIP: true, // allows OR via code path
+    requireFreshWeeklyFlipForDIP: true,
+    freshWeeklyLookbackWeeks: 5,
+    allowStaleCrossDip: false,
+
+    // explicit stale windows for “post-flip DIP still valid”
+    staleDailyCrossMaxAgeBars: 20,
+    staleWeeklyCrossMaxAgeWeeks: 10,
+
+    // For DIP: we now require (reclaim OR cross), not both
     requireMA25over75ForDIP: true,
+    maCrossMaxAgeBars: 10,
 
-    // Cross playbook
+    staleDipMaxAgeBars: 7,
+    staleDipMaxAgeWeeklyWeeks: 2,
+    staleCrossRequireReclaim: true,
+
+    // --- Multi-timeframe DIP presets (used ONLY for weekly wrapper) ---
+    dipDaily: {
+      minPullbackPct: 4.8,
+      minPullbackATR: 1.9,
+      maxBounceAgeBars: 7,
+      minBounceStrengthATR: 0.6,
+      minRR: 1.55,
+    },
+    dipWeekly: {
+      minPullbackPct: 6.5,
+      minPullbackATR: 2.6, // WEEKLY ATR units
+      maxBounceAgeWeeks: 2,
+      minBounceStrengthATR: 0.5,
+      minRR: 1.55,
+    },
+
+    // --- Cross+Volume playbook knobs ---
     crossPlaybookEnabled: true,
-    crossMinVolumeFactor: 1.5,
-    crossMinRR: 1.45,
-    crossUseReclaimNotJustMAcross: true,
+    crossMinVolumeFactor: 1.5, // ≥ 1.5× 20d avg volume
+    crossMinRR: 1.45, // RR floor for cross play
+    crossUseReclaimNotJustMAcross: true, // price reclaimed both 25 & 75 within lookback
 
-    // RR floors
+    // RR floors (DIP has its own too)
     minRRbase: 1.35,
     minRRstrongUp: 1.5,
     minRRweakUp: 1.55,
 
-    // headroom & extension guards (your newer, slightly looser values)
-    nearResVetoATR: 0.35,
-    nearResVetoPct: 0.55,
-    maxATRfromMA25: 2.8,
+    // headroom & extension guards
+    nearResVetoATR: 0.4,
+    nearResVetoPct: 0.6,
+    maxATRfromMA25: 2.4,
 
-    // RSI caps
+    // overbought guards
     hardRSI: 75,
     softRSI: 70,
 
-    // DIP structure/proximity
+    // --- DIP proximity / structure knobs ---
     dipMaSupportATRBands: 0.8,
     dipStructTolATR: 0.9,
     dipStructTolPct: 3.0,
@@ -173,26 +195,26 @@ function getConfig(opts = {}) {
     pullbackDryFactor: 1.2,
     bounceHotFactor: 1.0,
 
-    // DIP (dip.js legacy defaults kept; these are only used by dip.js directly)
+    // DIP parameters (used by dip.js)
     dipMinPullbackPct: 4.8,
     dipMinPullbackATR: 1.9,
     dipMaxBounceAgeBars: 7,
     dipMinBounceStrengthATR: 0.6,
     dipMinRR: 1.55,
 
-    // allow DIPs in softened regime
+    // allow DIPs even if broader regime softened
     allowDipInDowntrend: true,
 
-    // stop hygiene
+    // min stop distance
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
 
-    // SCOOT
+    // scoot logic for RR hop
     scootEnabled: true,
     scootNearMissBand: 0.25,
-    scootATRCapDIP: 4.6,
+    scootATRCapDIP: 4.2,
     scootATRCapNonDIP: 3.5,
     scootMaxHops: 2,
 
@@ -202,7 +224,6 @@ function getConfig(opts = {}) {
     debug,
   };
 }
-
 
 /* ========= Helpers for "how old is the bullish flip?" ========= */
 
@@ -354,7 +375,7 @@ function weeklyUptrendGate(data, px) {
   if (!hasAll)
     return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
 
-  const slack = 0.015; // ≤1.5% slack allowed (helps WEEKLY DIP qualify)
+  const slack = 0.01; // ≤1% slack allowed
   const above13 = px > w13 * (1 - slack);
   const above26 = px > w26 * (1 - slack);
   const above52 = px > w52 * (1 - slack);
@@ -1558,7 +1579,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       );
     }
   }
-
+  
   let activeDip = null;
   if (dipLane === "WEEKLY") {
     activeDip = detectDipBounceWeekly(stock, dataAll, cfg, U);
