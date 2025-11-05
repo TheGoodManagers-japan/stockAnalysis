@@ -122,41 +122,41 @@ function getConfig(opts = {}) {
     perfectMode: false,
 
     dailyReclaimLookback: 7,
-    freshDailyLookbackDays: 5, // keep fresh strict
-    freshWeeklyLookbackWeeks: 5, // keep fresh strict
-    staleDailyCrossMaxAgeBars: 30, // +10 bars (more DAILY stale DIPs)
-    staleWeeklyCrossMaxAgeWeeks: 14, // +4 weeks (more WEEKLY stale DIPs)
-    maCrossMaxAgeBars: 14, // allow slightly older 25>75 cross
-    staleDipMaxAgeBars: 10, // dip bounce can be a bit older
-    staleDipMaxAgeWeeklyWeeks: 3, // ditto for weekly
-    allowStaleCrossDip: true, // enable post-flip DIP more broadly
 
-    // explicit stale windows for “post-flip DIP still valid”
+    // Fresh flip windows
+    freshDailyLookbackDays: 5,
+    freshWeeklyLookbackWeeks: 5,
+
+    // Stale windows for post-flip DIP eligibility
     staleDailyCrossMaxAgeBars: 20,
     staleWeeklyCrossMaxAgeWeeks: 10,
 
-    // For DIP: we now require (reclaim OR cross), not both
-    requireMA25over75ForDIP: true,
+    // MA cross tolerance (age since 25>75)
     maCrossMaxAgeBars: 10,
 
+    // DIP bounce staleness windows
     staleDipMaxAgeBars: 7,
     staleDipMaxAgeWeeklyWeeks: 2,
-    staleCrossRequireReclaim: true,
+
+    // DIP gate intent: require (reclaim OR 25>75 cross); weekly lane relaxes these later
+    requireWeeklyUpForDIP: false,
+    requireDailyReclaim25and75ForDIP: true,
+    requireMA25over75ForDIP: true,
 
     // --- Multi-timeframe DIP presets (used ONLY for weekly wrapper) ---
     dipDaily: {
-      minPullbackPct: 4.2, // was 4.8
-      minPullbackATR: 1.7, // was 1.9
-      maxBounceAgeBars: 9, // was 7
-      minBounceStrengthATR: 0.5, // was 0.6
-      minRR: 1.5, // was 1.55
+      minPullbackPct: 4.2,
+      minPullbackATR: 1.7,
+      maxBounceAgeBars: 9,
+      minBounceStrengthATR: 0.5,
+      minRR: 1.5,
     },
     dipWeekly: {
-      minPullbackPct: 6.0, // was 6.5
-      minPullbackATR: 2.3, // was 2.6 (WEEKLY ATR units)
-      maxBounceAgeWeeks: 3, // was 2
-      minBounceStrengthATR: 0.45, // was 0.5
-      minRR: 1.5, // was 1.55
+      minPullbackPct: 6.0,
+      minPullbackATR: 2.3, // WEEKLY ATR units
+      maxBounceAgeWeeks: 3,
+      minBounceStrengthATR: 0.45,
+      minRR: 1.5,
     },
 
     // --- Cross+Volume playbook knobs ---
@@ -171,12 +171,12 @@ function getConfig(opts = {}) {
     minRRweakUp: 1.55,
 
     // headroom & extension guards
-    nearResVetoATR: 0.35, // a bit more headroom tolerance
+    nearResVetoATR: 0.35,
     nearResVetoPct: 0.55,
-    maxATRfromMA25: 2.8, // allow a touch more extension
+    maxATRfromMA25: 2.8,
 
     hardRSI: 75,
-    softRSI: 70,
+    softRSI: 70, // (present; not currently used)
 
     // --- DIP proximity / structure knobs ---
     dipMaSupportATRBands: 0.8,
@@ -214,7 +214,6 @@ function getConfig(opts = {}) {
     scootEnabled: true,
     scootNearMissBand: 0.25,
     scootATRCapDIP: 4.6, // lets target hop one more resistance
-
     scootATRCapNonDIP: 3.5,
     scootMaxHops: 2,
 
@@ -1184,11 +1183,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     // *** NEW: also surface what was rejected (will be empty here but consistent shape)
     out.rejectedCandidates = tele.rejected.slice();
 
-    throw new Error(
-      `[analyseCrossing] Not enough history to classify ${
-        stock?.ticker || "UNK"
-      }`
-    );
+    return out;
   }
 
   const dataAll = [...historicalData].sort(
@@ -1208,9 +1203,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     // *** NEW
     out.rejectedCandidates = tele.rejected.slice();
 
-    throw new Error(
-      `[analyseCrossing] Invalid last bar OHLCV for ${stock?.ticker || "UNK"}`
-    );
+    return out;
   }
   if (!Number.isFinite(last.volume)) last.volume = 0;
 
