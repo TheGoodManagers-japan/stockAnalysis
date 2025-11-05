@@ -382,11 +382,6 @@ function simulateTradeForward(
 
 /* ---------- save helpers (picker if gesture, else Blob fallback) ---------- */
 
-function makeFilename(prefix = "backtest", ext = "json") {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${prefix}-${ts}.${ext}`;
-}
-
 async function saveLargeJson(data, suggestedName = "backtest.json") {
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   const fname = suggestedName.replace(/\.json$/i, `_${ts}.json`);
@@ -432,8 +427,13 @@ async function saveLargeJson(data, suggestedName = "backtest.json") {
         if (i % 1000 === 0) await new Promise((r) => setTimeout(r, 0));
       }
 
-      await W("]}");
+      await W('],"summaries":');
+      await W(JSON.stringify(head.summaries ?? []));
+      await W(',"raw":');
+      await W(JSON.stringify(head.raw ?? {}));
+      await W("}");
       await writable.close();
+      
 
       console.log(`[SAVE] File written: ${handle.name}`);
       return { ok: true, method: "picker", filename: handle.name || fname };
@@ -464,7 +464,12 @@ async function saveLargeJson(data, suggestedName = "backtest.json") {
     if (i % 2000 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
-  P("]}");
+  P('],"summaries":');
+  P(JSON.stringify(head.summaries ?? []));
+  P(',"raw":');
+  P(JSON.stringify(head.raw ?? {}));
+  P("}");
+
 
   const blob = new Blob(parts, { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -532,32 +537,11 @@ function injectSaveButton(getDataFn) {
   document.body.appendChild(btn);
 }
 
-// Keep only rising-edge entries and prevent overlaps until prior trade ends.
-function selectNonOverlappingEntries(tickerEvents) {
-  const picked = [];
-  let nextAllowedBar = -Infinity;
-
-  for (let i = 0; i < tickerEvents.length; i++) {
-    const e = tickerEvents[i];
-    if (!e?.signal?.buyNow || !e?.simulation) continue;
-
-    // rising edge: previous event wasn't a buyNow
-    const prev = tickerEvents[i - 1];
-    const isEdge = !prev?.signal?.buyNow;
-    if (!isEdge) continue;
-
-    // block overlaps till this trade's holding finishes
-    const barIdx = Number(e.barIndex) || i;
-    if (barIdx <= nextAllowedBar) continue;
-
-    picked.push(e);
-
-    const hold = Number(e.simulation?.holdingDays) || 0;
-    nextAllowedBar = barIdx + hold;
-  }
-
-  return picked;
+// === OVERLAPPING: keep every buyNow=true entry (no de-dup, no hold blocking)
+function extractAllEntries(tickerEvents) {
+  return tickerEvents.filter((e) => e?.signal?.buyNow && e?.simulation);
 }
+
 
 function summarizeTradesQuick(trades) {
   // chronological just in case
@@ -686,24 +670,26 @@ async function runBacktest36m() {
         const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
         const pct = (((ti + 1) / total) * 100).toFixed(1);
 
-        const tickerEvents = events.slice(evBase);
-        const trades = selectNonOverlappingEntries(tickerEvents);
-        const s = summarizeTradesQuick(trades);
+        // per-ticker summary (successful path) — OVERLAPPING
+        {
+          const tickerEvents = events.slice(evBase);
 
-        console.log(
-          `[BT] ${ti + 1}/${total} (${pct}%) ${code} — SKIPPED (${
-            candles.length
-          } bars) in ${tMs}ms`
-        );
+          // Use ALL buyNow=true entries (overlaps allowed)
+          const entries = extractAllEntries(tickerEvents);
+          const s = summarizeTradesQuick(entries);
+          const rawEntries = entries.length;
 
-        console.log(
-          `[BT][PERF] ${code} — trades=${s.trades} ` +
-            `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
-            `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
-            `| Expectancy=${s.expectancyPct}%`
-        );
+          console.log(
+            `[BT][PERF][RAW] ${code} — entries_taken=${rawEntries} ` +
+              `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
+              `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
+              `| Expectancy=${s.expectancyPct}%`
+          );
 
-        summaries.push({ ticker: code, ...s });
+          // Store overlapping summary to keep it explicit
+          summaries.push({ ticker: code, overlapping: s, rawEntries });
+        }
+
         continue;
       }
 
@@ -1004,21 +990,26 @@ async function runBacktest36m() {
         localEvents++;
       }
 
-      // per-ticker summary (successful path)
+      // per-ticker summary (successful path) — OVERLAPPING
       {
         const tickerEvents = events.slice(evBase);
-        const trades = selectNonOverlappingEntries(tickerEvents);
-        const s = summarizeTradesQuick(trades);
+
+        // Use ALL buyNow=true entries (overlaps allowed)
+        const entries = extractAllEntries(tickerEvents);
+        const s = summarizeTradesQuick(entries);
+        const rawEntries = entries.length;
 
         console.log(
-          `[BT][PERF] ${code} — trades=${s.trades} ` +
+          `[BT][PERF][RAW] ${code} — entries_taken=${rawEntries} ` +
             `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
             `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
             `| Expectancy=${s.expectancyPct}%`
         );
 
-        summaries.push({ ticker: code, ...s });
+        // Store overlapping summary to keep it explicit
+        summaries.push({ ticker: code, overlapping: s, rawEntries });
       }
+
 
       const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
       const pct = (((ti + 1) / total) * 100).toFixed(1);
@@ -1046,23 +1037,35 @@ async function runBacktest36m() {
         )}`
       );
 
-      // summarize partial results even on error
-      {
-        const tickerEvents = events.slice(evBase);
-        const trades = selectNonOverlappingEntries(tickerEvents);
-        const s = summarizeTradesQuick(trades);
+// summarize partial results even on error — OVERLAPPING
+{
+  const tickerEvents = events.slice(evBase);
 
-        console.log(
-          `[BT][PERF][ERROR] ${code} — trades=${s.trades} ` +
-            `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
-            `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
-            `| Expectancy=${s.expectancyPct}%`
-        );
+  const entries = extractAllEntries(tickerEvents);
+  const s = summarizeTradesQuick(entries);
+  const rawEntries = entries.length;
 
-        summaries.push({ ticker: code, ...s, error: String(e).slice(0, 120) });
+  console.log(
+    `[BT][PERF][RAW][ERROR] ${code} — entries_taken=${rawEntries} ` +
+      `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
+      `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
+      `| Expectancy=${s.expectancyPct}%`
+  );
+
+  summaries.push({
+    ticker: code,
+    overlapping: s,
+    rawEntries,
+    error: String(e).slice(0, 120),
+  });
+
       }
     }
   }
+
+  // === GLOBAL overlapping entries count ===
+  const totalRawEntries = extractAllEntries(events).length;
+  console.log(`[BT][RAW][GLOBAL] entries_taken=${totalRawEntries}`);
 
   const out = {
     version: VERSION,
@@ -1078,6 +1081,7 @@ async function runBacktest36m() {
     skipped,
     events,
     summaries,
+    raw: { entriesTaken: totalRawEntries },
   };
 
   // Expose for "Copy object"
