@@ -710,6 +710,46 @@ function injectSaveButton(getDataFn) {
   document.body.appendChild(btn);
 }
 
+
+
+function summarizeTradesQuick(trades) {
+  // trades should be chronological (your loop already is), but ensure:
+  trades = trades.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const wins = trades.filter((t) => t.simulation?.result === "WIN");
+  const losses = trades.filter((t) => t.simulation?.result === "LOSS");
+
+  const sum = (arr, f) => arr.reduce((a, b) => a + (f(b) || 0), 0);
+
+  // Profit Factor on R
+  const grossWinR = sum(wins, (t) => t.simulation?.R);
+  const grossLossRAbs = Math.abs(sum(losses, (t) => t.simulation?.R));
+  const PF = grossLossRAbs ? grossWinR / grossLossRAbs : null;
+
+  // Win rate
+  const n = trades.length;
+  const winRate = n ? (wins.length / n) * 100 : 0;
+
+  // % profit (compounded)
+  let compounded = 1;
+  for (const t of trades) {
+    compounded *= 1 + (t.simulation?.returnPct || 0) / 100;
+  }
+  const pctProfitComp = (compounded - 1) * 100;
+
+  // Optional: simple avg % per trade
+  const avgPct = n ? sum(trades, (t) => t.simulation?.returnPct || 0) / n : 0;
+
+  return {
+    trades: n,
+    winRatePct: +winRate.toFixed(1),
+    PF: PF != null ? +PF.toFixed(2) : null,
+    pctProfitComp: +pctProfitComp.toFixed(2),
+    avgReturnPct: +avgPct.toFixed(2),
+  };
+}
+
+
 /* ---------- main (single 36m run, no options) ---------- */
 
 async function runBacktest36m() {
@@ -784,31 +824,38 @@ async function runBacktest36m() {
 
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
-
     const tStart = performance.now?.() ?? Date.now();
-
     let localEvents = 0;
-
+  
+    // NEW: remember where this ticker's events will start
+    const evBase = events.length;
+  
     try {
-      const candles = await fetchHistory(code, FROM_PREFETCH, TO);
-
+      const candles = await fetchHistory(code, FROM_PREFETCH, TO);  
       if (candles.length < WARMUP + 2) {
         skipped.push({
           ticker: code,
-
           reason: `not enough data (${candles.length} bars)`,
         });
-
         const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
-
         const pct = (((ti + 1) / total) * 100).toFixed(1);
 
+        const tickerEvents = events.slice(evBase);
+        const trades = tickerEvents.filter(
+          (e) => e?.signal?.buyNow && e?.simulation
+        );
+        const s = summarizeTradesQuick(trades);
+  
         console.log(
           `[BT] ${ti + 1}/${total} (${pct}%) ${code} — SKIPPED (${
             candles.length
           } bars) in ${tMs}ms`
         );
 
+         // NEW: per-ticker performance line
+      console.log(
+        `[BT][PERF] ${code} — trades=${s.trades} | WinRate=${s.winRatePct}% | PF=${s.PF} | %Profit=${s.pctProfitComp}%`
+      );
         continue;
       }
 
