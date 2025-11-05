@@ -121,64 +121,43 @@ function getConfig(opts = {}) {
     // general
     perfectMode: false,
 
+    // --- Fresh & stale windows ---
     dailyReclaimLookback: 7,
-    freshDailyLookbackDays: 5, // keep fresh strict
-    freshWeeklyLookbackWeeks: 5, // keep fresh strict
-    staleDailyCrossMaxAgeBars: 30, // +10 bars (more DAILY stale DIPs)
-    staleWeeklyCrossMaxAgeWeeks: 14, // +4 weeks (more WEEKLY stale DIPs)
-    maCrossMaxAgeBars: 14, // allow slightly older 25>75 cross
-    staleDipMaxAgeBars: 10, // dip bounce can be a bit older
-    staleDipMaxAgeWeeklyWeeks: 3, // ditto for weekly
-    allowStaleCrossDip: true, // enable post-flip DIP more broadly
+    freshDailyLookbackDays: 5, // strict fresh
+    freshWeeklyLookbackWeeks: 5, // strict fresh
+    staleDailyCrossMaxAgeBars: 30, // loosened (INTENDED)
+    staleWeeklyCrossMaxAgeWeeks: 14, // loosened (INTENDED)
+    maCrossMaxAgeBars: 14, // loosened (INTENDED)
+    staleDipMaxAgeBars: 10, // loosened (INTENDED)
+    staleDipMaxAgeWeeklyWeeks: 3, // loosened (INTENDED)
+    allowStaleCrossDip: true,
 
-    // explicit stale windows for “post-flip DIP still valid”
-    staleDailyCrossMaxAgeBars: 20,
-    staleWeeklyCrossMaxAgeWeeks: 10,
-
-    // For DIP: we now require (reclaim OR cross), not both
+    // DIP gating intent: require (reclaim OR 25>75 cross), not both
+    requireWeeklyUpForDIP: true, // keep explicit
+    requireDailyReclaim25and75ForDIP: true, // allows OR via code path
     requireMA25over75ForDIP: true,
-    maCrossMaxAgeBars: 10,
 
-    staleDipMaxAgeBars: 7,
-    staleDipMaxAgeWeeklyWeeks: 2,
-    staleCrossRequireReclaim: true,
-
-    // --- Multi-timeframe DIP presets (used ONLY for weekly wrapper) ---
-    dipDaily: {
-      minPullbackPct: 4.2, // was 4.8
-      minPullbackATR: 1.7, // was 1.9
-      maxBounceAgeBars: 9, // was 7
-      minBounceStrengthATR: 0.5, // was 0.6
-      minRR: 1.5, // was 1.55
-    },
-    dipWeekly: {
-      minPullbackPct: 6.0, // was 6.5
-      minPullbackATR: 2.3, // was 2.6 (WEEKLY ATR units)
-      maxBounceAgeWeeks: 3, // was 2
-      minBounceStrengthATR: 0.45, // was 0.5
-      minRR: 1.5, // was 1.55
-    },
-
-    // --- Cross+Volume playbook knobs ---
+    // Cross playbook
     crossPlaybookEnabled: true,
-    crossMinVolumeFactor: 1.5, // ≥ 1.5× 20d avg volume
-    crossMinRR: 1.45, // RR floor for cross play
-    crossUseReclaimNotJustMAcross: true, // price reclaimed both 25 & 75 within lookback
+    crossMinVolumeFactor: 1.5,
+    crossMinRR: 1.45,
+    crossUseReclaimNotJustMAcross: true,
 
-    // RR floors (DIP has its own too)
+    // RR floors
     minRRbase: 1.35,
     minRRstrongUp: 1.5,
     minRRweakUp: 1.55,
 
-    // headroom & extension guards
-    nearResVetoATR: 0.35, // a bit more headroom tolerance
+    // headroom & extension guards (your newer, slightly looser values)
+    nearResVetoATR: 0.35,
     nearResVetoPct: 0.55,
-    maxATRfromMA25: 2.8, // allow a touch more extension
+    maxATRfromMA25: 2.8,
 
+    // RSI caps
     hardRSI: 75,
     softRSI: 70,
 
-    // --- DIP proximity / structure knobs ---
+    // DIP structure/proximity
     dipMaSupportATRBands: 0.8,
     dipStructTolATR: 0.9,
     dipStructTolPct: 3.0,
@@ -194,27 +173,26 @@ function getConfig(opts = {}) {
     pullbackDryFactor: 1.2,
     bounceHotFactor: 1.0,
 
-    // DIP parameters (used by dip.js)
+    // DIP (dip.js legacy defaults kept; these are only used by dip.js directly)
     dipMinPullbackPct: 4.8,
     dipMinPullbackATR: 1.9,
     dipMaxBounceAgeBars: 7,
     dipMinBounceStrengthATR: 0.6,
     dipMinRR: 1.55,
 
-    // allow DIPs even if broader regime softened
+    // allow DIPs in softened regime
     allowDipInDowntrend: true,
 
-    // min stop distance
+    // stop hygiene
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
 
-    // scoot logic for RR hop
+    // SCOOT
     scootEnabled: true,
     scootNearMissBand: 0.25,
-    scootATRCapDIP: 4.6, // lets target hop one more resistance
-
+    scootATRCapDIP: 4.6,
     scootATRCapNonDIP: 3.5,
     scootMaxHops: 2,
 
@@ -224,6 +202,7 @@ function getConfig(opts = {}) {
     debug,
   };
 }
+
 
 /* ========= Helpers for "how old is the bullish flip?" ========= */
 
