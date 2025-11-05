@@ -121,15 +121,15 @@ function getConfig(opts = {}) {
     // general
     perfectMode: false,
 
-    // --- Weekly/Daily cross gating (DIP + new playbook) ---
-    requireWeeklyUpForDIP: true,
-    requireDailyReclaim25and75ForDIP: true,
-    dailyReclaimLookback: 5,
-    freshDailyLookbackDays: 5,
-
-    requireFreshWeeklyFlipForDIP: true,
-    freshWeeklyLookbackWeeks: 5,
-    allowStaleCrossDip: false,
+    dailyReclaimLookback: 7,
+    freshDailyLookbackDays: 5, // keep fresh strict
+    freshWeeklyLookbackWeeks: 5, // keep fresh strict
+    staleDailyCrossMaxAgeBars: 30, // +10 bars (more DAILY stale DIPs)
+    staleWeeklyCrossMaxAgeWeeks: 14, // +4 weeks (more WEEKLY stale DIPs)
+    maCrossMaxAgeBars: 14, // allow slightly older 25>75 cross
+    staleDipMaxAgeBars: 10, // dip bounce can be a bit older
+    staleDipMaxAgeWeeklyWeeks: 3, // ditto for weekly
+    allowStaleCrossDip: true, // enable post-flip DIP more broadly
 
     // explicit stale windows for “post-flip DIP still valid”
     staleDailyCrossMaxAgeBars: 20,
@@ -145,18 +145,18 @@ function getConfig(opts = {}) {
 
     // --- Multi-timeframe DIP presets (used ONLY for weekly wrapper) ---
     dipDaily: {
-      minPullbackPct: 4.8,
-      minPullbackATR: 1.9,
-      maxBounceAgeBars: 7,
-      minBounceStrengthATR: 0.6,
-      minRR: 1.55,
+      minPullbackPct: 4.2, // was 4.8
+      minPullbackATR: 1.7, // was 1.9
+      maxBounceAgeBars: 9, // was 7
+      minBounceStrengthATR: 0.5, // was 0.6
+      minRR: 1.5, // was 1.55
     },
     dipWeekly: {
-      minPullbackPct: 6.5,
-      minPullbackATR: 2.6, // WEEKLY ATR units
-      maxBounceAgeWeeks: 2,
-      minBounceStrengthATR: 0.5,
-      minRR: 1.55,
+      minPullbackPct: 6.0, // was 6.5
+      minPullbackATR: 2.3, // was 2.6 (WEEKLY ATR units)
+      maxBounceAgeWeeks: 3, // was 2
+      minBounceStrengthATR: 0.45, // was 0.5
+      minRR: 1.5, // was 1.55
     },
 
     // --- Cross+Volume playbook knobs ---
@@ -171,11 +171,10 @@ function getConfig(opts = {}) {
     minRRweakUp: 1.55,
 
     // headroom & extension guards
-    nearResVetoATR: 0.4,
-    nearResVetoPct: 0.6,
-    maxATRfromMA25: 2.4,
+    nearResVetoATR: 0.35, // a bit more headroom tolerance
+    nearResVetoPct: 0.55,
+    maxATRfromMA25: 2.8, // allow a touch more extension
 
-    // overbought guards
     hardRSI: 75,
     softRSI: 70,
 
@@ -214,7 +213,8 @@ function getConfig(opts = {}) {
     // scoot logic for RR hop
     scootEnabled: true,
     scootNearMissBand: 0.25,
-    scootATRCapDIP: 4.2,
+    scootATRCapDIP: 4.6, // lets target hop one more resistance
+
     scootATRCapNonDIP: 3.5,
     scootMaxHops: 2,
 
@@ -375,7 +375,7 @@ function weeklyUptrendGate(data, px) {
   if (!hasAll)
     return { pass: false, passRelaxed: false, hasAll, w13, w26, w52 };
 
-  const slack = 0.01; // ≤1% slack allowed
+  const slack = 0.015; // ≤1.5% slack allowed (helps WEEKLY DIP qualify)
   const above13 = px > w13 * (1 - slack);
   const above26 = px > w26 * (1 - slack);
   const above52 = px > w52 * (1 - slack);
@@ -1579,7 +1579,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
       );
     }
   }
-  
+
   let activeDip = null;
   if (dipLane === "WEEKLY") {
     activeDip = detectDipBounceWeekly(stock, dataAll, cfg, U);
