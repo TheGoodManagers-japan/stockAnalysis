@@ -1238,11 +1238,7 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
   };
 
   // completedDaily = fully closed bars (exclude current bar)
-  const completedDaily = Array.isArray(opts?.dataForGates)
-    ? opts.dataForGates
-    : dataAll.length > 0
-    ? dataAll.slice(0, -1)
-    : dataAll;
+  const completedDaily = dataAll.length > 0 ? dataAll.slice(0, -1) : dataAll;
 
   const msFull = getMarketStructure(stock, dataAll);
   tele.context = {
@@ -1531,14 +1527,6 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     dipGatePass = false;
     dipGateWhy.push("not above 13/26/52-week MAs");
   }
-  if (cfg.requireDailyReclaim25and75ForDIP || cfg.requireMA25over75ForDIP) {
-    if (!(reclaimGate.pass || maCrossGate.pass)) {
-      dipGatePass = false;
-      dipGateWhy.push(
-        `no 25/75 reclaim (≤${cfg.dailyReclaimLookback}) OR 25>75 cross (≤${cfg.maCrossMaxAgeBars})`
-      );
-    }
-  }
 
   // 2. Are we still in a fresh flip window *today*?
   const haveFreshCrossNow = !!(crossW.trigger || crossD.trigger);
@@ -1574,6 +1562,24 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     }
   }
 
+  // Lane-aware gate relaxation: WEEKLY DIP shouldn't require DAILY reclaim/MA cross
+  let requireDailyReclaim = cfg.requireDailyReclaim25and75ForDIP;
+  let requireMAcross = cfg.requireMA25over75ForDIP;
+  if (dipLane === "WEEKLY") {
+    requireDailyReclaim = false;
+    requireMAcross = false;
+  }
+
+  // Now evaluate the (possibly relaxed) daily reclaim / MA-cross gate
+  if (requireDailyReclaim || requireMAcross) {
+    if (!(reclaimGate.pass || maCrossGate.pass)) {
+      dipGatePass = false;
+      dipGateWhy.push(
+        `no 25/75 reclaim (≤${cfg.dailyReclaimLookback}) OR 25>75 cross (≤${cfg.maCrossMaxAgeBars})`
+      );
+    }
+  }
+  
   let activeDip = null;
   if (dipLane === "WEEKLY") {
     activeDip = detectDipBounceWeekly(stock, dataAll, cfg, U);
@@ -1608,7 +1614,9 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     dipStillFreshEnough =
       !Number.isFinite(ageBars) || ageBars <= (cfg.staleDipMaxAgeBars ?? 7);
   } else if (dipLane === "WEEKLY") {
-    const ageWeeks = activeDip?.diagnostics?.bounceAgeBars;
+    const ageWeeks =
+      activeDip?.diagnostics?.bounceAgeWeeks ??
+      activeDip?.diagnostics?.bounceAgeBars;
     dipStillFreshEnough =
       !Number.isFinite(ageWeeks) ||
       ageWeeks <= (cfg.staleDipMaxAgeWeeklyWeeks ?? 2);
@@ -1772,18 +1780,11 @@ export function analyseCrossing(stock, historicalData, opts = {}) {
     return out;
   }
 
-  // Choose preferred candidate.
-  // Priority:
-  //   1. WEEKLY CROSS
-  //   2. WEEKLY CROSS +VOLUME
-  //   3. DAILY CROSS
-  //   4. DAILY CROSS +VOLUME
-  //   5. else highest RR
   let pref =
-    candidates.find((c) => c.kind === "WEEKLY CROSS") ||
     candidates.find((c) => c.kind === "WEEKLY CROSS +VOLUME") ||
-    candidates.find((c) => c.kind === "DAILY CROSS") ||
+    candidates.find((c) => c.kind === "WEEKLY CROSS") ||
     candidates.find((c) => c.kind === "DAILY CROSS +VOLUME") ||
+    candidates.find((c) => c.kind === "DAILY CROSS") ||
     candidates.sort(
       (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
     )[0];
