@@ -1175,8 +1175,7 @@ function maSeries(data, n) {
   }
   return out;
 }
-
-/** A) Last GOLDEN CROSS (25 over 75): return barsAgo or null */
+/** A) Last GOLDEN CROSS (25 over 75) that is STILL ABOVE now; else null */
 export function goldenCross25Over75BarsAgo(data) {
   const last = data.length - 1;
   if (last < 74) return null; // need ≥75 bars
@@ -1184,16 +1183,25 @@ export function goldenCross25Over75BarsAgo(data) {
   const ma25 = maSeries(data, 25);
   const ma75 = maSeries(data, 75);
 
+  // Must STILL be above now, otherwise null
+  if (!(Number.isFinite(ma25[last]) && Number.isFinite(ma75[last]) && ma25[last] > ma75[last])) {
+    return null;
+  }
+
+  // Find the most recent bar where 25 crossed above 75
   for (let i = last; i >= 1; i--) {
-    // Upward cross at i: previously <=, now >
-    if (ma25[i] > 0 && ma75[i] > 0 && ma25[i] > ma75[i] && ma25[i - 1] <= ma75[i - 1]) {
+    if (
+      Number.isFinite(ma25[i]) && Number.isFinite(ma75[i]) &&
+      Number.isFinite(ma25[i - 1]) && Number.isFinite(ma75[i - 1]) &&
+      ma25[i] > ma75[i] && ma25[i - 1] <= ma75[i - 1]
+    ) {
       return last - i;
     }
   }
   return null;
 }
 
-/** B) Last DAILY FLIP to 5>25>75 (stack turns true at i): return barsAgo or null */
+/** B) Last DAILY FLIP to 5>25>75 that is STILL STACKED now; else null */
 export function dailyFlipBarsAgo(data) {
   const last = data.length - 1;
   if (last < 74) return null; // need ≥75 bars
@@ -1202,10 +1210,19 @@ export function dailyFlipBarsAgo(data) {
   const m25 = maSeries(data, 25);
   const m75 = maSeries(data, 75);
 
+  const isFiniteTriple = (i) =>
+    Number.isFinite(m5[i]) && Number.isFinite(m25[i]) && Number.isFinite(m75[i]);
+
+  const stacked = (i) => isFiniteTriple(i) && m5[i] > m25[i] && m25[i] > m75[i];
+
+  // Must STILL be stacked now, otherwise null
+  if (!stacked(last)) return null;
+
+  // Find the most recent bar where the stack turned true
   for (let i = last; i >= 1; i--) {
-    const nowStacked  = m5[i]  > 0 && m25[i]  > 0 && m75[i]  > 0 && m5[i]  > m25[i]  && m25[i]  > m75[i];
-    const prevStacked = m5[i-1] > 0 && m25[i-1] > 0 && m75[i-1] > 0 && m5[i-1] > m25[i-1] && m25[i-1] > m75[i-1];
-    if (nowStacked && !prevStacked) return last - i;
+    if (stacked(i) && !stacked(i - 1)) {
+      return last - i;
+    }
   }
   return null;
 }
