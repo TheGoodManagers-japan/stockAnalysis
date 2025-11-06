@@ -1520,13 +1520,15 @@ export async function fetchStockAnalysis({
         _api_c2_priceTarget: stock.priceTarget,
         // ANCHOR: LIQ_BUBBLE_FIELDS_MIN
         _api_c2_liqPass: liq ? !!liq.pass : null,
+
+        // Numbers (no formatting)
         _api_c2_liqAdv: (() => {
-          const v = toFinite(liq?.metrics?.adv); // ADV in JPY (raw number)
-          return Number.isFinite(v) ? formatJPYKMB(v) : null;
+          const v = toFinite(liq?.metrics?.adv); // ADV in JPY
+          return Number.isFinite(v) ? v : null;
         })(),
         _api_c2_liqVol: (() => {
-          const v = toFinite(liq?.metrics?.avVol); // Average volume (shares)
-          return Number.isFinite(v) ? formatKMB(v) : null;
+          const v = toFinite(liq?.metrics?.avVol); // Avg volume (shares)
+          return Number.isFinite(v) ? v : null;
         })(),
 
         _api_c2_tier: stock.tier,
