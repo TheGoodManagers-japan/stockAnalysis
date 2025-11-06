@@ -269,7 +269,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
   // ---------- RR + Guards (only if DIP triggered & structure ok) ----------
   if (dip?.trigger && structureGateOk) {
     // Precompute resistances once (shared by RR + guard if needed)
-    const resList = findResistancesAbove(dataForLevels, px, stock) || [];
+    const resList = findResistancesAbove(dataForLevels, px, stock, cfg) || [];
     const rr = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
       kind: "DIP",
       data: dataForLevels,
@@ -450,6 +450,18 @@ function getConfig(opts = {}) {
     minRRweakUp: 1.55,
     dipMinRR: 1.55, // DIP-specific RR floor
 
+    // Horizon behavior
+    horizonRRRelief: 0.1, // lower RR need by 0.10 if target was horizon-clamped
+    tightenStopOnHorizon: true, // try a safe micro-tighten on DIP stops after clamp
+    dipTightenStopATR: 0.25, // keep stop ≥ (nearestSupport - 0.25*ATR)
+
+    // ---- Holding horizon controls ----
+    maxHoldingBars: 8, // hard cap: you exit by bar 8
+    atrPerBarEstimate: 0.7,
+    include52wAsResistance: false, // ignore timeless 52w high by default
+    resistanceLookbackBars: 40, // only consider ~2 months of swing highs
+    timeHorizonRRPolicy: "clamp", // "clamp" target; alt: "reject" if RR falls short after clamp
+
     // Headroom & extension guards
     nearResVetoATR: 0.5, // veto if headroom < this ATR
     nearResVetoPct: 1.0, // and/or < this %
@@ -529,13 +541,6 @@ function getConfig(opts = {}) {
     probationRRSlack: 0.02,
     probationRSIMax: 58,
 
-    // Holding window / time stop
-    maxHoldBars: 8, // <-- your rule
-    enableTimeStop: true, // add a timeline step to force an exit
-    // Rough “reachable” price advance if trend is cooperating.
-    // 0.5–0.7 ATR/bar is a realistic ceiling for swing names.
-    timeboxATRPerBar: 0.55,
-
     // Timeline config (no magic numbers)
     timeline: {
       r1: 1.0, // breakeven at +1R
@@ -550,14 +555,7 @@ function getConfig(opts = {}) {
   };
 
   // ---------- Sentiment-aware tweaks ----------
-  const cfg = { ...base }; 
-  
-  // ANCHOR: CFG_SHORT_HOLD_RR_NUDGE_START
-  if (Number.isFinite(cfg.maxHoldBars) && cfg.maxHoldBars <= 8) {
-    cfg.minRRbase = Math.max((cfg.minRRbase ?? 1.5) + 0.05, 1.25);
-    cfg.dipMinRR = Math.max((cfg.dipMinRR ?? 1.55) + 0.05, 1.35);
-  }
-  // ANCHOR: CFG_SHORT_HOLD_RR_NUDGE_END
+  const cfg = { ...base };
 
   if (LT_bull && ST_pull) {
     cfg.dipMinRR = Math.max(cfg.dipMinRR - 0.05, 1.45);
@@ -648,7 +646,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   // 2) Resistances (use precomputed if provided)
   let resList = Array.isArray(ctx?.resList) ? ctx.resList : [];
   if (!resList.length && Array.isArray(ctx?.data) && ctx.data.length) {
-    resList = findResistancesAbove(ctx.data, entryPx, stock) || [];
+    resList = findResistancesAbove(ctx.data, entryPx, stock, cfg) || [];
   }
 
   // 3) Light target sanity with resistances
@@ -672,8 +670,9 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   }
 
   // 4) Compute base RR
-  const risk = Math.max(0.01, entryPx - stop);
+  let risk = Math.max(0.01, entryPx - stop);
   let reward = Math.max(0, target - entryPx);
+  let horizonClamped = false;
   let ratio = reward / risk;
 
   // 5) RR floors (use DIP-specific if applicable)
@@ -688,6 +687,8 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.0) need = Math.max(need - cfg.lowVolRRBump, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, cfg.highVolRRFloor);
+
+
 
   // 6) SCOOT: bounded target lifts to nearby clustered resistances
   if (cfg.scootEnabled && Array.isArray(resList) && resList.length) {
@@ -722,42 +723,79 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     }
   }
 
-  // ANCHOR: RR_TIMEBOX_CAP_START
-  // --- TIMEBOX CAP: don't assume more than X ATR over maxHoldBars
-  if (Number.isFinite(cfg.maxHoldBars) && cfg.maxHoldBars > 0) {
-    const perBar = Math.max(0, cfg.timeboxATRPerBar ?? 0.55);
-const timeCapATR = Math.max(
-  ctx?.kind === "DIP" ? cfg.minDipTargetATR ?? 2.6 : 2.2,
-  perBar * cfg.maxHoldBars
-);
+  // --- Time-horizon target cap (keep within N bars expectation)
+  {
+    const bars = Math.max(1, cfg.maxHoldingBars || 8);
+    const atrPerBar = Math.max(0.1, cfg.atrPerBarEstimate || 0.55);
+    const horizonCap = entryPx + bars * atrPerBar * atr;
 
+    // clamp or reject based on policy
+    if (ctx?.kind === "DIP") {
+      if ((cfg.timeHorizonRRPolicy || "clamp") === "clamp") {
+        if (target > horizonCap) {
+          target = horizonCap;
+          horizonClamped = true;
+        }
+      } else {
+        // "reject"
+        if (target > horizonCap) {
+          return {
+            acceptable: false,
+            ratio: 0,
+            stop,
+            target: horizonCap,
+            need: cfg.dipMinRR ?? cfg.minRRbase ?? 1.5,
+            atr,
+            risk: Math.max(0.01, entryPx - stop),
+            reward: Math.max(0, horizonCap - entryPx),
+            probation: false,
+          };
+        }
+      }
+      // Recompute reward/ratio after possible clamp
+      const _risk = Math.max(0.01, entryPx - stop);
+      const _reward = Math.max(0, target - entryPx);
+      ratio = _reward / _risk;
+      // keep outer vars in sync
+      reward = _reward;
+      risk = _risk;
 
-    const hardATRCap =
-      ctx?.kind === "DIP"
-        ? cfg.scootATRCapDIP ?? 4.2
-        : cfg.scootATRCapNonDIP ?? 3.5;
-
-    const finalATRCap = Math.min(timeCapATR, hardATRCap);
-    const timeboxCapPx = entryPx + finalATRCap * atr;
-
-    if (target > timeboxCapPx) {
-      target = timeboxCapPx; // cap target to what the 8-bar window can realistically deliver
+            // (Optional) micro-tighten stop to recover RR while respecting support
+      if (cfg.tightenStopOnHorizon && ratio < (cfg.dipMinRR ?? need)) {
+        const needNow = cfg.dipMinRR ?? need;
+        const maxRisk = (reward) / Math.max(1e-9, needNow); // risk cap to hit RR need
+        if (risk > maxRisk) {
+          const pad = Math.max(0, cfg.dipTightenStopATR ?? 0.25) * atr;
+          const sup = (findSupportsBelow(ctx?.data || [], entryPx)[0]) ?? stop; // highest support below entry
+          const structuralFloor = sup - pad;
+           const floor = Math.max(structuralFloor, stop);
+ const proposed = Math.max(entryPx - maxRisk, floor);
+          if (proposed > stop && proposed < entryPx) {
+            stop = proposed;
+            risk = entryPx - stop;
+            ratio = reward / Math.max(1e-9, risk);
+          }
+        }
+      }
     }
-
-    // refresh reward/ratio after cap (risk/reward already defined above)
-    reward = Math.max(0, target - entryPx);
-    ratio = reward / risk;
   }
-  // ANCHOR: RR_TIMEBOX_CAP_END
+
+    // Apply RR relief only if clamp actually happened
+  let needEff = need;
+  if (horizonClamped) {
+    needEff = Math.max(need - (cfg.horizonRRRelief ?? 0.10), cfg.minRRbase ?? 1.35);
+  }
 
   // 7) Acceptable / probation
-  let acceptable = ratio >= need;
+  let acceptable = ratio >= needEff;
   const allowProb = !!cfg.allowProbation;
-  const rsiHere = Number(stock.rsi14) || rsiFromData(ctx?.data || [], 14);
+   const rsiHere = Number.isFinite(stock.rsi14)
+   ? stock.rsi14
+   : rsiFromData(ctx?.data || [], 14);
   const probation =
     allowProb &&
     !acceptable &&
-    ratio >= need - (cfg.probationRRSlack ?? 0.02) &&
+    ratio >= needEff - (cfg.probationRRSlack ?? 0.02) &&
     (ms.trend === "STRONG_UP" || ms.trend === "UP") &&
     rsiHere < (cfg.probationRSIMax ?? 58);
 
@@ -768,11 +806,12 @@ const timeCapATR = Math.max(
     ratio,
     stop,
     target,
-    need,
+    need: needEff, // reflect effective need in telemetry
     atr,
     risk,
     reward,
     probation,
+    horizonClamped,
   };
 }
 
@@ -802,7 +841,7 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind, resListIn) {
   const resList =
     Array.isArray(resListIn) && resListIn.length
       ? resListIn
-      : findResistancesAbove(data, px, stock);
+      : findResistancesAbove(data, px, stock, cfg);
   let effRes = Number.isFinite(nearestRes) ? nearestRes : resList[0];
   if (
     isFiniteN(effRes) &&
@@ -981,20 +1020,13 @@ function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
     priceTarget: Number(candidate.target),
     note: "Trail by structure/MA",
   });
-  // ANCHOR: TIMELINE_TIME_STOP_START
-  if (
-    cfg.enableTimeStop &&
-    Number.isFinite(cfg.maxHoldBars) &&
-    cfg.maxHoldBars > 0
-  ) {
-    steps.push({
-      when: `T+${cfg.maxHoldBars}`,
-      condition: `After ${cfg.maxHoldBars} completed bars`,
-      action: "Exit at market (time stop)",
-      note: "Max holding window reached",
-    });
-  }
-  // ANCHOR: TIMELINE_TIME_STOP_END
+  steps.push({
+    when: `T+${cfg.maxHoldingBars} bars`,
+    condition: `Exit on close of bar ${cfg.maxHoldingBars}`,
+    stopLoss: undefined,
+    priceTarget: undefined,
+    note: `Time-based exit: force close by bar ${cfg.maxHoldingBars}`,
+  });
 
   return steps;
 }
@@ -1102,19 +1134,26 @@ function clusterLevels(levels, atrVal, thMul = 0.3) {
   if (bucket.length) out.push(avg(bucket));
   return out;
 }
-function findResistancesAbove(data, px, stock) {
+function findResistancesAbove(data, px, stock, cfg) {
+  const lookback = Math.max(10, Number(cfg?.resistanceLookbackBars) || 40);
+  const win = data.slice(-lookback);
   const ups = [];
-  const win = data.slice(-60);
   for (let i = 2; i < win.length - 2; i++) {
     const h = num(win[i].high);
     if (h > px && h > num(win[i - 1].high) && h > num(win[i + 1].high))
       ups.push(h);
   }
-  const yHigh = num(stock.fiftyTwoWeekHigh);
-  if (yHigh > px) ups.push(yHigh);
+
+  // Optional 52w high injection (disabled by default)
+  if (cfg?.include52wAsResistance) {
+    const yHigh = num(stock.fiftyTwoWeekHigh);
+    if (yHigh > px) ups.push(yHigh);
+  }
+
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
   return clusterLevels(ups, atr, 0.3);
 }
+
 function findSupportsBelow(data, px) {
   const downs = [];
   const win = data.slice(-60);
@@ -1149,6 +1188,7 @@ function toTeleRR(rr) {
     stop: rr.stop,
     target: rr.target,
     probation: !!rr.probation,
+    horizonClamped: !!rr.horizonClamped,
   };
 }
 
@@ -1172,6 +1212,7 @@ function summarizeTelemetryForLog(tele) {
         stop: rr.stop,
         target: rr.target,
         probation: rr.probation,
+        horizonClamped: rr.horizonClamped,
       },
       guard: {
         checked: guard.checked,
