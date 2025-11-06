@@ -83,22 +83,21 @@ export function getDeepMarketAnalysis(stock, historicalData) {
   const isShortRange = intermediateRegime.type === "RANGE_BOUND";
 
   if (isLongDown) {
-    if (isShortDown) regimeAdjustment = -3.0;
-    else if (isShortRange) regimeAdjustment = -1.2;
-    else if (isShortUp) regimeAdjustment = 1.5;
+    if (isShortDown) regimeAdjustment = -1.8;
+    else if (isShortRange) regimeAdjustment = -0.8;
+    else if (isShortUp) regimeAdjustment = 1.2;
   } else if (isLongUp) {
-    if (isShortUp && !extensionAnalysis.parabolicMove) regimeAdjustment = 1.5;
-    else if (isShortDown) regimeAdjustment = 0.5;
+    if (isShortUp && !extensionAnalysis.parabolicMove) regimeAdjustment = 1.8;
+    else if (isShortDown) regimeAdjustment = 0.8;
   } else if (longTermRegime.type === "RANGE_BOUND") {
     if (priceActionQuality.nearRangeLow) regimeAdjustment = 1.5;
     else if (priceActionQuality.nearRangeHigh) regimeAdjustment = -2.0;
   } else if (longTermRegime.type === "CHOPPY") {
-    regimeAdjustment = -Math.min(
-      1.5,
-      (longTermRegime.strength || 0) * 0.8 || 1.0
-    );
+    // neutral adjustment for chop
+    regimeAdjustment = 0;
   } else if (longTermRegime.type === "UNKNOWN") {
-    regimeAdjustment = -0.8;
+    // neutral when unsure
+    regimeAdjustment = 0;
   }
   mlScore += regimeAdjustment;
 
@@ -771,8 +770,8 @@ function calculateMLScore(features) {
   if (features.f2_trendEfficiency > 0.5) qualityPoints++;
 
   // Penalize poor quality more heavily
-  if (qualityPoints < 2) score -= 3.0;
-  else if (qualityPoints < 3) score -= 1.0;
+  if (qualityPoints < 2) score -= 1.5;
+  else if (qualityPoints < 3) score -= 0.5;
 
   // Positive combos (more selective)
   if (
@@ -814,8 +813,8 @@ function calculateMLScore(features) {
   if (features.f3_bearishHidden && features.f8_isExtended) score -= 4.0;
   if (features.f5_threePushes && features.f8_parabolicMove) score -= 5.0;
   if (features.f0_bearishAuction && features.f1_pocFalling) score -= 4.0;
-  if (features.f2_choppy) score -= 2.0;
-  if (features.f8_isExtended && !features.f9_isHealthyTrend) score -= 2.5;
+  if (features.f2_choppy) score -= 1.0;
+  if (features.f8_isExtended && !features.f9_isHealthyTrend) score -= 1.5;
 
   // Small nudges: volume/delta
   if (features.f1_volumeTrend_INCREASING && features.f0_bullishAuction)
@@ -936,12 +935,12 @@ export function mapRegimeToTier(longTermRegime, mlScore = 0) {
     // Better mlScore ⇒ more bullish
     tier = mlScore >= 2 ? 1 : mlScore >= 0.5 ? 2 : 3;
   } else if (longTermRegime?.type === "TRENDING" && has(longTermRegime.characteristics, "DOWNTREND")) {
-    tier = mlScore <= -2 ? 7 : mlScore <= -0.5 ? 6 : 5;
+    tier = mlScore <= -2.5 ? 7 : mlScore <= -1.0 ? 6 : 5;
   } else if (longTermRegime?.type === "RANGE_BOUND") {
     // Without priceActionQuality context here, keep center
     tier = 4;
   } else if (longTermRegime?.type === "CHOPPY") {
-    tier = 5; // mild bearish bias for chop
+    tier = 4; // neutral for chop
   } else {
     // UNKNOWN / insufficient history
     tier = 4;
