@@ -17,6 +17,21 @@ import {
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
 
+
+// ANCHOR: LIQ_HELPERS
+function formatKMB(n) {
+  const v = Number(n) || 0;
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (a >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(Math.round(v));
+}
+function formatJPYKMB(n) {
+  return "¥" + formatKMB(n);
+}
+
+
 /* -------------------------------------------
    0) Constants + tiny logging helper
 ------------------------------------------- */
@@ -1330,6 +1345,9 @@ export async function fetchStockAnalysis({
         sentiment: { ST, LT }, // << add this
       });
 
+      // ANCHOR: LIQ_CAPTURE
+      const liq = finalSignal?.liquidity || null;
+      stock._liquidity = liq; // keep on stock for any downstream use
 
       // capture MA stacking flip “bars ago” for downstream/UI
       const flipBarsAgo = Number.isFinite(finalSignal?.flipBarsAgo)
@@ -1349,10 +1367,8 @@ export async function fetchStockAnalysis({
         ? regimeForDate(regimeMap, regimeDate)
         : "RANGE";
 
-
       stock.marketRegime = dayRegime;
       stock._scoreAnalytics = analytics;
-
 
       // collect detailed telemetry per item
       if (finalSignal?.telemetry) {
@@ -1414,9 +1430,9 @@ export async function fetchStockAnalysis({
 
         // TARGET: only keep or raise
         const newTarget = Number.isFinite(suggestedTP)
-          ? (Number.isFinite(curTarget)
-              ? Math.max(curTarget, toTick(suggestedTP, stock))
-              : toTick(suggestedTP, stock))
+          ? Number.isFinite(curTarget)
+            ? Math.max(curTarget, toTick(suggestedTP, stock))
+            : toTick(suggestedTP, stock)
           : curTarget;
 
         stock.stopLoss = Number.isFinite(newStop) ? newStop : undefined;
@@ -1429,7 +1445,6 @@ export async function fetchStockAnalysis({
           stock.priceTarget = toTick(suggestedTP, stock);
         }
       }
-
 
       // 7) trade management if held
       if (portfolioEntry) {
@@ -1501,8 +1516,19 @@ export async function fetchStockAnalysis({
         _api_c2_currentPrice: stock.currentPrice,
         _api_c2_shortTermScore: stock.shortTermScore,
         _api_c2_longTermScore: stock.longTermScore,
-        _api_c2_stopLoss: stock.stopLoss,          
-        _api_c2_priceTarget: stock.priceTarget,  
+        _api_c2_stopLoss: stock.stopLoss,
+        _api_c2_priceTarget: stock.priceTarget,
+        // ANCHOR: LIQ_BUBBLE_FIELDS_MIN
+        _api_c2_liqPass: liq ? !!liq.pass : null,
+        _api_c2_liqAdv: (() => {
+          const v = toFinite(liq?.metrics?.adv); // ADV in JPY (raw number)
+          return Number.isFinite(v) ? formatJPYKMB(v) : null;
+        })(),
+        _api_c2_liqVol: (() => {
+          const v = toFinite(liq?.metrics?.avVol); // Average volume (shares)
+          return Number.isFinite(v) ? formatKMB(v) : null;
+        })(),
+
         _api_c2_tier: stock.tier,
         _api_c2_isBuyNow: stock.isBuyNow,
         _api_c2_flipBarsAgo: stock.flipBarsAgo,

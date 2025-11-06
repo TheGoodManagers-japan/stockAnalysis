@@ -79,7 +79,6 @@ function mkTracer(opts = {}) {
   return T;
 }
 
-
 export function analyzeDipEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
   const gatesData =
@@ -156,31 +155,6 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     sentiment: { ST, LT },
   };
 
-  // ---------- Minimal structure gate (config-only thresholds) ----------
-  const ma5Finite = Number.isFinite(msFull.ma5);
-  const pxVsMa5Ok = ma5Finite ? px >= msFull.ma5 * cfg.structureMa5Tol : true;
-  const allowDown = cfg.allowDipInDowntrend;
-  const structureGateOk = (msFull.trend !== "DOWN" || allowDown) && pxVsMa5Ok;
-
-  tele.gates.structure = {
-    pass: !!structureGateOk,
-    why: structureGateOk
-      ? ""
-      : msFull.trend === "DOWN" && !allowDown
-      ? "trend DOWN (DIP not allowed in DOWNtrend)"
-      : `price < MA5 * tol (${cfg.structureMa5Tol})`,
-  };
-  if (!structureGateOk) {
-    const margin =
-      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
-    pushBlock(tele, "STRUCTURE", "structure", tele.gates.structure.why, {
-      trend: msFull.trend,
-      px,
-      ma5: msFull.ma5,
-      marginPct: +margin.toFixed(3),
-    });
-  }
-
   const candidates = [];
   const U = {
     num,
@@ -194,37 +168,18 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     tracer: T,
   };
 
-  // ---------- Liquidity prefilter ----------
-  if (cfg.liquidityCheckEnabled) {
-    const L = assessLiquidity(dataForGates2, stock, cfg); // completed bars only
-     tele.gates.liquidity = {
-   pass: !!L.pass,
-   why: L.why || "",
-   metrics: L.metrics,
-   thresholds: L.thresholds,
-   ratios: L.ratios,
- };
-    tele.context.liquidity = L.metrics;
-    tele.context.liqNearMargin = cfg.liqNearMargin; // for helper awareness
-    // store severity for reason tag
-    const liqPacked = packLiquidity(tele, cfg);
-    tele.__liquiditySeverity = liqPacked.severity;
-
-    if (!L.pass) {
-      pushBlock(tele, "LIQUIDITY_FAIL", "prefilter", L.why, L.metrics);
-      const base = `Liquidity filter failed: ${L.why}`;
-      const reason = makeReasonWithLiquidity(base, tele);
-      tele.outcome = { buyNow: false, reason };
-      return {
-        buyNow: false,
-        reason,
-        timeline: [],
-        telemetry: { ...tele, trace: T.logs },
-        flipBarsAgo,
-        liquidity: packLiquidity(tele, cfg), // <-- NEW
-      };
-    }
-  }
+  // ---------- Liquidity (compute only; do NOT prefilter or affect reasons) ----------
+  // We still compute and return liquidity information for the caller.
+  const L = assessLiquidity(dataForGates2, stock, cfg); // completed bars window
+  tele.gates.liquidity = {
+    pass: true, // mark as informational "pass" so severity isn't "unk"
+    why: L.why || "",
+    metrics: L.metrics,
+    thresholds: L.thresholds,
+    ratios: L.ratios,
+  };
+  tele.context.liquidity = L.metrics;
+  tele.context.liqNearMargin = cfg.liqNearMargin;
 
   // ---------- DIP detection ----------
   const dip = detectDipBounce(stock, dataForLevels, cfg, U); // keep levels/targets on full data
@@ -279,6 +234,31 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     pushBlock(tele, code, "dip", dip?.waitReason || "DIP not ready", {
       px,
       diag: dip?.diagnostics || {},
+    });
+  }
+
+  // ---------- Minimal structure gate (config-only thresholds) ----------
+  const ma5Finite = Number.isFinite(msFull.ma5);
+  const pxVsMa5Ok = ma5Finite ? px >= msFull.ma5 * cfg.structureMa5Tol : true;
+  const allowDown = cfg.allowDipInDowntrend;
+  const structureGateOk = (msFull.trend !== "DOWN" || allowDown) && pxVsMa5Ok;
+
+  tele.gates.structure = {
+    pass: !!structureGateOk,
+    why: structureGateOk
+      ? ""
+      : msFull.trend === "DOWN" && !allowDown
+      ? "trend DOWN (DIP not allowed in DOWNtrend)"
+      : `price < MA5 * tol (${cfg.structureMa5Tol})`,
+  };
+  if (!structureGateOk) {
+    const margin =
+      ((px - (msFull.ma5 || 0)) / Math.max(msFull.ma5 || 1e-9, 1e-9)) * 100;
+    pushBlock(tele, "STRUCTURE", "structure", tele.gates.structure.why, {
+      trend: msFull.trend,
+      px,
+      ma5: msFull.ma5,
+      marginPct: +margin.toFixed(3),
     });
   }
 
@@ -402,7 +382,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
 
   if (candidates.length === 0) {
     const base = buildNoReason([], reasons);
-    const reason = makeReasonWithLiquidity(base, tele);
+    const reason = base; // no liquidity logs in reason
     tele.outcome = { buyNow: false, reason };
     return {
       buyNow: false,
@@ -410,7 +390,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
       timeline: [], // no fallbacks
       telemetry: { ...tele, trace: T.logs },
       flipBarsAgo,
-      liquidity: packLiquidity(tele, cfg), // <-- NEW
+      liquidity: packLiquidity(tele, cfg), // pass liquidity back to caller
     };
   }
 
@@ -419,21 +399,20 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
   );
   const best = candidates[0];
-  const baseReason = `${best.kind}: ${
+  const reason = `${best.kind}: ${
     best.rr ? best.rr.ratio.toFixed(2) : "?"
   }:1. ${best.why}`;
-  const reason = makeReasonWithLiquidity(baseReason, tele);
   tele.outcome = { buyNow: true, reason };
 
   return {
     buyNow: true,
-    reason,
+    reason, // no liquidity logs appended
     stopLoss: toTick(best.stop, stock),
     priceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull, cfg),
     telemetry: { ...tele, trace: T.logs },
     flipBarsAgo,
-    liquidity: packLiquidity(tele, cfg), // <-- NEW
+    liquidity: packLiquidity(tele, cfg), // informational only
   };
 }
 
@@ -530,14 +509,14 @@ function getConfig(opts = {}) {
     maxConsecutiveUpDays: 9,
     // ANCHOR: CFG_MISSING_KEYS_END
 
-    // --- Liquidity prefilter ---
-    liquidityCheckEnabled: true,
+    // --- Liquidity window (for metrics only; no prefiltering) ---
+    liquidityCheckEnabled: true, // retained but unused for gating
     liqLookbackDays: 20, // rolling window
     minADVNotional: 2e8, // avg(close*volume) in JPY (tune to your market)
     minAvgVolume: 200_000, // shares/day
     minClosePrice: 200, // avoid penny names
     minATRTicks: 5, // ATR must span at least N ticks
-    liqNearMargin: 0.15, // NEW: warn if within 15% of thresholds
+    liqNearMargin: 0.15, // warn if within 15% of thresholds
 
     // Probation
     allowProbation: true,
@@ -885,39 +864,7 @@ function assessLiquidity(data, stock, cfg) {
     minATRTicks: cfg.minATRTicks ?? 0,
   };
 
-  // Hard fails (same as before)
-  if (thresholds.minClosePrice && px < thresholds.minClosePrice)
-    return {
-      pass: false,
-      why: `Price ${px} < minClosePrice ${thresholds.minClosePrice}`,
-      metrics,
-    };
-  if (thresholds.minADVNotional && adv < thresholds.minADVNotional)
-    return {
-      pass: false,
-      why: `ADV ${Math.round(adv)} < minADVNotional ${
-        thresholds.minADVNotional
-      }`,
-      metrics,
-    };
-  if (thresholds.minAvgVolume && avVol < thresholds.minAvgVolume)
-    return {
-      pass: false,
-      why: `Avg volume ${Math.round(avVol)} < minAvgVolume ${
-        thresholds.minAvgVolume
-      }`,
-      metrics,
-    };
-  if (thresholds.minATRTicks && atrTicks < thresholds.minATRTicks)
-    return {
-      pass: false,
-      why: `ATR in ticks ${atrTicks.toFixed(2)} < minATRTicks ${
-        thresholds.minATRTicks
-      }`,
-      metrics,
-    };
-
-  // Soft warning if close to threshold
+  // Soft evaluation only; we still return these for informational purposes
   const near = cfg.liqNearMargin ?? 0.15;
   const ratios = {
     advR: thresholds.minADVNotional ? adv / thresholds.minADVNotional : null,
@@ -939,7 +886,6 @@ function assessLiquidity(data, stock, cfg) {
 
   return { pass: true, why: whyWarn, metrics, thresholds, ratios };
 }
-
 
 function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
   const steps = [];
@@ -992,7 +938,7 @@ function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
 
 // Helper to produce a no-entry result WITHOUT any fallback stop/target.
 function noEntry(baseReason, ctx, tele, T, cfg) {
-  const reason = makeReasonWithLiquidity(baseReason, tele);
+  const reason = baseReason; // no liquidity logs in reason
   const out = {
     buyNow: false,
     reason,
@@ -1003,105 +949,12 @@ function noEntry(baseReason, ctx, tele, T, cfg) {
       reasons: [reason],
       trace: T.logs,
     },
-    liquidity: packLiquidity(tele, cfg),
+    liquidity: packLiquidity(tele, cfg), // still pass liquidity to caller
   };
   return out;
 }
 
 /* =========================== Utils =========================== */
-
-
-function formatKMB(v) {
-  const n = Number(v) || 0;
-  const abs = Math.abs(n);
-  if (abs >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
-  if (abs >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  if (abs >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
-  return String(Math.round(n));
-}
-
-// brief string for reason tag
-function liqBrief(metrics) {
-  if (!metrics) return "";
-  const parts = [];
-  if (Number.isFinite(metrics.adv))
-    parts.push(`adv=¥${formatKMB(metrics.adv)}`);
-  if (Number.isFinite(metrics.avVol))
-    parts.push(`vol=${formatKMB(metrics.avVol)}`);
-  if (Number.isFinite(metrics.atrTicks))
-    parts.push(`atrT=${(+metrics.atrTicks).toFixed(1)}`);
-  return parts.join(" ");
-}
-
-// pack structured liquidity for return object
-function packLiquidity(tele, cfg) {
-  const g = tele?.gates?.liquidity || {};
-  const thresholds = {
-    minADVNotional: cfg?.minADVNotional ?? null,
-    minAvgVolume: cfg?.minAvgVolume ?? null,
-    minClosePrice: cfg?.minClosePrice ?? null,
-    minATRTicks: cfg?.minATRTicks ?? null,
-  };
-  const m = g.metrics || tele?.context?.liquidity || null;
-  const ratios = m
-    ? {
-        advR: thresholds.minADVNotional
-          ? m.adv / thresholds.minADVNotional
-          : null,
-        volR: thresholds.minAvgVolume
-          ? m.avVol / thresholds.minAvgVolume
-          : null,
-        pxR: thresholds.minClosePrice ? m.px / thresholds.minClosePrice : null,
-        atrTicksR: thresholds.minATRTicks
-          ? m.atrTicks / thresholds.minATRTicks
-          : null,
-      }
-    : null;
-
-  // severity: fail if pass=false, warn if near threshold, else pass
-  let severity =
-    g.pass === false ? "fail" : typeof g.pass === "boolean" ? "pass" : "unk";
-  let warnKeys = [];
-  const near = Number.isFinite(tele?.context?.liqNearMargin)
-    ? tele.context.liqNearMargin
-    : 0.15;
-
-  if (g.pass && ratios) {
-    const checks = [
-      ["adv", ratios.advR],
-      ["vol", ratios.volR],
-      ["px", ratios.pxR],
-      ["atrTicks", ratios.atrTicksR],
-    ].filter(([, r]) => r !== null && Number.isFinite(r));
-    for (const [k, r] of checks) {
-      if (r <= 1 + near) warnKeys.push(k);
-    }
-    if (warnKeys.length) severity = "warn";
-  }
-
-  const why =
-    g.why ||
-    (severity === "warn" ? `near threshold: ${warnKeys.join(", ")}` : "");
-  return { pass: !!g.pass, severity, why, metrics: m, thresholds, ratios };
-}
-
-// reason composer (now includes brief metrics + severity)
-function makeReasonWithLiquidity(baseReason, tele) {
-  const liq = tele?.gates?.liquidity || {};
-  const tag =
-    typeof liq.pass === "boolean" ? (liq.pass ? "PASS" : "FAIL") : "UNK";
-  const sev = liq.pass
-    ? tele?.__liquiditySeverity === "warn"
-      ? "WARN"
-      : "PASS"
-    : "FAIL";
-  const brief = liqBrief(liq.metrics);
-  const why = liq.why ? ` (${liq.why})` : "";
-  const sevStr = sev !== tag ? `:${sev}` : "";
-  return `[LIQ:${tag}${sevStr}${why}${brief ? " " + brief : ""}] ${
-    baseReason || ""
-  }`.trim();
-}
 
 function sma(data, n, field = "close") {
   if (!Array.isArray(data) || data.length < n) return NaN;
@@ -1310,7 +1163,7 @@ export function dailyFlipBarsAgo(data) {
 
   // prefix sums for O(1) SMA
   const ps = new Array(n + 1).fill(0);
-  for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + (+data[i].close || 0);
+  for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + +data[i].close || 0;
   const sma = (len, i) => {
     if (i + 1 < len) return NaN;
     return (ps[i + 1] - ps[i + 1 - len]) / len;
@@ -1342,6 +1195,61 @@ export function dailyFlipBarsAgo(data) {
     }
   }
   return null;
+}
+
+/* ============== Liquidity packaging (informational only) ============== */
+
+// pack structured liquidity for return object
+function packLiquidity(tele, cfg) {
+  const g = tele?.gates?.liquidity || {};
+  const thresholds = {
+    minADVNotional: cfg?.minADVNotional ?? null,
+    minAvgVolume: cfg?.minAvgVolume ?? null,
+    minClosePrice: cfg?.minClosePrice ?? null,
+    minATRTicks: cfg?.minATRTicks ?? null,
+  };
+  const m = g.metrics || tele?.context?.liquidity || null;
+  const ratios = m
+    ? {
+        advR: thresholds.minADVNotional
+          ? m.adv / thresholds.minADVNotional
+          : null,
+        volR: thresholds.minAvgVolume
+          ? m.avVol / thresholds.minAvgVolume
+          : null,
+        pxR: thresholds.minClosePrice ? m.px / thresholds.minClosePrice : null,
+        atrTicksR: thresholds.minATRTicks
+          ? m.atrTicks / thresholds.minATRTicks
+          : null,
+      }
+    : null;
+
+  // severity: informational only; "pass" unless undefined
+  let severity =
+    g.pass === false ? "fail" : typeof g.pass === "boolean" ? "pass" : "unk";
+
+  // warn if near thresholds
+  let warnKeys = [];
+  const near = Number.isFinite(tele?.context?.liqNearMargin)
+    ? tele.context.liqNearMargin
+    : 0.15;
+  if (g.pass && ratios) {
+    const checks = [
+      ["adv", ratios.advR],
+      ["vol", ratios.volR],
+      ["px", ratios.pxR],
+      ["atrTicks", ratios.atrTicksR],
+    ].filter(([, r]) => r !== null && Number.isFinite(r));
+    for (const [k, r] of checks) {
+      if (r <= 1 + near) warnKeys.push(k);
+    }
+    if (warnKeys.length) severity = "warn";
+  }
+
+  const why =
+    g.why ||
+    (severity === "warn" ? `near threshold: ${warnKeys.join(", ")}` : "");
+  return { pass: !!g.pass, severity, why, metrics: m, thresholds, ratios };
 }
 
 /* Exports */
