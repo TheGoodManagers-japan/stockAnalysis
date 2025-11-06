@@ -1,6 +1,5 @@
 // /scripts/swingTradeEntryTiming.js — DIP-only, simplified (rich diagnostics kept, no fallbacks)
 
-
 import { detectDipBounce } from "./dip.js";
 
 /* ============== lightweight global bus for guard histos (unchanged) ============== */
@@ -80,6 +79,16 @@ function mkTracer(opts = {}) {
   return T;
 }
 
+/* ============================ Reason composer ============================ */
+function makeReasonWithLiquidity(baseReason, tele) {
+  const liq = tele?.gates?.liquidity || {};
+  const tag =
+    typeof liq.pass === "boolean" ? (liq.pass ? "PASS" : "FAIL") : "UNK";
+  const why = liq.why ? ` (${liq.why})` : "";
+  // Example: "[LIQ:PASS] DIP ENTRY: 1.62:1. …"  or  "[LIQ:FAIL (ADV ...)] Liquidity filter failed: …"
+  return `[LIQ:${tag}${why}] ${baseReason || ""}`.trim();
+}
+
 export function analyzeDipEntry(stock, historicalData, opts = {}) {
   const cfg = getConfig(opts);
   const gatesData =
@@ -118,8 +127,8 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
   ) {
     const r = "Invalid last bar OHLCV.";
-const out = noEntry(r, { stock, data: dataForLevels }, tele, T);
-out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
+    const out = noEntry(r, { stock, data: dataForLevels }, tele, T);
+    out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
     return out;
   }
   const lastVolume = Number.isFinite(last.volume) ? last.volume : 0;
@@ -202,7 +211,8 @@ out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
 
     if (!L.pass) {
       pushBlock(tele, "LIQUIDITY_FAIL", "prefilter", L.why, L.metrics);
-      const reason = `Liquidity filter failed: ${L.why}`;
+      const base = `Liquidity filter failed: ${L.why}`;
+      const reason = makeReasonWithLiquidity(base, tele);
       tele.outcome = { buyNow: false, reason };
       return {
         buyNow: false,
@@ -389,7 +399,8 @@ out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
   teleGlobal.histos.distMA25.length = 0;
 
   if (candidates.length === 0) {
-    const reason = buildNoReason([], reasons);
+    const base = buildNoReason([], reasons);
+    const reason = makeReasonWithLiquidity(base, tele);
     tele.outcome = { buyNow: false, reason };
     return {
       buyNow: false,
@@ -405,18 +416,15 @@ out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
     (a, b) => (Number(b?.rr?.ratio) || -1e9) - (Number(a?.rr?.ratio) || -1e9)
   );
   const best = candidates[0];
-  tele.outcome = {
-    buyNow: true,
-    reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
-      best.why
-    }`,
-  };
+  const baseReason = `${best.kind}: ${
+    best.rr ? best.rr.ratio.toFixed(2) : "?"
+  }:1. ${best.why}`;
+  const reason = makeReasonWithLiquidity(baseReason, tele);
+  tele.outcome = { buyNow: true, reason };
 
   return {
     buyNow: true,
-    reason: `${best.kind}: ${best.rr ? best.rr.ratio.toFixed(2) : "?"}:1. ${
-      best.why
-    }`,
+    reason,
     stopLoss: toTick(best.stop, stock),
     priceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull, cfg),
@@ -759,9 +767,10 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind, resListIn) {
   }
 
   // headroom
-   const resList = Array.isArray(resListIn) && resListIn.length
-   ? resListIn
-   : findResistancesAbove(data, px, stock);
+  const resList =
+    Array.isArray(resListIn) && resListIn.length
+      ? resListIn
+      : findResistancesAbove(data, px, stock);
   let effRes = Number.isFinite(nearestRes) ? nearestRes : resList[0];
   if (
     isFiniteN(effRes) &&
@@ -838,7 +847,6 @@ function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind, resListIn) {
 }
 
 /* ============================ Helpers ============================ */
-
 
 function assessLiquidity(data, stock, cfg) {
   const n = Math.min(data.length, cfg.liqLookbackDays || 20);
@@ -948,7 +956,8 @@ function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
 }
 
 // Helper to produce a no-entry result WITHOUT any fallback stop/target.
-function noEntry(reason, ctx, tele, T) {
+function noEntry(baseReason, ctx, tele, T) {
+  const reason = makeReasonWithLiquidity(baseReason, tele);
   const out = {
     buyNow: false,
     reason,
@@ -1206,4 +1215,4 @@ export function dailyFlipBarsAgo(data) {
 }
 
 /* Exports */
-export { getConfig, summarizeTelemetryForLog};
+export { getConfig, summarizeTelemetryForLog };
