@@ -617,15 +617,28 @@ async function runBacktest36m() {
   const WARMUP = 60;
   const PREFETCH_WARMUP_DAYS = 120;
 
-const now = new Date();
-const TO = toISO(now);                           // end today
-const fromDate = new Date(                       // start 36 months back
-  now.getFullYear(),
-  now.getMonth() - 36,
-  now.getDate()
-);
-const FROM = toISO(fromDate);
-const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
+ const now = new Date();
+ // Shift the whole window back in time (in months). 0 = current 36m,
+ // 36 = the 36 months *before* that (unseen), 72 = even earlier, etc.
+ const ANCHOR_OFFSET_MONTHS = 36;  // <<< set to 36 for your “unseen” test
+
+ // Anchor is "today minus offset"
+ const anchor = new Date(
+   now.getFullYear(),
+   now.getMonth() - ANCHOR_OFFSET_MONTHS,
+   now.getDate()
+ );
+
+ // Our 36m window ends at the anchor date (TO) and starts 36m before it (FROM)
+ const TO = toISO(anchor);
+ const fromDate = new Date(
+   anchor.getFullYear(),
+   anchor.getMonth() - MONTHS,
+   anchor.getDate()
+ );
+ const FROM = toISO(fromDate);
+ const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
+
 
   // Regime reference
   const topix = await fetchHistory(DEFAULT_REGIME_TICKER, FROM_PREFETCH, TO);
