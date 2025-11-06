@@ -1206,4 +1206,4 @@ export function dailyFlipBarsAgo(data) {
 }
 
 /* Exports */
-export { getConfig, summarizeTelemetryForLog, dailyFlipBarsAgo };
+export { getConfig, summarizeTelemetryForLog};
