@@ -6,6 +6,8 @@
 import { analyseCrossing } from "./swingTradeEntryTiming.js";
 import { enrichForTechnicalScore, getShortLongSentiment } from "./main.js";
 import { allTickers } from "./tickers.js";
+import { attachBranchScores } from "./branch-scorer.js";
+
 
 const API_BASE =
   "https://stock-analysis-thegoodmanagers-japan-aymerics-projects-60f33831.vercel.app";
@@ -1010,7 +1012,6 @@ async function runBacktest36m() {
         summaries.push({ ticker: code, overlapping: s, rawEntries });
       }
 
-
       const tMs = Math.round((performance.now?.() ?? Date.now()) - tStart);
       const pct = (((ti + 1) / total) * 100).toFixed(1);
 
@@ -1037,28 +1038,27 @@ async function runBacktest36m() {
         )}`
       );
 
-// summarize partial results even on error — OVERLAPPING
-{
-  const tickerEvents = events.slice(evBase);
+      // summarize partial results even on error — OVERLAPPING
+      {
+        const tickerEvents = events.slice(evBase);
 
-  const entries = extractAllEntries(tickerEvents);
-  const s = summarizeTradesQuick(entries);
-  const rawEntries = entries.length;
+        const entries = extractAllEntries(tickerEvents);
+        const s = summarizeTradesQuick(entries);
+        const rawEntries = entries.length;
 
-  console.log(
-    `[BT][PERF][RAW][ERROR] ${code} — entries_taken=${rawEntries} ` +
-      `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
-      `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
-      `| Expectancy=${s.expectancyPct}%`
-  );
+        console.log(
+          `[BT][PERF][RAW][ERROR] ${code} — entries_taken=${rawEntries} ` +
+            `| WinRate=${s.winRatePct}% | PF=${s.PF} ` +
+            `| Avg/Trade=${s.avgReturnPct}% | AvgWin=${s.avgWinPct}% | AvgLoss=${s.avgLossPct}% ` +
+            `| Expectancy=${s.expectancyPct}%`
+        );
 
-  summaries.push({
-    ticker: code,
-    overlapping: s,
-    rawEntries,
-    error: String(e).slice(0, 120),
-  });
-
+        summaries.push({
+          ticker: code,
+          overlapping: s,
+          rawEntries,
+          error: String(e).slice(0, 120),
+        });
       }
     }
   }
@@ -1083,6 +1083,13 @@ async function runBacktest36m() {
     summaries,
     raw: { entriesTaken: totalRawEntries },
   };
+
+  // === attach branch tokens + scores (0 if no match) ===
+  try {
+    await attachBranchScores(out); // mutates out.events[..] and out.raw.branchTotals
+  } catch (e) {
+    console.warn("[BRANCH] Failed to attach branch scores:", e);
+  }
 
   // Expose for "Copy object"
   if (typeof window !== "undefined") window.__backtest36m = out;
