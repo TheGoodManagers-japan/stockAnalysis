@@ -38,66 +38,42 @@ function toTick(v, stock) {
 
 async function fetchHistory(ticker, fromISO, toISOstr) {
   try {
-    const url = `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`;
-    const t0 = performance.now?.() ?? Date.now();
-    const r = await fetch(url);
-    const text = await r.text();
-        if (!r.ok) {
-      console.warn(`[FETCH] ${ticker} HTTP ${r.status} ${r.statusText} — url=${url}`);
-      return [];
-    }
-    const j = JSON.parse(text);
-    if (!j?.success || !Array.isArray(j.data)) {
-      console.warn(`[FETCH] ${ticker} malformed payload (success=${j?.success})`);
-      return [];
-    }
+   // Ask the server for enough years to cover our prefetch window.
+   // (today - FROM_PREFETCH), rounded up to whole years, min 3.
+   const today = new Date();
+   const needStart = fromISO ? new Date(fromISO) : new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
+   const ms = Math.max(1, today - needStart);
+   const yearsNeeded = Math.max(3, Math.ceil(ms / (365 * 24 * 3600 * 1000)));
 
-    const raw = j.data
-      .map((d) => ({
-        date: new Date(d.date),
-        open: Number(d.open ?? d.close ?? 0),
-        high: Number(d.high ?? d.close ?? 0),
-        low: Number(d.low ?? d.close ?? 0),
-        close: Number(d.close ?? 0),
-        volume: Number(d.volume ?? 0),
-      }))
-            .sort((a, b) => a.date - b.date); // ensure ascending
 
-    const rawN = raw.length;
-    const rawFirst = rawN ? raw[0].date.toISOString().slice(0,10) : 'n/a';
-    const rawLast  = rawN ? raw[rawN-1].date.toISOString().slice(0,10) : 'n/a';
-
-    if (!rawN) {
-      console.warn(`[FETCH] ${ticker} returned 0 bars.`);
-      return [];
-    }
-
-    // Apply caller window
-    const fromD = fromISO ? new Date(fromISO) : null;
-    const toD   = toISOstr ? new Date(toISOstr) : null;
-
-    const filtered = raw.filter(
-      (d) =>
-        (!fromD || d.date >= fromD) &&
-        (!toD   || d.date <= toD)
+    const r = await fetch(
+      `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}&years=${yearsNeeded}`
     );
 
-    const fN = filtered.length;
-    const fFirst = fN ? filtered[0].date.toISOString().slice(0,10) : 'n/a';
-    const fLast  = fN ? filtered[fN-1].date.toISOString().slice(0,10) : 'n/a';
+     const text = await r.text();
+     if (!r.ok) return [];
+     const j = JSON.parse(text);
+     if (!j?.success || !Array.isArray(j.data)) return [];
+     return j.data
+       .map((d) => ({
+         date: new Date(d.date),
+         open: Number(d.open ?? d.close ?? 0),
+         high: Number(d.high ?? d.close ?? 0),
+         low: Number(d.low ?? d.close ?? 0),
+         close: Number(d.close ?? 0),
+         volume: Number(d.volume ?? 0),
+       }))
+       .filter(
+         (d) =>
+           (!fromISO || d.date >= new Date(fromISO)) &&
+           (!toISOstr || d.date <= new Date(toISOstr))
+       )
+       .sort((a, b) => a.date - b.date);
+  } catch {
+    return [];
+  }
+}
 
-    const t1 = Math.round((performance.now?.() ?? Date.now()) - t0);
-    console.log(
-      `[FETCH] ${ticker} ok in ${t1}ms | raw=${rawN} (${rawFirst}→${rawLast}) ` +
-      `| filtered=${fN} (${fFirst}→${fLast}) | window=${fromISO || '-∞'}→${toISOstr || '+∞'}`
-    );
-
-    return filtered;
-   } catch (e) {
-    console.warn(`[FETCH] ${ticker} exception: ${String(e).slice(0,120)}`);
-     return [];
-   }
- }
 
 /* ---------- indicators (snapshot-at-entry only) ---------- */
 
