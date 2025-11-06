@@ -1355,6 +1355,13 @@ export async function fetchStockAnalysis({
         : null;
       stock.flipBarsAgo = flipBarsAgo;
 
+      
+      // capture last GOLDEN CROSS (25>75) “bars ago”
+      const goldenCrossBarsAgo = Number.isFinite(finalSignal?.goldenCrossBarsAgo)
+        ? finalSignal.goldenCrossBarsAgo
+        : null;
+      stock.goldenCrossBarsAgo = goldenCrossBarsAgo;
+
       const analytics = scanAnalytics(stock, dataForLevels);
 
       // Pick the date we want the regime for: last *completed* bar if available,
@@ -1534,6 +1541,7 @@ export async function fetchStockAnalysis({
         _api_c2_tier: stock.tier,
         _api_c2_isBuyNow: stock.isBuyNow,
         _api_c2_flipBarsAgo: stock.flipBarsAgo,
+        _api_c2_goldenCrossBarsAgo: stock.goldenCrossBarsAgo,
         _api_c2_buyNowReason: stock.buyNowReason,
         _api_c2_managementSignalStatus: stock.managementSignalStatus,
         _api_c2_managementSignalReason: stock.managementSignalReason,

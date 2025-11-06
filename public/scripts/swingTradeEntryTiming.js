@@ -98,6 +98,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     const r = `Insufficient historical data (need ≥${cfg.minBarsNeeded}).`;
     const out = noEntry(r, { stock, data: historicalData || [] }, tele, T, cfg);
     out.flipBarsAgo = dailyFlipBarsAgo(historicalData || []);
+    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(historicalData || []); // NEW
     return out;
   }
 
@@ -111,6 +112,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
   const dataForLevels = sortedLevels; // includes “today”
   const dataForGates2 = sortedGates; // completed bars only
   const flipBarsAgo = dailyFlipBarsAgo(dataForGates2);
+  const goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForGates2); // NEW
 
   const last = dataForLevels[dataForLevels.length - 1];
   if (
@@ -119,6 +121,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     const r = "Invalid last bar OHLCV.";
     const out = noEntry(r, { stock, data: dataForLevels }, tele, T, cfg);
     out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
+    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForLevels); // NEW
     return out;
   }
   const lastVolume = Number.isFinite(last.volume) ? last.volume : 0;
@@ -152,6 +155,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
       lastDate: dataForGates2.at(-1)?.date,
     },
     flipBarsAgo,
+    goldenCrossBarsAgo, // NEW
     sentiment: { ST, LT },
   };
 
@@ -390,6 +394,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
       timeline: [], // no fallbacks
       telemetry: { ...tele, trace: T.logs },
       flipBarsAgo,
+      goldenCrossBarsAgo, // NEW
       liquidity: packLiquidity(tele, cfg), // pass liquidity back to caller
     };
   }
@@ -412,6 +417,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     timeline: buildSwingTimeline(px, best, best.rr, msFull, cfg),
     telemetry: { ...tele, trace: T.logs },
     flipBarsAgo,
+    goldenCrossBarsAgo, // NEW
     liquidity: packLiquidity(tele, cfg), // informational only
   };
 }
@@ -1156,43 +1162,50 @@ export function summarizeBlocks(teleList = []) {
 }
 
 // data: [{ date, open, high, low, close, volume }, ...] in chronological order
-export function dailyFlipBarsAgo(data) {
-  const n = data?.length ?? 0;
-  const last = n - 1;
-  if (last < 75) return null; // need ≥75 bars to form MA75
 
-  // prefix sums for O(1) SMA
-  const ps = new Array(n + 1).fill(0);
-  for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + +data[i].close || 0;
-  const sma = (len, i) => {
-    if (i + 1 < len) return NaN;
-    return (ps[i + 1] - ps[i + 1 - len]) / len;
-  };
+// --- tiny SMA helper (rolling O(n)) ---
+function maSeries(data, n) {
+  const closes = data.map(d => +d.close || 0);
+  const out = new Array(closes.length).fill(0);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= n) sum -= closes[i - n];
+    if (i + 1 >= n) out[i] = sum / n; // else stays 0 (insufficient history)
+  }
+  return out;
+}
+
+/** A) Last GOLDEN CROSS (25 over 75): return barsAgo or null */
+export function goldenCross25Over75BarsAgo(data) {
+  const last = data.length - 1;
+  if (last < 74) return null; // need ≥75 bars
+
+  const ma25 = maSeries(data, 25);
+  const ma75 = maSeries(data, 75);
 
   for (let i = last; i >= 1; i--) {
-    const m5 = sma(5, i),
-      m25 = sma(25, i),
-      m75 = sma(75, i);
-    const pm5 = sma(5, i - 1),
-      pm25 = sma(25, i - 1),
-      pm75 = sma(75, i - 1);
-
-    const nowStacked =
-      Number.isFinite(m5) &&
-      Number.isFinite(m25) &&
-      Number.isFinite(m75) &&
-      m5 > m25 &&
-      m25 > m75;
-    const prevStacked =
-      Number.isFinite(pm5) &&
-      Number.isFinite(pm25) &&
-      Number.isFinite(pm75) &&
-      pm5 > pm25 &&
-      pm25 > pm75;
-
-    if (nowStacked && !prevStacked) {
-      return last - i; // bars ago (0 = today)
+    // Upward cross at i: previously <=, now >
+    if (ma25[i] > 0 && ma75[i] > 0 && ma25[i] > ma75[i] && ma25[i - 1] <= ma75[i - 1]) {
+      return last - i;
     }
+  }
+  return null;
+}
+
+/** B) Last DAILY FLIP to 5>25>75 (stack turns true at i): return barsAgo or null */
+export function dailyFlipBarsAgo(data) {
+  const last = data.length - 1;
+  if (last < 74) return null; // need ≥75 bars
+
+  const m5  = maSeries(data, 5);
+  const m25 = maSeries(data, 25);
+  const m75 = maSeries(data, 75);
+
+  for (let i = last; i >= 1; i--) {
+    const nowStacked  = m5[i]  > 0 && m25[i]  > 0 && m75[i]  > 0 && m5[i]  > m25[i]  && m25[i]  > m75[i];
+    const prevStacked = m5[i-1] > 0 && m25[i-1] > 0 && m75[i-1] > 0 && m5[i-1] > m25[i-1] && m25[i-1] > m75[i-1];
+    if (nowStacked && !prevStacked) return last - i;
   }
   return null;
 }
