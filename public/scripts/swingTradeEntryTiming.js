@@ -457,7 +457,7 @@ function getConfig(opts = {}) {
 
     // ---- Holding horizon controls ----
     maxHoldingBars: 8, // hard cap: you exit by bar 8
-    atrPerBarEstimate: 0.7,
+    atrPerBarEstimate: 0.55,
     include52wAsResistance: false, // ignore timeless 52w high by default
     resistanceLookbackBars: 40, // only consider ~2 months of swing highs
     timeHorizonRRPolicy: "clamp", // "clamp" target; alt: "reject" if RR falls short after clamp
