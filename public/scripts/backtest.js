@@ -642,20 +642,14 @@ async function runBacktest36m() {
   const PREFETCH_WARMUP_DAYS = 120;
 
 const now = new Date();
-
-const TO = toISO(
-  new Date(now.getFullYear(), now.getMonth() - 36, now.getDate())
-);
-
-const fromDate = new Date(
+const TO = toISO(now);                           // end today
+const fromDate = new Date(                       // start 36 months back
   now.getFullYear(),
-  now.getMonth() - 72,
+  now.getMonth() - 36,
   now.getDate()
 );
-
-
-  const FROM = toISO(fromDate);
-  const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
+const FROM = toISO(fromDate);
+const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
 
   // Regime reference
   const topix = await fetchHistory(DEFAULT_REGIME_TICKER, FROM_PREFETCH, TO);
