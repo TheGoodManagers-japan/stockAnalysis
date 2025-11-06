@@ -529,6 +529,13 @@ function getConfig(opts = {}) {
     probationRRSlack: 0.02,
     probationRSIMax: 58,
 
+    // Holding window / time stop
+    maxHoldBars: 8, // <-- your rule
+    enableTimeStop: true, // add a timeline step to force an exit
+    // Rough “reachable” price advance if trend is cooperating.
+    // 0.5–0.7 ATR/bar is a realistic ceiling for swing names.
+    timeboxATRPerBar: 0.55,
+
     // Timeline config (no magic numbers)
     timeline: {
       r1: 1.0, // breakeven at +1R
@@ -543,7 +550,14 @@ function getConfig(opts = {}) {
   };
 
   // ---------- Sentiment-aware tweaks ----------
-  const cfg = { ...base };
+  const cfg = { ...base }; 
+  
+  // ANCHOR: CFG_SHORT_HOLD_RR_NUDGE_START
+  if (Number.isFinite(cfg.maxHoldBars) && cfg.maxHoldBars <= 8) {
+    cfg.minRRbase = Math.max((cfg.minRRbase ?? 1.5) + 0.05, 1.25);
+    cfg.dipMinRR = Math.max((cfg.dipMinRR ?? 1.55) + 0.05, 1.35);
+  }
+  // ANCHOR: CFG_SHORT_HOLD_RR_NUDGE_END
 
   if (LT_bull && ST_pull) {
     cfg.dipMinRR = Math.max(cfg.dipMinRR - 0.05, 1.45);
@@ -707,6 +721,34 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
       }
     }
   }
+
+  // ANCHOR: RR_TIMEBOX_CAP_START
+  // --- TIMEBOX CAP: don't assume more than X ATR over maxHoldBars
+  if (Number.isFinite(cfg.maxHoldBars) && cfg.maxHoldBars > 0) {
+    const perBar = Math.max(0, cfg.timeboxATRPerBar ?? 0.55);
+const timeCapATR = Math.max(
+  ctx?.kind === "DIP" ? cfg.minDipTargetATR ?? 2.6 : 2.2,
+  perBar * cfg.maxHoldBars
+);
+
+
+    const hardATRCap =
+      ctx?.kind === "DIP"
+        ? cfg.scootATRCapDIP ?? 4.2
+        : cfg.scootATRCapNonDIP ?? 3.5;
+
+    const finalATRCap = Math.min(timeCapATR, hardATRCap);
+    const timeboxCapPx = entryPx + finalATRCap * atr;
+
+    if (target > timeboxCapPx) {
+      target = timeboxCapPx; // cap target to what the 8-bar window can realistically deliver
+    }
+
+    // refresh reward/ratio after cap (risk/reward already defined above)
+    reward = Math.max(0, target - entryPx);
+    ratio = reward / risk;
+  }
+  // ANCHOR: RR_TIMEBOX_CAP_END
 
   // 7) Acceptable / probation
   let acceptable = ratio >= need;
@@ -939,6 +981,21 @@ function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
     priceTarget: Number(candidate.target),
     note: "Trail by structure/MA",
   });
+  // ANCHOR: TIMELINE_TIME_STOP_START
+  if (
+    cfg.enableTimeStop &&
+    Number.isFinite(cfg.maxHoldBars) &&
+    cfg.maxHoldBars > 0
+  ) {
+    steps.push({
+      when: `T+${cfg.maxHoldBars}`,
+      condition: `After ${cfg.maxHoldBars} completed bars`,
+      action: "Exit at market (time stop)",
+      note: "Max holding window reached",
+    });
+  }
+  // ANCHOR: TIMELINE_TIME_STOP_END
+
   return steps;
 }
 
