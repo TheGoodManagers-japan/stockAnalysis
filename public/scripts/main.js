@@ -607,11 +607,17 @@ export function getTradeManagementSignal_V3(
     };
 
   // 2) Structural breakdown
-  const bearishContext =
-    sentiment >= 6 ||
-    ml <= -1.5 ||
-    (ctx.deep?.shortTermRegime?.type === "TRENDING" &&
-      ctx.deep?.shortTermRegime?.characteristics?.includes?.("DOWNTREND"));
+ const deep = (ctx && typeof ctx === "object" ? ctx.deep : null) || {};
+ const stReg = (deep && typeof deep === "object" ? deep.shortTermRegime : null) || null;
+ const bearishContext =
+   sentiment >= 6 ||
+   ml <= -1.5 ||
+   (
+     stReg &&
+     stReg.type === "TRENDING" &&
+     Array.isArray(stReg.characteristics) &&
+     stReg.characteristics.includes("DOWNTREND")
+   );
 
   if (nowBelowMA25 && madeLowerLow(historicalData) && bearishContext) {
     return {
@@ -1461,7 +1467,7 @@ export async function fetchStockAnalysis({
             sentimentScore: stock.shortTermScore,
             entryDate,
             barsSinceEntry,
-            deep: horizons.deep, // ← give V3 the Layer-2 context
+            deep: horizons?.deep || {}, // ensure object, not undefined
             isExtended:
               Number.isFinite(stock.bollingerMid) && stock.bollingerMid > 0
                 ? (stock.currentPrice - stock.bollingerMid) /
