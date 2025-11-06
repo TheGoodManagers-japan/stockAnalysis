@@ -606,14 +606,18 @@ async function runBacktest36m() {
   const WARMUP = 60;
   const PREFETCH_WARMUP_DAYS = 120;
 
-  const now = new Date();
-  const TO = toISO(now);
+const now = new Date();
 
-  const fromDate = new Date(
-    now.getFullYear(),
-    now.getMonth() - MONTHS,
-    now.getDate()
-  );
+const TO = toISO(
+  new Date(now.getFullYear(), now.getMonth() - 36, now.getDate())
+);
+
+const fromDate = new Date(
+  now.getFullYear(),
+  now.getMonth() - 72,
+  now.getDate()
+);
+
 
   const FROM = toISO(fromDate);
   const FROM_PREFETCH = toISO(addDays(fromDate, -PREFETCH_WARMUP_DAYS));
