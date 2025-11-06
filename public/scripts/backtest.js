@@ -38,14 +38,21 @@ function toTick(v, stock) {
 
 async function fetchHistory(ticker, fromISO, toISOstr) {
   try {
-    const r = await fetch(
-      `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`
-    );
+    const url = `${API_BASE}/api/history?ticker=${encodeURIComponent(ticker)}`;
+    const t0 = performance.now?.() ?? Date.now();
+    const r = await fetch(url);
     const text = await r.text();
-    if (!r.ok) return [];
+        if (!r.ok) {
+      console.warn(`[FETCH] ${ticker} HTTP ${r.status} ${r.statusText} — url=${url}`);
+      return [];
+    }
     const j = JSON.parse(text);
-    if (!j?.success || !Array.isArray(j.data)) return [];
-    return j.data
+    if (!j?.success || !Array.isArray(j.data)) {
+      console.warn(`[FETCH] ${ticker} malformed payload (success=${j?.success})`);
+      return [];
+    }
+
+    const raw = j.data
       .map((d) => ({
         date: new Date(d.date),
         open: Number(d.open ?? d.close ?? 0),
@@ -54,15 +61,43 @@ async function fetchHistory(ticker, fromISO, toISOstr) {
         close: Number(d.close ?? 0),
         volume: Number(d.volume ?? 0),
       }))
-      .filter(
-        (d) =>
-          (!fromISO || d.date >= new Date(fromISO)) &&
-          (!toISOstr || d.date <= new Date(toISOstr))
-      );
-  } catch {
-    return [];
-  }
-}
+            .sort((a, b) => a.date - b.date); // ensure ascending
+
+    const rawN = raw.length;
+    const rawFirst = rawN ? raw[0].date.toISOString().slice(0,10) : 'n/a';
+    const rawLast  = rawN ? raw[rawN-1].date.toISOString().slice(0,10) : 'n/a';
+
+    if (!rawN) {
+      console.warn(`[FETCH] ${ticker} returned 0 bars.`);
+      return [];
+    }
+
+    // Apply caller window
+    const fromD = fromISO ? new Date(fromISO) : null;
+    const toD   = toISOstr ? new Date(toISOstr) : null;
+
+    const filtered = raw.filter(
+      (d) =>
+        (!fromD || d.date >= fromD) &&
+        (!toD   || d.date <= toD)
+    );
+
+    const fN = filtered.length;
+    const fFirst = fN ? filtered[0].date.toISOString().slice(0,10) : 'n/a';
+    const fLast  = fN ? filtered[fN-1].date.toISOString().slice(0,10) : 'n/a';
+
+    const t1 = Math.round((performance.now?.() ?? Date.now()) - t0);
+    console.log(
+      `[FETCH] ${ticker} ok in ${t1}ms | raw=${rawN} (${rawFirst}→${rawLast}) ` +
+      `| filtered=${fN} (${fFirst}→${fLast}) | window=${fromISO || '-∞'}→${toISOstr || '+∞'}`
+    );
+
+    return filtered;
+   } catch (e) {
+    console.warn(`[FETCH] ${ticker} exception: ${String(e).slice(0,120)}`);
+     return [];
+   }
+ }
 
 /* ---------- indicators (snapshot-at-entry only) ---------- */
 
@@ -624,6 +659,11 @@ const fromDate = new Date(
 
   // Regime reference
   const topix = await fetchHistory(DEFAULT_REGIME_TICKER, FROM_PREFETCH, TO);
+   if (!topix.length) {
+   console.warn(`[BT] TOPIX proxy (${DEFAULT_REGIME_TICKER}) returned 0 bars. Regime labels will be useless.`);
+ } else {
+   console.log(`[BT] TOPIX bars=${topix.length} (${toISO(topix[0].date)}→${toISO(topix.at(-1).date)})`);
+ }
   const topixLabels = computeRegimeLabels(topix);
   const topixDateToLabel = Object.create(null);
 
@@ -656,6 +696,9 @@ const fromDate = new Date(
   const total = codes.length;
 
   console.log(`[BT] Starting 36m backtest: ${FROM} → ${TO} | tickers=${total}`);
+   console.log(
+   `[BT] Prefetch window: FROM_PREFETCH=${FROM_PREFETCH} (days ${PREFETCH_WARMUP_DAYS} before FROM)`
+ );
 
   for (let ti = 0; ti < codes.length; ti++) {
     const code = codes[ti];
@@ -668,6 +711,19 @@ const fromDate = new Date(
     try {
       const candles = await fetchHistory(code, FROM_PREFETCH, TO);
       if (candles.length < WARMUP + 2) {
+                if (candles.length === 0) {
+          console.warn(
+            `[BT][SKIP] ${code} — 0 bars **after filtering**. ` +
+            `Likely API returns only recent data newer than TO=${TO} ` +
+            `or FROM_PREFETCH=${FROM_PREFETCH} is too far back.`
+          );
+        } else {
+          const c0 = candles[0]?.date?.toISOString?.().slice(0,10);
+          const cZ = candles.at(-1)?.date?.toISOString?.().slice(0,10);
+          console.warn(
+            `[BT][SKIP] ${code} — only ${candles.length} bars (${c0}→${cZ}), need ≥${WARMUP+2}.`
+          );
+        }
         skipped.push({
           ticker: code,
           reason: `not enough data (${candles.length} bars)`,
