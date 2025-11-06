@@ -44,7 +44,7 @@ export function getDeepMarketAnalysis(stock, historicalData) {
   const trendQuality = analyzeTrendQuality(stock, recentData);
   const momentumAnalysis = analyzeMomentumPersistence(stock, recentData);
   const longTermRegime = detectMarketRegime(sortedAll);
-  const shortTermRegime = detectMarketRegime(recentData);
+  const intermediateRegime = detectMarketRegime(recentData); // 30–90b context
 
   // 2) FEATURE VECTOR & BASE SCORE
   const features = extractFeatureVector(
@@ -114,7 +114,9 @@ export function getDeepMarketAnalysis(stock, historicalData) {
   if (volatilityRegime.compression && advancedPatterns.coiledSpring)
     mlScore += 2.5;
 
-  return { mlScore, features, longTermRegime, shortTermRegime };
+  const ltTier = mapRegimeToTier(longTermRegime, mlScore);
+
+  return { mlScore, features, longTermRegime, intermediateRegime, ltTier }; // ← NEW field
 }
 
 /* ──────────── Microstructure ──────────── */
@@ -919,4 +921,30 @@ function calculateATR(historicalData, period = 14) {
   }
   const last = trs.slice(-period);
   return last.reduce((s, v) => s + v, 0) / period;
+}
+
+
+// Map a regime + mlScore to a compact tier (1..7)
+// 1=Strong Bullish ... 7=Strong Bearish
+export function mapRegimeToTier(longTermRegime, mlScore = 0) {
+  const has = (arr, s) => Array.isArray(arr) && arr.includes(s);
+
+  // Default neutral
+  let tier = 4;
+
+  if (longTermRegime?.type === "TRENDING" && has(longTermRegime.characteristics, "UPTREND")) {
+    // Better mlScore ⇒ more bullish
+    tier = mlScore >= 2 ? 1 : mlScore >= 0.5 ? 2 : 3;
+  } else if (longTermRegime?.type === "TRENDING" && has(longTermRegime.characteristics, "DOWNTREND")) {
+    tier = mlScore <= -2 ? 7 : mlScore <= -0.5 ? 6 : 5;
+  } else if (longTermRegime?.type === "RANGE_BOUND") {
+    // Without priceActionQuality context here, keep center
+    tier = 4;
+  } else if (longTermRegime?.type === "CHOPPY") {
+    tier = 5; // mild bearish bias for chop
+  } else {
+    // UNKNOWN / insufficient history
+    tier = 4;
+  }
+  return tier;
 }
