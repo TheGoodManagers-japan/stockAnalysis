@@ -607,17 +607,17 @@ export function getTradeManagementSignal_V3(
     };
 
   // 2) Structural breakdown
- const deep = (ctx && typeof ctx === "object" ? ctx.deep : null) || {};
- const stReg = (deep && typeof deep === "object" ? deep.shortTermRegime : null) || null;
- const bearishContext =
-   sentiment >= 6 ||
-   ml <= -1.5 ||
-   (
-     stReg &&
-     stReg.type === "TRENDING" &&
-     Array.isArray(stReg.characteristics) &&
-     stReg.characteristics.includes("DOWNTREND")
-   );
+const deep = (ctx && typeof ctx === "object" ? ctx.deep : null) || {};
+const iReg =
+  (deep && typeof deep === "object" ? deep.intermediateRegime : null) || null;
+const bearishContext =
+  sentiment >= 6 ||
+  ml <= -1.5 ||
+  (iReg &&
+    iReg.type === "TRENDING" &&
+    Array.isArray(iReg.characteristics) &&
+    iReg.characteristics.includes("DOWNTREND"));
+
 
   if (nowBelowMA25 && madeLowerLow(historicalData) && bearishContext) {
     return {

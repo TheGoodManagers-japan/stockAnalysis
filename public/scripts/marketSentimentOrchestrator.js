@@ -92,7 +92,7 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
     mlScore = 0,
     features = {},
     longTermRegime = { type: "UNKNOWN", strength: 0, characteristics: [] },
-    shortTermRegime = undefined, // exposed if you still want to inspect
+    intermediateRegime = { type: "UNKNOWN", strength: 0, characteristics: [] },
   } = getDeepMarketAnalysis(stock, sorted) || {};
 
   const ltScore = longTermBucket(mlScore, longTermRegime);
@@ -107,6 +107,12 @@ export function getComprehensiveMarketSentiment(stock, historicalData) {
       confidence: ltConf,
       regime: longTermRegime.type,
       strength: longTermRegime.strength ?? 0,
+    },
+    deep: {
+      intermediateRegime,
+      longTermRegime,
+      mlScore,
+      features
     }
   };
 }

@@ -75,12 +75,12 @@ export function getDeepMarketAnalysis(stock, historicalData) {
     longTermRegime.type === "TRENDING" &&
     has(longTermRegime.characteristics, "UPTREND");
   const isShortDown =
-    shortTermRegime.type === "TRENDING" &&
-    has(shortTermRegime.characteristics, "DOWNTREND");
+    intermediateRegime.type === "TRENDING" &&
+    has(intermediateRegime.characteristics, "DOWNTREND");
   const isShortUp =
-    shortTermRegime.type === "TRENDING" &&
-    has(shortTermRegime.characteristics, "UPTREND");
-  const isShortRange = shortTermRegime.type === "RANGE_BOUND";
+    intermediateRegime.type === "TRENDING" &&
+    has(intermediateRegime.characteristics, "UPTREND");
+  const isShortRange = intermediateRegime.type === "RANGE_BOUND";
 
   if (isLongDown) {
     if (isShortDown) regimeAdjustment = -3.0;
