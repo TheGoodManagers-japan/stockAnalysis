@@ -628,24 +628,28 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     node.innerHTML = renderTr(t.translated_text || "");
   }
   // If there are no translations yet, inject EN/JA placeholders (hidden by default)
-  if (!msg?.isFile && translations.length === 0) {
-    const placeholders = [
-      { language: "en", text: "Translation not available yet" },
-      { language: "ja", text: "翻訳はまだありません" },
-    ];
-    for (const p of placeholders) {
-      let node = contentWrap.querySelector(
-        `:scope > .message-text.lang-${p.language}`
-      );
-      if (!node) {
-        node = document.createElement("div");
-        node.className = `message-text lang-${p.language}`;
-        node.style.display = "none"; // shown only when user toggles lang
-        contentWrap.appendChild(node);
-      }
-      node.innerHTML = renderTr(p.text);
+if (!msg?.isFile && translations.length === 0) {
+  const placeholders = [
+    { language: "en", text: "Translation not available yet" },
+    { language: "ja", text: "翻訳はまだありません" },
+    { language: "zh", text: "翻译尚未提供" },
+    { language: "fr", text: "Traduction pas encore disponible" },
+    { language: "es", text: "Traducción aún no disponible" },
+    { language: "vi", text: "Bản dịch hiện chưa có" },
+  ];
+  for (const p of placeholders) {
+    let node = contentWrap.querySelector(
+      `:scope > .message-text.lang-${p.language}`
+    );
+    if (!node) {
+      node = document.createElement("div");
+      node.className = `message-text lang-${p.language}`;
+      node.style.display = "none"; // shown only when user toggles lang
+      contentWrap.appendChild(node);
     }
+    node.innerHTML = renderTr(p.text);
   }
+}
 
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;

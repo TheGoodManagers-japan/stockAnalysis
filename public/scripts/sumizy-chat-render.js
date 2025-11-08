@@ -335,19 +335,25 @@ const renderMsgWithMarkdown = (m, cuid) => {
         })
         .join("");
     } else {
-      // No translations yet: add EN/JA placeholders (hidden by default)
+      // No translations yet: add placeholders (hidden by default)
       const placeholders = [
         { language: "en", text: "Translation not available yet" },
         { language: "ja", text: "翻訳はまだありません" },
+        { language: "zh", text: "翻译尚未提供" },
+        { language: "fr", text: "Traduction pas encore disponible" },
+        { language: "es", text: "Traducción aún no disponible" },
+        { language: "vi", text: "Bản dịch hiện chưa có" },
       ];
       messageContent += placeholders
         .map((p) => {
-          const inner = isAIChat && isAIMessage ? parseMarkdown(p.text) : esc(p.text);
-          return `<div class="message-text lang-${esc(p.language)}" style="display:none;">${inner}</div>`;
+          const inner =
+            isAIChat && isAIMessage ? parseMarkdown(p.text) : esc(p.text);
+          return `<div class="message-text lang-${esc(
+            p.language
+          )}" style="display:none;">${inner}</div>`;
         })
         .join("");
-    }
-    
+    }  
   }
 
   
