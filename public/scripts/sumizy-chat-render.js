@@ -203,6 +203,44 @@ function fmtTime(ts) {
   }
 }
 
+
+// Choose the correct "Message Unsent" label for a deleted message
+function getDeleteLabel(msg) {
+  const DELETE_TEXT = {
+    en: "Message Unsent",
+    ja: "メッセージが削除されました",
+    zh: "消息已被撤回",
+    fr: "Message supprimé",
+    es: "Mensaje eliminado",
+    vi: "Tin nhắn đã bị xóa",
+  };
+
+  const translations = Array.isArray(msg?._translations)
+    ? msg._translations
+    : [];
+
+  const getLangCode = (v) => String(v || "").toLowerCase();
+
+  const userLang =
+    (typeof window.getUserLanguage === "function"
+      ? window.getUserLanguage()
+      : "en") || "en";
+  const langKey = DELETE_TEXT[userLang] ? userLang : "en";
+
+  const userLangTr = translations.find(
+    (t) => getLangCode(t?.language) === langKey
+  );
+  const enTr = translations.find((t) => getLangCode(t?.language) === "en");
+
+  return (
+    (userLangTr && userLangTr.translated_text) ||
+    (enTr && enTr.translated_text) ||
+    msg?.message ||
+    DELETE_TEXT[langKey]
+  );
+}
+
+
 /* ─────────── FILE ATTACHMENT (message = URL) ─────────── */
 function renderFileAttachment(m) {
   const type = String(m.file_type || "").toLowerCase();
@@ -236,7 +274,7 @@ function renderInlineReplyPreview(r) {
   const isDeleted = !!r.isDeleted;
 
   const body = isDeleted
-    ? `<div class="message-text lang-original">${esc("Message Unsent")}</div>`
+    ? `<div class="message-text lang-original">${esc(getDeleteLabel(r))}</div>`
     : r.isFile
     ? renderFileAttachment(r)
     : `<div class="message-text lang-original">${esc(r.message)}</div>` +
@@ -299,6 +337,7 @@ const renderMsgWithMarkdown = (m, cuid) => {
 
   const u = m._user ?? {};
   const ts = parseTime(m.created_at);
+  const isDeleted = !!m.isDeleted;
 
   // Avatar
   let avatarStyle = "";
@@ -315,15 +354,29 @@ const renderMsgWithMarkdown = (m, cuid) => {
 
   // Body
   let messageContent = "";
+
   if (m.isFile) {
-    messageContent = renderFileAttachment(m);
-  } else if (m.message) {
-    messageContent =
-      isAIChat && isAIMessage
-        ? `<div class="message-text lang-original">${parseMarkdown(
-            m.message
-          )}</div>`
-        : `<div class="message-text lang-original">${esc(m.message)}</div>`;
+    if (isDeleted) {
+      // Deleted file → show tombstone text, not the attachment
+      const label = getDeleteLabel(m);
+      messageContent = `<div class="message-text lang-original">${esc(
+        label
+      )}</div>`;
+    } else {
+      messageContent = renderFileAttachment(m);
+    }
+  } else {
+    const baseText = isDeleted ? getDeleteLabel(m) : m.message || "";
+
+    if (baseText) {
+      messageContent =
+        isAIChat && isAIMessage
+          ? `<div class="message-text lang-original">${parseMarkdown(
+              baseText
+            )}</div>`
+          : `<div class="message-text lang-original">${esc(baseText)}</div>`;
+    }
+
     // translations
     if (Array.isArray(m._translations) && m._translations.length > 0) {
       messageContent += m._translations
@@ -353,10 +406,9 @@ const renderMsgWithMarkdown = (m, cuid) => {
           )}" style="display:none;">${inner}</div>`;
         })
         .join("");
-    }  
+    }
   }
 
-  
   const reacts = isNotification
     ? ""
     : agg(m._reactions)
@@ -380,9 +432,9 @@ const renderMsgWithMarkdown = (m, cuid) => {
       ? window.renderReadReceipts(readers, cuid)
       : "";
 
-        const actionTrigger = isNotification
-          ? ''
-          : '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
+  const actionTrigger = isNotification
+    ? ""
+    : '<div class="message-actions-trigger" aria-label="Message actions" tabindex="0">⋮</div>';
 
   const imageLike =
     m.isFile &&
@@ -391,15 +443,21 @@ const renderMsgWithMarkdown = (m, cuid) => {
       .startsWith("image") ||
       /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(m.message || "")));
 
+  const displayDatasetMessage = isDeleted
+    ? getDeleteLabel(m)
+    : imageLike
+    ? ""
+    : m.isFile
+    ? m.file_name
+    : m.message || "";
+
   return `<div class="message${m._reply ? " has-reply" : ""}${
     isAIChat && isAIMessage ? " ai-message" : ""
-      }${isNotification ? " is-notification" : ""}"
+  }${isNotification ? " is-notification" : ""}"
                      data-id="${m.id}" data-ts="${ts}" data-uid="${m.user_id}"
                      data-notification="${isNotification ? "true" : "false"}"
-                 data-username="${esc(u.name || "Unknown")}"
-                 data-message="${esc(
-                   imageLike ? "" : m.isFile ? m.file_name : m.message || ""
-                 )}">
+                     data-username="${esc(u.name || "Unknown")}"
+                     data-message="${esc(displayDatasetMessage)}">
               <div class="message-wrapper">
                 <div class="message-gutter">
                   <div class="avatar" ${avatarStyle}>${avatarContent}</div>
@@ -418,7 +476,6 @@ const renderMsgWithMarkdown = (m, cuid) => {
                   ${messageContent}
                   ${reacts ? `<div class="reactions">${reacts}</div>` : ""}
                   ${readReceipts}
-                  
                 </div>
               </div>
             </div>`;
