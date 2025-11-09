@@ -1067,12 +1067,31 @@ function injectBatchForPane(paneRole, chatId, batch) {
     const el = document.querySelector(
       `#rg${rg} .chat-messages .message[data-id="${safeSelId(m.id)}"]`
     );
+    if (!el) continue;
+
+    // Keep file sanitization
     sanitizeInjectedFileMessageNode(el, m);
-        // PATCH: attach receipts during injection
-        if (typeof window.updateReadReceiptsInPlace === "function") {
-          try { window.updateReadReceiptsInPlace(el, m); } catch {}
-        }
+
+    // NEW: ensure deleted messages get the correct "Message Unsent" label on initial load
+    if (typeof window.updateMessageTextsInPlace === "function") {
+      try {
+        window.updateMessageTextsInPlace(el, m, { forDelete: !!m.isDeleted });
+      } catch (e) {
+        log.warn("updateMessageTextsInPlace failed during injectBatch", {
+          id: m.id,
+          e,
+        });
+      }
+    }
+
+    // Keep receipts
+    if (typeof window.updateReadReceiptsInPlace === "function") {
+      try {
+        window.updateReadReceiptsInPlace(el, m);
+      } catch {}
+    }
   }
+
 
   // Ensure AI styling + markdown render immediately for AI pane
   const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
