@@ -3,19 +3,71 @@
 
 
 /* ─────────────────── CONFIG & HELPERS ─────────────────── */
-const DATE_LOCALE = "en-US";
+const DATE_LOCALE = "en-US"; // fallback
+
+// Shared: parse time
 const parseTime = (t) => (typeof t === "string" ? new Date(t).getTime() : t);
+
+// Prefer Bubble-injected language, else browser
+function getUserLanguage() {
+  try {
+    const cand =
+      window.sumizyUserLanguage || window.currentUserLanguage || null;
+    if (typeof cand === "string" && cand.trim()) {
+      return cand.trim().toLowerCase().split(/[-_]/)[0]; // "en-US" -> "en"
+    }
+
+    const nav = (navigator.language || navigator.userLanguage || "en")
+      .toLowerCase()
+      .split(/[-_]/)[0];
+
+    return nav || "en";
+  } catch {
+    return "en";
+  }
+}
+
+// Map to a locale for Intl.DateTimeFormat
+function getDateLocale() {
+  try {
+    const lang = getUserLanguage();
+
+    // Simple mapping for common ones you care about
+    switch (lang) {
+      case "ja":
+        return "ja-JP";
+      case "fr":
+        return "fr-FR";
+      case "es":
+        return "es-ES";
+      case "vi":
+        return "vi-VN";
+      case "zh":
+        return "zh-CN";
+      case "en":
+        return "en-US";
+      default:
+        // Let Intl try just "lang" if we don't have a mapping
+        return lang || DATE_LOCALE;
+    }
+  } catch {
+    return DATE_LOCALE;
+  }
+}
+
 const fmtTime = (t) =>
-  new Intl.DateTimeFormat(DATE_LOCALE, {
+  new Intl.DateTimeFormat(getDateLocale(), {
     hour: "2-digit",
     minute: "2-digit",
   }).format(parseTime(t));
+
 const fmtDate = (t) =>
-  new Intl.DateTimeFormat(DATE_LOCALE, {
+  new Intl.DateTimeFormat(getDateLocale(), {
     month: "short",
     day: "numeric",
     year: "numeric",
   }).format(parseTime(t));
+
 const esc = (s) =>
   s
     ? s.replace(
@@ -30,6 +82,7 @@ const esc = (s) =>
           }[c])
       )
     : "";
+
 
 /* aggregate reactions */
 const agg = (arr) => {
@@ -258,6 +311,28 @@ function clearChatByPane(pane /* "main"|"ai" */) {
 }
 
 
+function getUserLanguage() {
+  try {
+    // 1) Prefer Bubble-injected value
+    const cand =
+      window.sumizyUserLanguage || window.currentUserLanguage || null;
+    if (typeof cand === "string" && cand.trim()) {
+      return cand.trim().toLowerCase().split(/[-_]/)[0]; // "en-US" -> "en"
+    }
+
+    // 2) Fallback to browser language
+    const nav = (navigator.language || navigator.userLanguage || "en")
+      .toLowerCase()
+      .split(/[-_]/)[0];
+
+    return nav || "en";
+  } catch {
+    return "en";
+  }
+}
+
+
+
 /* ─────────── EXPORTS ─────────── */
 Object.assign(window, {
   DATE_LOCALE,
@@ -283,6 +358,9 @@ Object.assign(window, {
   // Misc UI helpers
   switchLanguage,
   scrollToMessage,
+
+  // Language helper
+  getUserLanguage,
 
   // Kept for back-compat with earlier calls
   clearVisibleChatDOMOnce,

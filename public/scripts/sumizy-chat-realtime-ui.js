@@ -594,10 +594,31 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     (t) => String(t?.language || "").toLowerCase() === "en"
   );
 
+  // Language-specific delete messages
+  const DELETE_TEXT = {
+    en: "Message Unsent",
+    ja: "メッセージが削除されました",
+    zh: "消息已被撤回",
+    fr: "Message supprimé",
+    es: "Mensaje eliminado",
+    vi: "Tin nhắn đã bị xóa",
+  };
+
+  const userLang =
+    (typeof window.getUserLanguage === "function"
+      ? window.getUserLanguage()
+      : "en") || "en";
+  const langKey = DELETE_TEXT[userLang] ? userLang : "en";
+
+  const userLangTr = translations.find(
+    (t) => String(t?.language || "").toLowerCase() === langKey
+  );
+
   const deleteText =
+    (userLangTr && userLangTr.translated_text) ||
     (enTr && enTr.translated_text) ||
     msg.message ||
-    "メッセージが削除されました / Message Unsent";
+    DELETE_TEXT[langKey];
 
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
@@ -661,29 +682,28 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   }
 
   // If there are no *real* translations yet, inject EN/JA/... placeholders
-if (!msg?.isFile && !hasRealTranslations) {
-  const placeholders = [
-    { language: "en", text: FALLBACK_TEXT.en },
-    { language: "ja", text: FALLBACK_TEXT.ja },
-    { language: "zh", text: FALLBACK_TEXT.zh },
-    { language: "fr", text: FALLBACK_TEXT.fr },
-    { language: "es", text: FALLBACK_TEXT.es },
-    { language: "vi", text: FALLBACK_TEXT.vi },
-  ];
-  for (const p of placeholders) {
-    let node = contentWrap.querySelector(
-      `:scope > .message-text.lang-${p.language}`
-    );
-    if (!node) {
-      node = document.createElement("div");
-      node.className = `message-text lang-${p.language}`;
-      node.style.display = "none";
-      contentWrap.appendChild(node);
+  if (!msg?.isFile && !hasRealTranslations) {
+    const placeholders = [
+      { language: "en", text: FALLBACK_TEXT.en },
+      { language: "ja", text: FALLBACK_TEXT.ja },
+      { language: "zh", text: FALLBACK_TEXT.zh },
+      { language: "fr", text: FALLBACK_TEXT.fr },
+      { language: "es", text: FALLBACK_TEXT.es },
+      { language: "vi", text: FALLBACK_TEXT.vi },
+    ];
+    for (const p of placeholders) {
+      let node = contentWrap.querySelector(
+        `:scope > .message-text.lang-${p.language}`
+      );
+      if (!node) {
+        node = document.createElement("div");
+        node.className = `message-text lang-${p.language}`;
+        node.style.display = "none";
+        contentWrap.appendChild(node);
+      }
+      node.innerHTML = renderTr(p.text);
     }
-    node.innerHTML = renderTr(p.text);
   }
-}
-
 
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
@@ -817,14 +837,38 @@ function updateReplyPreviewsForMessage(msg) {
   const pickDisplayText = (m) => {
     const raw = (m?.message || "").trim();
     if (raw) return raw;
-const trs = Array.isArray(m?._translations) ? m._translations : [];
-// Only match exact "en" since backend sends short codes
-const en = trs.find((t) => String(t?.language || "").toLowerCase() === "en");
 
+    const trs = Array.isArray(m?._translations) ? m._translations : [];
+    const en = trs.find(
+      (t) => String(t?.language || "").toLowerCase() === "en"
+    );
+
+    const DELETE_TEXT = {
+      en: "Message Unsent",
+      ja: "メッセージが削除されました",
+      zh: "消息已被撤回",
+      fr: "Message supprimé",
+      es: "Mensaje eliminado",
+      vi: "Tin nhắn đã bị xóa",
+    };
+
+    const userLang =
+      (typeof window.getUserLanguage === "function"
+        ? window.getUserLanguage()
+        : "en") || "en";
+    const langKey = DELETE_TEXT[userLang] ? userLang : "en";
+
+    const userLangTr = trs.find(
+      (t) => String(t?.language || "").toLowerCase() === langKey
+    );
+
+    if (userLangTr?.translated_text) return userLangTr.translated_text;
     if (en?.translated_text) return en.translated_text;
     if (trs[0]?.translated_text) return trs[0].translated_text;
-    return "メッセージが削除されました / Message Unsent";
+
+    return DELETE_TEXT[langKey];
   };
+
 
   const displayText = pickDisplayText(msg);
 
