@@ -52,25 +52,8 @@ function makeChatInjector(chatEl, cuid) {
             window.updateReadReceiptsInPlace(el, m);
           } catch {}
         }
-
-        // don't auto-scroll when updating existing messages
       } else {
-        // Date divider logic for a single message
-        const msgDate = fmtDate(m.created_at);
-        const existingDivider = chatEl.querySelector(
-          `[data-date="${msgDate}"]`
-        );
-        const allDividers = chatEl.querySelectorAll(".date-divider");
-        const lastDivider = allDividers[allDividers.length - 1];
-        const lastDate = lastDivider ? lastDivider.dataset.date : "";
-
-        if (msgDate !== lastDate && !existingDivider) {
-          const dividerEl = document
-            .createRange()
-            .createContextualFragment(renderDivider(msgDate));
-          chatEl.appendChild(dividerEl);
-        }
-
+        // No date divider – just append the message
         chatEl.appendChild(el);
 
         // PATCH: attach receipts on first append
@@ -96,25 +79,7 @@ function makeChatInjector(chatEl, cuid) {
       (a, b) => parseTime(a.created_at) - parseTime(b.created_at)
     );
 
-    const existingDates = new Set(
-      Array.from(chatEl.querySelectorAll(".date-divider")).map(
-        (div) => div.dataset.date
-      )
-    );
-
-    let batchLastDate = "";
-
     for (const m of sortedMessages) {
-      const lbl = fmtDate(m.created_at);
-
-      if (lbl !== batchLastDate && !existingDates.has(lbl)) {
-        outFrag.appendChild(
-          document.createRange().createContextualFragment(renderDivider(lbl))
-        );
-        existingDates.add(lbl);
-        batchLastDate = lbl;
-      }
-
       // Build message node (even if deleted)
       const msgFrag = document
         .createRange()
@@ -136,13 +101,13 @@ function makeChatInjector(chatEl, cuid) {
         msgEl.dataset.deleted = "false";
       }
 
-            if (m.is_notification) {
-                msgEl.classList.add("is-notification");
-                msgEl.dataset.notification = "true";
-              } else {
-                msgEl.classList.remove("is-notification");
-                msgEl.dataset.notification = "false";
-              }
+      if (m.is_notification) {
+        msgEl.classList.add("is-notification");
+        msgEl.dataset.notification = "true";
+      } else {
+        msgEl.classList.remove("is-notification");
+        msgEl.dataset.notification = "false";
+      }
 
       // PATCH: add receipts before appending bulk fragment
       if (typeof window.updateReadReceiptsInPlace === "function") {
