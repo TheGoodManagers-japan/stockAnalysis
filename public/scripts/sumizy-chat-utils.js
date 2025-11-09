@@ -311,26 +311,6 @@ function clearChatByPane(pane /* "main"|"ai" */) {
 }
 
 
-function getUserLanguage() {
-  try {
-    // 1) Prefer Bubble-injected value
-    const cand =
-      window.sumizyUserLanguage || window.currentUserLanguage || null;
-    if (typeof cand === "string" && cand.trim()) {
-      return cand.trim().toLowerCase().split(/[-_]/)[0]; // "en-US" -> "en"
-    }
-
-    // 2) Fallback to browser language
-    const nav = (navigator.language || navigator.userLanguage || "en")
-      .toLowerCase()
-      .split(/[-_]/)[0];
-
-    return nav || "en";
-  } catch {
-    return "en";
-  }
-}
-
 
 
 /* ─────────── EXPORTS ─────────── */
