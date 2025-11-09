@@ -361,6 +361,13 @@
     line-height: 1;
 }
 
+/* Date divider */
+.date-divider {
+    display: flex;
+    align-items: center;
+    margin: 20px 20px 8px;
+    position: relative;
+}
 
 .date-divider-line {
     flex: 1;
@@ -1484,3 +1491,5 @@
         opacity: 1;
     }
 }
+
+
