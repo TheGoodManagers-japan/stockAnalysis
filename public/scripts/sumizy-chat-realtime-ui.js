@@ -565,12 +565,35 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     return;
   }
 
+  // A "real" translation = non-"original" lang with non-empty text
   const translations = Array.isArray(msg._translations)
     ? msg._translations
     : [];
+
+  // A "real" translation = non-"original" lang with non-empty text
+  const hasRealTranslations = translations.some((t) => {
+    const lang = String(t?.language || "").toLowerCase();
+    const txt = t?.translated_text;
+    return (
+      lang && lang !== "original" && txt != null && String(txt).trim() !== ""
+    );
+  });
+
+  // Common fallback texts per language
+  const FALLBACK_TEXT = {
+    en: "Translation not available yet",
+    ja: "翻訳はまだありません",
+    zh: "翻译尚未提供",
+    fr: "Traduction pas encore disponible",
+    es: "Traducción aún no disponible",
+    vi: "Bản dịch hiện chưa có",
+  };
+
+  // We only ever expect short codes like "en", "es", "ja"
   const enTr = translations.find(
-    (t) => t && (t.language === "en" || t.language === "en_us")
+    (t) => String(t?.language || "").toLowerCase() === "en"
   );
+
   const deleteText =
     (enTr && enTr.translated_text) ||
     msg.message ||
@@ -625,17 +648,27 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       node.style.display = "none";
       contentWrap.appendChild(node);
     }
-    node.innerHTML = renderTr(t.translated_text || "");
+
+    const rawTxt = t?.translated_text;
+    const hasText = rawTxt != null && String(rawTxt).trim() !== "";
+    const fallback =
+      FALLBACK_TEXT[lang] ||
+      FALLBACK_TEXT.en ||
+      "Translation not available yet";
+    const finalText = hasText ? rawTxt : fallback;
+
+    node.innerHTML = renderTr(finalText);
   }
-  // If there are no translations yet, inject EN/JA placeholders (hidden by default)
-if (!msg?.isFile && translations.length === 0) {
+
+  // If there are no *real* translations yet, inject EN/JA/... placeholders
+if (!msg?.isFile && !hasRealTranslations) {
   const placeholders = [
-    { language: "en", text: "Translation not available yet" },
-    { language: "ja", text: "翻訳はまだありません" },
-    { language: "zh", text: "翻译尚未提供" },
-    { language: "fr", text: "Traduction pas encore disponible" },
-    { language: "es", text: "Traducción aún no disponible" },
-    { language: "vi", text: "Bản dịch hiện chưa có" },
+    { language: "en", text: FALLBACK_TEXT.en },
+    { language: "ja", text: FALLBACK_TEXT.ja },
+    { language: "zh", text: FALLBACK_TEXT.zh },
+    { language: "fr", text: FALLBACK_TEXT.fr },
+    { language: "es", text: FALLBACK_TEXT.es },
+    { language: "vi", text: FALLBACK_TEXT.vi },
   ];
   for (const p of placeholders) {
     let node = contentWrap.querySelector(
@@ -644,12 +677,13 @@ if (!msg?.isFile && translations.length === 0) {
     if (!node) {
       node = document.createElement("div");
       node.className = `message-text lang-${p.language}`;
-      node.style.display = "none"; // shown only when user toggles lang
+      node.style.display = "none";
       contentWrap.appendChild(node);
     }
     node.innerHTML = renderTr(p.text);
   }
 }
+
 
   if (typeof msg.message === "string") {
     msgEl.dataset.message = msg.message;
@@ -783,12 +817,10 @@ function updateReplyPreviewsForMessage(msg) {
   const pickDisplayText = (m) => {
     const raw = (m?.message || "").trim();
     if (raw) return raw;
-    const trs = Array.isArray(m?._translations) ? m._translations : [];
-    const en = trs.find((t) =>
-      String(t?.language || "")
-        .toLowerCase()
-        .startsWith("en")
-    );
+const trs = Array.isArray(m?._translations) ? m._translations : [];
+// Only match exact "en" since backend sends short codes
+const en = trs.find((t) => String(t?.language || "").toLowerCase() === "en");
+
     if (en?.translated_text) return en.translated_text;
     if (trs[0]?.translated_text) return trs[0].translated_text;
     return "メッセージが削除されました / Message Unsent";
