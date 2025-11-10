@@ -496,81 +496,30 @@ window.updateReadReceiptsInPlace = function updateReadReceiptsInPlace(msgEl, msg
 
 
 /* ─────────── In-place updaters (no node swaps) ─────────── */
-function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
+function updateMessageTextsInPlace(msgEl, msg, opts = {}) {
+  if (!msgEl || !msg) return;
+
+  // --- unified "is deleted" detection ---
+  const isDeleted =
+    !!opts.forDelete ||
+    !!msg.isDeleted ||
+    !!msg.isDelete ||
+    !!msg.deleted ||
+    (msgEl.dataset && msgEl.dataset.deleted === "true");
+
   // Notification flag styling/data
   if (typeof msg.is_notification === "boolean") {
     msgEl.classList.toggle("is-notification", !!msg.is_notification);
     msgEl.dataset.notification = String(!!msg.is_notification);
   }
+
   const contentWrap = msgEl.querySelector(".message-content-wrapper") || msgEl;
 
-  // File messages: keep attachment, no URL text
-  if (msg?.isFile) {
-    const contentWrap2 =
-      msgEl.querySelector(".message-content-wrapper") || msgEl;
-
-    contentWrap2
-      .querySelectorAll(":scope > .message-text")
-      .forEach((n) => n.remove());
-
-    const url = msg.message || "#";
-    const name = msg.file_name || url.split("/").pop() || "download";
-    const type = String(msg.file_type || "").toLowerCase();
-    const isImg =
-      type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
-
-    let fa = contentWrap2.querySelector(":scope > .file-attachment");
-    if (!fa) {
-      const html = isImg
-        ? `<div class="file-attachment image-attachment" data-url="${_esc(
-            url
-          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
-             <a href="#" class="file-open-trigger" tabindex="0">
-               <img src="${_esc(url)}" alt="" class="file-image-preview">
-             </a>
-           </div>`
-        : typeof window.renderFileAttachment === "function"
-        ? window.renderFileAttachment(msg)
-        : `<div class="file-attachment generic-attachment" data-url="${_esc(
-            url
-          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
-               <a href="#" class="file-open-trigger" tabindex="0">
-                 <span class="file-icon">📎</span><span class="file-name">${_esc(
-                   name
-                 )}</span>
-               </a>
-             </div>`;
-      contentWrap2.insertAdjacentHTML("beforeend", html);
-      fa = contentWrap2.querySelector(":scope > .file-attachment");
-    } else {
-      fa.dataset.url = url;
-      fa.dataset.name = name;
-      fa.dataset.type = type;
-      fa.classList.toggle("image-attachment", isImg);
-      fa.classList.toggle("generic-attachment", !isImg);
-      const img = fa.querySelector(".file-image-preview");
-      if (isImg && img) {
-        if (img.src !== url) img.src = url;
-        img.alt = "";
-      }
-      if (isImg) {
-        const nm = fa.querySelector(".file-name");
-        if (nm) nm.remove();
-      }
-    }
-
-    msgEl.dataset.message = isImg ? "" : name;
-    updateReplyPreviewsForMessage(msg);
-    log.debug("updateMessageTextsInPlace:file", { id: msg.id, isImg, name });
-    return;
-  }
-
-  // A "real" translation = non-"original" lang with non-empty text
+  // --- translations + delete text helpers (used by both file + text) ---
   const translations = Array.isArray(msg._translations)
     ? msg._translations
     : [];
 
-  // A "real" translation = non-"original" lang with non-empty text
   const hasRealTranslations = translations.some((t) => {
     const lang = String(t?.language || "").toLowerCase();
     const txt = t?.translated_text;
@@ -579,7 +528,6 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     );
   });
 
-  // Common fallback texts per language
   const FALLBACK_TEXT = {
     en: "Translation not available yet",
     ja: "翻訳はまだありません",
@@ -589,12 +537,10 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     vi: "Bản dịch hiện chưa có",
   };
 
-  // We only ever expect short codes like "en", "es", "ja"
   const enTr = translations.find(
     (t) => String(t?.language || "").toLowerCase() === "en"
   );
 
-  // Language-specific delete messages
   const DELETE_TEXT = {
     en: "Message Unsent",
     ja: "メッセージが削除されました",
@@ -620,6 +566,105 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     msg.message ||
     DELETE_TEXT[langKey];
 
+  // Helper for rendering translations (with markdown for AI pane)
+  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
+  const isAIMessage = String(msg.user_id) === AI_USER_ID;
+  const inAIPane =
+    isNodeInAIPane(msgEl) ||
+    (typeof window.isAIChat === "function" && window.isAIChat(msgEl));
+
+  const renderTr = (txt) => {
+    const s = String(txt || "");
+    if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
+      return window.parseMarkdown(s);
+    }
+    return _esc(s);
+  };
+
+  // --- FILE MESSAGES ---
+  if (msg.isFile) {
+    // Deleted file → tombstone text instead of attachment
+    if (isDeleted) {
+      // remove any existing attachment + text
+      contentWrap
+        .querySelectorAll(":scope > .file-attachment, :scope > .message-text")
+        .forEach((n) => n.remove());
+
+      const d = document.createElement("div");
+      d.className = "message-text lang-original";
+      d.textContent = deleteText;
+      contentWrap.appendChild(d);
+
+      msgEl.dataset.message = deleteText;
+      updateReplyPreviewsForMessage(msg);
+
+      log.debug("updateMessageTextsInPlace:file(deleted)", {
+        id: msg.id,
+        deleteText,
+      });
+      return;
+    }
+
+    // Normal file behaviour (non-deleted) – same as before
+    contentWrap
+      .querySelectorAll(":scope > .message-text")
+      .forEach((n) => n.remove());
+
+    const url = msg.message || "#";
+    const name = msg.file_name || url.split("/").pop() || "download";
+    const type = String(msg.file_type || "").toLowerCase();
+    const isImg =
+      type.startsWith("image") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(url);
+
+    let fa = contentWrap.querySelector(":scope > .file-attachment");
+    if (!fa) {
+      const html = isImg
+        ? `<div class="file-attachment image-attachment" data-url="${_esc(
+            url
+          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
+             <a href="#" class="file-open-trigger" tabindex="0">
+               <img src="${_esc(url)}" alt="" class="file-image-preview">
+             </a>
+           </div>`
+        : typeof window.renderFileAttachment === "function"
+        ? window.renderFileAttachment(msg)
+        : `<div class="file-attachment generic-attachment" data-url="${_esc(
+            url
+          )}" data-name="${_esc(name)}" data-type="${_esc(type)}">
+               <a href="#" class="file-open-trigger" tabindex="0">
+                 <span class="file-icon">📎</span><span class="file-name">${_esc(
+                   name
+                 )}</span>
+               </a>
+             </div>`;
+      contentWrap.insertAdjacentHTML("beforeend", html);
+      fa = contentWrap.querySelector(":scope > .file-attachment");
+    } else {
+      fa.dataset.url = url;
+      fa.dataset.name = name;
+      fa.dataset.type = type;
+      fa.classList.toggle("image-attachment", isImg);
+      fa.classList.toggle("generic-attachment", !isImg);
+      const img = fa.querySelector(".file-image-preview");
+      if (isImg && img) {
+        if (img.src !== url) img.src = url;
+        img.alt = "";
+      }
+      if (isImg) {
+        const nm = fa.querySelector(".file-name");
+        if (nm) nm.remove();
+      }
+    }
+
+    msgEl.dataset.message = isImg ? "" : name;
+    updateReplyPreviewsForMessage(msg);
+    log.debug("updateMessageTextsInPlace:file", { id: msg.id, isImg, name });
+    return;
+  }
+
+  // --- TEXT MESSAGES ---
+
+  // Find/create the "original" text node
   const original =
     contentWrap.querySelector(":scope > .message-text.lang-original") ||
     contentWrap.querySelector(":scope > .message-text:not([class*='lang-'])") ||
@@ -630,35 +675,21 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
       return d;
     })();
 
-  // Pane-aware AI markdown for ORIGINAL text (fix)
-  const AI_USER_ID = "5c82f501-a3da-4083-894c-4367dc2e01f3";
-  const isAIMessage = String(msg.user_id) === AI_USER_ID;
-  const inAIPane =
-    isNodeInAIPane(msgEl) ||
-    (typeof window.isAIChat === "function" && window.isAIChat(msgEl));
-
   if (original) {
-    const txt = forDelete ? deleteText : msg.message ?? "";
+    const txt = isDeleted ? deleteText : msg.message ?? "";
     if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
       original.innerHTML = window.parseMarkdown(txt);
       log.debug("Rendered ORIGINAL with Markdown (AI pane)", {
         id: msg.id,
         len: txt.length,
+        isDeleted,
       });
     } else {
       original.textContent = txt;
     }
   }
 
-  // For translations we already render with Markdown in AI pane
-  const renderTr = (txt) => {
-    const s = String(txt || "");
-    if (inAIPane && isAIMessage && typeof window.parseMarkdown === "function") {
-      return window.parseMarkdown(s);
-    }
-    return _esc(s);
-  };
-
+  // Render translations (existing + placeholders)
   for (const t of translations) {
     const lang = String(t?.language || "").toLowerCase();
     if (!lang || lang === "original") continue;
@@ -681,8 +712,7 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
     node.innerHTML = renderTr(finalText);
   }
 
-  // If there are no *real* translations yet, inject EN/JA/... placeholders
-  if (!msg?.isFile && !hasRealTranslations) {
+  if (!msg.isFile && !hasRealTranslations) {
     const placeholders = [
       { language: "en", text: FALLBACK_TEXT.en },
       { language: "ja", text: FALLBACK_TEXT.ja },
@@ -706,18 +736,21 @@ function updateMessageTextsInPlace(msgEl, msg, { forDelete = false } = {}) {
   }
 
   if (typeof msg.message === "string") {
-    msgEl.dataset.message = msg.message;
+    msgEl.dataset.message = isDeleted ? deleteText : msg.message;
   }
+
+  updateReplyPreviewsForMessage(msg);
 
   log.debug("updateMessageTextsInPlace:text", {
     id: msg.id,
-    forDelete,
+    isDeleted,
     hasTranslations: !!translations.length,
     inAIPane,
     isAIMessage,
     isNotification: !!msg.is_notification,
   });
 }
+
 
 function updateReactionsInPlace(msgEl, msg, currentUserId) {
     // Notifications have no reactions
@@ -1073,16 +1106,17 @@ function injectBatchForPane(paneRole, chatId, batch) {
     sanitizeInjectedFileMessageNode(el, m);
 
     // NEW: ensure deleted messages get the correct "Message Unsent" label on initial load
-    if (typeof window.updateMessageTextsInPlace === "function") {
-      try {
-        window.updateMessageTextsInPlace(el, m, { forDelete: !!m.isDeleted });
-      } catch (e) {
-        log.warn("updateMessageTextsInPlace failed during injectBatch", {
-          id: m.id,
-          e,
-        });
-      }
-    }
+if (typeof window.updateMessageTextsInPlace === "function") {
+  try {
+    window.updateMessageTextsInPlace(el, m);
+  } catch (e) {
+    log.warn("updateMessageTextsInPlace failed during injectBatch", {
+      id: m.id,
+      e,
+    });
+  }
+}
+
 
     // Keep receipts
     if (typeof window.updateReadReceiptsInPlace === "function") {
