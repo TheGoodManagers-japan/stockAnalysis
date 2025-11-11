@@ -1358,9 +1358,10 @@ export async function fetchStockAnalysis({
         : null;
       stock.flipBarsAgo = flipBarsAgo;
 
-      
       // capture last GOLDEN CROSS (25>75) “bars ago”
-      const goldenCrossBarsAgo = Number.isFinite(finalSignal?.goldenCrossBarsAgo)
+      const goldenCrossBarsAgo = Number.isFinite(
+        finalSignal?.goldenCrossBarsAgo
+      )
         ? finalSignal.goldenCrossBarsAgo
         : null;
       stock.goldenCrossBarsAgo = goldenCrossBarsAgo;
@@ -1519,6 +1520,13 @@ export async function fetchStockAnalysis({
         stock.managementSignalReason = null;
       }
 
+      // 🔍 DEBUG: log what we're about to send to Bubble for earnings date
+      log("Earnings date for Bubble payload", {
+        ticker: stock.ticker,
+        nextEarningsDateIso: stock.nextEarningsDateIso,
+        nextEarningsDateFmt: stock.nextEarningsDateFmt,
+      });
+
       // 8) Bubble-friendly payload
       const stockObject = {
         _api_c2_ticker: stock.ticker,
@@ -1553,7 +1561,7 @@ export async function fetchStockAnalysis({
         _api_c2_managementSignalReason: stock.managementSignalReason,
 
         // 👇 NEW
-        _api_c2_nextEarningsDateIso: "2025-12-12",
+        _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
         _api_c2_otherData: JSON.stringify({
           highPrice: stock.highPrice,
           lowPrice: stock.lowPrice,
