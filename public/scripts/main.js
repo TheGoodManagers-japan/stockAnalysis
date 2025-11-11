@@ -35,14 +35,25 @@ function formatJPYKMB(n) {
 /* -------------------------------------------
    0) Constants + tiny logging helper
 ------------------------------------------- */
-const API_BASE =
-  "https://stock-analysis-q4vsvhf71-aymerics-projects-60f33831.vercel.app";
-const DEBUG = true;
-
+/* -------------------------------------------
+   0) Constants + tiny logging helper
+------------------------------------------- */
 const IS_BROWSER =
   typeof window !== "undefined" &&
   typeof document !== "undefined" &&
   !!(window.document && window.document.nodeType === 9);
+
+// 👇 Stable project domain from Vercel → Settings → Domains
+const PROJECT_BASE = "https://stock-analysis-chi.vercel.app";
+
+// Use stable domain in browser, deployment URL on server (if available)
+const API_BASE = IS_BROWSER
+  ? PROJECT_BASE
+  : process.env.VERCEL_URL
+  ? `https://${process.env.VERCEL_URL}`
+  : PROJECT_BASE;
+
+const DEBUG = true;
 
 function log(...args) {
   if (!DEBUG) return;
