@@ -486,35 +486,57 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
 /* --------------------------- Serverless handler --------------------------- */
 
-const allowedOrigins = [
+const allowedOrigins = new Set([
   "https://thegoodmanagers.com",
   "https://www.thegoodmanagers.com",
-  // add your Bubble preview domain here if needed
-];
+  // add your Bubble test / preview domain(s) here if needed, e.g.:
+  // "https://your-app.bubbleapps.io",
+]);
 
-module.exports = async (req, res) => {
+function applyCors(req, res) {
   const origin = req.headers.origin;
 
-  // 🔍 DEBUG: log incoming request
-  console.log("[/api/stocks] incoming", {
-    method: req.method,
-    origin,
-    body: req.body,
-  });
-
-  if (allowedOrigins.includes(origin)) {
+  if (origin && allowedOrigins.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
+    // Only add this if you ever use credentials/cookies:
+    // res.setHeader("Access-Control-Allow-Credentials", "true");
   }
-  // ... headers and method checks unchanged ...
+
+  res.setHeader("Vary", "Origin");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
+
+  // Echo back requested headers so preflight always passes
+  const reqHeaders =
+    req.headers["access-control-request-headers"] || "Content-Type";
+  res.setHeader("Access-Control-Allow-Headers", reqHeaders);
+  res.setHeader("Access-Control-Max-Age", "600");
+}
+
+module.exports = async (req, res) => {
+  applyCors(req, res);
+
+  // Preflight: just say "OK" and stop here
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  if (req.method !== "POST") {
+    return res
+      .status(405)
+      .json({ success: false, message: "Method Not Allowed" });
+  }
 
   try {
     const body = req.body || {};
+    // Expect { ticker:{ code:"6758.T", sector:"Electronics" } }
     const tickerObj = body.ticker || body || {};
     const code = String(tickerObj.code || tickerObj.ticker || "").trim();
     const sector = String(tickerObj.sector || "").trim();
 
     if (!code) {
-      console.warn("[/api/stocks] missing ticker.code in body:", body);
       return res
         .status(400)
         .json({ success: false, message: "ticker.code is required" });
@@ -522,19 +544,11 @@ module.exports = async (req, res) => {
 
     const yahooData = await fetchYahooFinanceData(code, sector);
 
-    // 🔍 DEBUG: log the key bits we care about
-    console.log("[/api/stocks] response yahooData summary", {
-      ticker: code,
-      nextEarningsDateIso: yahooData.nextEarningsDateIso,
-      nextEarningsDateFmt: yahooData.nextEarningsDateFmt,
-    });
-
     return res.status(200).json({
       success: true,
       data: { code, sector, yahooData },
     });
   } catch (error) {
-    console.error("[/api/stocks] error", error);
     const status = error?.name === "DataIntegrityError" ? 422 : 500;
     return res.status(status).json({
       success: false,
