@@ -51,6 +51,18 @@ async function fetchYahooFinanceData(ticker, sector = "") {
         }),
       ]);
 
+    // DEBUG: high-level summary info
+    console.log(
+      "[stocks] quoteSummary keys for",
+      ticker,
+      Object.keys(summary || {})
+    );
+    console.log(
+      "[stocks] raw calendarEvents for",
+      ticker,
+      JSON.stringify(summary?.calendarEvents || {}, null, 2)
+    );
+
     if (!Array.isArray(historicalPrices) || !historicalPrices.length) {
       throw mkError("NO_HISTORICAL", `No historical prices for ${ticker}`, {
         ticker,
@@ -214,6 +226,13 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const qt = summary?.quoteType || {};
     const ce = summary?.calendarEvents || {};
 
+    // DEBUG: show calendarEvents structure in detail
+    console.log(
+      "[stocks] parsed calendarEvents for",
+      ticker,
+      JSON.stringify(ce, null, 2)
+    );
+
     // ---------- raw pulls ----------
     const currency = (pr?.currency || quote?.currency || "").toUpperCase();
     const symbol = pr?.symbol || quote?.symbol || ticker;
@@ -236,7 +255,6 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
     const repurchasesTTM = toNumber(cfH?.repurchaseOfStock);
     // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid); // not directly used in calc below
-
 
     // Normalize Yahoo date formats (raw seconds, Date, string…)
     const parseYahooDate = (d) => {
@@ -262,8 +280,19 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       ? ce.earningsDate
       : [];
 
-    const earningsDates = earningsDatesRaw.map(parseYahooDate).filter(Boolean);
+    // DEBUG: inspect the raw earnings structures
+    console.log(
+      "[stocks] earningsBlock for",
+      ticker,
+      JSON.stringify(earningsBlock, null, 2)
+    );
+    console.log(
+      "[stocks] earningsDatesRaw for",
+      ticker,
+      JSON.stringify(earningsDatesRaw, null, 2)
+    );
 
+    const earningsDates = earningsDatesRaw.map(parseYahooDate).filter(Boolean);
     const futureEarningsDates = earningsDates.filter((d) => d >= now);
 
     let nextEarningsDate = null;
@@ -274,6 +303,24 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       // all in the past: take most recent as a fallback
       nextEarningsDate = earningsDates.sort((a, b) => b - a)[0];
     }
+
+    const nextEarningsDateIso = nextEarningsDate
+      ? nextEarningsDate.toISOString()
+      : null;
+
+    const nextEarningsDateFmt = (() => {
+      const first = earningsDatesRaw[0];
+      return first && typeof first === "object" && first.fmt ? first.fmt : null;
+    })();
+
+    // DEBUG: final computed earnings date values
+    console.log("[stocks] nextEarnings debug for", ticker, {
+      earningsDatesRaw,
+      earningsDates,
+      nextEarningsDate,
+      nextEarningsDateIso,
+      nextEarningsDateFmt,
+    });
 
     // ---------- price/volume ----------
     const yahooData = {
@@ -351,19 +398,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       regularMarketTime: quote.regularMarketTime || null,
       exchange: quote.fullExchangeName || quote.exchange || null,
 
-      regularMarketTime: quote.regularMarketTime || null,
-      exchange: quote.fullExchangeName || quote.exchange || null,
-
-      nextEarningsDateIso: nextEarningsDate
-        ? nextEarningsDate.toISOString()
-        : null,
-
-      nextEarningsDateFmt: (() => {
-        const first = earningsDatesRaw[0];
-        return first && typeof first === "object" && first.fmt
-          ? first.fmt
-          : null;
-      })(),
+      nextEarningsDateIso,
+      nextEarningsDateFmt,
 
       enterpriseValue,
       totalDebt,
@@ -404,6 +440,12 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     yahooData.shareholderYieldPct =
       toNumber(yahooData.dividendYield) + toNumber(yahooData.buybackYieldPct);
 
+    // DEBUG: final yahooData earnings fields
+    console.log("[stocks] yahooData earnings fields for", ticker, {
+      nextEarningsDateIso: yahooData.nextEarningsDateIso,
+      nextEarningsDateFmt: yahooData.nextEarningsDateFmt,
+    });
+
     const required = [
       "currentPrice",
       "highPrice",
@@ -436,7 +478,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     return yahooData;
   } catch (err) {
     if (err && err.name === "DataIntegrityError") throw err;
-    throw new Error(`fetchYahooFinanceData failed for ${ticker}: ${err.stack || err.message}`);
+    throw new Error(
+      `fetchYahooFinanceData failed for ${ticker}: ${err.stack || err.message}`
+    );
   }
 }
 
@@ -462,7 +506,9 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
   if (req.method !== "POST") {
-    return res.status(405).json({ success: false, message: "Method Not Allowed" });
+    return res
+      .status(405)
+      .json({ success: false, message: "Method Not Allowed" });
   }
 
   try {
@@ -473,7 +519,9 @@ module.exports = async (req, res) => {
     const sector = String(tickerObj.sector || "").trim();
 
     if (!code) {
-      return res.status(400).json({ success: false, message: "ticker.code is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "ticker.code is required" });
     }
 
     const yahooData = await fetchYahooFinanceData(code, sector);
