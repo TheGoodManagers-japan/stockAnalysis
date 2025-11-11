@@ -237,6 +237,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const repurchasesTTM = toNumber(cfH?.repurchaseOfStock);
     // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid); // not directly used in calc below
 
+
     // Normalize Yahoo date formats (raw seconds, Date, string…)
     const parseYahooDate = (d) => {
       if (!d) return null;
@@ -253,10 +254,15 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       return null;
     };
 
-    // earningsDate is usually an array (start/end window)
-    const earningsDates = Array.isArray(ce.earningsDate)
-      ? ce.earningsDate.map(parseYahooDate).filter(Boolean)
+    // calendarEvents.earnings.earningsDate is the usual shape
+    const earningsBlock = ce.earnings || {};
+    const earningsDatesRaw = Array.isArray(earningsBlock.earningsDate)
+      ? earningsBlock.earningsDate
+      : Array.isArray(ce.earningsDate) // fallback for any older / weird shape
+      ? ce.earningsDate
       : [];
+
+    const earningsDates = earningsDatesRaw.map(parseYahooDate).filter(Boolean);
 
     const futureEarningsDates = earningsDates.filter((d) => d >= now);
 
@@ -351,11 +357,13 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       nextEarningsDateIso: nextEarningsDate
         ? nextEarningsDate.toISOString()
         : null,
-      // Optional: human-readable format if Yahoo provided fmt on the first entry
-      nextEarningsDateFmt:
-        Array.isArray(ce.earningsDate) && ce.earningsDate[0]?.fmt
-          ? ce.earningsDate[0].fmt
-          : null,
+
+      nextEarningsDateFmt: (() => {
+        const first = earningsDatesRaw[0];
+        return first && typeof first === "object" && first.fmt
+          ? first.fmt
+          : null;
+      })(),
 
       enterpriseValue,
       totalDebt,
