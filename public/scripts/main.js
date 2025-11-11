@@ -1553,7 +1553,7 @@ export async function fetchStockAnalysis({
         _api_c2_managementSignalReason: stock.managementSignalReason,
 
         // 👇 NEW
-        _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
+        _api_c2_nextEarningsDateIso: "2025-12-12",
         _api_c2_otherData: JSON.stringify({
           highPrice: stock.highPrice,
           lowPrice: stock.lowPrice,
