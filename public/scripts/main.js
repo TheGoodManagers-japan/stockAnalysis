@@ -36,7 +36,7 @@ function formatJPYKMB(n) {
    0) Constants + tiny logging helper
 ------------------------------------------- */
 const API_BASE =
-  "https://stock-analysis-rhkb3ohpx-aymerics-projects-60f33831.vercel.app";
+  "https://stock-analysis-q4vsvhf71-aymerics-projects-60f33831.vercel.app";
 const DEBUG = true;
 
 const IS_BROWSER =
