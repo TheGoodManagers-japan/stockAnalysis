@@ -23,34 +23,38 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
-    const [quote, historicalPrices, dividendEvents, summary] = await Promise.all([
-      yahooFinance.quote(ticker),
-      yahooFinance.historical(ticker, {
-        period1: oneYearAgo,
-        period2: now,
-        interval: "1d",
-      }),
-      yahooFinance.historical(ticker, {
-        period1: fiveYearsAgo,
-        period2: now,
-        events: "dividends",
-      }),
-      yahooFinance.quoteSummary(ticker, {
-        modules: [
-          "financialData",
-          "defaultKeyStatistics",
-          "balanceSheetHistory",
-          "incomeStatementHistory",
-          "cashflowStatementHistory",
-          "summaryDetail",
-          "price",
-          "quoteType",
-        ],
-      }),
-    ]);
+    const [quote, historicalPrices, dividendEvents, summary] =
+      await Promise.all([
+        yahooFinance.quote(ticker),
+        yahooFinance.historical(ticker, {
+          period1: oneYearAgo,
+          period2: now,
+          interval: "1d",
+        }),
+        yahooFinance.historical(ticker, {
+          period1: fiveYearsAgo,
+          period2: now,
+          events: "dividends",
+        }),
+        yahooFinance.quoteSummary(ticker, {
+          modules: [
+            "financialData",
+            "defaultKeyStatistics",
+            "balanceSheetHistory",
+            "incomeStatementHistory",
+            "cashflowStatementHistory",
+            "summaryDetail",
+            "price",
+            "quoteType",
+            "calendarEvents",
+          ],
+        }),
+      ]);
 
     if (!Array.isArray(historicalPrices) || !historicalPrices.length) {
-      throw mkError("NO_HISTORICAL", `No historical prices for ${ticker}`, { ticker });
+      throw mkError("NO_HISTORICAL", `No historical prices for ${ticker}`, {
+        ticker,
+      });
     }
     if (!quote) {
       throw mkError("NO_QUOTE", `No quote for ${ticker}`, { ticker });
@@ -59,7 +63,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const toNumber = (val) => (isNaN(parseFloat(val)) ? 0 : parseFloat(val));
     const lastBar = historicalPrices[historicalPrices.length - 1] || {};
     const prevBar = historicalPrices[historicalPrices.length - 2] || {};
-    const safeDividendEvents = Array.isArray(dividendEvents) ? dividendEvents : [];
+    const safeDividendEvents = Array.isArray(dividendEvents)
+      ? dividendEvents
+      : [];
 
     // ---------- indicators ----------
     const calculateMA = (data, days) =>
@@ -84,13 +90,15 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
     const calculateRSI = (closes, period = 14) => {
       if (closes.length < period + 1) return 50;
-      let gains = 0, losses = 0;
+      let gains = 0,
+        losses = 0;
       for (let i = closes.length - period; i < closes.length; i++) {
         const d = closes[i] - closes[i - 1];
         if (d >= 0) gains += d;
         else losses -= d;
       }
-      const avgG = gains / period, avgL = losses / period;
+      const avgG = gains / period,
+        avgL = losses / period;
       const rs = avgL === 0 ? 100 : avgG / avgL;
       return 100 - 100 / (1 + rs);
     };
@@ -99,7 +107,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       if (closes.length < slow) return { macd: 0, signal: 0 };
       const emaFast = calculateEMA(closes, fast);
       const emaSlow = calculateEMA(closes, slow);
-      const macdLine = emaFast.slice(emaFast.length - emaSlow.length).map((v, i) => v - emaSlow[i]);
+      const macdLine = emaFast
+        .slice(emaFast.length - emaSlow.length)
+        .map((v, i) => v - emaSlow[i]);
       const sig = calculateEMA(macdLine, signal);
       return { macd: macdLine.pop() || 0, signal: sig.pop() || 0 };
     };
@@ -108,7 +118,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       if (closes.length < period) return { upper: 0, lower: 0, mid: 0 };
       const recent = closes.slice(-period);
       const mid = recent.reduce((a, v) => a + v, 0) / period;
-      const variance = recent.reduce((a, v) => a + Math.pow(v - mid, 2), 0) / period;
+      const variance =
+        recent.reduce((a, v) => a + Math.pow(v - mid, 2), 0) / period;
       const sd = Math.sqrt(variance);
       return { upper: mid + m * sd, lower: mid - m * sd, mid };
     };
@@ -118,7 +129,8 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       const rel = data.slice(-(period + 1));
       let sum = 0;
       for (let i = 1; i < rel.length; i++) {
-        const c = rel[i], p = rel[i - 1];
+        const c = rel[i],
+          p = rel[i - 1];
         const tr = Math.max(
           c.high - c.low,
           Math.abs(c.high - p.close),
@@ -152,8 +164,11 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       if (data.length < 2) return 0;
       let obv = 0;
       for (let i = 1; i < data.length; i++) {
-        const cc = data[i].close, pc = data[i - 1].close, vol = data[i].volume || 0;
-        if (cc > pc) obv += vol; else if (cc < pc) obv -= vol;
+        const cc = data[i].close,
+          pc = data[i - 1].close,
+          vol = data[i].volume || 0;
+        if (cc > pc) obv += vol;
+        else if (cc < pc) obv -= vol;
       }
       return obv;
     };
@@ -190,11 +205,14 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const fd = summary?.financialData || {};
     const ks = summary?.defaultKeyStatistics || {};
     const bsH = summary?.balanceSheetHistory?.balanceSheetStatements?.[0] || {};
-    const isH = summary?.incomeStatementHistory?.incomeStatementHistory?.[0] || {};
-    const cfH = summary?.cashflowStatementHistory?.cashflowStatements?.[0] || {};
+    const isH =
+      summary?.incomeStatementHistory?.incomeStatementHistory?.[0] || {};
+    const cfH =
+      summary?.cashflowStatementHistory?.cashflowStatements?.[0] || {};
     const sd = summary?.summaryDetail || {};
     const pr = summary?.price || {};
     const qt = summary?.quoteType || {};
+    const ce = summary?.calendarEvents || {};
 
     // ---------- raw pulls ----------
     const currency = (pr?.currency || quote?.currency || "").toUpperCase();
@@ -208,7 +226,9 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const ebitda = toNumber(fd?.ebitda);
     const ebit = toNumber(isH?.ebit ?? isH?.operatingIncome);
 
-    const sharesOutstanding = toNumber(ks?.sharesOutstanding ?? quote?.sharesOutstanding);
+    const sharesOutstanding = toNumber(
+      ks?.sharesOutstanding ?? quote?.sharesOutstanding
+    );
     const goodwill = toNumber(bsH?.goodWill) || 0;
     const intangibles = toNumber(bsH?.intangibleAssets) || 0;
     const equity = toNumber(bsH?.totalStockholderEquity);
@@ -216,6 +236,38 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
     const repurchasesTTM = toNumber(cfH?.repurchaseOfStock);
     // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid); // not directly used in calc below
+
+    // Normalize Yahoo date formats (raw seconds, Date, string…)
+    const parseYahooDate = (d) => {
+      if (!d) return null;
+      if (typeof d === "object" && "raw" in d) {
+        const t = Number(d.raw);
+        if (!Number.isFinite(t)) return null;
+        return new Date(t * 1000); // Yahoo raw is in seconds
+      }
+      if (d instanceof Date) return d;
+      if (typeof d === "string" || typeof d === "number") {
+        const dt = new Date(d);
+        return Number.isNaN(dt.getTime()) ? null : dt;
+      }
+      return null;
+    };
+
+    // earningsDate is usually an array (start/end window)
+    const earningsDates = Array.isArray(ce.earningsDate)
+      ? ce.earningsDate.map(parseYahooDate).filter(Boolean)
+      : [];
+
+    const futureEarningsDates = earningsDates.filter((d) => d >= now);
+
+    let nextEarningsDate = null;
+    if (futureEarningsDates.length) {
+      // earliest upcoming
+      nextEarningsDate = futureEarningsDates.sort((a, b) => a - b)[0];
+    } else if (earningsDates.length) {
+      // all in the past: take most recent as a fallback
+      nextEarningsDate = earningsDates.sort((a, b) => b - a)[0];
+    }
 
     // ---------- price/volume ----------
     const yahooData = {
@@ -228,27 +280,36 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       highPrice: toNumber(quote.regularMarketDayHigh) || toNumber(lastBar.high),
       lowPrice: toNumber(quote.regularMarketDayLow) || toNumber(lastBar.low),
       openPrice: toNumber(quote.regularMarketOpen) || toNumber(lastBar.open),
-      prevClosePrice: toNumber(quote.regularMarketPreviousClose) || toNumber(prevBar.close),
-      todayVolume: toNumber(quote.regularMarketVolume) || toNumber(lastBar.volume || 0),
+      prevClosePrice:
+        toNumber(quote.regularMarketPreviousClose) || toNumber(prevBar.close),
+      todayVolume:
+        toNumber(quote.regularMarketVolume) || toNumber(lastBar.volume || 0),
       marketCap: toNumber(quote.marketCap),
 
       fiftyTwoWeekHigh: toNumber(quote.fiftyTwoWeekHigh),
       fiftyTwoWeekLow: toNumber(quote.fiftyTwoWeekLow),
 
       peRatio: toNumber(quote.trailingPE ?? ks?.trailingPE ?? sd?.trailingPE),
-      pbRatio: toNumber(quote.priceToBook ?? ks?.priceToBook ?? sd?.priceToBook),
+      pbRatio: toNumber(
+        quote.priceToBook ?? ks?.priceToBook ?? sd?.priceToBook
+      ),
       priceToSales: toNumber(sd?.priceToSalesTrailing12Months),
 
       dividendYield: toNumber(quote.dividendYield) * 100,
 
       dividendGrowth5yr: (() => {
-        if (!Array.isArray(safeDividendEvents) || safeDividendEvents.length < 2) return 0;
+        if (!Array.isArray(safeDividendEvents) || safeDividendEvents.length < 2)
+          return 0;
         const first = safeDividendEvents[0];
         const last = safeDividendEvents[safeDividendEvents.length - 1];
         const dv0 = toNumber(first?.dividends);
         const dv1 = toNumber(last?.dividends);
         if (!dv0 || !dv1) return 0;
-        const years = Math.max(1, (new Date(last.date) - new Date(first.date)) / (365.25 * 24 * 3600 * 1000));
+        const years = Math.max(
+          1,
+          (new Date(last.date) - new Date(first.date)) /
+            (365.25 * 24 * 3600 * 1000)
+        );
         const cagr = Math.pow(dv1 / dv0, 1 / years) - 1;
         return cagr * 100;
       })(),
@@ -283,6 +344,18 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 
       regularMarketTime: quote.regularMarketTime || null,
       exchange: quote.fullExchangeName || quote.exchange || null,
+
+      regularMarketTime: quote.regularMarketTime || null,
+      exchange: quote.fullExchangeName || quote.exchange || null,
+
+      nextEarningsDateIso: nextEarningsDate
+        ? nextEarningsDate.toISOString()
+        : null,
+      // Optional: human-readable format if Yahoo provided fmt on the first entry
+      nextEarningsDateFmt:
+        Array.isArray(ce.earningsDate) && ce.earningsDate[0]?.fmt
+          ? ce.earningsDate[0].fmt
+          : null,
 
       enterpriseValue,
       totalDebt,

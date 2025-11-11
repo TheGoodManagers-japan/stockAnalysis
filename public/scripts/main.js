@@ -1250,6 +1250,9 @@ export async function fetchStockAnalysis({
         buybackYieldPct: yahooData.buybackYieldPct,
         shareholderYieldPct: yahooData.shareholderYieldPct,
         ptbv: yahooData.ptbv,
+        // 👇 NEW
+        nextEarningsDateIso: yahooData.nextEarningsDateIso ?? null,
+        nextEarningsDateFmt: yahooData.nextEarningsDateFmt ?? null,
       };
 
       // 3) history + enrichment
@@ -1525,6 +1528,9 @@ export async function fetchStockAnalysis({
         _api_c2_longTermScore: stock.longTermScore,
         _api_c2_stopLoss: stock.stopLoss,
         _api_c2_priceTarget: stock.priceTarget,
+        // 👇 NEW (ISO is best for Bubble date parsing)
+        _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
+        _api_c2_nextEarningsDateFmt: stock.nextEarningsDateFmt,
         // ANCHOR: LIQ_BUBBLE_FIELDS_MIN
         _api_c2_liqPass: liq ? !!liq.pass : null,
 
@@ -1576,6 +1582,9 @@ export async function fetchStockAnalysis({
           technicalScore: stock.technicalScore,
           fundamentalScore: stock.fundamentalScore,
           valuationScore: stock.valuationScore,
+          // 👇 NEW
+          nextEarningsDateIso: stock.nextEarningsDateIso,
+          nextEarningsDateFmt: stock.nextEarningsDateFmt,
         }),
       };
 
