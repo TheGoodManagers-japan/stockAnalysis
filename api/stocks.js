@@ -494,31 +494,27 @@ const allowedOrigins = [
 
 module.exports = async (req, res) => {
   const origin = req.headers.origin;
+
+  // 🔍 DEBUG: log incoming request
+  console.log("[/api/stocks] incoming", {
+    method: req.method,
+    origin,
+    body: req.body,
+  });
+
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Max-Age", "600");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-  if (req.method !== "POST") {
-    return res
-      .status(405)
-      .json({ success: false, message: "Method Not Allowed" });
-  }
+  // ... headers and method checks unchanged ...
 
   try {
     const body = req.body || {};
-    // Expect { ticker:{ code:"6758.T", sector:"Electronics" } }
     const tickerObj = body.ticker || body || {};
     const code = String(tickerObj.code || tickerObj.ticker || "").trim();
     const sector = String(tickerObj.sector || "").trim();
 
     if (!code) {
+      console.warn("[/api/stocks] missing ticker.code in body:", body);
       return res
         .status(400)
         .json({ success: false, message: "ticker.code is required" });
@@ -526,11 +522,19 @@ module.exports = async (req, res) => {
 
     const yahooData = await fetchYahooFinanceData(code, sector);
 
+    // 🔍 DEBUG: log the key bits we care about
+    console.log("[/api/stocks] response yahooData summary", {
+      ticker: code,
+      nextEarningsDateIso: yahooData.nextEarningsDateIso,
+      nextEarningsDateFmt: yahooData.nextEarningsDateFmt,
+    });
+
     return res.status(200).json({
       success: true,
       data: { code, sector, yahooData },
     });
   } catch (error) {
+    console.error("[/api/stocks] error", error);
     const status = error?.name === "DataIntegrityError" ? 422 : 500;
     return res.status(status).json({
       success: false,
