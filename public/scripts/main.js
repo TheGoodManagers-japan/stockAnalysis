@@ -1551,6 +1551,9 @@ export async function fetchStockAnalysis({
         _api_c2_buyNowReason: stock.buyNowReason,
         _api_c2_managementSignalStatus: stock.managementSignalStatus,
         _api_c2_managementSignalReason: stock.managementSignalReason,
+
+        // 👇 NEW
+        _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
         _api_c2_otherData: JSON.stringify({
           highPrice: stock.highPrice,
           lowPrice: stock.lowPrice,
@@ -1582,9 +1585,6 @@ export async function fetchStockAnalysis({
           technicalScore: stock.technicalScore,
           fundamentalScore: stock.fundamentalScore,
           valuationScore: stock.valuationScore,
-          // 👇 NEW
-          nextEarningsDateIso: stock.nextEarningsDateIso,
-          nextEarningsDateFmt: stock.nextEarningsDateFmt,
         }),
       };
 
