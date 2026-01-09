@@ -11,45 +11,101 @@ function mkError(code, message, details = {}) {
   return e;
 }
 
+/* ---------- throttle error helper (so we can return 429) ---------- */
+function mkThrottleError(message, details = {}) {
+  const e = new Error(message || "Yahoo Finance throttled this request");
+  e.name = "YahooThrottleError";
+  e.code = "YAHOO_THROTTLED";
+  e.details = details;
+  return e;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isThrottleError(err) {
+  const msg = String(err?.message || "");
+  // Common patterns from yahoo-finance2 / undici when Yahoo returns plain-text "Too Many Requests"
+  return (
+    /Too Many Requests/i.test(msg) ||
+    /status\s*429/i.test(msg) ||
+    /Unexpected token 'T'/i.test(msg) || // because body starts with "Too Many Requests"
+    /crumb/i.test(msg) // crumb/cookie flow can also be throttled
+  );
+}
+
+async function withRetry(fn, { retries = 4, baseMs = 500 } = {}) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+
+      // only retry on throttle-like errors
+      if (!isThrottleError(err) || i === retries) break;
+
+      const wait = baseMs * Math.pow(2, i) + Math.random() * 300;
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
+
 /* ---------- your function (enriched fundamentals + value metrics) ---------- */
 async function fetchYahooFinanceData(ticker, sector = "") {
   try {
     const now = new Date();
+
     const getDateYearsAgo = (years) => {
       const d = new Date();
       d.setFullYear(d.getFullYear() - years);
       return d;
     };
+
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
-    const [quote, historicalPrices, dividendEvents, summary] =
-      await Promise.all([
-        yahooFinance.quote(ticker),
-        yahooFinance.historical(ticker, {
-          period1: oneYearAgo,
-          period2: now,
-          interval: "1d",
-        }),
-        yahooFinance.historical(ticker, {
-          period1: fiveYearsAgo,
-          period2: now,
-          events: "dividends",
-        }),
-        yahooFinance.quoteSummary(ticker, {
-          modules: [
-            "financialData",
-            "defaultKeyStatistics",
-            "balanceSheetHistory",
-            "incomeStatementHistory",
-            "cashflowStatementHistory",
-            "summaryDetail",
-            "price",
-            "quoteType",
-            "calendarEvents",
-          ],
-        }),
-      ]);
+    // IMPORTANT:
+    // Your old code did 4 Yahoo calls in parallel (Promise.all).
+    // Even for one ticker, that’s a burst and can trigger throttling.
+    // We run them sequentially + small jitter between calls.
+
+    const quote = await withRetry(() => yahooFinance.quote(ticker));
+    await sleep(150 + Math.random() * 200);
+
+    const historicalPrices = await withRetry(() =>
+      yahooFinance.historical(ticker, {
+        period1: oneYearAgo,
+        period2: now,
+        interval: "1d",
+      })
+    );
+    await sleep(150 + Math.random() * 200);
+
+    const dividendEvents = await withRetry(() =>
+      yahooFinance.historical(ticker, {
+        period1: fiveYearsAgo,
+        period2: now,
+        events: "dividends",
+      })
+    );
+    await sleep(150 + Math.random() * 200);
+
+    const summary = await withRetry(() =>
+      yahooFinance.quoteSummary(ticker, {
+        modules: [
+          "financialData",
+          "defaultKeyStatistics",
+          "balanceSheetHistory",
+          "incomeStatementHistory",
+          "cashflowStatementHistory",
+          "summaryDetail",
+          "price",
+          "quoteType",
+          "calendarEvents",
+        ],
+      })
+    );
 
     // DEBUG: high-level summary info
     console.log(
@@ -197,6 +253,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const bb = calculateBollinger(closes);
     const stoch = calculateStochastic(historicalPrices);
     const obvRaw = calculateOBV(historicalPrices);
+
     // OBV series for MA20
     const obvSeries = [];
     if (historicalPrices.length >= 2) {
@@ -226,7 +283,6 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const qt = summary?.quoteType || {};
     const ce = summary?.calendarEvents || {};
 
-    // DEBUG: show calendarEvents structure in detail
     console.log(
       "[stocks] parsed calendarEvents for",
       ticker,
@@ -254,7 +310,6 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const tangibleBookValue = Math.max(0, equity - goodwill - intangibles);
 
     const repurchasesTTM = toNumber(cfH?.repurchaseOfStock);
-    // const dividendsPaidTTM = toNumber(cfH?.dividendsPaid); // not directly used in calc below
 
     // Normalize Yahoo date formats (raw seconds, Date, string…)
     const parseYahooDate = (d) => {
@@ -276,11 +331,10 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const earningsBlock = ce.earnings || {};
     const earningsDatesRaw = Array.isArray(earningsBlock.earningsDate)
       ? earningsBlock.earningsDate
-      : Array.isArray(ce.earningsDate) // fallback for any older / weird shape
+      : Array.isArray(ce.earningsDate)
       ? ce.earningsDate
       : [];
 
-    // DEBUG: inspect the raw earnings structures
     console.log(
       "[stocks] earningsBlock for",
       ticker,
@@ -296,13 +350,10 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const futureEarningsDates = earningsDates.filter((d) => d >= now);
 
     let nextEarningsDate = null;
-    if (futureEarningsDates.length) {
-      // earliest upcoming
+    if (futureEarningsDates.length)
       nextEarningsDate = futureEarningsDates.sort((a, b) => a - b)[0];
-    } else if (earningsDates.length) {
-      // all in the past: take most recent as a fallback
+    else if (earningsDates.length)
       nextEarningsDate = earningsDates.sort((a, b) => b - a)[0];
-    }
 
     const nextEarningsDateIso = nextEarningsDate
       ? nextEarningsDate.toISOString()
@@ -313,11 +364,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       return first && typeof first === "object" && first.fmt ? first.fmt : null;
     })();
 
-    // DEBUG: final computed earnings date values
     console.log("[stocks] nextEarnings debug for", ticker, {
-      earningsDatesRaw,
-      earningsDates,
-      nextEarningsDate,
       nextEarningsDateIso,
       nextEarningsDateFmt,
     });
@@ -440,12 +487,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     yahooData.shareholderYieldPct =
       toNumber(yahooData.dividendYield) + toNumber(yahooData.buybackYieldPct);
 
-    // DEBUG: final yahooData earnings fields
-    console.log("[stocks] yahooData earnings fields for", ticker, {
-      nextEarningsDateIso: yahooData.nextEarningsDateIso,
-      nextEarningsDateFmt: yahooData.nextEarningsDateFmt,
-    });
-
+    // ✅ FIX: Don't treat 0 as "missing". Only fail if undefined/null/not-finite.
     const required = [
       "currentPrice",
       "highPrice",
@@ -463,21 +505,33 @@ async function fetchYahooFinanceData(ticker, sector = "") {
       "stochasticK",
       "stochasticD",
     ];
+
     const missing = required.filter((f) => {
       const v = yahooData[f];
-      return v === undefined || v === null || v === 0;
+      return v === undefined || v === null || !Number.isFinite(v);
     });
+
     if (missing.length) {
-      throw mkError(
-        "MISSING_FIELDS",
-        `Missing/zero fields: ${missing.join(", ")}`,
-        { ticker, missingFields: missing, snapshot: yahooData, rawQuote: quote }
-      );
+      throw mkError("MISSING_FIELDS", `Missing fields: ${missing.join(", ")}`, {
+        ticker,
+        missingFields: missing,
+        snapshot: yahooData,
+        rawQuote: quote,
+      });
     }
 
     return yahooData;
   } catch (err) {
+    // Convert Yahoo throttling into a special error we can map to HTTP 429
+    if (isThrottleError(err)) {
+      throw mkThrottleError(`Yahoo Finance throttled/blocked: ${ticker}`, {
+        ticker,
+        originalMessage: String(err?.message || ""),
+      });
+    }
+
     if (err && err.name === "DataIntegrityError") throw err;
+
     throw new Error(
       `fetchYahooFinanceData failed for ${ticker}: ${err.stack || err.message}`
     );
@@ -489,8 +543,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
 const allowedOrigins = new Set([
   "https://thegoodmanagers.com",
   "https://www.thegoodmanagers.com",
-  // add your Bubble test / preview domain(s) here if needed, e.g.:
-  // "https://your-app.bubbleapps.io",
+  // add your Bubble test / preview domain(s) here if needed
 ]);
 
 function applyCors(req, res) {
@@ -498,8 +551,6 @@ function applyCors(req, res) {
 
   if (origin && allowedOrigins.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    // Only add this if you ever use credentials/cookies:
-    // res.setHeader("Access-Control-Allow-Credentials", "true");
   }
 
   res.setHeader("Vary", "Origin");
@@ -508,7 +559,6 @@ function applyCors(req, res) {
     "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   );
 
-  // Echo back requested headers so preflight always passes
   const reqHeaders =
     req.headers["access-control-request-headers"] || "Content-Type";
   res.setHeader("Access-Control-Allow-Headers", reqHeaders);
@@ -518,7 +568,6 @@ function applyCors(req, res) {
 module.exports = async (req, res) => {
   applyCors(req, res);
 
-  // Preflight: just say "OK" and stop here
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
@@ -531,10 +580,11 @@ module.exports = async (req, res) => {
 
   try {
     const body = req.body || {};
-    // Expect { ticker:{ code:"6758.T", sector:"Electronics" } }
     const tickerObj = body.ticker || body || {};
     const code = String(tickerObj.code || tickerObj.ticker || "").trim();
     const sector = String(tickerObj.sector || "").trim();
+
+    console.log("[stocks] request", new Date().toISOString(), "ticker:", code);
 
     if (!code) {
       return res
@@ -549,6 +599,19 @@ module.exports = async (req, res) => {
       data: { code, sector, yahooData },
     });
   } catch (error) {
+    // ✅ If Yahoo throttled/blocked, return 429 so Bubble can retry later
+    if (
+      error?.name === "YahooThrottleError" ||
+      error?.code === "YAHOO_THROTTLED"
+    ) {
+      return res.status(429).json({
+        success: false,
+        message: error?.message || "Yahoo Finance throttled this request",
+        code: error?.code,
+        details: error?.details,
+      });
+    }
+
     const status = error?.name === "DataIntegrityError" ? 422 : 500;
     return res.status(status).json({
       success: false,
