@@ -1,6 +1,51 @@
-// /api/history.js
+// /api/history.js  (yahoo-finance2 v3 + retry + 429)
 
-const yahooFinance = require("yahoo-finance2").default;
+const YahooFinance = require("yahoo-finance2").default;
+
+// v3: instantiate the client (instead of using the old default instance)
+const yahooFinance = new YahooFinance({
+  suppressNotices: ["yahooSurvey"], // optional
+});
+
+/* ---------- throttle error helper (so we can return 429) ---------- */
+function mkThrottleError(message, details = {}) {
+  const e = new Error(message || "Yahoo Finance throttled this request");
+  e.name = "YahooThrottleError";
+  e.code = "YAHOO_THROTTLED";
+  e.details = details;
+  return e;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isThrottleError(err) {
+  const msg = String(err?.message || "");
+  // Common patterns from yahoo-finance2 / undici when Yahoo returns plain-text "Too Many Requests"
+  return (
+    /Too Many Requests/i.test(msg) ||
+    /status\s*429/i.test(msg) ||
+    /Unexpected token 'T'/i.test(msg) || // because body starts with "Too Many Requests"
+    /crumb/i.test(msg) // crumb/cookie flow can also be throttled
+  );
+}
+
+async function withRetry(fn, { retries = 4, baseMs = 500 } = {}) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+
+      // only retry on throttle-like errors
+      if (!isThrottleError(err) || i === retries) break;
+
+      const wait = baseMs * Math.pow(2, i) + Math.random() * 300;
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
 
 async function fetchHistoricalData(ticker, years = 3) {
   try {
@@ -13,11 +58,14 @@ async function fetchHistoricalData(ticker, years = 3) {
       `Fetching historical data for ticker: ${ticker} from ${startDate.toISOString()} to ${today.toISOString()}`
     );
 
-    const data = await yahooFinance.chart(ticker, {
-      period1: startDate,
-      period2: today,
-      interval: "1d",
-    });
+    // Use retry wrapper to reduce failure rate on 429 throttling
+    const data = await withRetry(() =>
+      yahooFinance.chart(ticker, {
+        period1: startDate,
+        period2: today,
+        interval: "1d",
+      })
+    );
 
     if (!data || !data.quotes || data.quotes.length === 0) {
       console.warn(`No historical data available for ticker: ${ticker}`);
@@ -48,6 +96,14 @@ async function fetchHistoricalData(ticker, years = 3) {
       price: quote.close,
     }));
   } catch (error) {
+    // Convert Yahoo throttling into a special error we can map to HTTP 429
+    if (isThrottleError(error)) {
+      throw mkThrottleError(`Yahoo Finance throttled/blocked: ${ticker}`, {
+        ticker,
+        originalMessage: String(error?.message || ""),
+      });
+    }
+
     console.error(
       `Error fetching historical data for ${ticker}:`,
       error.message
@@ -71,13 +127,17 @@ module.exports = async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
 
+  // Good practice when varying by Origin
+  res.setHeader("Vary", "Origin");
+
   // 3) Other standard CORS headers
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "600");
 
   // 4) Handle preflight (OPTIONS) requests
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
   try {
@@ -105,9 +165,22 @@ module.exports = async (req, res) => {
     console.log(
       `Fetched historical data for ${ticker} over ${numYears} years.`
     );
-    res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data });
   } catch (error) {
+    // ✅ If Yahoo throttled/blocked, return 429 so Bubble can retry later
+    if (
+      error?.name === "YahooThrottleError" ||
+      error?.code === "YAHOO_THROTTLED"
+    ) {
+      return res.status(429).json({
+        success: false,
+        message: error?.message || "Yahoo Finance throttled this request",
+        code: error?.code,
+        details: error?.details,
+      });
+    }
+
     console.error("Error in API handler:", error.message);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };

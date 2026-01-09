@@ -1,6 +1,12 @@
-// /api/stocks.js
+// /api/stocks.js  (yahoo-finance2 v3)
 
-const yahooFinance = require("yahoo-finance2").default;
+const YahooFinance = require("yahoo-finance2").default;
+
+// v3: instantiate the client (instead of using the old default instance)
+// You can pass options here (optional), including suppressNotices.
+const yahooFinance = new YahooFinance({
+  suppressNotices: ["yahooSurvey"],
+});
 
 /* ---------- tiny error helper to match your fetch code ---------- */
 function mkError(code, message, details = {}) {
@@ -65,11 +71,7 @@ async function fetchYahooFinanceData(ticker, sector = "") {
     const oneYearAgo = getDateYearsAgo(1);
     const fiveYearsAgo = getDateYearsAgo(5);
 
-    // IMPORTANT:
-    // Your old code did 4 Yahoo calls in parallel (Promise.all).
-    // Even for one ticker, that’s a burst and can trigger throttling.
-    // We run them sequentially + small jitter between calls.
-
+    // Sequential calls + jitter to reduce throttling
     const quote = await withRetry(() => yahooFinance.quote(ticker));
     await sleep(150 + Math.random() * 200);
 
