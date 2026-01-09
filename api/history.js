@@ -1,13 +1,50 @@
-// /api/history.js  (yahoo-finance2 v3 + retry + 429)
+// /api/history.js  (yahoo-finance2 v3 + retry + robust CORS + 429)
 
 const YahooFinance = require("yahoo-finance2").default;
 
-// v3: instantiate the client (instead of using the old default instance)
 const yahooFinance = new YahooFinance({
-  suppressNotices: ["yahooSurvey"], // optional
+  suppressNotices: ["yahooSurvey"],
 });
 
-/* ---------- throttle error helper (so we can return 429) ---------- */
+/* --------------------------- CORS helpers --------------------------- */
+
+const allowedOrigins = new Set([
+  "https://thegoodmanagers.com",
+  "https://www.thegoodmanagers.com",
+]);
+
+function getHeader(req, name) {
+  const key = String(name).toLowerCase();
+  // Node-style (req.headers is an object)
+  const v1 = req?.headers?.[key];
+  if (typeof v1 === "string") return v1;
+  // Some frameworks can give arrays
+  if (Array.isArray(v1)) return v1[0];
+  // Edge-style (req.headers is a Headers instance)
+  const v2 = req?.headers?.get?.(name) || req?.headers?.get?.(key);
+  return typeof v2 === "string" ? v2 : undefined;
+}
+
+function applyCors(req, res) {
+  const origin = getHeader(req, "origin");
+
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+
+  // Echo requested headers to satisfy real preflights (Authorization, X-* etc)
+  const reqHeaders =
+    getHeader(req, "access-control-request-headers") || "Content-Type";
+  res.setHeader("Access-Control-Allow-Headers", reqHeaders);
+
+  res.setHeader("Access-Control-Max-Age", "600");
+}
+
+/* ------------------------ Throttle + retry helpers ------------------------ */
+
 function mkThrottleError(message, details = {}) {
   const e = new Error(message || "Yahoo Finance throttled this request");
   e.name = "YahooThrottleError";
@@ -20,12 +57,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function isThrottleError(err) {
   const msg = String(err?.message || "");
-  // Common patterns from yahoo-finance2 / undici when Yahoo returns plain-text "Too Many Requests"
   return (
     /Too Many Requests/i.test(msg) ||
     /status\s*429/i.test(msg) ||
-    /Unexpected token 'T'/i.test(msg) || // because body starts with "Too Many Requests"
-    /crumb/i.test(msg) // crumb/cookie flow can also be throttled
+    /Unexpected token 'T'/i.test(msg) ||
+    /crumb/i.test(msg)
   );
 }
 
@@ -36,8 +72,6 @@ async function withRetry(fn, { retries = 4, baseMs = 500 } = {}) {
       return await fn();
     } catch (err) {
       lastErr = err;
-
-      // only retry on throttle-like errors
       if (!isThrottleError(err) || i === retries) break;
 
       const wait = baseMs * Math.pow(2, i) + Math.random() * 300;
@@ -47,9 +81,10 @@ async function withRetry(fn, { retries = 4, baseMs = 500 } = {}) {
   throw lastErr;
 }
 
+/* ------------------------ Business logic ------------------------ */
+
 async function fetchHistoricalData(ticker, years = 3) {
   try {
-    // Calculate the start date by subtracting the desired number of years from today.
     const startDate = new Date();
     startDate.setFullYear(startDate.getFullYear() - years);
     const today = new Date();
@@ -58,7 +93,6 @@ async function fetchHistoricalData(ticker, years = 3) {
       `Fetching historical data for ticker: ${ticker} from ${startDate.toISOString()} to ${today.toISOString()}`
     );
 
-    // Use retry wrapper to reduce failure rate on 429 throttling
     const data = await withRetry(() =>
       yahooFinance.chart(ticker, {
         period1: startDate,
@@ -72,87 +106,67 @@ async function fetchHistoricalData(ticker, years = 3) {
       return [];
     }
 
-    // Filter out any invalid quotes before mapping
     const validQuotes = data.quotes.filter(
-      (quote) =>
-        quote &&
-        typeof quote.close === "number" &&
-        !isNaN(quote.close) &&
-        typeof quote.volume === "number" &&
-        !isNaN(quote.volume)
+      (q) =>
+        q &&
+        typeof q.close === "number" &&
+        !Number.isNaN(q.close) &&
+        typeof q.volume === "number" &&
+        !Number.isNaN(q.volume)
     );
 
     console.log(
       `Filtered out ${data.quotes.length - validQuotes.length} invalid quotes`
     );
 
-    return validQuotes.map((quote) => ({
-      date: quote.date,
-      open: quote.open || quote.close, // Fallback to close if open is missing
-      high: quote.high || quote.close, // Fallback to close if high is missing
-      low: quote.low || quote.close, // Fallback to close if low is missing
-      close: quote.close,
-      volume: quote.volume || 0, // Default to 0 if volume is missing
-      price: quote.close,
+    return validQuotes.map((q) => ({
+      date: q.date,
+      open: q.open || q.close,
+      high: q.high || q.close,
+      low: q.low || q.close,
+      close: q.close,
+      volume: q.volume || 0,
+      price: q.close,
     }));
-  } catch (error) {
-    // Convert Yahoo throttling into a special error we can map to HTTP 429
-    if (isThrottleError(error)) {
+  } catch (err) {
+    if (isThrottleError(err)) {
       throw mkThrottleError(`Yahoo Finance throttled/blocked: ${ticker}`, {
         ticker,
-        originalMessage: String(error?.message || ""),
+        originalMessage: String(err?.message || ""),
       });
     }
-
-    console.error(
-      `Error fetching historical data for ${ticker}:`,
-      error.message
-    );
-    throw new Error(`Failed to fetch historical data: ${error.message}`);
+    throw new Error(`Failed to fetch historical data: ${err.message}`);
   }
 }
 
-// API handler for historical data
-const allowedOrigins = [
-  "https://thegoodmanagers.com",
-  "https://www.thegoodmanagers.com",
-];
+/* --------------------------- Serverless handler --------------------------- */
 
 module.exports = async (req, res) => {
-  // 1) Grab the incoming request’s origin
-  const origin = req.headers.origin;
+  applyCors(req, res);
 
-  // 2) If it’s in our list of allowed origins, set CORS headers dynamically
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
-
-  // Good practice when varying by Origin
-  res.setHeader("Vary", "Origin");
-
-  // 3) Other standard CORS headers
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Max-Age", "600");
-
-  // 4) Handle preflight (OPTIONS) requests
+  // Preflight must return the CORS headers too (applyCors already ran)
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
 
+  if (req.method !== "GET") {
+    return res
+      .status(405)
+      .json({ success: false, message: "Method Not Allowed" });
+  }
+
   try {
-    // Extract ticker and optional years parameter from query.
-    const { ticker, years } = req.query;
+    const ticker = String(req.query?.ticker || "").trim();
+    const yearsRaw = req.query?.years;
+
     if (!ticker) {
       return res
         .status(400)
         .json({ success: false, message: "Ticker is required" });
     }
 
-    // Parse years, defaulting to 3 if not provided.
-    const numYears = years ? parseInt(years, 10) : 3;
+    const numYears = yearsRaw ? parseInt(yearsRaw, 10) : 3;
 
-    // Fetch historical data for the extended period.
     const data = await fetchHistoricalData(ticker, numYears);
 
     if (!data || data.length === 0) {
@@ -162,12 +176,8 @@ module.exports = async (req, res) => {
       });
     }
 
-    console.log(
-      `Fetched historical data for ${ticker} over ${numYears} years.`
-    );
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    // ✅ If Yahoo throttled/blocked, return 429 so Bubble can retry later
     if (
       error?.name === "YahooThrottleError" ||
       error?.code === "YAHOO_THROTTLED"
@@ -180,7 +190,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    console.error("Error in API handler:", error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 };
