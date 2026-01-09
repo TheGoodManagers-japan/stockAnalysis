@@ -1,10 +1,25 @@
 // /api/history.js  (yahoo-finance2 v3 + retry + robust CORS + 429)
 
-const YahooFinance = require("yahoo-finance2").default;
+// /api/history.js
+
+const YahooFinanceModule = require("yahoo-finance2");
+const YahooFinance =
+  YahooFinanceModule?.default ||
+  YahooFinanceModule?.YahooFinance ||
+  YahooFinanceModule;
+
+if (typeof YahooFinance !== "function") {
+  throw new Error(
+    `yahoo-finance2: YahooFinance class not found. Export keys: ${Object.keys(
+      YahooFinanceModule || {}
+    ).join(", ")}`
+  );
+}
 
 const yahooFinance = new YahooFinance({
   suppressNotices: ["yahooSurvey"],
 });
+
 
 /* --------------------------- CORS helpers --------------------------- */
 

@@ -1,12 +1,25 @@
 // /api/stocks.js  (yahoo-finance2 v3)
 
-const YahooFinance = require("yahoo-finance2").default;
+// /api/history.js
 
-// v3: instantiate the client (instead of using the old default instance)
-// You can pass options here (optional), including suppressNotices.
+const YahooFinanceModule = require("yahoo-finance2");
+const YahooFinance =
+  YahooFinanceModule?.default ||
+  YahooFinanceModule?.YahooFinance ||
+  YahooFinanceModule;
+
+if (typeof YahooFinance !== "function") {
+  throw new Error(
+    `yahoo-finance2: YahooFinance class not found. Export keys: ${Object.keys(
+      YahooFinanceModule || {}
+    ).join(", ")}`
+  );
+}
+
 const yahooFinance = new YahooFinance({
   suppressNotices: ["yahooSurvey"],
 });
+
 
 /* ---------- tiny error helper to match your fetch code ---------- */
 function mkError(code, message, details = {}) {
