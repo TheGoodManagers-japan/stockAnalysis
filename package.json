@@ -18,7 +18,7 @@
     "firebase-functions": "^6.3.2",
     "openai": "^4.78.1",
     "puppeteer": "^23.11.1",
-    "yahoo-finance2": "^2.13.3"
+    "yahoo-finance2": "^2.14.2"
   },
   "author": "Your Name",
   "license": "MIT"
