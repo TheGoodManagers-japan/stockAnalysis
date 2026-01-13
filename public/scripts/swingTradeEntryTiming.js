@@ -80,6 +80,7 @@ function mkTracer(opts = {}) {
 }
 
 export function analyzeDipEntry(stock, historicalData, opts = {}) {
+  console.log("analyzeDipEntry running", stock?.ticker);
   const cfg = getConfig(opts);
   const gatesData =
     Array.isArray(opts?.dataForGates) && opts.dataForGates.length
