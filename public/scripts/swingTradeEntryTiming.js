@@ -875,15 +875,53 @@ if (
   const adjTopVeto =
     ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
 
-if (weeklyRange.pos >= adjTopVeto) {
-  return {
-    veto: true,
-    reason: `Weekly range too high (pos ${(weeklyRange.pos * 100).toFixed(
-      0
-    )}% ≥ ${(adjTopVeto * 100).toFixed(0)}%)`,
-    details,
-  };
-}
+  // ---- Weekly guard debug log (PASS or VETO, with raw numbers) ----
+  const tkr = stock?.ticker || "UNK";
+  const pos = weeklyRange.pos;
+  const lo = weeklyRange.lo;
+  const hi = weeklyRange.hi;
+  const pxW = weeklyRange.px;
+  const span = Math.max(1e-9, (hi ?? 0) - (lo ?? 0));
+  const calcPos = span > 0 ? ((pxW ?? 0) - (lo ?? 0)) / span : null;
+
+  const pass = pos < adjTopVeto;
+
+  // Only log when debug is enabled (opts.debug => cfg.debug)
+  if (cfg.debug) {
+    console.log(
+      `[${tkr}] WeeklyRangeGuard ${pass ? "PASS ✅" : "VETO ❌"} ` +
+        `pos=${(pos * 100).toFixed(1)}% (thr=${(adjTopVeto * 100).toFixed(
+          1
+        )}%)`,
+      {
+        reason: pass
+          ? `pos ${(pos * 100).toFixed(1)}% < ${(adjTopVeto * 100).toFixed(1)}%`
+          : `pos ${(pos * 100).toFixed(1)}% >= ${(adjTopVeto * 100).toFixed(
+              1
+            )}%`,
+        // raw numbers used to produce 32%, 61%, etc.
+        pxWeeklyClose: pxW,
+        loWeeklyLow: lo,
+        hiWeeklyHigh: hi,
+        span,
+        formula: "(px - lo) / (hi - lo)",
+        recomputedPos: calcPos,
+        lookbackWeeks: weeklyRange.lookbackWeeks,
+        weeksFound: weeklyRange.weeks,
+      }
+    );
+  }
+
+  if (!pass) {
+    return {
+      veto: true,
+      reason: `Weekly range too high (pos ${(pos * 100).toFixed(0)}% ≥ ${(
+        adjTopVeto * 100
+      ).toFixed(0)}%)`,
+      details,
+    };
+  }
+
 }
 
   // RSI caps
