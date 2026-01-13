@@ -1,6 +1,6 @@
 // /scripts/swingTradeEntryTiming.js — DIP-only, simplified (rich diagnostics kept, no fallbacks)
 
-import { detectDipBounce } from "./dip.js";
+import { detectDipBounce, weeklyRangePositionFromDaily } from "./dip.js";
 
 /* ============== lightweight global bus for guard histos (unchanged) ============== */
 const teleGlobal = { histos: { headroom: [], distMA25: [] } };
@@ -114,6 +114,12 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
   const flipBarsAgo = dailyFlipBarsAgo(dataForGates2);
   const goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForGates2); // NEW
 
+  const weeklyRange = weeklyRangePositionFromDaily(
+    dataForGates2,
+    cfg.weeklyRangeLookbackWeeks || 12
+  );
+  // NOTE: do NOT write tele.context.weeklyRange here, because tele.context is overwritten below.
+
   const last = dataForLevels[dataForLevels.length - 1];
   if (
     ![last?.open, last?.high, last?.low, last?.close].every(Number.isFinite)
@@ -133,31 +139,35 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
 
   // ---------- Structure snapshot ----------
   const msFull = getMarketStructure(stock, dataForLevels);
-  tele.context = {
-    ticker: stock?.ticker,
-    px,
-    openPx,
-    prevClose,
-    volume: lastVolume,
-    dayPct,
-    trend: msFull.trend,
-    ma: {
-      ma5: msFull.ma5,
-      ma20: msFull.ma20,
-      ma25: msFull.ma25,
-      ma50: msFull.ma50,
-      ma75: msFull.ma75,
-      ma200: msFull.ma200,
-    },
-    perfectMode: cfg.perfectMode,
-    gatesDataset: {
-      bars: dataForGates2.length,
-      lastDate: dataForGates2.at(-1)?.date,
-    },
-    flipBarsAgo,
-    goldenCrossBarsAgo, // NEW
-    sentiment: { ST, LT },
-  };
+tele.context = {
+  ticker: stock?.ticker,
+  px,
+  openPx,
+  prevClose,
+  volume: lastVolume,
+  dayPct,
+  trend: msFull.trend,
+
+  weeklyRange, // ✅ keep weekly range here so it survives the context overwrite
+
+  ma: {
+    ma5: msFull.ma5,
+    ma20: msFull.ma20,
+    ma25: msFull.ma25,
+    ma50: msFull.ma50,
+    ma75: msFull.ma75,
+    ma200: msFull.ma200,
+  },
+  perfectMode: cfg.perfectMode,
+  gatesDataset: {
+    bars: dataForGates2.length,
+    lastDate: dataForGates2.at(-1)?.date,
+  },
+  flipBarsAgo,
+  goldenCrossBarsAgo, // NEW
+  sentiment: { ST, LT },
+};
+
 
   const candidates = [];
   const U = {
@@ -166,7 +176,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     near,
     sma,
     rsiFromData,
-    findResistancesAbove,
+    findResistancesAbove: (d, p, s) => findResistancesAbove(d, p, s, cfg), // ✅ wrap
     findSupportsBelow,
     inferTickFromPrice,
     tracer: T,
@@ -175,18 +185,19 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
   // ---------- Liquidity (compute only; do NOT prefilter or affect reasons) ----------
   // We still compute and return liquidity information for the caller.
   const L = assessLiquidity(dataForGates2, stock, cfg); // completed bars window
-  tele.gates.liquidity = {
-    pass: true, // mark as informational "pass" so severity isn't "unk"
-    why: L.why || "",
-    metrics: L.metrics,
-    thresholds: L.thresholds,
-    ratios: L.ratios,
-  };
+tele.gates.liquidity = {
+  pass: !!L.pass,
+  why: L.why || "",
+  metrics: L.metrics,
+  thresholds: L.thresholds,
+  ratios: L.ratios,
+};
   tele.context.liquidity = L.metrics;
   tele.context.liqNearMargin = cfg.liqNearMargin;
 
   // ---------- DIP detection ----------
-  const dip = detectDipBounce(stock, dataForLevels, cfg, U); // keep levels/targets on full data
+  const dip = detectDipBounce(stock, dataForGates2, cfg, U); // ✅ completed bars only
+
   T(
     "dip",
     "detect",
@@ -320,17 +331,20 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
       );
       reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
     } else {
-      const gv = guardVeto(
-        stock,
-        dataForLevels,
-        px,
-        rr,
-        msFull,
-        cfg,
-        dip.nearestRes,
-        "DIP",
-        resList
-      );
+const weeklyRangeCtx = tele.context.weeklyRange;
+const gv = guardVeto(
+  stock,
+  dataForLevels,
+  px,
+  rr,
+  msFull,
+  cfg,
+  dip.nearestRes,
+  "DIP",
+  resList,
+  weeklyRangeCtx
+);
+
       T(
         "guard",
         "veto",
@@ -439,6 +453,15 @@ function getConfig(opts = {}) {
     perfectMode: false,
     assumeSorted: false,
     minBarsNeeded: 25,
+
+    // Weekly range guard
+    useWeeklyRangeGuard: true,
+    weeklyRangeLookbackWeeks: 12,
+
+    // Hard veto thresholds (tune these)
+    weeklyTopVetoPos: 0.75, // veto if you're in top 25% of weekly range
+    weeklyBottomPreferPos: 0.45, // "bottom-ish" zone; optional
+    weeklyTopVetoRRBump: 0.1, // optional alternative to hard veto
 
     // Structure gate
     structureMa5Tol: 0.992, // price must be ≥ MA5 * tol (was hard-coded)
@@ -816,12 +839,52 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
 }
 
 /* ============================ Guards ============================ */
-function guardVeto(stock, data, px, rr, ms, cfg, nearestRes, _kind, resListIn) {
+function guardVeto(
+  stock,
+  data,
+  px,
+  rr,
+  ms,
+  cfg,
+  nearestRes,
+  _kind,
+  resListIn,
+  weeklyRange
+) {
   const details = {};
   details.rrNeed = Number(rr?.need);
   details.rrHave = Number(rr?.ratio);
 
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+
+  // Weekly range position veto (higher timeframe context)
+if (
+  cfg.useWeeklyRangeGuard &&
+  weeklyRange &&
+  Number.isFinite(weeklyRange.pos)
+) {
+  details.weeklyPos = weeklyRange.pos;
+  details.weeklyLo = weeklyRange.lo;
+  details.weeklyHi = weeklyRange.hi;
+
+  // Strict: veto buys near top of weekly range
+  const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.75);
+
+  // Optional: allow more in STRONG_UP (if you want trends to still buy dips higher)
+  // If you truly want "only bottoms", remove this adjustment.
+  const adjTopVeto =
+    ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
+
+if (weeklyRange.pos >= adjTopVeto) {
+  return {
+    veto: true,
+    reason: `Weekly range too high (pos ${(weeklyRange.pos * 100).toFixed(
+      0
+    )}% ≥ ${(adjTopVeto * 100).toFixed(0)}%)`,
+    details,
+  };
+}
+}
 
   // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);

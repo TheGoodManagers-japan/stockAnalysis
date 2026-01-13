@@ -682,72 +682,6 @@ export function detectDipBounce(stock, data, cfg, U) {
 }
 
 
-
-
-
-
-// Detect DIP on WEEKLY bars using weekly thresholds, but we still ENTER on daily.
-// We reuse detectDipBounce by building "weekly data" and a weekly-tuned cfg.
-export function detectDipBounceWeekly(stock, dailyData, cfg, U) {
-  const weeks = resampleToWeeks(dailyData);
-  if (weeks.length < 52) {
-    return {
-      trigger: false,
-      waitReason: "Not enough weekly data",
-      diagnostics: {},
-    };
-  }
-
-  // Build weekly "stock" snapshot
-  const lastW = weeks.at(-1);
-  const pxW = +lastW.close || 0;
-
-  // Weekly ATR: prefer a proxy from daily ATR (we don't have weekly OHLC)
-  const atrDaily = Math.max(
-    +stock.atr14 || 0,
-    (+dailyData.at(-1)?.close || 0) * 0.005,
-    1e-9
-  );
-  const atrWeekly = approxWeeklyATRFromDailyATR(atrDaily);
-
-  const stockW = {
-    ...stock,
-    currentPrice: pxW,
-    atr14: atrWeekly,
-  };
-
-  // Map weekly DIP knobs into the names expected by dip.js
-  const cfgW = {
-    ...cfg,
-    dipMinPullbackPct: cfg.dipWeekly?.minPullbackPct ?? 6.5,
-    dipMinPullbackATR: cfg.dipWeekly?.minPullbackATR ?? 2.6,
-    dipMaxBounceAgeBars: cfg.dipWeekly?.maxBounceAgeWeeks ?? 2, // "bars" == weeks here
-    dipMinBounceStrengthATR: cfg.dipWeekly?.minBounceStrengthATR ?? 0.5,
-    dipMinRR: cfg.dipWeekly?.minRR ?? cfg.dipMinRR ?? 1.55,
-  };
-
-  // Reuse primitives on weekly data (SMA still works on {close})
-  const Uw = U; // reuse as-is; weekly bars also have { close }
-
-  const dipW = detectDipBounce(stockW, weeks, cfgW, Uw);
-
-  // Normalize diagnostics so the caller can compare recency in WEEKS directly.
-  if (dipW && dipW.diagnostics) {
-    // If the weekly detector provided a "bounceAgeBars" in weeks, keep the name for symmetry.
-    dipW.diagnostics.bounceAgeBars = Number.isFinite(
-      dipW.diagnostics.bounceAgeBars
-    )
-      ? dipW.diagnostics.bounceAgeBars
-      : undefined;
-  }
-
-  if (dipW?.trigger) dipW.timeframe = "WEEKLY";
-  return dipW;
-}
-
-
-
-// --- helpers local to dip.js (weekly resample + ATR proxy) ---
 function isoWeek(d) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
@@ -758,26 +692,75 @@ function isoWeek(d) {
 
 function resampleToWeeks(daily) {
   const out = [];
-  let curKey = "", agg = null;
+  let curKey = "";
+  let agg = null;
+
   for (const d of daily) {
     const dt = new Date(d.date);
     const y = dt.getUTCFullYear();
     const w = isoWeek(dt);
     const key = `${y}-W${w}`;
+
+    const o = +d.open || +d.close || 0;
+    const h = +d.high || +d.close || 0;
+    const l = +d.low || +d.close || 0;
+    const c = +d.close || 0;
+    const v = +d.volume || 0;
+
     if (key !== curKey) {
       if (agg) out.push(agg);
-      agg = { date: d.date, close: +d.close || 0 };
+      agg = {
+        date: d.date, // updated as we go; ends up being last day of week
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: v,
+      };
       curKey = key;
     } else {
+      // update this week's aggregate
       agg.date = d.date;
-      agg.close = +d.close || agg.close;
+      agg.high = Math.max(agg.high, h);
+      agg.low = Math.min(agg.low, l);
+      agg.close = c;
+      agg.volume += v;
     }
   }
+
   if (agg) out.push(agg);
   return out;
 }
 
-function approxWeeklyATRFromDailyATR(atrDaily) {
-  // rough proxy; good enough for gating & RR seeding
-  return Math.max(atrDaily || 0, 1e-9) * Math.sqrt(5);
+
+export function weeklyRangePositionFromDaily(dailyData, lookbackWeeks = 12) {
+  const daily = Array.isArray(dailyData) ? dailyData.slice() : [];
+  // ensure chronological ascending by date
+  daily.sort((a, b) => +new Date(a.date) - +new Date(b.date));
+
+  const weeks = resampleToWeeks(daily);
+
+  const n = weeks.length;
+
+  if (n < 5) {
+    return { pos: null, lo: null, hi: null, px: null, weeks: n, lookbackWeeks };
+  }
+
+  const win = weeks.slice(-Math.min(lookbackWeeks, n));
+const lows = win.map((b) => +b.low || +b.close || 0).filter((x) => x > 0);
+const highs = win.map((b) => +b.high || +b.close || 0).filter((x) => x > 0);
+
+if (!lows.length || !highs.length) {
+  return { pos: null, lo: null, hi: null, px: null, weeks: n, lookbackWeeks };
+}
+
+const lo = Math.min(...lows);
+const hi = Math.max(...highs);
+
+  const px = +weeks.at(-1)?.close || 0;
+
+  const span = Math.max(1e-9, hi - lo);
+  const pos = (px - lo) / span; // 0=bottom, 1=top
+
+  return { pos, lo, hi, px, span, weeks: n, lookbackWeeks };
 }
