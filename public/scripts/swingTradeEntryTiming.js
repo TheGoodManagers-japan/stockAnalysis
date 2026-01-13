@@ -459,8 +459,8 @@ function getConfig(opts = {}) {
     weeklyRangeLookbackWeeks: 12,
 
     // Hard veto thresholds (tune these)
-    weeklyTopVetoPos: 0.75, // veto if you're in top 25% of weekly range
-    weeklyBottomPreferPos: 0.45, // "bottom-ish" zone; optional
+    weeklyTopVetoPos: 0.50, // veto if you're in top 25% of weekly range
+    weeklyBottomPreferPos: 0.25, // "bottom-ish" zone; optional
     weeklyTopVetoRRBump: 0.1, // optional alternative to hard veto
 
     // Structure gate
