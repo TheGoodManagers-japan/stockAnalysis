@@ -169,6 +169,16 @@ tele.context = {
   sentiment: { ST, LT },
 };
 
+  const marketCtx = computeMarketContext(opts?.market, cfg);
+  if (marketCtx) {
+    tele.context.market = marketCtx;
+
+    if (cfg.debug) {
+      console.log(`[${stock?.ticker}] MarketCtx`, marketCtx);
+    }
+  }
+
+
 
   const candidates = [];
   const U = {
@@ -333,6 +343,8 @@ tele.gates.liquidity = {
       reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
     } else {
 const weeklyRangeCtx = tele.context.weeklyRange;
+const marketCtx = tele.context.market || null;
+
 const gv = guardVeto(
   stock,
   dataForLevels,
@@ -343,7 +355,8 @@ const gv = guardVeto(
   dip.nearestRes,
   "DIP",
   resList,
-  weeklyRangeCtx
+  weeklyRangeCtx,
+  marketCtx
 );
 
       T(
@@ -455,12 +468,18 @@ function getConfig(opts = {}) {
     assumeSorted: false,
     minBarsNeeded: 25,
 
+    // --- Market veto (index context) ---
+    marketVetoEnabled: true,
+    marketImpulseVetoPct: 1.8, // veto dip-buys if market day >= +1.8% (open→close)
+    marketImpulseVetoATR: 1.0, // or if market move >= 1.0 ATR (open→close)
+    marketUseTodayIfPresent: true, // if synthetic today candle exists, use it
+
     // Weekly range guard
     useWeeklyRangeGuard: true,
     weeklyRangeLookbackWeeks: 12,
 
     // Hard veto thresholds (tune these)
-    weeklyTopVetoPos: 0.50, // veto if you're in top 25% of weekly range
+    weeklyTopVetoPos: 0.5, // veto if you're in top 50% of weekly range
     weeklyBottomPreferPos: 0.25, // "bottom-ish" zone; optional
     weeklyTopVetoRRBump: 0.1, // optional alternative to hard veto
 
@@ -839,6 +858,57 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   };
 }
 
+
+
+function computeMarketContext(market, cfg) {
+  const levels = Array.isArray(market?.dataForLevels)
+    ? market.dataForLevels
+    : null;
+  const gates = Array.isArray(market?.dataForGates)
+    ? market.dataForGates
+    : null;
+  if (!levels?.length || !gates?.length) return null;
+
+  const series = cfg.marketUseTodayIfPresent ? levels : gates;
+  if (series.length < 20) return null;
+
+  const last = series.at(-1);
+  const o = Number(last?.open);
+  const c = Number(last?.close);
+  if (!(Number.isFinite(o) && Number.isFinite(c) && o > 0)) return null;
+
+  const dayPct = ((c - o) / o) * 100;
+
+  // ATR(14) on completed bars (gates) is more stable
+  const atr = calcATRLike(gates, 14);
+  const moveATR = atr > 0 ? (c - o) / atr : 0;
+
+  const impulse =
+    dayPct >= (cfg.marketImpulseVetoPct ?? 1.8) ||
+    moveATR >= (cfg.marketImpulseVetoATR ?? 1.0);
+
+  return {
+    ticker: market?.ticker || "MARKET",
+    dayPct,
+    atr,
+    moveATR,
+    impulse,
+    lastDate: last?.date,
+  };
+}
+
+function calcATRLike(data, p = 14) {
+  if (!Array.isArray(data) || data.length < p + 1) return 0;
+  const trs = [];
+  for (let i = data.length - p; i < data.length; i++) {
+    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
+    const pc = Number(data[i - 1]?.close ?? data[i]?.close ?? 0);
+    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
 /* ============================ Guards ============================ */
 function guardVeto(
   stock,
@@ -850,7 +920,8 @@ function guardVeto(
   nearestRes,
   _kind,
   resListIn,
-  weeklyRange
+  weeklyRange,
+  marketCtx
 ) {
   const details = {};
   details.rrNeed = Number(rr?.need);
@@ -859,71 +930,95 @@ function guardVeto(
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
 
   // Weekly range position veto (higher timeframe context)
-if (
-  cfg.useWeeklyRangeGuard &&
-  weeklyRange &&
-  Number.isFinite(weeklyRange.pos)
-) {
-  details.weeklyPos = weeklyRange.pos;
-  details.weeklyLo = weeklyRange.lo;
-  details.weeklyHi = weeklyRange.hi;
+  if (
+    cfg.useWeeklyRangeGuard &&
+    weeklyRange &&
+    Number.isFinite(weeklyRange.pos)
+  ) {
+    details.weeklyPos = weeklyRange.pos;
+    details.weeklyLo = weeklyRange.lo;
+    details.weeklyHi = weeklyRange.hi;
 
-  // Strict: veto buys near top of weekly range
-  const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.75);
+    // Strict: veto buys near top of weekly range
+    const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.75);
 
-  // Optional: allow more in STRONG_UP (if you want trends to still buy dips higher)
-  // If you truly want "only bottoms", remove this adjustment.
-  const adjTopVeto =
-    ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
+    // Optional: allow more in STRONG_UP (if you want trends to still buy dips higher)
+    // If you truly want "only bottoms", remove this adjustment.
+    const adjTopVeto =
+      ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
 
-  // ---- Weekly guard debug log (PASS or VETO, with raw numbers) ----
-  const tkr = stock?.ticker || "UNK";
-  const pos = weeklyRange.pos;
-  const lo = weeklyRange.lo;
-  const hi = weeklyRange.hi;
-  const pxW = weeklyRange.px;
-  const span = Math.max(1e-9, (hi ?? 0) - (lo ?? 0));
-  const calcPos = span > 0 ? ((pxW ?? 0) - (lo ?? 0)) / span : null;
+    // ---- Weekly guard debug log (PASS or VETO, with raw numbers) ----
+    const tkr = stock?.ticker || "UNK";
+    const pos = weeklyRange.pos;
+    const lo = weeklyRange.lo;
+    const hi = weeklyRange.hi;
+    const pxW = weeklyRange.px;
+    const span = Math.max(1e-9, (hi ?? 0) - (lo ?? 0));
+    const calcPos = span > 0 ? ((pxW ?? 0) - (lo ?? 0)) / span : null;
 
-  const pass = pos < adjTopVeto;
+    const pass = pos < adjTopVeto;
 
-  // Only log when debug is enabled (opts.debug => cfg.debug)
-  if (cfg.debug) {
-    console.log(
-      `[${tkr}] WeeklyRangeGuard ${pass ? "PASS ✅" : "VETO ❌"} ` +
-        `pos=${(pos * 100).toFixed(1)}% (thr=${(adjTopVeto * 100).toFixed(
-          1
-        )}%)`,
-      {
-        reason: pass
-          ? `pos ${(pos * 100).toFixed(1)}% < ${(adjTopVeto * 100).toFixed(1)}%`
-          : `pos ${(pos * 100).toFixed(1)}% >= ${(adjTopVeto * 100).toFixed(
-              1
-            )}%`,
-        // raw numbers used to produce 32%, 61%, etc.
-        pxWeeklyClose: pxW,
-        loWeeklyLow: lo,
-        hiWeeklyHigh: hi,
-        span,
-        formula: "(px - lo) / (hi - lo)",
-        recomputedPos: calcPos,
-        lookbackWeeks: weeklyRange.lookbackWeeks,
-        weeksFound: weeklyRange.weeks,
+    // Only log when debug is enabled (opts.debug => cfg.debug)
+    if (cfg.debug) {
+      console.log(
+        `[${tkr}] WeeklyRangeGuard ${pass ? "PASS ✅" : "VETO ❌"} ` +
+          `pos=${(pos * 100).toFixed(1)}% (thr=${(adjTopVeto * 100).toFixed(
+            1
+          )}%)`,
+        {
+          reason: pass
+            ? `pos ${(pos * 100).toFixed(1)}% < ${(adjTopVeto * 100).toFixed(
+                1
+              )}%`
+            : `pos ${(pos * 100).toFixed(1)}% >= ${(adjTopVeto * 100).toFixed(
+                1
+              )}%`,
+          // raw numbers used to produce 32%, 61%, etc.
+          pxWeeklyClose: pxW,
+          loWeeklyLow: lo,
+          hiWeeklyHigh: hi,
+          span,
+          formula: "(px - lo) / (hi - lo)",
+          recomputedPos: calcPos,
+          lookbackWeeks: weeklyRange.lookbackWeeks,
+          weeksFound: weeklyRange.weeks,
+        }
+      );
+    }
+
+    if (!pass) {
+      return {
+        veto: true,
+        reason: `Weekly range too high (pos ${(pos * 100).toFixed(0)}% ≥ ${(
+          adjTopVeto * 100
+        ).toFixed(0)}%)`,
+        details,
+      };
+    }
+  }
+  // --- Market impulse veto (index up big → skip DIP buys) ---
+  // Runs even if weeklyRange is missing
+  if (cfg.marketVetoEnabled && marketCtx?.impulse) {
+    const dayPct = Number(marketCtx.dayPct) || 0;
+    const thrPct = Number(cfg.marketImpulseVetoPct ?? 1.8);
+
+    // Optional: only veto when market is UP big (not down big)
+    if (dayPct > 0) {
+      const reason = `Market impulse day (${dayPct.toFixed(
+        1
+      )}% ≥ ${thrPct.toFixed(1)}%) — skip DIP buys`;
+
+      if (cfg.debug) {
+        console.log(`[${stock?.ticker}] MARKET VETO ❌`, { reason, marketCtx });
       }
-    );
-  }
 
-  if (!pass) {
-    return {
-      veto: true,
-      reason: `Weekly range too high (pos ${(pos * 100).toFixed(0)}% ≥ ${(
-        adjTopVeto * 100
-      ).toFixed(0)}%)`,
-      details,
-    };
+      return {
+        veto: true,
+        reason,
+        details: { ...details, market: marketCtx },
+      };
+    }
   }
-
-}
 
   // RSI caps
   const rsi = num(stock.rsi14) || rsiFromData(data, 14);
@@ -1365,13 +1460,13 @@ export function summarizeBlocks(teleList = []) {
 
 // --- tiny SMA helper (rolling O(n)) ---
 function maSeries(data, n) {
-  const closes = data.map(d => +d.close || 0);
-  const out = new Array(closes.length).fill(0);
+  const closes = data.map((d) => +d.close || 0);
+  const out = new Array(closes.length).fill(NaN);
   let sum = 0;
   for (let i = 0; i < closes.length; i++) {
     sum += closes[i];
     if (i >= n) sum -= closes[i - n];
-    if (i + 1 >= n) out[i] = sum / n; // else stays 0 (insufficient history)
+    if (i + 1 >= n) out[i] = sum / n;
   }
   return out;
 }

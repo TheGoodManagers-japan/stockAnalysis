@@ -35,9 +35,6 @@ function formatJPYKMB(n) {
 /* -------------------------------------------
    0) Constants + tiny logging helper
 ------------------------------------------- */
-/* -------------------------------------------
-   0) Constants + tiny logging helper
-------------------------------------------- */
 const IS_BROWSER =
   typeof window !== "undefined" &&
   typeof document !== "undefined" &&
@@ -45,6 +42,9 @@ const IS_BROWSER =
 
 // 👇 Stable project domain from Vercel → Settings → Domains
 const PROJECT_BASE = "https://stock-analysis-chi.vercel.app";
+
+const isoDay = (d) => new Date(d).toISOString().slice(0, 10);
+
 
 // Use stable domain in browser, deployment URL on server (if available)
 const API_BASE = IS_BROWSER
@@ -1185,6 +1185,87 @@ export async function fetchStockAnalysis({
   );
   let count = 0;
 
+  // --- Market context series (same ticker as regime by default) ---
+  let marketLevels = null;
+  let marketGates = null;
+
+  try {
+    const marketHist = await fetchHistoricalData(regimeTicker); // reuse 1306.T history
+
+    // Try to get today's open/high/low/current so we can build a synthetic "today" candle
+    // (same as you do for each stock)
+    let marketSnap = null;
+    try {
+      const snapRes = await fetchSingleStockData({
+        code: regimeTicker,
+        sector: "Market",
+      });
+      marketSnap = snapRes?.data?.yahooData || null;
+    } catch (e) {
+      warn(
+        `Market snapshot failed for ${regimeTicker} (ok to ignore): ${
+          e?.message || e
+        }`
+      );
+    }
+
+    const marketSeries = [...marketHist];
+
+    // Append synthetic today candle if we have a snapshot and history doesn't already contain today
+    if (marketSnap) {
+      const today = new Date();
+      const last = marketSeries.at(-1);
+
+      const sameDay =
+        last?.date &&
+        last.date.getFullYear() === today.getFullYear() &&
+        last.date.getMonth() === today.getMonth() &&
+        last.date.getDate() === today.getDate();
+
+      if (!sameDay) {
+        const o =
+          Number(marketSnap.openPrice) ||
+          Number(last?.close) ||
+          Number(marketSnap.currentPrice) ||
+          0;
+        const c = Number(marketSnap.currentPrice) || o;
+        const h = Math.max(o, c, Number(marketSnap.highPrice) || -Infinity);
+        const l = Math.min(o, c, Number(marketSnap.lowPrice) || Infinity);
+        const vol = Number.isFinite(marketSnap.todayVolume)
+          ? Number(marketSnap.todayVolume)
+          : undefined;
+
+        marketSeries.push({
+          date: today,
+          open: o,
+          high: h,
+          low: l,
+          close: c,
+          volume: vol,
+        });
+      }
+    }
+
+
+
+    marketLevels = marketSeries;
+    marketGates =
+      marketSeries.length > 1 ? marketSeries.slice(0, -1) : marketSeries;
+
+
+    log(`Market context ready from ${regimeTicker}`, {
+      barsLevels: marketLevels.length,
+      barsGates: marketGates.length,
+      lastDate: marketLevels.at(-1)?.date,
+    });
+  } catch (e) {
+    warn(
+      `Market context disabled: failed to load ${regimeTicker} — ${
+        e?.message || e
+      }`
+    );
+  }
+
   for (const tickerObj of filteredTickers) {
     log(`\n--- Fetching data for ${tickerObj.code} ---`);
 
@@ -1306,16 +1387,9 @@ export async function fetchStockAnalysis({
         }
       }
 
-      // split the views
-      const lastIsToday =
-        stock.historicalData.length &&
-        stock.historicalData.at(-1)?.date?.toDateString?.() ===
-          new Date().toDateString();
 
-      const dataForGates = lastIsToday
-        ? stock.historicalData.slice(0, -1)
-        : stock.historicalData; // completed bars only
-      const dataForLevels = stock.historicalData; // includes today
+      const dataForLevels = stock.historicalData; // includes today (synthetic)
+      const dataForGates = stock.historicalData.slice(0, -1); // completed bars only
 
       enrichForTechnicalScore(stock);
 
@@ -1355,8 +1429,16 @@ export async function fetchStockAnalysis({
       log("Running swing entry timing…");
       const finalSignal = analyzeDipEntry({ ...stock }, dataForLevels, {
         debug: true,
-        dataForGates, // completed-bars view for structure
-        sentiment: { ST, LT }, // << add this
+        dataForGates,
+        sentiment: { ST, LT },
+        market:
+          marketLevels && marketGates
+            ? {
+                ticker: regimeTicker,
+                dataForLevels: marketLevels,
+                dataForGates: marketGates,
+              }
+            : null,
       });
 
       // ANCHOR: LIQ_CAPTURE
@@ -1439,7 +1521,9 @@ export async function fetchStockAnalysis({
 
       stock.trigger = finalSignal.trigger ?? null;
 
-      const portfolioEntry = myPortfolio.find((p) => p.ticker === stock.ticker);
+      const portfolioEntry = myPortfolio.find(
+        (p) => normalizeTicker(p?.ticker) === normalizeTicker(stock.ticker)
+      );
 
       if (portfolioEntry) {
         const curStop = Number(portfolioEntry?.trade?.stopLoss);
@@ -1571,8 +1655,6 @@ export async function fetchStockAnalysis({
         _api_c2_managementSignalStatus: stock.managementSignalStatus,
         _api_c2_managementSignalReason: stock.managementSignalReason,
 
-        // 👇 NEW
-        _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
         _api_c2_otherData: JSON.stringify({
           highPrice: stock.highPrice,
           lowPrice: stock.lowPrice,
@@ -1634,8 +1716,6 @@ export async function fetchStockAnalysis({
       };
     })
     .sort((a, b) => b.buyRatePct - a.buyRatePct || b.total - a.total);
-
-
 
   // top reasons (take top 10 each)
   function topK(obj, k = 10) {
