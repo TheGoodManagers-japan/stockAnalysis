@@ -1,7 +1,12 @@
-// /scripts/dip.js — DIP detector (pullback + bounce) — tighter but keeps A+ setups
-export function detectDipBounce(stock, data, cfg, U) {
+// /scripts/dip.js — DIP detector (pullback + bounce) — with weekly trend context
+// FIX #2: Now accepts tapeFlags to require stronger bounce when MA5 resistance or dead cat flagged
+export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
   const { num, avg, near, sma, findResistancesAbove } = U;
   const reasonTrace = [];
+
+  // FIX #2: Extract tape flags for stronger bounce requirements
+  const requireStrongerBounce = tapeFlags.requireStrongerBounce || false;
+  const ma5ResistanceActive = tapeFlags.ma5ResistanceActive || false;
 
   if (!Array.isArray(data) || data.length < 25) {
     const why = "insufficient data (<25 bars)";
@@ -16,7 +21,7 @@ export function detectDipBounce(stock, data, cfg, U) {
   const px = num(stock.currentPrice) || num(data.at(-1).close);
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-9);
 
-  // --- MAs (MA20 as valid support; track slopes for a light veto) ---
+  // --- MAs ---
   const ma5 = num(stock.movingAverage5d) || sma(data, 5);
   const ma20 = sma(data, 20);
   const ma25 = num(stock.movingAverage25d) || sma(data, 25);
@@ -47,7 +52,6 @@ export function detectDipBounce(stock, data, cfg, U) {
   const hadPullback =
     pullbackPct >= (cfg.dipMinPullbackPct ?? 4.2) ||
     pullbackATR >= Math.max(cfg.dipMinPullbackATR ?? 1.7, 0.4);
-
 
   if (!hadPullback) {
     const why = `no meaningful pullback (${pullbackPct.toFixed(
@@ -87,7 +91,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  // --- Fib window (slightly tighter tol)
+  // --- Fib window ---
   function lastSwingLowBeforeHigh(arr) {
     const win = arr.slice(-25, -5);
     let low = Infinity;
@@ -113,10 +117,10 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Bounce freshness ---
   let lowBarIndex = -1;
-    const ageWin = Math.min(
-        (cfg.dipMaxBounceAgeBars ?? 6) + 1,
-        recentBars.length
-      );
+  const ageWin = Math.min(
+    (cfg.dipMaxBounceAgeBars ?? 6) + 1,
+    recentBars.length
+  );
   for (let i = 0; i < ageWin; i++) {
     const lowVal = num(recentBars.at(-(i + 1)).low);
     if (near(lowVal, dipLow, Math.max(atr * 0.05, 1e-6))) {
@@ -132,22 +136,21 @@ export function detectDipBounce(stock, data, cfg, U) {
       waitReason: why,
       diagnostics: {
         lowBarIndex,
-        bounceAgeBars: lowBarIndex, // <— add this
+        bounceAgeBars: lowBarIndex,
         dipLow,
         passedPreBounce: false,
         code: "NOT_DIP_BOUNCE_OLD",
       },
       reasonTrace,
     };
-    
   }
 
-  // --- Prepare bar refs & bounce strength early (shared) ---
-  const d0 = data.at(-1),
-    d1 = data.at(-2);
+  // --- Bar refs & bounce strength ---
+  const d0 = data.at(-1);
+  const d1 = data.at(-2);
   const bounceStrengthATR = (px - dipLow) / Math.max(atr, 1e-9);
 
-  // --- Support (ATR-based MA bands OR tested/micro structure) ---
+  // --- Support detection ---
   const bandATR = Math.max(cfg.dipMaSupportATRBands ?? 0.8, 0.6) * atr;
   const nearMA20 = ma20 > 0 && Math.abs(dipLow - ma20) <= bandATR;
   const nearMA25 = ma25 > 0 && Math.abs(dipLow - ma25) <= bandATR;
@@ -160,8 +163,8 @@ export function detectDipBounce(stock, data, cfg, U) {
       (cfg.dipStructTolATR ?? 1.0) * atr,
       dipLow * ((cfg.dipStructTolPct ?? 3.5) / 100)
     );
-    let touches = 0,
-      lastTouchIdx = -999;
+    let touches = 0;
+    let lastTouchIdx = -999;
     for (let i = 2; i < lookback.length - 2; i++) {
       const L = num(lookback[i].low);
       const isPivotLow =
@@ -187,20 +190,21 @@ export function detectDipBounce(stock, data, cfg, U) {
       const isPivot = L < num(win[i - 1].low) && L < num(win[i + 1].low);
       if (isPivot && Math.abs(L - dipLow) <= 0.5 * atr) hits++;
     }
-    return hits >= 2; // keep 2 (don’t over-tighten)
+    return hits >= 2;
   })();
 
-  // 1) Strong-bounce override (stronger)
+  // Strong-bounce override
   const strongBounceOverride =
     (num(d0.close) > num(d1.high) && bounceStrengthATR >= 1.05) ||
     bounceStrengthATR >= 1.15;
 
-  // preferred supports; MA50-alone no longer enough by itself
-   const nearSupport =
-     nearMA20 || nearMA25 || structureSupport || microBase || strongBounceOverride ||
-     // fallback: if the thrust is A+ and we are hugging MA50, accept
-     (nearMA50 && strongBounceOverride && !slopeComboFlag);
-  // (MA50-alone can still count indirectly via strongBounceOverride/structure; MA20/25/structure preferred)
+  const nearSupport =
+    nearMA20 ||
+    nearMA25 ||
+    structureSupport ||
+    microBase ||
+    strongBounceOverride ||
+    (nearMA50 && strongBounceOverride && !slopeComboFlag);
 
   const passedPreBounce =
     hadPullback &&
@@ -239,20 +243,28 @@ export function detectDipBounce(stock, data, cfg, U) {
 
   // --- Volume regime ---
   const avgVol20 = avg(data.slice(-20).map((d) => num(d.volume)));
+  // FIX #1: Safe avgVol to prevent division by zero
+  const safeAvgVol20 = Math.max(avgVol20, 1);
+
   const pullbackBars = recentBars.filter(
     (b) => num(b.high) <= recentHigh && num(b.low) >= dipLow
   );
   const pullbackVol = avg(pullbackBars.map((b) => num(b.volume)));
+
+  // FIX #3: Dry pullback means volume BELOW average, not above
+  // A dry pullback is healthy - it means selling pressure is light
+  // dryFactor of 1.2 means pullback volume should be <= avgVol / 1.2 (i.e., 83% of avg)
+  const dryFactor = Math.max(cfg.pullbackDryFactor || 1.2, 1.0);
   const dryPullback =
     pullbackVol > 0
-      ? pullbackVol <= avgVol20 * Math.max(cfg.pullbackDryFactor, 1.3)
+      ? pullbackVol <= safeAvgVol20 / dryFactor // FIXED: divide, not multiply
       : true;
 
   const bounceHotX = Math.min(cfg.bounceHotFactor || 1.0, 1.18);
   const bounceVolHot =
-    avgVol20 > 0 ? num(d0.volume) >= avgVol20 * bounceHotX : true;
+    safeAvgVol20 > 0 ? num(d0.volume) >= safeAvgVol20 * bounceHotX : true;
 
-  // --- Bounce confirmation (quality, stricter baselines) ---
+  // --- Bounce confirmation ---
   if (bounceStrengthATR <= 0.03) {
     const midPrev = (num(d1.high) + num(d1.low)) / 2;
     const greenSeed =
@@ -277,9 +289,12 @@ export function detectDipBounce(stock, data, cfg, U) {
     );
   }
 
-  // 2) basic bounce quality baselines
-  const minStr = cfg.dipMinBounceStrengthATR ?? 0.6;
-
+  // Bounce quality baselines
+  // FIX #2: If tape flags indicate MA5 resistance or dead cat, require stronger bounce
+  const baseMinStr = cfg.dipMinBounceStrengthATR ?? 0.6;
+  const minStr = requireStrongerBounce
+    ? Math.max(baseMinStr, 0.85) // Require stronger bounce when flagged
+    : baseMinStr;
 
   const closeAboveYHigh =
     num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
@@ -310,7 +325,6 @@ export function detectDipBounce(stock, data, cfg, U) {
     num(d0.close) > num(d0.open) &&
     bounceStrengthATR >= Math.max(0.7, minStr);
 
-  // tightened basicCloseUp thresholds
   const barRange = num(d0.high) - num(d0.low);
   const body = Math.abs(num(d0.close) - num(d0.open));
   const midPrev = (num(d1.high) + num(d1.low)) / 2;
@@ -321,32 +335,45 @@ export function detectDipBounce(stock, data, cfg, U) {
       bounceStrengthATR >= Math.max(0.75, minStr)) ||
     (num(d0.close) > num(d1.high) && bounceStrengthATR >= 0.9);
 
-  // stricter quality gates
   const rangeQuality = barRange >= 0.6 * atr;
   const bodyQuality = body >= 0.3 * barRange;
   const closeQuality =
     num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
-    const v20ok = avgVol20 > 0 ? num(d0.volume) >= 0.97 * avgVol20 : true;
+  const v20ok = safeAvgVol20 > 0 ? num(d0.volume) >= 0.97 * safeAvgVol20 : true;
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
 
-  // 3) Volume regime (stop green-but-thin passes)
-   const volumeRegimeOK =
-     // any bona fide hot day OR respectable-on-avg volume
-     (bounceVolHot || v20ok) ||
-     // dry pullback plus a proper signal OR a truly strong thrust
-     (dryPullback && (closeAboveYHigh || hammer || engulf || strongBounceOverride));
-  
-    const bounceOK = strongBounceOverride
-      // strong bar can pass with any one of: v20 ok, hot vol, or a dry pullback
-      ? (v20ok || bounceVolHot || dryPullback)
-      : (patternOK && bodyQuality && rangeQuality && closeQuality && volumeRegimeOK);
+  const volumeRegimeOK =
+    bounceVolHot ||
+    v20ok ||
+    (dryPullback &&
+      (closeAboveYHigh || hammer || engulf || strongBounceOverride));
+
+  // FIX #2: When tape flags are active, require stronger confirmation
+  let bounceOK;
+  if (requireStrongerBounce) {
+    // Stricter: need closeAboveYHigh or strongBounceOverride, plus volume
+    bounceOK =
+      (closeAboveYHigh || strongBounceOverride) && (v20ok || bounceVolHot);
+  } else {
+    bounceOK = strongBounceOverride
+      ? v20ok || bounceVolHot || dryPullback
+      : patternOK &&
+        bodyQuality &&
+        rangeQuality &&
+        closeQuality &&
+        volumeRegimeOK;
+  }
 
   if (!bounceOK) {
-    const why = `bounce weak (${bounceStrengthATR.toFixed(
-      2
-    )} ATR) / no quality pattern`;
+    const why = requireStrongerBounce
+      ? `bounce insufficient for tape-flagged setup (${bounceStrengthATR.toFixed(
+          2
+        )} ATR, need closeAboveYHigh or strongBounce + volume)`
+      : `bounce weak (${bounceStrengthATR.toFixed(
+          2
+        )} ATR) / no quality pattern`;
     reasonTrace.push(why);
     return {
       trigger: false,
@@ -362,35 +389,40 @@ export function detectDipBounce(stock, data, cfg, U) {
         rangeQuality,
         closeQuality,
         v20ok,
+        requireStrongerBounce, // FIX #2: Include tape flag status
+        ma5ResistanceActive,
         passedPreBounce: true,
-        code: "DIP_BOUNCE_WEAK",
+        code: requireStrongerBounce
+          ? "DIP_BOUNCE_WEAK_FLAGGED"
+          : "DIP_BOUNCE_WEAK",
       },
       reasonTrace,
     };
   }
 
-  // --- Optional: very light RSI divergence veto (soft, with override) ---
+  // --- RSI divergence veto ---
   function rsiFromDataLocal(arr, length = 14) {
     const n = arr.length;
     if (n < length + 1) return 50;
-    let gains = 0,
-      losses = 0;
+    let gains = 0;
+    let losses = 0;
     for (let i = n - length; i < n; i++) {
-      const prev = num(arr[i - 1].close),
-        curr = num(arr[i].close);
+      const prev = num(arr[i - 1].close);
+      const curr = num(arr[i].close);
       const diff = curr - prev;
       if (diff > 0) gains += diff;
       else losses -= diff;
     }
-    const avgGain = gains / length,
-      avgLoss = losses / length || 1e-9;
+    const avgGain = gains / length;
+    const avgLoss = losses / length || 1e-9;
     const rs = avgGain / avgLoss;
     return 100 - 100 / (1 + rs);
   }
+
   function recentHighIdx(arr, k = 8) {
-    let idx = -1,
-      mx = -Infinity,
-      start = Math.max(0, arr.length - k);
+    let idx = -1;
+    let mx = -Infinity;
+    const start = Math.max(0, arr.length - k);
     for (let i = start; i < arr.length; i++) {
       const h = num(arr[i].high);
       if (h > mx) {
@@ -400,6 +432,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     }
     return idx;
   }
+
   const rsiSeries = [];
   for (let i = Math.max(15, data.length - 40); i < data.length; i++) {
     rsiSeries.push(rsiFromDataLocal(data.slice(0, i), 14));
@@ -408,10 +441,10 @@ export function detectDipBounce(stock, data, cfg, U) {
   const hi2 = recentHighIdx(data.slice(0, -10));
   let bearishDiv = false;
   if (hi1 > 0 && hi2 > 0 && rsiSeries.length >= 8) {
-    const p1 = num(data[hi1].high),
-      p2 = num(data[hi2].high);
-    const r1 = rsiSeries[rsiSeries.length - 1],
-      r2 = rsiSeries[Math.max(0, rsiSeries.length - 8)];
+    const p1 = num(data[hi1].high);
+    const p2 = num(data[hi2].high);
+    const r1 = rsiSeries[rsiSeries.length - 1];
+    const r2 = rsiSeries[Math.max(0, rsiSeries.length - 8)];
     bearishDiv = p1 <= p2 * 1.01 && r1 < r2 - 3;
     if (bearishDiv && !(closeAboveYHigh || bounceStrengthATR >= 1.05)) {
       const why = "bearish RSI divergence into resistance";
@@ -437,36 +470,18 @@ export function detectDipBounce(stock, data, cfg, U) {
     }
   }
 
-  // --- Pre-entry headroom (diagnostic only) ---
-  function clusterLevels(levels, atrVal, thMul = 0.3) {
-    const th = thMul * atrVal;
-    const uniq = Array.from(
-      new Set(levels.map((v) => +Number(v).toFixed(2)))
-    ).sort((a, b) => a - b);
-    const out = [];
-    let bucket = [];
-    for (let i = 0; i < uniq.length; i++) {
-      if (!bucket.length || Math.abs(uniq[i] - bucket[bucket.length - 1]) <= th)
-        bucket.push(uniq[i]);
-      else {
-        out.push(avg(bucket));
-        bucket = [uniq[i]];
-      }
-    }
-    if (bucket.length) out.push(avg(bucket));
-    return out;
-  }
-  const rawResEarly = findResistancesAbove(data, px, stock);
-  const resListEarly = clusterLevels(rawResEarly, atr, 0.3);
+  // --- Pre-entry headroom ---
+  // FIX #4: findResistancesAbove already returns clustered levels, don't cluster again
+  const resListEarly = findResistancesAbove(data, px, stock);
   const nearestResEarly = resListEarly.length ? resListEarly[0] : null;
-  let headroomATR = null,
-    headroomPct = null;
+  let headroomATR = null;
+  let headroomPct = null;
   if (nearestResEarly) {
     headroomATR = (nearestResEarly - px) / Math.max(atr, 1e-9);
     headroomPct = ((nearestResEarly - px) / Math.max(px, 1e-9)) * 100;
   }
 
-  // --- Recovery cap (trim late entries, keep strong trends)
+  // --- Recovery cap ---
   const spanRaw = recentHigh - dipLow;
   const span = Math.max(spanRaw, Math.max(0.7 * atr, px * 0.003));
   const recoveryPct = span > 0 ? ((px - dipLow) / span) * 100 : 0;
@@ -482,7 +497,6 @@ export function detectDipBounce(stock, data, cfg, U) {
   else maxRec = Math.min(140, 140);
 
   if (recoveryPctCapped > maxRec) {
-    // keep soft-pass only if decent headroom + strength
     if (headroomATR != null && headroomATR >= 1.2 && bounceStrengthATR >= 1.0) {
       reasonTrace.push(
         `over-recovery soft-pass (headroom ${headroomATR.toFixed(2)} ATR)`
@@ -508,7 +522,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     }
   }
 
-  // --- Higher low (tighter) & volume acceptance ---
+  // --- Higher low & volume acceptance ---
   const prevLow = Math.min(...data.slice(-15, -5).map((d) => num(d.low)));
   const higherLow = dipLow >= prevLow * 0.996 || dipLow >= prevLow - 0.2 * atr;
   const higherLowOK = higherLow || strongBounceOverride || closeAboveYHigh;
@@ -532,7 +546,7 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  // 7) Slope combo veto (escape hatch slightly stronger)
+  // Slope combo veto
   if (
     slopeComboFlag &&
     !(closeAboveYHigh || (bounceStrengthATR >= 1.08 && v20ok))
@@ -552,21 +566,20 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  // 6) Fib alternative path (requires real strength)
-   const fibAltOK =
-   !fibOK && (
-     (closeAboveYHigh && bounceStrengthATR >= 0.98) ||
-     (strongBounceOverride && (v20ok || dryPullback))
-   );
-  // 9) Headroom small guardrail
-    const headroomOK =
-      headroomATR == null || headroomPct == null
-        ? true
-        : (headroomATR >= 0.40 && headroomPct >= 0.80) ||
-          // strong reclaim handles nearby noise levels
-          (strongBounceOverride && headroomATR >= 0.30);
+  // Fib alternative path
+  const fibAltOK =
+    !fibOK &&
+    ((closeAboveYHigh && bounceStrengthATR >= 0.98) ||
+      (strongBounceOverride && (v20ok || dryPullback)));
 
-  // --- Final trigger
+  // Headroom guardrail
+  const headroomOK =
+    headroomATR == null ||
+    headroomPct == null ||
+    (headroomATR >= 0.4 && headroomPct >= 0.8) ||
+    (strongBounceOverride && headroomATR >= 0.3);
+
+  // --- Final trigger ---
   const trigger =
     hadPullback &&
     (fibOK || fibAltOK) &&
@@ -589,7 +602,7 @@ export function detectDipBounce(stock, data, cfg, U) {
         fibAltOK,
         nearSupport,
         bounceOK,
-        higherLow: higherLow,
+        higherLow,
         higherLowOK,
         headroomOK,
         lowBarIndex,
@@ -601,9 +614,9 @@ export function detectDipBounce(stock, data, cfg, U) {
     };
   }
 
-  // --- Targets & stops (structure-aware; improved RR) ---
-  const rawRes = findResistancesAbove(data, px, stock);
-  const resList = clusterLevels(rawRes, atr, 0.3);
+  // --- Targets & stops ---
+  // FIX #4: findResistancesAbove already returns clustered levels
+  const resList = findResistancesAbove(data, px, stock);
   const nearestRes = resList.length ? resList[0] : null;
   const recentHigh20 = Math.max(...data.slice(-20).map((d) => num(d.high)));
 
@@ -618,18 +631,14 @@ export function detectDipBounce(stock, data, cfg, U) {
     if (isPivotLow) swingLowNear = Math.min(swingLowNear, L);
   }
 
-  // Tighter default stop to help RR; still sane
   let stop = Math.min(
     swingLowNear - 0.35 * atr,
     ma25 > 0 ? ma25 - 0.65 * atr : Infinity
   );
   const minRiskATR = strongBounceOverride ? 1.15 : 1.2;
   if (px - stop < minRiskATR * atr) stop = px - minRiskATR * atr;
-
-  // 10) micro-stop guard (nudge)
   if (px - stop < 1.35 * atr) stop = px - 1.35 * atr;
 
-  // Grow target; skip too-near first resistance when second is reasonable
   let target = Math.max(px + Math.max(2.8 * atr, px * 0.024), recentHigh20);
   if (nearestRes && nearestRes - px < 1.1 * atr) {
     if (resList.length >= 2) {
@@ -639,8 +648,8 @@ export function detectDipBounce(stock, data, cfg, U) {
       target = Math.max(target, px + 3.2 * atr);
     }
   } else if (resList.length >= 2) {
-    const r0 = resList[0],
-      r1 = resList[1];
+    const r0 = resList[0];
+    const r1 = resList[1];
     if (r0 - px < 0.8 * atr && r1 - px <= 3.8 * atr) {
       target = Math.max(target, Math.min(r1, px + 3.8 * atr));
     }
@@ -662,7 +671,7 @@ export function detectDipBounce(stock, data, cfg, U) {
       pullbackATR,
       retracePct,
       lowBarIndex,
-      bounceAgeBars: lowBarIndex, // <— add this
+      bounceAgeBars: lowBarIndex,
       bounceStrengthATR,
       recoveryPct: recoveryPctCapped,
       nearSupport,
@@ -681,9 +690,12 @@ export function detectDipBounce(stock, data, cfg, U) {
   };
 }
 
+// ========== WEEKLY RANGE WITH TREND CONTEXT ==========
 
 function isoWeek(d) {
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const date = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  );
   date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const weekNo = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
@@ -710,7 +722,7 @@ function resampleToWeeks(daily) {
     if (key !== curKey) {
       if (agg) out.push(agg);
       agg = {
-        date: d.date, // updated as we go; ends up being last day of week
+        date: d.date,
         open: o,
         high: h,
         low: l,
@@ -719,7 +731,6 @@ function resampleToWeeks(daily) {
       };
       curKey = key;
     } else {
-      // update this week's aggregate
       agg.date = d.date;
       agg.high = Math.max(agg.high, h);
       agg.low = Math.min(agg.low, l);
@@ -732,35 +743,88 @@ function resampleToWeeks(daily) {
   return out;
 }
 
+// Simple SMA for weekly data
+function weeklySMA(weeks, n) {
+  if (weeks.length < n) return null;
+  let sum = 0;
+  for (let i = weeks.length - n; i < weeks.length; i++) {
+    sum += +weeks[i].close || 0;
+  }
+  return sum / n;
+}
 
 export function weeklyRangePositionFromDaily(dailyData, lookbackWeeks = 12) {
   const daily = Array.isArray(dailyData) ? dailyData.slice() : [];
-  // ensure chronological ascending by date
   daily.sort((a, b) => +new Date(a.date) - +new Date(b.date));
 
   const weeks = resampleToWeeks(daily);
-
   const n = weeks.length;
 
   if (n < 5) {
-    return { pos: null, lo: null, hi: null, px: null, weeks: n, lookbackWeeks };
+    return {
+      pos: null,
+      lo: null,
+      hi: null,
+      px: null,
+      weeks: n,
+      lookbackWeeks,
+      weeklyTrend: null,
+      ma13: null,
+      ma26: null,
+    };
   }
 
   const win = weeks.slice(-Math.min(lookbackWeeks, n));
-const lows = win.map((b) => +b.low || +b.close || 0).filter((x) => x > 0);
-const highs = win.map((b) => +b.high || +b.close || 0).filter((x) => x > 0);
+  const lows = win.map((b) => +b.low || +b.close || 0).filter((x) => x > 0);
+  const highs = win.map((b) => +b.high || +b.close || 0).filter((x) => x > 0);
 
-if (!lows.length || !highs.length) {
-  return { pos: null, lo: null, hi: null, px: null, weeks: n, lookbackWeeks };
-}
+  if (!lows.length || !highs.length) {
+    return {
+      pos: null,
+      lo: null,
+      hi: null,
+      px: null,
+      weeks: n,
+      lookbackWeeks,
+      weeklyTrend: null,
+      ma13: null,
+      ma26: null,
+    };
+  }
 
-const lo = Math.min(...lows);
-const hi = Math.max(...highs);
-
+  const lo = Math.min(...lows);
+  const hi = Math.max(...highs);
   const px = +weeks.at(-1)?.close || 0;
-
   const span = Math.max(1e-9, hi - lo);
   const pos = (px - lo) / span; // 0=bottom, 1=top
 
-  return { pos, lo, hi, px, span, weeks: n, lookbackWeeks };
+  // ========== NEW: Weekly trend context ==========
+  const ma13 = weeklySMA(weeks, 13); // ~3 months
+  const ma26 = weeklySMA(weeks, 26); // ~6 months
+
+  let weeklyTrend = "NEUTRAL";
+  if (ma13 !== null && ma26 !== null) {
+    if (px > ma13 && ma13 > ma26) {
+      weeklyTrend = "UP";
+    } else if (px < ma13 && ma13 < ma26) {
+      weeklyTrend = "DOWN";
+    } else if (px > ma13) {
+      weeklyTrend = "WEAK_UP";
+    } else if (px < ma13) {
+      weeklyTrend = "WEAK_DOWN";
+    }
+  }
+
+  return {
+    pos,
+    lo,
+    hi,
+    px,
+    span,
+    weeks: n,
+    lookbackWeeks,
+    weeklyTrend, // NEW
+    ma13, // NEW
+    ma26, // NEW
+  };
 }

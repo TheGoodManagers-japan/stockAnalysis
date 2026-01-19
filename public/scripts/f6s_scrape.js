@@ -4,7 +4,7 @@
   (async () => {
     /* ===== Config ===== */
     const WEBHOOK_URL =
-      "https://sccopy-38403.bubbleapps.io/version-32etr/api/1.1/wf/receive-programs";
+      "https://sccopy-38403.bubbleapps.io/api/1.1/wf/receive-programs";
     const MAX_ITEMS = 1000;
 
     // Always send (don't skip on missing)

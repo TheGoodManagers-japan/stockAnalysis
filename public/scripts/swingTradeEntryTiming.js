@@ -1,4 +1,5 @@
-// /scripts/swingTradeEntryTiming.js — DIP-only, simplified (rich diagnostics kept, no fallbacks)
+// /scripts/swingTradeEntryTiming.js — DIP-only, with professional "tape reading" enhancements
+// Enhancements: Supply wall detection, flush veto, MA5 resistance, weekly trend context, target skepticism
 
 import { detectDipBounce, weeklyRangePositionFromDaily } from "./dip.js";
 
@@ -10,9 +11,10 @@ function teleInit() {
   return {
     context: {},
     gates: {
-      structure: { pass: false, why: "" }, // minimal, DIP-friendly
-      regime: { pass: true, why: "" }, // reserved slot for logs (regime disabled)
+      structure: { pass: false, why: "" },
+      regime: { pass: true, why: "" },
       liquidity: { pass: undefined, why: "" },
+      tapeReading: { pass: true, why: "", details: {} }, // NEW: tape reading gate
     },
     dip: { trigger: false, waitReason: "", why: "", diagnostics: {} },
     rr: {
@@ -30,11 +32,11 @@ function teleInit() {
     outcome: { buyNow: false, reason: "" },
     reasons: [],
     trace: [],
-    blocks: [], // [{code, gate, why, ctx}]
+    blocks: [],
     histos: {
-      rrShortfall: [], // [{need, have, short, atrPct, trend, ticker}]
-      headroom: [], // [{atr, pct, nearestRes, ticker}]
-      distMA25: [], // [{distATR, ma25, px, ticker}]
+      rrShortfall: [],
+      headroom: [],
+      distMA25: [],
     },
     distros: {
       dipV20ratio: [],
@@ -48,13 +50,14 @@ function teleInit() {
     },
   };
 }
+
 function pushBlock(tele, code, gate, why, ctx = {}) {
   tele.blocks.push({ code, gate, why, ctx });
 }
 
 /* ============================ Tracing ============================ */
 function mkTracer(opts = {}) {
-  const level = opts.debugLevel || "normal"; // "off"|"normal"|"verbose"
+  const level = opts.debugLevel || "normal";
   const logs = [];
   const should = (lvl) =>
     level !== "off" && (level === "verbose" || lvl !== "debug");
@@ -86,40 +89,46 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     Array.isArray(opts?.dataForGates) && opts.dataForGates.length
       ? opts.dataForGates
       : historicalData;
+
+  // FIX #1: Default historicalData to gatesData if null/undefined
+  const safeHistoricalData =
+    Array.isArray(historicalData) && historicalData.length
+      ? historicalData
+      : gatesData;
+
   const reasons = [];
   const tele = teleInit();
   const T = mkTracer(opts);
 
-  // sentiment (1..7 where 1=Strong Bullish, 7=Strong Bearish)
   const ST = Number.isFinite(opts?.sentiment?.ST) ? opts.sentiment.ST : null;
   const LT = Number.isFinite(opts?.sentiment?.LT) ? opts.sentiment.LT : null;
 
-  // ---------- Basic data checks (no fallbacks; return with logs only) ----------
+  // ---------- Basic data checks ----------
   if (!Array.isArray(gatesData) || gatesData.length < cfg.minBarsNeeded) {
     const r = `Insufficient historical data (need ≥${cfg.minBarsNeeded}).`;
     const out = noEntry(r, { stock, data: historicalData || [] }, tele, T, cfg);
     out.flipBarsAgo = dailyFlipBarsAgo(historicalData || []);
-    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(historicalData || []); // NEW
+    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(historicalData || []);
     return out;
   }
 
-  // Keep full data (incl. synthetic "today") for RR/levels
   const sortedLevels = cfg.assumeSorted
-    ? historicalData
-    : [...historicalData].sort((a, b) => new Date(a.date) - new Date(b.date));
+    ? safeHistoricalData
+    : [...safeHistoricalData].sort(
+        (a, b) => new Date(a.date) - new Date(b.date)
+      );
   const sortedGates = cfg.assumeSorted
     ? gatesData
     : [...gatesData].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const dataForLevels = sortedLevels; // includes “today”
-  const dataForGates2 = sortedGates; // completed bars only
+  const dataForLevels = sortedLevels;
+  const dataForGates2 = sortedGates;
   const flipBarsAgo = dailyFlipBarsAgo(dataForGates2);
-  const goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForGates2); // NEW
+  const goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForGates2);
 
   const weeklyRange = weeklyRangePositionFromDaily(
     dataForGates2,
     cfg.weeklyRangeLookbackWeeks || 12
   );
-  // NOTE: do NOT write tele.context.weeklyRange here, because tele.context is overwritten below.
 
   const last = dataForLevels[dataForLevels.length - 1];
   if (
@@ -128,7 +137,7 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     const r = "Invalid last bar OHLCV.";
     const out = noEntry(r, { stock, data: dataForLevels }, tele, T, cfg);
     out.flipBarsAgo = dailyFlipBarsAgo(dataForLevels);
-    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForLevels); // NEW
+    out.goldenCrossBarsAgo = goldenCross25Over75BarsAgo(dataForLevels);
     return out;
   }
   const lastVolume = Number.isFinite(last.volume) ? last.volume : 0;
@@ -140,74 +149,114 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
 
   // ---------- Structure snapshot ----------
   const msFull = getMarketStructure(stock, dataForLevels);
-tele.context = {
-  ticker: stock?.ticker,
-  px,
-  openPx,
-  prevClose,
-  volume: lastVolume,
-  dayPct,
-  trend: msFull.trend,
-
-  weeklyRange, // ✅ keep weekly range here so it survives the context overwrite
-
-  ma: {
-    ma5: msFull.ma5,
-    ma20: msFull.ma20,
-    ma25: msFull.ma25,
-    ma50: msFull.ma50,
-    ma75: msFull.ma75,
-    ma200: msFull.ma200,
-  },
-  perfectMode: cfg.perfectMode,
-  gatesDataset: {
-    bars: dataForGates2.length,
-    lastDate: dataForGates2.at(-1)?.date,
-  },
-  flipBarsAgo,
-  goldenCrossBarsAgo, // NEW
-  sentiment: { ST, LT },
-};
+  tele.context = {
+    ticker: stock?.ticker,
+    px,
+    openPx,
+    prevClose,
+    volume: lastVolume,
+    dayPct,
+    trend: msFull.trend,
+    weeklyRange,
+    ma: {
+      ma5: msFull.ma5,
+      ma20: msFull.ma20,
+      ma25: msFull.ma25,
+      ma50: msFull.ma50,
+      ma75: msFull.ma75,
+      ma200: msFull.ma200,
+    },
+    perfectMode: cfg.perfectMode,
+    gatesDataset: {
+      bars: dataForGates2.length,
+      lastDate: dataForGates2.at(-1)?.date,
+    },
+    flipBarsAgo,
+    goldenCrossBarsAgo,
+    sentiment: { ST, LT },
+  };
 
   const marketCtx = computeMarketContext(opts?.market, cfg);
   if (marketCtx) {
     tele.context.market = marketCtx;
-
     if (cfg.debug) {
       console.log(`[${stock?.ticker}] MarketCtx`, marketCtx);
     }
   }
 
-
-
   const candidates = [];
+  const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
+
   const U = {
     num,
     avg,
     near,
     sma,
     rsiFromData,
-    findResistancesAbove: (d, p, s) => findResistancesAbove(d, p, s, cfg), // ✅ wrap
+    findResistancesAbove: (d, p, s) => findResistancesAbove(d, p, s, cfg),
     findSupportsBelow,
     inferTickFromPrice,
     tracer: T,
   };
 
+  // ---------- Tape Reading Gate (hard vetoes only) ----------
+  // Soft issues (MA5 resistance, dead cat in non-down weekly) are flagged
+  // but passed through — DIP strength decides
+  const tapeReading = assessTapeReading(
+    dataForGates2,
+    stock,
+    msFull,
+    px,
+    atr,
+    cfg,
+    weeklyRange
+  );
+  tele.gates.tapeReading = tapeReading;
+
+  if (!tapeReading.pass) {
+    const reason = `Tape reading: ${tapeReading.why}`;
+    pushBlock(
+      tele,
+      tapeReading.code || "TAPE_VETO",
+      "tapeReading",
+      tapeReading.why,
+      tapeReading.details
+    );
+    reasons.push(reason);
+
+    tele.outcome = { buyNow: false, reason };
+    return {
+      buyNow: false,
+      reason,
+      timeline: [],
+      telemetry: { ...tele, trace: T.logs },
+      flipBarsAgo,
+      goldenCrossBarsAgo,
+      liquidity: packLiquidity(tele, cfg),
+    };
+  }
+
+  // Store tape reading flags for potential use by DIP detector
+  const tapeFlags = {
+    requireStrongerBounce: tapeReading.requireStrongerBounce || false,
+    ma5ResistanceActive: tapeReading.ma5ResistanceActive || false,
+  };
+
   // ---------- Liquidity (compute only; do NOT prefilter or affect reasons) ----------
-  // We still compute and return liquidity information for the caller.
-  const L = assessLiquidity(dataForGates2, stock, cfg); // completed bars window
-tele.gates.liquidity = {
-  pass: !!L.pass,
-  why: L.why || "",
-  metrics: L.metrics,
-  thresholds: L.thresholds,
-  ratios: L.ratios,
-};
+  const L = assessLiquidity(dataForGates2, stock, cfg);
+  tele.gates.liquidity = {
+    pass: !!L.pass,
+    why: L.why || "",
+    metrics: L.metrics,
+    thresholds: L.thresholds,
+    ratios: L.ratios,
+  };
   tele.context.liquidity = L.metrics;
   tele.context.liqNearMargin = cfg.liqNearMargin;
 
   // ---------- DIP detection ----------
-  const dip = detectDipBounce(stock, dataForGates2, cfg, U); // ✅ completed bars only
+  // FIX #2: Pass tapeFlags so DIP can require stronger bounce when flagged
+  const dip = detectDipBounce(stock, dataForGates2, cfg, U, tapeFlags);
 
   T(
     "dip",
@@ -292,10 +341,31 @@ tele.gates.liquidity = {
   if (dip?.trigger && structureGateOk) {
     // Precompute resistances once (shared by RR + guard if needed)
     const resList = findResistancesAbove(dataForLevels, px, stock, cfg) || [];
+
+    // FIX #2: Scan supply walls up to MAXIMUM plausible target
+    // This includes: SCOOT cap, horizon cap, and any resistance we might lift to
+    const atrCap = cfg.scootATRCapDIP ?? 4.2;
+    const horizonCap =
+      px + (cfg.maxHoldingBars ?? 8) * (cfg.atrPerBarEstimate ?? 0.55) * atr;
+    const maxPlausibleTarget = Math.max(
+      dip.target,
+      px + atrCap * atr,
+      horizonCap,
+      resList[2] || 0 // Include 3rd resistance in case of multi-hop SCOOT
+    );
+    const supplyWallCheck = detectSupplyWalls(
+      dataForLevels,
+      px,
+      maxPlausibleTarget,
+      atr,
+      cfg
+    );
+
     const rr = analyzeRR(px, dip.stop, dip.target, stock, msFull, cfg, {
       kind: "DIP",
       data: dataForLevels,
       resList,
+      supplyWallCheck, // Pass supply wall info to RR analysis
     });
 
     T(
@@ -311,11 +381,13 @@ tele.gates.liquidity = {
         atr: rr.atr,
         probation: rr.probation,
         kind: "DIP",
+        supplyWall: supplyWallCheck,
       },
       "verbose"
     );
 
     tele.rr = toTeleRR(rr);
+    tele.rr.supplyWallBlocked = supplyWallCheck?.blocked || false;
 
     if (!rr.acceptable) {
       const atrPct = (rr.atr / Math.max(1e-9, px)) * 100;
@@ -328,36 +400,40 @@ tele.gates.liquidity = {
         trend: msFull.trend,
         ticker: stock?.ticker,
       });
-      pushBlock(
-        tele,
-        "RR_FAIL",
-        "rr",
-        `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`,
-        {
-          stop: rr.stop,
-          target: rr.target,
-          atr: rr.atr,
-          px,
-        }
-      );
-      reasons.push(`DIP RR too low: ${fmt(rr.ratio)} < need ${fmt(rr.need)}`);
-    } else {
-const weeklyRangeCtx = tele.context.weeklyRange;
-const marketCtx = tele.context.market || null;
 
-const gv = guardVeto(
-  stock,
-  dataForLevels,
-  px,
-  rr,
-  msFull,
-  cfg,
-  dip.nearestRes,
-  "DIP",
-  resList,
-  weeklyRangeCtx,
-  marketCtx
-);
+      // Build RR fail reason — include SCOOT block info if that's why we failed
+      let rrFailReason = `RR ${fmt(rr.ratio)} < need ${fmt(rr.need)}`;
+      if (rr.scootBlocked) {
+        rrFailReason += ` (target lift blocked: ${rr.scootBlockReason})`;
+      }
+
+      pushBlock(tele, "RR_FAIL", "rr", rrFailReason, {
+        stop: rr.stop,
+        target: rr.target,
+        atr: rr.atr,
+        px,
+        supplyWall: supplyWallCheck,
+        scootBlocked: rr.scootBlocked,
+        scootBlockReason: rr.scootBlockReason,
+      });
+      reasons.push(`DIP RR too low: ${rrFailReason}`);
+    } else {
+      const weeklyRangeCtx = tele.context.weeklyRange;
+      const marketCtxLocal = tele.context.market || null;
+
+      const gv = guardVeto(
+        stock,
+        dataForLevels,
+        px,
+        rr,
+        msFull,
+        cfg,
+        dip.nearestRes,
+        "DIP",
+        resList,
+        weeklyRangeCtx,
+        marketCtxLocal
+      );
 
       T(
         "guard",
@@ -383,6 +459,10 @@ const gv = guardVeto(
           ? "VETO_RSI"
           : gv.reason?.startsWith("Too far above MA25")
           ? "VETO_MA25_EXT"
+          : gv.reason?.startsWith("Weekly")
+          ? "VETO_WEEKLY"
+          : gv.reason?.startsWith("Falling knife")
+          ? "VETO_FALLING_KNIFE"
           : "VETO_OTHER";
         pushBlock(tele, code, "guard", gv.reason, gv.details);
       } else {
@@ -414,16 +494,16 @@ const gv = guardVeto(
 
   if (candidates.length === 0) {
     const base = buildNoReason([], reasons);
-    const reason = base; // no liquidity logs in reason
+    const reason = base;
     tele.outcome = { buyNow: false, reason };
     return {
       buyNow: false,
       reason,
-      timeline: [], // no fallbacks
+      timeline: [],
       telemetry: { ...tele, trace: T.logs },
       flipBarsAgo,
-      goldenCrossBarsAgo, // NEW
-      liquidity: packLiquidity(tele, cfg), // pass liquidity back to caller
+      goldenCrossBarsAgo,
+      liquidity: packLiquidity(tele, cfg),
     };
   }
 
@@ -439,21 +519,20 @@ const gv = guardVeto(
 
   return {
     buyNow: true,
-    reason, // no liquidity logs appended
+    reason,
     stopLoss: toTick(best.stop, stock),
     priceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull, cfg),
     telemetry: { ...tele, trace: T.logs },
     flipBarsAgo,
-    goldenCrossBarsAgo, // NEW
-    liquidity: packLiquidity(tele, cfg), // informational only
+    goldenCrossBarsAgo,
+    liquidity: packLiquidity(tele, cfg),
   };
 }
 
 /* ============================ Config ============================ */
 function getConfig(opts = {}) {
   const debug = !!opts.debug;
-  // Read sentiments if provided
   const ST = Number.isFinite(opts?.sentiment?.ST) ? opts.sentiment.ST : null;
   const LT = Number.isFinite(opts?.sentiment?.LT) ? opts.sentiment.LT : null;
 
@@ -470,51 +549,51 @@ function getConfig(opts = {}) {
 
     // --- Market veto (index context) ---
     marketVetoEnabled: true,
-    marketImpulseVetoPct: 1.8, // veto dip-buys if market day >= +1.8% (open→close)
-    marketImpulseVetoATR: 1.0, // or if market move >= 1.0 ATR (open→close)
-    marketUseTodayIfPresent: true, // if synthetic today candle exists, use it
+    marketImpulseVetoPct: 1.8,
+    marketImpulseVetoATR: 1.0,
+    marketUseTodayIfPresent: true,
 
     // Weekly range guard
     useWeeklyRangeGuard: true,
     weeklyRangeLookbackWeeks: 12,
 
-    // Hard veto thresholds (tune these)
-    weeklyTopVetoPos: 0.5, // veto if you're in top 50% of weekly range
-    weeklyBottomPreferPos: 0.25, // "bottom-ish" zone; optional
-    weeklyTopVetoRRBump: 0.1, // optional alternative to hard veto
+    // Hard veto thresholds
+    weeklyTopVetoPos: 0.5,
+    weeklyBottomPreferPos: 0.25,
+    weeklyTopVetoRRBump: 0.1,
 
     // Structure gate
-    structureMa5Tol: 0.992, // price must be ≥ MA5 * tol (was hard-coded)
+    structureMa5Tol: 0.992,
     allowDipInDowntrend: false,
 
     // RR floors
     minRRbase: 1.35,
     minRRstrongUp: 1.5,
     minRRweakUp: 1.55,
-    dipMinRR: 1.55, // DIP-specific RR floor
+    dipMinRR: 1.55,
 
     // Horizon behavior
-    horizonRRRelief: 0.1, // lower RR need by 0.10 if target was horizon-clamped
-    tightenStopOnHorizon: true, // try a safe micro-tighten on DIP stops after clamp
-    dipTightenStopATR: 0.25, // keep stop ≥ (nearestSupport - 0.25*ATR)
+    horizonRRRelief: 0.1,
+    tightenStopOnHorizon: true,
+    dipTightenStopATR: 0.25,
 
     // ---- Holding horizon controls ----
-    maxHoldingBars: 8, // hard cap: you exit by bar 8
+    maxHoldingBars: 8,
     atrPerBarEstimate: 0.55,
-    include52wAsResistance: false, // ignore timeless 52w high by default
-    resistanceLookbackBars: 40, // only consider ~2 months of swing highs
-    timeHorizonRRPolicy: "clamp", // "clamp" target; alt: "reject" if RR falls short after clamp
+    include52wAsResistance: false,
+    resistanceLookbackBars: 40,
+    timeHorizonRRPolicy: "clamp",
 
     // Headroom & extension guards
-    nearResVetoATR: 0.5, // veto if headroom < this ATR
-    nearResVetoPct: 1.0, // and/or < this %
-    headroomSecondResATR: 0.6, // when < this ATR, prefer next resistance
-    maxATRfromMA25: 2.4, // distance above MA25 cap (ATR)
-    ma25VetoMarginATR: 0.2, // extra breathing room previously implicit (+0.2)
+    nearResVetoATR: 0.5,
+    nearResVetoPct: 1.0,
+    headroomSecondResATR: 0.6,
+    maxATRfromMA25: 2.4,
+    ma25VetoMarginATR: 0.2,
 
     // Overbought guards
     hardRSI: 78,
-    softRSI: 72, // reserved
+    softRSI: 72,
 
     // DIP proximity/structure knobs
     dipMaSupportATRBands: 0.8,
@@ -538,20 +617,21 @@ function getConfig(opts = {}) {
     dipMaxBounceAgeBars: 7,
     dipMinBounceStrengthATR: 0.72,
 
-    // Min stop distance for non-DIP (kept for completeness; DIP path uses dip.js stop)
+    // Min stop distance for non-DIP
     minStopATRStrong: 1.15,
     minStopATRUp: 1.2,
     minStopATRWeak: 1.3,
     minStopATRDown: 1.45,
 
-    // SCOOT target lift
+    // SCOOT target lift - NOW WITH SUPPLY WALL SKEPTICISM
     scootEnabled: true,
     scootNearMissBand: 0.25,
     scootATRCapDIP: 4.2,
     scootATRCapNonDIP: 3.5,
     scootMaxHops: 2,
+    // Note: Supply wall blocking is done inline in analyzeRR, not via config flag
 
-    // RR hop thresholds for resistance “next hop”
+    // RR hop thresholds for resistance "next hop"
     hopThreshDipATR: 1.1,
     hopThreshNonDipATR: 0.7,
 
@@ -560,39 +640,67 @@ function getConfig(opts = {}) {
     minDipTargetFrac: 0.022,
 
     // Volatility-aware RR floors
-    lowVolRRBump: 0.1, // subtract from need when ATR% ≤ 1.0
-    highVolRRFloor: 1.6, // raise need when ATR% ≥ 3.0
+    lowVolRRBump: 0.1,
+    highVolRRFloor: 1.6,
 
     // DIP pathological stop clamp
     dipFallbackStopATR: 0.8,
 
     // Streak veto
     maxConsecutiveUpDays: 9,
-    // ANCHOR: CFG_MISSING_KEYS_END
 
-    // --- Liquidity window (for metrics only; no prefiltering) ---
-    liquidityCheckEnabled: true, // retained but unused for gating
-    liqLookbackDays: 20, // rolling window
-    minADVNotional: 2e8, // avg(close*volume) in JPY (tune to your market)
-    minAvgVolume: 200_000, // shares/day
-    minClosePrice: 200, // avoid penny names
-    minATRTicks: 5, // ATR must span at least N ticks
-    liqNearMargin: 0.15, // warn if within 15% of thresholds
+    // --- Liquidity window ---
+    liquidityCheckEnabled: true,
+    liqLookbackDays: 20,
+    minADVNotional: 2e8,
+    minAvgVolume: 200_000,
+    minClosePrice: 200,
+    minATRTicks: 5,
+    liqNearMargin: 0.15,
 
     // Probation
     allowProbation: true,
     probationRRSlack: 0.02,
     probationRSIMax: 58,
 
-    // Timeline config (no magic numbers)
+    // Timeline config
     timeline: {
-      r1: 1.0, // breakeven at +1R
-      r15: 1.5, // lock fraction at +1.5R
-      r2: 2.0, // runner tighten at +2R
-      lockAtR15: 0.6, // lock 0.6R at +1.5R
-      runnerLockAtR2: 1.2, // entry + 1.2R at +2R
+      r1: 1.0,
+      r15: 1.5,
+      r2: 2.0,
+      lockAtR15: 0.6,
+      runnerLockAtR2: 1.2,
       trail: { ma25OffsetATR: 0.6, swingLowOffsetATR: 0.5 },
     },
+
+    // ========== NEW: TAPE READING ENHANCEMENTS ==========
+
+    // Capitulation flush detection
+    flushVetoEnabled: true,
+    flushVolMultiple: 1.8, // Volume must be > 1.8x average
+    flushRangeATR: 1.3, // Range must be > 1.3 ATR
+    flushCloseNearLow: 0.25, // Close must be in bottom 25% of range
+    flushStabilizationBars: 2, // Wait N bars after flush
+
+    // MA5 resistance detection
+    ma5ResistanceVetoEnabled: true,
+    ma5ResistanceRejections: 2, // Need 2+ rejections in last 3 bars
+    ma5ResistanceTol: 0.998, // High touches MA5 within 0.2%
+
+    // Supply wall detection for targets
+    supplyWallEnabled: true,
+    supplyWallGapThreshold: 0.02, // Gap > 2% of price
+    supplyWallVolMultiple: 1.5, // High-volume rejection
+    supplyWallLookback: 60, // Look back N bars
+
+    // Weekly trend context (enhanced)
+    weeklyTrendVetoEnabled: true,
+    weeklyTrendLookback: 26, // Use 26-week for trend
+    weeklyFallingKnifePos: 0.35, // If pos < 35% AND trend down = falling knife
+
+    // Arrival quality assessment
+    arrivalQualityEnabled: true,
+    arrivalFlushPenalty: true, // Penalize if arrived at support via flush
 
     debug,
   };
@@ -625,10 +733,355 @@ function getConfig(opts = {}) {
   }
 
   if (!LT_bear && ST_pull) {
-    cfg.allowDipInDowntrend = true; // narrowly for DIP structure gate
+    cfg.allowDipInDowntrend = true;
   }
 
   return cfg;
+}
+
+/* ======================= NEW: Tape Reading Assessment ======================= */
+/*
+ * PHILOSOPHY: Only hard-veto on mechanical risks that no bounce quality can overcome.
+ * Soft issues (MA5 resistance, weak patterns) should be handled by requiring stronger
+ * DIP confirmation, not by blocking the trade outright.
+ *
+ * HARD VETOES (return pass: false):
+ * - Fresh capitulation flush (needs stabilization)
+ * - Dead cat bounce WITH weekly trend confirmed DOWN
+ *
+ * SOFT FLAGS (return pass: true with flags):
+ * - MA5 resistance → flag for DIP to require stronger bounce
+ * - Arrival quality → informational
+ */
+function assessTapeReading(data, stock, ms, px, atr, cfg, weeklyRange = null) {
+  const details = {};
+  const last = data.at(-1);
+  const prev = data.at(-2);
+
+  // FIX #1: Compute avgVol with safety clamp
+  const avgVolRaw = avg(data.slice(-20).map((d) => num(d.volume)));
+  const avgVol = Math.max(avgVolRaw, 1); // Prevent division-by-zero
+
+  // 1) Capitulation Flush Detection — HARD VETO
+  // Rationale: A fresh high-volume crash needs time to stabilize
+  if (cfg.flushVetoEnabled) {
+    const flushResult = detectCapitulationFlush(data, atr, avgVol, cfg);
+    details.flush = flushResult;
+
+    if (
+      flushResult.isFlush &&
+      flushResult.barsAgo < cfg.flushStabilizationBars
+    ) {
+      return {
+        pass: false,
+        why: `Capitulation flush ${flushResult.barsAgo} bar(s) ago — need ${cfg.flushStabilizationBars} bars to stabilize`,
+        code: "TAPE_FLUSH",
+        details,
+      };
+    }
+  }
+
+  // 2) MA5 Acting as Resistance — SOFT FLAG (not hard veto)
+  // FIX #3 & #4: Don't veto here; flag it and let DIP/bounce quality decide
+  if (cfg.ma5ResistanceVetoEnabled) {
+    const ma5 = num(stock.movingAverage5d) || sma(data, 5);
+    const ma5Resistance = detectMA5Resistance(data, ma5, cfg);
+    details.ma5Resistance = ma5Resistance;
+
+    if (ma5Resistance.acting) {
+      // Check if there's a strong reclaim (close above yesterday's high)
+      const closeAboveYHigh = num(last.close) > num(prev.high);
+      if (closeAboveYHigh) {
+        details.ma5ReclaimOverride = true;
+      } else {
+        // Flag it — DIP detector can use this to require stronger bounce
+        details.ma5ResistanceActive = true;
+        details.requireStrongerBounce = true;
+      }
+    }
+  }
+
+  // 3) Arrival Quality — INFORMATIONAL FLAG
+  if (cfg.arrivalQualityEnabled) {
+    const arrivalQuality = assessArrivalQuality(data, atr, avgVol, cfg);
+    details.arrivalQuality = arrivalQuality;
+
+    if (arrivalQuality.wasFlush) {
+      details.arrivalWarning = "Price arrived at support via high-volume flush";
+      // This can inform DIP to be more cautious, but not a veto
+    }
+  }
+
+  // 4) Dead Cat Bounce — CONDITIONAL HARD VETO
+  // Only veto if BOTH: pattern detected AND weekly trend confirmed DOWN
+  const deadCat = detectDeadCatBounce(data, ms, px, atr, cfg);
+  details.deadCatBounce = deadCat;
+
+  if (deadCat.detected) {
+    const weeklyTrend = weeklyRange?.weeklyTrend || null;
+
+    // Only hard veto if weekly confirms the weakness
+    if (weeklyTrend === "DOWN") {
+      return {
+        pass: false,
+        why: `Dead cat bounce confirmed by weekly downtrend — ${deadCat.reason}`,
+        code: "TAPE_DEAD_CAT",
+        details,
+      };
+    } else {
+      // Weekly is not DOWN — flag it but don't veto
+      details.deadCatDetected = true;
+      details.deadCatOverriddenByWeekly = weeklyTrend;
+      details.requireStrongerBounce = true;
+    }
+  }
+
+  // Pass through — let DIP detector handle with the flags
+  return {
+    pass: true,
+    why: "",
+    details,
+    // These flags can be used by DIP to require stronger confirmation
+    requireStrongerBounce: details.requireStrongerBounce || false,
+    ma5ResistanceActive: details.ma5ResistanceActive || false,
+  };
+}
+
+/* ======================= NEW: Capitulation Flush Detection ======================= */
+function detectCapitulationFlush(data, atr, avgVolRaw, cfg) {
+  // FIX #1: Clamp avgVol to prevent division-by-zero / Infinity ratios
+  const avgVol = Math.max(avgVolRaw, 1);
+
+  // Look at last few bars for a flush event
+  const lookback = Math.min(5, data.length);
+
+  for (let i = 0; i < lookback; i++) {
+    const bar = data.at(-(i + 1));
+    const barRange = num(bar.high) - num(bar.low);
+    const closePos =
+      barRange > 0 ? (num(bar.close) - num(bar.low)) / barRange : 0.5;
+
+    const volRatio = num(bar.volume) / avgVol;
+
+    const isFlush =
+      volRatio > (cfg.flushVolMultiple || 1.8) &&
+      num(bar.close) < num(bar.open) && // Red candle
+      closePos < (cfg.flushCloseNearLow || 0.25) && // Close near low
+      barRange > (cfg.flushRangeATR || 1.3) * atr; // Wide range
+
+    if (isFlush) {
+      return {
+        isFlush: true,
+        barsAgo: i,
+        bar: {
+          date: bar.date,
+          volume: num(bar.volume),
+          volRatio,
+          range: barRange,
+          rangeATR: barRange / atr,
+          closePos,
+        },
+      };
+    }
+  }
+
+  return { isFlush: false, barsAgo: -1 };
+}
+
+/* ======================= NEW: MA5 Resistance Detection ======================= */
+function detectMA5Resistance(data, ma5, cfg) {
+  if (!ma5 || ma5 <= 0) return { acting: false, rejections: 0 };
+
+  const recent = data.slice(-3);
+  const tol = cfg.ma5ResistanceTol || 0.998;
+
+  let rejections = 0;
+  for (const bar of recent) {
+    // High touches MA5 but close stays below
+    const highTouchesMA5 = num(bar.high) >= ma5 * tol;
+    const closeBelowMA5 = num(bar.close) < ma5 * tol;
+
+    if (highTouchesMA5 && closeBelowMA5) {
+      rejections++;
+    }
+  }
+
+  return {
+    acting: rejections >= (cfg.ma5ResistanceRejections || 2),
+    rejections,
+    ma5,
+    lastClose: num(recent.at(-1)?.close),
+  };
+}
+
+/* ======================= NEW: Arrival Quality Assessment ======================= */
+function assessArrivalQuality(data, atr, avgVolRaw, cfg) {
+  // FIX #1: Clamp avgVol to prevent division-by-zero
+  const avgVol = Math.max(avgVolRaw, 1);
+
+  // Check how price arrived at current level
+  const last = data.at(-1);
+  const prev = data.at(-2);
+
+  const arrivalVolRatio = num(last.volume) / avgVol;
+  const arrivalRange = num(last.high) - num(last.low);
+  const arrivalRed = num(last.close) < num(last.open);
+  const closeNearLow =
+    arrivalRange > 0
+      ? (num(last.close) - num(last.low)) / arrivalRange < 0.3
+      : false;
+
+  const wasFlush =
+    arrivalVolRatio > 1.5 &&
+    arrivalRed &&
+    closeNearLow &&
+    arrivalRange > 1.2 * atr;
+
+  // Check for slow drift (healthier)
+  const slowDrift = arrivalVolRatio < 1.2 && arrivalRange < 0.8 * atr;
+
+  return {
+    wasFlush,
+    slowDrift,
+    volRatio: arrivalVolRatio,
+    rangeATR: arrivalRange / atr,
+    quality: wasFlush ? "poor" : slowDrift ? "good" : "neutral",
+  };
+}
+
+/* ======================= NEW: Dead Cat Bounce Detection ======================= */
+function detectDeadCatBounce(data, ms, px, atr, cfg) {
+  // Dead cat bounce: sharp decline followed by weak bounce that fails to reclaim MA5
+  const ma5 = ms.ma5;
+  const ma25 = ms.ma25;
+
+  if (!ma5 || !ma25) return { detected: false };
+
+  // Look for pattern: significant drop in last 5-10 bars
+  const recentBars = data.slice(-10);
+  const recentHigh = Math.max(
+    ...recentBars.slice(0, 5).map((d) => num(d.high))
+  );
+  const recentLow = Math.min(...recentBars.map((d) => num(d.low)));
+
+  // FIX #7: Prevent division by zero if recentHigh is 0 (bad data)
+  const dropPct =
+    recentHigh > 0 ? ((recentHigh - recentLow) / recentHigh) * 100 : 0;
+
+  // Check if we're in a bounce that's failing at MA5
+  const pxBelowMA5 = px < ma5;
+  const ma5Declining = data.length >= 6 && sma(data.slice(0, -1), 5) > ma5;
+  const ma25Declining = data.length >= 26 && sma(data.slice(0, -1), 25) > ma25;
+
+  // Dead cat criteria:
+  // 1. Recent sharp drop (> 8%)
+  // 2. Currently below declining MA5
+  // 3. MA structure deteriorating
+  const detected =
+    dropPct > 8 &&
+    pxBelowMA5 &&
+    ma5Declining &&
+    ma25Declining &&
+    ms.trend !== "STRONG_UP";
+
+  return {
+    detected,
+    reason: detected
+      ? `Sharp ${dropPct.toFixed(1)}% drop with price failing at declining MA5`
+      : "",
+    dropPct,
+    pxBelowMA5,
+    ma5Declining,
+    ma25Declining,
+  };
+}
+
+/* ======================= NEW: Supply Wall Detection ======================= */
+function detectSupplyWalls(data, entryPx, targetPx, atr, cfg) {
+  if (!cfg.supplyWallEnabled) return { blocked: false };
+
+  const lookback = cfg.supplyWallLookback || 60;
+  const relevant = data.slice(-lookback);
+
+  // FIX #1: Safe avgVol
+  const avgVolRaw = avg(relevant.map((d) => num(d.volume)));
+  const avgVol = Math.max(avgVolRaw, 1);
+
+  const walls = [];
+
+  for (let i = 1; i < relevant.length; i++) {
+    const bar = relevant[i];
+    const prevBar = relevant[i - 1];
+    const barHigh = num(bar.high);
+    const barLow = num(bar.low);
+    const barOpen = num(bar.open);
+    const prevClose = num(prevBar.close);
+
+    // Skip if not in the zone between entry and target
+    if (barHigh < entryPx || barLow > targetPx) continue;
+
+    // Check for gap-down
+    const gapThreshold = cfg.supplyWallGapThreshold || 0.02;
+    const isGapDown = barOpen < prevClose * (1 - gapThreshold);
+
+    // Check for high-volume rejection
+    const volRatio = num(bar.volume) / avgVol;
+    const isHighVolRejection =
+      volRatio > (cfg.supplyWallVolMultiple || 1.5) &&
+      num(bar.close) < num(bar.open) && // Red candle
+      barHigh > entryPx; // High above entry = supply
+
+    if (isGapDown) {
+      // FIX #5: For gap-downs, the wall is at prevClose (gap upper boundary)
+      // This is where trapped longs will be looking to exit
+      walls.push({
+        type: "gap",
+        level: prevClose, // Gap upper bound, not barHigh
+        gapLow: barOpen, // Gap lower bound (informational)
+        gapSize: prevClose - barOpen,
+        gapPct: ((prevClose - barOpen) / prevClose) * 100,
+        date: bar.date,
+        volume: num(bar.volume),
+        volRatio,
+      });
+    } else if (isHighVolRejection) {
+      // For rejections, barHigh is the right level
+      walls.push({
+        type: "rejection",
+        level: barHigh,
+        date: bar.date,
+        volume: num(bar.volume),
+        volRatio,
+      });
+    }
+  }
+
+  // Find the most significant wall between entry and target
+  const blockingWalls = walls.filter(
+    (w) => w.level > entryPx && w.level < targetPx
+  );
+
+  if (blockingWalls.length > 0) {
+    // Sort by level (lowest first = first obstacle)
+    blockingWalls.sort((a, b) => a.level - b.level);
+    const firstWall = blockingWalls[0];
+
+    return {
+      blocked: true,
+      wall: firstWall,
+      allWalls: blockingWalls,
+      headroomToWall: firstWall.level - entryPx,
+      headroomToWallATR: (firstWall.level - entryPx) / atr,
+      reason:
+        firstWall.type === "gap"
+          ? `Gap-down supply at ${firstWall.level.toFixed(
+              0
+            )} (${firstWall.gapPct.toFixed(1)}% gap)`
+          : `High-volume rejection at ${firstWall.level.toFixed(0)}`,
+    };
+  }
+
+  return { blocked: false, allWalls: walls };
 }
 
 /* ======================= Market Structure ======================= */
@@ -665,9 +1118,19 @@ function getMarketStructure(stock, data) {
   return { trend, recentHigh, recentLow, ...m };
 }
 
-/* ======================== RR ======================== */
+/* ======================== RR (with supply wall awareness) ======================== */
 function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   const atr = Math.max(num(stock.atr14), entryPx * 0.005, 1e-6);
+
+  // FIX #5: Early stop sanity check for ALL paths (not just DIP)
+  // If stop is NaN, undefined, or >= entryPx, it's invalid
+  if (!Number.isFinite(stop) || stop >= entryPx) {
+    const fallbackStopATR =
+      ctx?.kind === "DIP"
+        ? cfg.dipFallbackStopATR || 0.8
+        : cfg.minStopATRUp || 1.2;
+    stop = entryPx - fallbackStopATR * atr;
+  }
 
   // 1) Stop hygiene
   if (ctx?.kind !== "DIP") {
@@ -680,11 +1143,8 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     const riskNow = entryPx - stop;
     const minStopDist = minStopATR * atr;
     if (riskNow < minStopDist) stop = entryPx - minStopDist;
-  } else {
-    // DIP: ensure stop < entry; keep dip.js logic intact; if pathological, clamp to ATR
-    if (!(stop < entryPx))
-      stop = entryPx - cfg.dipFallbackStopATR * atr || entryPx - 0.8 * atr;
   }
+  // DIP path: stop was already validated above; dip.js provides the stop
 
   // 2) Resistances (use precomputed if provided)
   let resList = Array.isArray(ctx?.resList) ? ctx.resList : [];
@@ -704,7 +1164,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     }
   }
   if (ctx?.kind === "DIP") {
-    // ensure a minimum extension for DIPs
     target = Math.max(
       target,
       entryPx +
@@ -718,7 +1177,7 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
   let horizonClamped = false;
   let ratio = reward / risk;
 
-  // 5) RR floors (use DIP-specific if applicable)
+  // 5) RR floors
   let need = cfg.minRRbase ?? 1.5;
   if (ctx?.kind === "DIP" && Number.isFinite(cfg.dipMinRR))
     need = Math.max(need, cfg.dipMinRR);
@@ -726,14 +1185,18 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     need = Math.max(need, cfg.minRRstrongUp ?? need);
   if (ms.trend === "WEAK_UP") need = Math.max(need, cfg.minRRweakUp ?? need);
 
-  // micro adjustment by instrument volatility
   const atrPct = (atr / Math.max(1e-9, entryPx)) * 100;
   if (atrPct <= 1.0) need = Math.max(need - cfg.lowVolRRBump, 1.25);
   if (atrPct >= 3.0) need = Math.max(need, cfg.highVolRRFloor);
 
+  // 6) SCOOT: bounded target lifts — WITH SUPPLY WALL SKEPTICISM
+  // Philosophy: If we can't reach minimum RR with a "clean path" to target,
+  // the trade should fail on RR Gate, not on a tape veto. This is more honest
+  // about why we're passing — the setup just doesn't have enough reward potential.
+  const supplyWall = ctx?.supplyWallCheck;
+  let scootBlocked = false;
+  let scootBlockReason = "";
 
-
-  // 6) SCOOT: bounded target lifts to nearby clustered resistances
   if (cfg.scootEnabled && Array.isArray(resList) && resList.length) {
     const atrCap =
       ctx?.kind === "DIP"
@@ -744,35 +1207,54 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     if (ratio < need && resList.length >= 2) {
       const nextRes = resList[1];
       const lifted = Math.min(nextRes, entryPx + atrCap * atr);
-      if (lifted > target) {
+
+      // CHECK: Is there a supply wall blocking this lift?
+      const wallBlocksLift =
+        supplyWall?.blocked && supplyWall.wall.level < lifted;
+
+      if (lifted > target && !wallBlocksLift) {
         target = lifted;
         reward = Math.max(0, target - entryPx);
         ratio = reward / risk;
+      } else if (wallBlocksLift) {
+        // Record that SCOOT was blocked — trade will fail on RR if it can't pass naturally
+        scootBlocked = true;
+        scootBlockReason = `Supply wall at ${supplyWall.wall.level.toFixed(
+          0
+        )} blocks target lift to ${lifted.toFixed(0)}`;
       }
     }
 
-    // Second hop: only if near miss and resList[2]
+    // Second hop: only if near miss and resList[2] and first hop didn't get blocked
     if (
+      !scootBlocked &&
       ratio < need &&
       need - ratio <= (cfg.scootNearMissBand ?? 0.25) &&
       resList.length >= 3
     ) {
       const next2 = Math.min(resList[2], entryPx + atrCap * atr);
-      if (next2 > target) {
+      const wallBlocksLift =
+        supplyWall?.blocked && supplyWall.wall.level < next2;
+
+      if (next2 > target && !wallBlocksLift) {
         target = next2;
         reward = Math.max(0, target - entryPx);
         ratio = reward / risk;
+      } else if (wallBlocksLift && !scootBlocked) {
+        scootBlocked = true;
+        scootBlockReason = `Supply wall at ${supplyWall.wall.level.toFixed(
+          0
+        )} blocks second target lift to ${next2.toFixed(0)}`;
       }
     }
   }
 
-  // --- Time-horizon target cap (keep within N bars expectation)
+  // --- Time-horizon target cap
   {
     const bars = Math.max(1, cfg.maxHoldingBars || 8);
     const atrPerBar = Math.max(0.1, cfg.atrPerBarEstimate || 0.55);
     const horizonCap = entryPx + bars * atrPerBar * atr;
 
-    // clamp or reject based on policy
     if (ctx?.kind === "DIP") {
       if ((cfg.timeHorizonRRPolicy || "clamp") === "clamp") {
         if (target > horizonCap) {
@@ -780,7 +1262,6 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
           horizonClamped = true;
         }
       } else {
-        // "reject"
         if (target > horizonCap) {
           return {
             acceptable: false,
@@ -795,24 +1276,22 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
           };
         }
       }
-      // Recompute reward/ratio after possible clamp
+
       const _risk = Math.max(0.01, entryPx - stop);
       const _reward = Math.max(0, target - entryPx);
       ratio = _reward / _risk;
-      // keep outer vars in sync
       reward = _reward;
       risk = _risk;
 
-            // (Optional) micro-tighten stop to recover RR while respecting support
       if (cfg.tightenStopOnHorizon && ratio < (cfg.dipMinRR ?? need)) {
         const needNow = cfg.dipMinRR ?? need;
-        const maxRisk = (reward) / Math.max(1e-9, needNow); // risk cap to hit RR need
+        const maxRisk = reward / Math.max(1e-9, needNow);
         if (risk > maxRisk) {
           const pad = Math.max(0, cfg.dipTightenStopATR ?? 0.25) * atr;
-          const sup = (findSupportsBelow(ctx?.data || [], entryPx)[0]) ?? stop; // highest support below entry
+          const sup = findSupportsBelow(ctx?.data || [], entryPx)[0] ?? stop;
           const structuralFloor = sup - pad;
-           const floor = Math.max(structuralFloor, stop);
- const proposed = Math.max(entryPx - maxRisk, floor);
+          const floor = Math.max(structuralFloor, stop);
+          const proposed = Math.max(entryPx - maxRisk, floor);
           if (proposed > stop && proposed < entryPx) {
             stop = proposed;
             risk = entryPx - stop;
@@ -823,18 +1302,20 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     }
   }
 
-    // Apply RR relief only if clamp actually happened
   let needEff = need;
   if (horizonClamped) {
-    needEff = Math.max(need - (cfg.horizonRRRelief ?? 0.10), cfg.minRRbase ?? 1.35);
+    needEff = Math.max(
+      need - (cfg.horizonRRRelief ?? 0.1),
+      cfg.minRRbase ?? 1.35
+    );
   }
 
   // 7) Acceptable / probation
   let acceptable = ratio >= needEff;
   const allowProb = !!cfg.allowProbation;
-   const rsiHere = Number.isFinite(stock.rsi14)
-   ? stock.rsi14
-   : rsiFromData(ctx?.data || [], 14);
+  const rsiHere = Number.isFinite(stock.rsi14)
+    ? stock.rsi14
+    : rsiFromData(ctx?.data || [], 14);
   const probation =
     allowProb &&
     !acceptable &&
@@ -849,16 +1330,17 @@ function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
     ratio,
     stop,
     target,
-    need: needEff, // reflect effective need in telemetry
+    need: needEff,
     atr,
     risk,
     reward,
     probation,
     horizonClamped,
+    supplyWallBlocked: supplyWall?.blocked || false,
+    scootBlocked,
+    scootBlockReason,
   };
 }
-
-
 
 function computeMarketContext(market, cfg) {
   const levels = Array.isArray(market?.dataForLevels)
@@ -878,8 +1360,6 @@ function computeMarketContext(market, cfg) {
   if (!(Number.isFinite(o) && Number.isFinite(c) && o > 0)) return null;
 
   const dayPct = ((c - o) / o) * 100;
-
-  // ATR(14) on completed bars (gates) is more stable
   const atr = calcATRLike(gates, 14);
   const moveATR = atr > 0 ? (c - o) / atr : 0;
 
@@ -909,7 +1389,7 @@ function calcATRLike(data, p = 14) {
   return trs.reduce((a, b) => a + b, 0) / trs.length;
 }
 
-/* ============================ Guards ============================ */
+/* ============================ Guards (Enhanced) ============================ */
 function guardVeto(
   stock,
   data,
@@ -929,7 +1409,12 @@ function guardVeto(
 
   const atr = Math.max(num(stock.atr14), px * 0.005, 1e-6);
 
-  // Weekly range position veto (higher timeframe context)
+  // ========== ENHANCED: Weekly Range + Trend Context ==========
+  // Philosophy: Be surgical with "falling knife" detection
+  // - Only veto when BOTH conditions are met:
+  //   1. Price is in the bottom 35% of its 12-week range
+  //   2. Weekly trend is confirmed DOWN (Price < MA13 < MA26)
+  // - This allows buying dips in strong stocks even when "cheap"
   if (
     cfg.useWeeklyRangeGuard &&
     weeklyRange &&
@@ -938,55 +1423,32 @@ function guardVeto(
     details.weeklyPos = weeklyRange.pos;
     details.weeklyLo = weeklyRange.lo;
     details.weeklyHi = weeklyRange.hi;
+    details.weeklyTrend = weeklyRange.weeklyTrend;
+    details.weeklyMA13 = weeklyRange.ma13;
+    details.weeklyMA26 = weeklyRange.ma26;
 
-    // Strict: veto buys near top of weekly range
-    const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.75);
-
-    // Optional: allow more in STRONG_UP (if you want trends to still buy dips higher)
-    // If you truly want "only bottoms", remove this adjustment.
+    const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.5);
     const adjTopVeto =
       ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
 
-    // ---- Weekly guard debug log (PASS or VETO, with raw numbers) ----
     const tkr = stock?.ticker || "UNK";
     const pos = weeklyRange.pos;
-    const lo = weeklyRange.lo;
-    const hi = weeklyRange.hi;
-    const pxW = weeklyRange.px;
-    const span = Math.max(1e-9, (hi ?? 0) - (lo ?? 0));
-    const calcPos = span > 0 ? ((pxW ?? 0) - (lo ?? 0)) / span : null;
 
-    const pass = pos < adjTopVeto;
-
-    // Only log when debug is enabled (opts.debug => cfg.debug)
     if (cfg.debug) {
       console.log(
-        `[${tkr}] WeeklyRangeGuard ${pass ? "PASS ✅" : "VETO ❌"} ` +
-          `pos=${(pos * 100).toFixed(1)}% (thr=${(adjTopVeto * 100).toFixed(
-            1
-          )}%)`,
+        `[${tkr}] WeeklyRangeGuard pos=${(pos * 100).toFixed(1)}% trend=${
+          weeklyRange.weeklyTrend
+        }`,
         {
-          reason: pass
-            ? `pos ${(pos * 100).toFixed(1)}% < ${(adjTopVeto * 100).toFixed(
-                1
-              )}%`
-            : `pos ${(pos * 100).toFixed(1)}% >= ${(adjTopVeto * 100).toFixed(
-                1
-              )}%`,
-          // raw numbers used to produce 32%, 61%, etc.
-          pxWeeklyClose: pxW,
-          loWeeklyLow: lo,
-          hiWeeklyHigh: hi,
-          span,
-          formula: "(px - lo) / (hi - lo)",
-          recomputedPos: calcPos,
-          lookbackWeeks: weeklyRange.lookbackWeeks,
-          weeksFound: weeklyRange.weeks,
+          threshold: adjTopVeto,
+          weeklyMA13: weeklyRange.ma13,
+          weeklyMA26: weeklyRange.ma26,
         }
       );
     }
 
-    if (!pass) {
+    // Standard top-of-range veto (unchanged)
+    if (pos >= adjTopVeto) {
       return {
         veto: true,
         reason: `Weekly range too high (pos ${(pos * 100).toFixed(0)}% ≥ ${(
@@ -995,14 +1457,45 @@ function guardVeto(
         details,
       };
     }
+
+    // REFINED: Falling knife detection — BOTH conditions must be met
+    // Condition 1: Price in bottom 35% of weekly range
+    // Condition 2: Weekly trend confirmed DOWN (price < MA13 < MA26)
+    const fallingKnifePos = cfg.weeklyFallingKnifePos ?? 0.35;
+    const inBottomZone = pos < fallingKnifePos;
+    const weeklyTrendConfirmedDown = weeklyRange.weeklyTrend === "DOWN"; // Price < MA13 < MA26
+
+    if (
+      cfg.weeklyTrendVetoEnabled &&
+      inBottomZone &&
+      weeklyTrendConfirmedDown
+    ) {
+      return {
+        veto: true,
+        reason: `Falling knife: pos ${(pos * 100).toFixed(0)}% (bottom ${(
+          fallingKnifePos * 100
+        ).toFixed(0)}% of range) with weekly trend DOWN (px < MA13 < MA26)`,
+        details,
+      };
+    }
+
+    // If in bottom zone but weekly trend is UP/NEUTRAL — allow the trade
+    // This is a legitimate "buy the dip in a strong stock" scenario
+    if (inBottomZone && !weeklyTrendConfirmedDown) {
+      details.bottomZoneAllowed = true;
+      details.bottomZoneReason = `Price in bottom ${(
+        fallingKnifePos * 100
+      ).toFixed(0)}% but weekly trend is ${
+        weeklyRange.weeklyTrend || "unknown"
+      } — allowing dip buy`;
+    }
   }
-  // --- Market impulse veto (index up big → skip DIP buys) ---
-  // Runs even if weeklyRange is missing
+
+  // --- Market impulse veto ---
   if (cfg.marketVetoEnabled && marketCtx?.impulse) {
     const dayPct = Number(marketCtx.dayPct) || 0;
     const thrPct = Number(cfg.marketImpulseVetoPct ?? 1.8);
 
-    // Optional: only veto when market is UP big (not down big)
     if (dayPct > 0) {
       const reason = `Market impulse day (${dayPct.toFixed(
         1
@@ -1148,7 +1641,6 @@ function assessLiquidity(data, stock, cfg) {
     minATRTicks: cfg.minATRTicks ?? 0,
   };
 
-  // Soft evaluation only; we still return these for informational purposes
   const near = cfg.liqNearMargin ?? 0.15;
   const ratios = {
     advR: thresholds.minADVNotional ? adv / thresholds.minADVNotional : null,
@@ -1228,9 +1720,8 @@ function buildSwingTimeline(entryPx, candidate, rr, ms, cfg) {
   return steps;
 }
 
-// Helper to produce a no-entry result WITHOUT any fallback stop/target.
 function noEntry(baseReason, ctx, tele, T, cfg) {
-  const reason = baseReason; // no liquidity logs in reason
+  const reason = baseReason;
   const out = {
     buyNow: false,
     reason,
@@ -1241,7 +1732,7 @@ function noEntry(baseReason, ctx, tele, T, cfg) {
       reasons: [reason],
       trace: T.logs,
     },
-    liquidity: packLiquidity(tele, cfg), // still pass liquidity to caller
+    liquidity: packLiquidity(tele, cfg),
   };
   return out;
 }
@@ -1341,7 +1832,6 @@ function findResistancesAbove(data, px, stock, cfg) {
       ups.push(h);
   }
 
-  // Optional 52w high injection (disabled by default)
   if (cfg?.include52wAsResistance) {
     const yHigh = num(stock.fiftyTwoWeekHigh);
     if (yHigh > px) ups.push(yHigh);
@@ -1386,10 +1876,11 @@ function toTeleRR(rr) {
     target: rr.target,
     probation: !!rr.probation,
     horizonClamped: !!rr.horizonClamped,
+    scootBlocked: !!rr.scootBlocked,
+    scootBlockReason: rr.scootBlockReason || "",
   };
 }
 
-/* Optional: compact summary for console logs in callers */
 function summarizeTelemetryForLog(tele) {
   try {
     const g = tele?.gates || {};
@@ -1400,6 +1891,7 @@ function summarizeTelemetryForLog(tele) {
         regime: { pass: true, why: "" },
         liquidity: { pass: g.liquidity?.pass, why: g.liquidity?.why },
         structure: { pass: g.structure?.pass, why: g.structure?.why },
+        tapeReading: { pass: g.tapeReading?.pass, why: g.tapeReading?.why },
       },
       rr: {
         checked: rr.checked,
@@ -1427,7 +1919,6 @@ function summarizeTelemetryForLog(tele) {
   }
 }
 
-/* Batch-friendly grouper for blocks */
 export function summarizeBlocks(teleList = []) {
   const out = {};
   for (const t of teleList) {
@@ -1456,9 +1947,6 @@ export function summarizeBlocks(teleList = []) {
     }));
 }
 
-// data: [{ date, open, high, low, close, volume }, ...] in chronological order
-
-// --- tiny SMA helper (rolling O(n)) ---
 function maSeries(data, n) {
   const closes = data.map((d) => +d.close || 0);
   const out = new Array(closes.length).fill(NaN);
@@ -1470,25 +1958,32 @@ function maSeries(data, n) {
   }
   return out;
 }
-/** A) Last GOLDEN CROSS (25 over 75) that is STILL ABOVE now; else null */
+
 export function goldenCross25Over75BarsAgo(data) {
   const last = data.length - 1;
-  if (last < 74) return null; // need ≥75 bars
+  if (last < 74) return null;
 
   const ma25 = maSeries(data, 25);
   const ma75 = maSeries(data, 75);
 
-  // Must STILL be above now, otherwise null
-  if (!(Number.isFinite(ma25[last]) && Number.isFinite(ma75[last]) && ma25[last] > ma75[last])) {
+  if (
+    !(
+      Number.isFinite(ma25[last]) &&
+      Number.isFinite(ma75[last]) &&
+      ma25[last] > ma75[last]
+    )
+  ) {
     return null;
   }
 
-  // Find the most recent bar where 25 crossed above 75
   for (let i = last; i >= 1; i--) {
     if (
-      Number.isFinite(ma25[i]) && Number.isFinite(ma75[i]) &&
-      Number.isFinite(ma25[i - 1]) && Number.isFinite(ma75[i - 1]) &&
-      ma25[i] > ma75[i] && ma25[i - 1] <= ma75[i - 1]
+      Number.isFinite(ma25[i]) &&
+      Number.isFinite(ma75[i]) &&
+      Number.isFinite(ma25[i - 1]) &&
+      Number.isFinite(ma75[i - 1]) &&
+      ma25[i] > ma75[i] &&
+      ma25[i - 1] <= ma75[i - 1]
     ) {
       return last - i;
     }
@@ -1496,24 +1991,23 @@ export function goldenCross25Over75BarsAgo(data) {
   return null;
 }
 
-/** B) Last DAILY FLIP to 5>25>75 that is STILL STACKED now; else null */
 export function dailyFlipBarsAgo(data) {
   const last = data.length - 1;
-  if (last < 74) return null; // need ≥75 bars
+  if (last < 74) return null;
 
-  const m5  = maSeries(data, 5);
+  const m5 = maSeries(data, 5);
   const m25 = maSeries(data, 25);
   const m75 = maSeries(data, 75);
 
   const isFiniteTriple = (i) =>
-    Number.isFinite(m5[i]) && Number.isFinite(m25[i]) && Number.isFinite(m75[i]);
+    Number.isFinite(m5[i]) &&
+    Number.isFinite(m25[i]) &&
+    Number.isFinite(m75[i]);
 
   const stacked = (i) => isFiniteTriple(i) && m5[i] > m25[i] && m25[i] > m75[i];
 
-  // Must STILL be stacked now, otherwise null
   if (!stacked(last)) return null;
 
-  // Find the most recent bar where the stack turned true
   for (let i = last; i >= 1; i--) {
     if (stacked(i) && !stacked(i - 1)) {
       return last - i;
@@ -1522,9 +2016,6 @@ export function dailyFlipBarsAgo(data) {
   return null;
 }
 
-/* ============== Liquidity packaging (informational only) ============== */
-
-// pack structured liquidity for return object
 function packLiquidity(tele, cfg) {
   const g = tele?.gates?.liquidity || {};
   const thresholds = {
@@ -1549,11 +2040,9 @@ function packLiquidity(tele, cfg) {
       }
     : null;
 
-  // severity: informational only; "pass" unless undefined
   let severity =
     g.pass === false ? "fail" : typeof g.pass === "boolean" ? "pass" : "unk";
 
-  // warn if near thresholds
   let warnKeys = [];
   const near = Number.isFinite(tele?.context?.liqNearMargin)
     ? tele.context.liqNearMargin
@@ -1577,5 +2066,4 @@ function packLiquidity(tele, cfg) {
   return { pass: !!g.pass, severity, why, metrics: m, thresholds, ratios };
 }
 
-/* Exports */
 export { getConfig, summarizeTelemetryForLog };
