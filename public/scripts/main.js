@@ -1538,6 +1538,10 @@ export async function fetchStockAnalysis({
 
       stock.isBuyNow = finalSignal.buyNow;
       stock.buyNowReason = finalSignal.reason;
+      stock.limitBuyOrder = Number.isFinite(finalSignal?.limitBuyOrder)
+        ? finalSignal.limitBuyOrder
+        : null;
+
 
       // tier aggregation
       const tierKey = String(Number.isFinite(stock.tier) ? stock.tier : "na");
@@ -1670,6 +1674,7 @@ export async function fetchStockAnalysis({
         _api_c2_longTermScore: stock.longTermScore,
         _api_c2_stopLoss: stock.stopLoss,
         _api_c2_priceTarget: stock.priceTarget,
+        _api_c2_limitBuyOrder: stock.limitBuyOrder,
         // 👇 NEW (ISO is best for Bubble date parsing)
         _api_c2_nextEarningsDateIso: stock.nextEarningsDateIso,
         _api_c2_nextEarningsDateFmt: stock.nextEarningsDateFmt,

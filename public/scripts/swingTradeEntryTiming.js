@@ -55,6 +55,24 @@ function pushBlock(tele, code, gate, why, ctx = {}) {
   tele.blocks.push({ code, gate, why, ctx });
 }
 
+
+
+function computeLimitBuyOrder({ ref, atr, stop, stock, cfg }) {
+  const tick =
+    Number(stock?.tickSize) || inferTickFromPrice(Number(ref) || 0) || 0.1;
+
+  // default: a small discount to last close
+  let limit = ref - (cfg.limitBuyDiscountATR ?? 0.15) * atr;
+
+  // never set a limit below/at stop (meaningless)
+  const minAboveStop = stop + tick;
+  if (Number.isFinite(stop)) limit = Math.max(limit, minAboveStop);
+
+  // tick-round
+  return toTick(limit, { tickSize: tick });
+}
+
+
 /* ============================ Tracing ============================ */
 function mkTracer(opts = {}) {
   const level = opts.debugLevel || "normal";
@@ -517,9 +535,19 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
   }:1. ${best.why}`;
   tele.outcome = { buyNow: true, reason };
 
+  const refCloseForLimit = num(last.close);
+  const limitBuyOrder = computeLimitBuyOrder({
+    ref: refCloseForLimit,
+    atr,
+    stop: best.stop,
+    stock,
+    cfg,
+  });
+
   return {
     buyNow: true,
     reason,
+    limitBuyOrder, // ✅ NEW
     stopLoss: toTick(best.stop, stock),
     priceTarget: toTick(best.target, stock),
     timeline: buildSwingTimeline(px, best, best.rr, msFull, cfg),
@@ -556,6 +584,8 @@ function getConfig(opts = {}) {
     // Weekly range guard
     useWeeklyRangeGuard: true,
     weeklyRangeLookbackWeeks: 12,
+
+    limitBuyDiscountATR: 0.15,
 
     // Hard veto thresholds
     weeklyTopVetoPos: 0.5,
