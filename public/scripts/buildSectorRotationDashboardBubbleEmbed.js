@@ -659,9 +659,11 @@ function escapeHtml(str) {
  * Avoids closing the script tag by escaping "</script" sequences.
  */
 function safeJsonForScriptTag(obj) {
-  const json = JSON.stringify(obj ?? {}, null, 0);
-  return json.replace(/<\\/ / g, "<\\\\/"); // prevents </script> termination
+  const json = JSON.stringify(obj ?? {});
+  // Prevent breaking out of <script> by neutralizing "</script"
+  return json.replace(/<\/script/gi, "<\\/script");
 }
+
 
 /* ------------------------------
 Example usage:

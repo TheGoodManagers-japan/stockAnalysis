@@ -198,20 +198,25 @@ function safeJsonParse(text) {
  * - Safe to call from browser or server
  * - Does NOT call bubble_fn_sector itself (we do that in the browser adapter)
  */
+
+// ---- Regime helpers (match backtest) ----
+const DEFAULT_REGIME_TICKER = "1306.T"; // Nikkei 225 ETF proxy
+
+
 export async function fetchSectorRotationEmbed({
   regimeTicker = DEFAULT_REGIME_TICKER, // use same benchmark as your scan
   title = "JP Sector Rotation (Swing Dashboard)",
 } = {}) {
   // sectorRotationMonitor should internally know the sector pools + weights
   // These options are safe even if your function ignores unknown keys.
-  const sectorRotationResult = await analyzeSectorRotation({
-    benchTicker: regimeTicker, // if your monitor supports it
-    swingBars: 8,
-    weightMode: "auto",
-    concurrency: 6,
-    // IMPORTANT: per your critique — breadth should be equal-weight (participation)
-    breadthWeightMode: "equal", // if supported; otherwise ignore
-  });
+const sectorRotationResult = await analyzeSectorRotation({
+  benchmarkTicker: regimeTicker,
+  swingBars: 8,
+  weightMode: "auto",
+  concurrency: 6,
+  breadthMode: "equal",
+});
+
 
   const { bubbleHtmlCode } = buildSectorRotationDashboardBubbleEmbed(
     sectorRotationResult,
@@ -383,8 +388,7 @@ function toTick(v, priceRefOrStock) {
 
 
 
-// ---- Regime helpers (match backtest) ----
-const DEFAULT_REGIME_TICKER = "1306.T"; // Nikkei 225 ETF proxy
+
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
 
 function smaArr(arr, p) {
@@ -408,7 +412,7 @@ function smaArr(arr, p) {
  */
 function computeRegimeLabels(candles) {
   if (!Array.isArray(candles) || candles.length < 30) {
-    return candles.map(() => "RANGE");
+    return Array.isArray(candles) ? candles.map(() => "RANGE") : [];
   }
   const closes = candles.map((c) => Number(c.close) || 0);
   const ma25 = smaArr(closes, 25);

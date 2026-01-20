@@ -1,5 +1,5 @@
 /**
- * sectorRotationJP.js
+ * sectorRotationMonitor.js
  *
  * Tactical JP Sector Rotation (Swing-trading aligned)
  * - Weighted bellwethers + optional liquidity weighting (advWeightPower)
@@ -24,6 +24,15 @@
 // ------------------------------
 // You can replace this with your own exact pools.
 // Format: { [sectorId]: [ { ticker, w?, name? }, ... ] }
+
+
+const DEFAULT_API_BASE =
+  typeof window !== "undefined"
+    ? "https://stock-analysis-chi.vercel.app"
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "https://stock-analysis-chi.vercel.app";
+
 export const sectorPoolsJP = {
   Autos: [
     { ticker: "7203.T", w: 1.4, name: "Toyota" },
@@ -269,7 +278,7 @@ async function fetchHistoricalData(
   ticker,
   {
     years = 3,
-    historyEndpoint = "/api/history",
+    historyEndpoint = `${DEFAULT_API_BASE}/api/history`,
     historyTickerParam = "ticker",
     historyYearsParam = "years",
     fetchFn = globalThis.fetch,
@@ -281,10 +290,15 @@ async function fetchHistoricalData(
   const key = `${historyEndpoint}::${ticker}::${years}`;
   if (useCache && __historyCache.has(key)) return __historyCache.get(key);
 
-  const url = new URL(
-    historyEndpoint,
-    typeof window !== "undefined" ? window.location.origin : "http://localhost",
-  );
+  const url = historyEndpoint.startsWith("http")
+    ? new URL(historyEndpoint)
+    : new URL(
+        historyEndpoint,
+        typeof window !== "undefined"
+          ? window.location.origin
+          : "http://localhost",
+      );
+
   url.searchParams.set(historyTickerParam, ticker);
   url.searchParams.set(historyYearsParam, String(years));
 
@@ -528,7 +542,7 @@ export async function analyzeSectorRotation({
 
   // History fetch config
   years = 3,
-  historyEndpoint = "/api/history",
+  historyEndpoint = `${DEFAULT_API_BASE}/api/history`,
   historyTickerParam = "ticker",
   historyYearsParam = "years",
   fetchFn = globalThis.fetch,
