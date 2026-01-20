@@ -16,6 +16,8 @@ import {
   classifyValueQuadrant,
 } from "./techFundValAnalysis.js";
 import { allTickers } from "./tickers.js";
+import { analyzeSectorRotation } from "./sectorRotationMonitor.js";
+import { buildSectorRotationDashboardBubbleEmbed } from "./buildSectorRotationDashboardBubbleEmbed.js";
 
 
 // ANCHOR: LIQ_HELPERS
@@ -190,6 +192,39 @@ function safeJsonParse(text) {
     return null;
   }
 }
+
+/**
+ * Fetch sector rotation + build Bubble HTML embed.
+ * - Safe to call from browser or server
+ * - Does NOT call bubble_fn_sector itself (we do that in the browser adapter)
+ */
+export async function fetchSectorRotationEmbed({
+  regimeTicker = DEFAULT_REGIME_TICKER, // use same benchmark as your scan
+  title = "JP Sector Rotation (Swing Dashboard)",
+} = {}) {
+  // sectorRotationMonitor should internally know the sector pools + weights
+  // These options are safe even if your function ignores unknown keys.
+  const sectorRotationResult = await analyzeSectorRotation({
+    benchTicker: regimeTicker, // if your monitor supports it
+    swingBars: 8,
+    weightMode: "auto",
+    concurrency: 6,
+    // IMPORTANT: per your critique — breadth should be equal-weight (participation)
+    breadthWeightMode: "equal", // if supported; otherwise ignore
+  });
+
+  const { bubbleHtmlCode } = buildSectorRotationDashboardBubbleEmbed(
+    sectorRotationResult,
+    {
+      title,
+      defaultView: "cards",
+      showExplainPanel: true,
+    }
+  );
+
+  return { sectorRotationResult, bubbleHtmlCode };
+}
+
 
 
 // Last close from candle array
@@ -1787,13 +1822,40 @@ if (IS_BROWSER) {
         tickerList,
         myPortfolioLen: myPortfolio.length,
       });
+
+      // ✅ 0) Sector rotation embed FIRST (before scanning)
+      try {
+        const { bubbleHtmlCode } = await fetchSectorRotationEmbed({
+          regimeTicker: DEFAULT_REGIME_TICKER,
+          title: "JP Sector Rotation (Swing Dashboard)",
+        });
+
+        if (typeof bubble_fn_sector === "function") {
+          bubble_fn_sector(bubbleHtmlCode); // <-- this is your “bubbleEmbed”
+          log("bubble_fn_sector OK (sector embed sent)");
+        } else {
+          warn(
+            "bubble_fn_sector is not defined. Add a JavaScript-to-Bubble element named 'sector' (bubble_fn_sector).",
+          );
+        }
+      } catch (e) {
+        warn(
+          "Sector rotation embed failed (continuing scan):",
+          e?.message || e,
+        );
+        // optional: clear/notify bubble UI
+        try {
+          if (typeof bubble_fn_sector === "function") bubble_fn_sector("");
+        } catch (_) {}
+      }
+
+      // ✅ 1) Proceed with normal scan (unchanged)
       try {
         await fetchStockAnalysis({
           tickers: tickerList,
           myPortfolio,
           onItem: (obj) => {
             try {
-              // Provided by Bubble runtime
               bubble_fn_result(obj);
               log("bubble_fn_result OK for", obj?._api_c2_ticker);
             } catch (e) {
@@ -1803,7 +1865,6 @@ if (IS_BROWSER) {
         });
       } finally {
         try {
-          // Provided by Bubble runtime
           bubble_fn_finish();
           log("bubble_fn_finish called");
         } catch (e) {
@@ -1813,3 +1874,4 @@ if (IS_BROWSER) {
     },
   };
 }
+
