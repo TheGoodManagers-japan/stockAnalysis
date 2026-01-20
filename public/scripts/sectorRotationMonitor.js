@@ -25,7 +25,6 @@
 // You can replace this with your own exact pools.
 // Format: { [sectorId]: [ { ticker, w?, name? }, ... ] }
 
-
 const DEFAULT_API_BASE =
   typeof window !== "undefined"
     ? "https://stock-analysis-chi.vercel.app"
@@ -291,6 +290,19 @@ async function mapLimit(items, limit, mapper) {
 // ------------------------------
 const __historyCache = new Map();
 
+/**
+ * Normalize tickers for JP equities:
+ * - "7203" -> "7203.T"
+ * - "7203.T" -> "7203.T"
+ * - "7203.X" -> "7203.T" (strip any suffix then .T)
+ */
+function normalizeTickerJP(input) {
+  if (!input) return "";
+  const s = String(input).trim().toUpperCase();
+  if (s.endsWith(".T")) return s;
+  return `${s.replace(/\..*$/, "")}.T`;
+}
+
 function normalizeBars(rawBars) {
   if (!Array.isArray(rawBars)) return [];
 
@@ -336,6 +348,9 @@ async function fetchHistoricalData(
 ) {
   if (!fetchFn) throw new Error("No fetch function available.");
 
+  // ✅ key fix: your API expects ".T"
+  ticker = normalizeTickerJP(ticker);
+
   const key = `${historyEndpoint}::${ticker}::${years}`;
   if (useCache && __historyCache.has(key)) return __historyCache.get(key);
 
@@ -356,6 +371,11 @@ async function fetchHistoricalData(
     throw new Error(`History fetch failed for ${ticker}: ${res.status}`);
 
   const json = await res.json();
+
+  // ✅ handle "success=false" even when HTTP=200
+  if (json && typeof json === "object" && json.success === false) {
+    throw new Error(json.error || `History API success=false for ${ticker}`);
+  }
 
   // Common shapes:
   // - { data: [...] }
@@ -614,6 +634,9 @@ export async function analyzeSectorRotation({
 } = {}) {
   if (!fetchFn) throw new Error("No fetch function available.");
 
+  // ✅ normalize benchmark too (safe)
+  benchmarkTicker = normalizeTickerJP(benchmarkTicker);
+
   // 1) Benchmark snapshot
   const benchBars = await fetchHistoricalData(benchmarkTicker, {
     years,
@@ -644,7 +667,7 @@ export async function analyzeSectorRotation({
     if (!members.length) continue;
 
     const snaps = await mapLimit(members, concurrency, async (m) => {
-      const ticker = m.ticker;
+      const ticker = normalizeTickerJP(m.ticker); // ✅ key fix
       const poolWeight = safeNum(m.w) ?? 1;
 
       try {
