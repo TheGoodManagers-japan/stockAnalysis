@@ -1,0 +1,91 @@
+/* --- Insight cards (InsightsSection) --- */
+.insightCard {
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  border-left: 3px solid var(--accent-yellow);
+  margin-bottom: 12px;
+}
+
+.severityHigh {
+  border-left-color: var(--accent-red);
+}
+
+.severityLow {
+  border-left-color: var(--accent-green);
+}
+
+.title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+  color: var(--text-heading);
+}
+
+.desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.severityBadge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.high {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}
+
+.medium {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--accent-yellow);
+}
+
+.low {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--accent-green);
+}
+
+/* --- Diff indicators (ScanDiffSection) --- */
+.diffImproved {
+  color: var(--accent-green);
+}
+
+.diffDegraded {
+  color: var(--accent-red);
+}
+
+.diffUnchanged {
+  color: var(--text-muted);
+}
+
+/* --- Win rate matrix (SignalTrackingSection) --- */
+.matrixCell {
+  text-align: center;
+  padding: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 4px;
+}
+
+.winHigh {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--accent-green);
+}
+
+.winMid {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--accent-yellow);
+}
+
+.winLow {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}

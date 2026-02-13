@@ -1,0 +1,271 @@
+.btnAddPortfolio {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  line-height: 1;
+  padding: 0;
+}
+
+.btnAddPortfolio:hover {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.addPopup {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 50;
+  width: 340px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  box-shadow: var(--shadow-lg);
+  margin-top: 4px;
+}
+
+.addPopupGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.addPopupGrid input,
+.addPopupGrid select {
+  width: 100%;
+}
+
+/* AI Review — verdict badge button */
+.btnAiVerdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 10px;
+  border: 1px solid;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btnAiVerdict:hover {
+  opacity: 0.85;
+}
+
+/* AI Review — analyze button */
+.btnAiReview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 10px;
+  border: 1px solid var(--accent-blue);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--accent-blue);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.btnAiReview:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.btnAiReview:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* Expanded review row */
+.expandedRow {
+  background: var(--bg-tertiary) !important;
+  cursor: default !important;
+}
+
+.expandedRow:hover {
+  background: var(--bg-tertiary) !important;
+}
+
+.expandedRow td {
+  border-top: none !important;
+}
+
+.reviewContent {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 16px 20px;
+}
+
+.reviewSection {
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-primary);
+}
+
+.reviewSectionTitle {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.reviewSectionText {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.reviewVerdictRow {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-primary);
+}
+
+.reviewVerdictBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  border: 1px solid;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  margin-right: 10px;
+}
+
+.reviewVerdictReason {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.confidenceBlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.confidenceLabel {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.confidenceTrack {
+  width: 80px;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.confidenceFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* --- View toggle buttons --- */
+.viewToggle {
+  display: flex;
+  gap: 2px;
+  margin-left: 8px;
+}
+
+.viewToggleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+}
+
+.viewToggleBtn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-blue);
+}
+
+.viewToggleActive {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.sortIndicator {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+
+/* --- Clickable row styles --- */
+
+/* Link overlay covering entire row */
+.rowLink {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  cursor: pointer;
+}
+
+/* Clickable row base */
+.clickableRow {
+  position: relative;
+  transition: background-color 0.15s ease;
+}
+
+/* Row hover state */
+.clickableRow:hover {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+  cursor: pointer;
+}
+
+/* Buy signal rows - maintain green tint on hover */
+.clickableRow:global(.buy-signal):hover {
+  background-color: rgba(16, 185, 129, 0.08) !important;
+}
+
+/* Ensure buttons are clearly interactive */
+.btnAddPortfolio,
+.btnAiVerdict,
+.btnAiReview {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}

@@ -1,0 +1,23 @@
+{
+  "name": "dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "axios": "^1.13.5",
+    "bottleneck": "^2.19.5",
+    "cheerio": "^1.2.0",
+    "lightweight-charts": "^5.1.0",
+    "next": "16.1.6",
+    "pg": "^8.18.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "recharts": "^3.7.0",
+    "yahoo-finance2": "^3.13.0"
+  }
+}

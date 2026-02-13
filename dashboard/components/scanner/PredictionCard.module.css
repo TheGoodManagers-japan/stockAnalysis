@@ -1,0 +1,43 @@
+.predictionCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.predictionCard:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+}
+
+.upside {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.prices {
+  display: flex;
+  gap: 16px;
+  margin-top: 6px;
+}
+
+.prices span {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .predictionCard { flex-direction: column; align-items: flex-start; }
+}
