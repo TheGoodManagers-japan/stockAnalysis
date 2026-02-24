@@ -4,12 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import styles from "./StockCard.module.css";
-
-const VERDICT_CONFIG = {
-    CONFIRMED: { icon: "✅", label: "CONFIRMED", cssClass: "badge-buy", style: { background: "rgba(16, 185, 129, 0.2)", color: "#10b981", borderColor: "#10b981" } },
-    CAUTION: { icon: "⚠️", label: "CAUTION", cssClass: "badge-neutral", style: { background: "rgba(245, 158, 11, 0.2)", color: "#f59e0b", borderColor: "#f59e0b" } },
-    AVOID: { icon: "❌", label: "AVOID", cssClass: "badge-sell", style: { background: "rgba(239, 68, 68, 0.2)", color: "#ef4444", borderColor: "#ef4444" } },
-};
+import { VERDICT_CONFIG, formatSector } from "../../lib/uiHelpers";
 
 export default function StockCard({ stock, initialReview }) {
     const [review, setReview] = useState(initialReview);
@@ -76,7 +71,7 @@ export default function StockCard({ stock, initialReview }) {
                 <div className={styles.metric}>
                     <span className={styles.metricLabel}>Sector</span>
                     <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-                        {stock.sector ? stock.sector.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()) : "-"}
+                        {formatSector(stock.sector)}
                     </span>
                 </div>
                 <div className={styles.metric}>
@@ -114,7 +109,7 @@ export default function StockCard({ stock, initialReview }) {
             <div style={{ marginTop: 12, borderTop: "1px solid var(--border-color)", paddingTop: 8, position: "relative", zIndex: 2 }}>
                 {review ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className={`badge`} style={{ ...verdict?.style, display: "flex", alignItems: "center", gap: 4 }}>
+                        <span className={`badge`} style={{ background: verdict?.bg, color: verdict?.color, borderColor: verdict?.border, display: "flex", alignItems: "center", gap: 4 }}>
                             {verdict?.icon} {verdict?.label}
                         </span>
                         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

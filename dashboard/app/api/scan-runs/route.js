@@ -25,3 +25,41 @@ export async function GET(request) {
     );
   }
 }
+
+// DELETE /api/scan-runs?scanId=<UUID> — delete a scan run and its results
+export async function DELETE(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const scanId = searchParams.get("scanId");
+
+    if (!scanId) {
+      return NextResponse.json(
+        { success: false, error: "scanId query param is required" },
+        { status: 400 }
+      );
+    }
+
+    // Delete all dependents, then scan_runs
+    await query(`DELETE FROM predictions WHERE scan_id = $1`, [scanId]).catch(() => {});
+    await query(`DELETE FROM ai_reviews WHERE scan_id = $1`, [scanId]).catch(() => {});
+    await query(`DELETE FROM scan_results WHERE scan_id = $1`, [scanId]);
+    const result = await query(
+      `DELETE FROM scan_runs WHERE scan_id = $1 RETURNING scan_id`,
+      [scanId]
+    );
+
+    if (result.rows.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Scan not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true, deletedScanId: scanId });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err.message },
+      { status: 500 }
+    );
+  }
+}

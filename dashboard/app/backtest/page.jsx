@@ -1,11 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-
-function formatNum(v) {
-  if (v == null) return "-";
-  return Number(v).toLocaleString();
-}
+import { formatNum } from "../../lib/uiHelpers";
 
 export default function BacktestPage() {
   const [runs, setRuns] = useState([]);

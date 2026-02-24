@@ -3,16 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 3002",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-node": "^4.22.0",
     "axios": "^1.13.5",
     "bottleneck": "^2.19.5",
     "cheerio": "^1.2.0",
-    "lightweight-charts": "^5.1.0",
+    "lightweight-charts": "^4.2.1",
     "next": "16.1.6",
     "pg": "^8.18.0",
     "react": "19.2.3",

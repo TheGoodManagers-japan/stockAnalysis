@@ -4,6 +4,7 @@
 // ESM — no browser globals
 
 import { calcATR, calcADX14, sma } from "../regime/regimeLabels.js";
+import { num as n, lastSwingLowRecent } from "../helpers.js";
 
 /* ======================== Private helpers ======================== */
 
@@ -13,17 +14,7 @@ function lastClose(data) {
 }
 
 /** Last swing low (simple pivot scan on recent window) */
-function lastSwingLow(data) {
-  if (!Array.isArray(data) || data.length < 5) return 0;
-  const w = data.slice(-40);
-  for (let i = w.length - 3; i >= 2; i--) {
-    const l = Number(w[i]?.low ?? w[i]?.close ?? 0);
-    const l0 = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? 0);
-    const l1 = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? 0);
-    if (l < l0 && l < l1) return l;
-  }
-  return Number(w.at(-1)?.low ?? w.at(-1)?.close ?? 0);
-}
+const lastSwingLow = lastSwingLowRecent;
 
 /** Did price make a new lower low vs prior swing lows (recent window)? */
 function madeLowerLow(data) {
@@ -75,8 +66,6 @@ export function getTradeManagementSignal_V3(
   historicalData,
   ctx = {}
 ) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-
   function clampStopLoss(px, atr, proposed, floorStop = 0) {
     const _px = n(px);
     const _atr = Math.max(n(atr), _px * 0.005, 1e-6);

@@ -1,6 +1,9 @@
 // ================== SHORT TERM SENTIMENT ANALYSIS (Layer 1) ==================
 // shortTermSentimentAnalysis.js
 
+import { sma } from "../indicators.js";
+import { num as n } from "../helpers.js";
+
 /**
  * Analyzes short-term (≈15 trading days) price action, patterns, and momentum to determine market sentiment.
  * Japan-friendly defaults: emphasizes MA25/MA50 (25日線/50日線), adaptive thresholds by ATR%.
@@ -21,7 +24,6 @@ export function getShortTermSentimentScore(stock, historicalData) {
   );
   const recentData = sorted.slice(-15); // core sentiment window
 
-  const n = (v) => (Number.isFinite(v) ? v : 0);
   const currentPrice = n(stock?.currentPrice) || n(recentData.at(-1)?.close);
 
   // ---- Market context (JP-friendly) ----
@@ -98,7 +100,6 @@ export function getShortTermSentimentScore(stock, historicalData) {
  */
 
 function deriveMarketContext(stock, sorted, currentPrice) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // ATR14 (Wilder). If insufficient data, fallback to avg true range of last 10.
   const atr = computeATR(sorted, 14) || approxATR(sorted);
@@ -130,7 +131,6 @@ function deriveMarketContext(stock, sorted, currentPrice) {
 
 function computeATR(data, length = 14) {
   if (!Array.isArray(data) || data.length < length + 1) return 0;
-  const n = (v) => (Number.isFinite(v) ? v : 0);
   let prevClose = n(data[0].close);
   let trs = [];
   for (let i = 1; i < data.length; i++) {
@@ -156,19 +156,11 @@ function computeATR(data, length = 14) {
 
 function approxATR(data) {
   if (!Array.isArray(data) || data.length < 10) return 0;
-  const n = (v) => (Number.isFinite(v) ? v : 0);
   const w = data.slice(-10);
   const ranges = w.map((d) => Math.max(0, n(d.high) - n(d.low)));
   return avg(ranges);
 }
 
-function sma(data, n, field = "close") {
-  if (!Array.isArray(data) || data.length < n) return 0;
-  let s = 0;
-  for (let i = data.length - n; i < data.length; i++)
-    s += Number(data[i][field]) || 0;
-  return s / n;
-}
 
 function rollingSMASeries(data, n, field = "close") {
   if (!Array.isArray(data) || data.length < n) return [];
@@ -186,10 +178,6 @@ function avg(arr) {
   return arr.length
     ? arr.reduce((a, b) => a + (Number(b) || 0), 0) / arr.length
     : 0;
-}
-
-function n(v) {
-  return Number.isFinite(v) ? v : 0;
 }
 
 /**
@@ -237,7 +225,6 @@ function detectShortTermBullishPatterns(
   ctx
 ) {
   const patterns = {};
-  const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // Higher lows (≥5 of last 6 are higher)
   if (recentData.length >= 7) {
@@ -328,7 +315,6 @@ function detectShortTermBullishPatterns(
 
 function detectShortTermBearishPatterns(recentData, historical, ctx) {
   const patterns = {};
-  const n = (v) => (Number.isFinite(v) ? v : 0);
 
   // Lower highs (≥5 of last 6 are lower)
   if (recentData.length >= 7) {
@@ -385,7 +371,6 @@ function detectShortTermExhaustion(
   ctx
 ) {
   const patterns = {};
-  const n = (v) => (Number.isFinite(v) ? v : 0);
   const currentPrice = n(stock?.currentPrice) || n(recentData.at(-1)?.close);
 
   // Trend maturity: many up-days in 15-day window

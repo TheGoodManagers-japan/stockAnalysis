@@ -3,11 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import styles from "./InsightsSection.module.css";
-
-function formatNum(v) {
-  if (v == null) return "-";
-  return Number(v).toLocaleString();
-}
+import { formatNum, formatSector } from "../../lib/uiHelpers";
 
 export default function InsightsSection({ days }) {
   const [data, setData] = useState(null);
@@ -116,7 +112,7 @@ export default function InsightsSection({ days }) {
                       )}
                     </td>
                     <td style={{ fontSize: "0.78rem" }}>
-                      {m.sector ? m.sector.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "-"}
+                      {formatSector(m.sector)}
                     </td>
                     <td><span className={`badge badge-tier-${m.tier || 3}`}>T{m.tier || "?"}</span></td>
                     <td>

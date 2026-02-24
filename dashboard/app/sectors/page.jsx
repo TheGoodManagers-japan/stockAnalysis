@@ -1,6 +1,6 @@
 import { query } from "../../lib/db";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 600;
 
 async function getSectorRotation() {
   try {

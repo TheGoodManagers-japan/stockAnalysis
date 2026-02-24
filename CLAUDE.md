@@ -148,9 +148,9 @@ Yahoo aggressively rate-limits. Every Yahoo call implements:
 ## Development Commands
 
 ```bash
-# Dashboard
+# Dashboard (port 3002)
 cd dashboard
-npm run dev              # next dev
+npm run dev              # next dev --port 3002
 npm run build            # next build
 npm start                # next start
 

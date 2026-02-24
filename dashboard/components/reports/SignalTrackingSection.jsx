@@ -3,16 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import styles from "./InsightsSection.module.css";
-
-function formatNum(v) {
-  if (v == null) return "-";
-  return Number(v).toLocaleString();
-}
-
-function formatDate(d) {
-  if (!d) return "-";
-  return new Date(d).toLocaleDateString("ja-JP");
-}
+import { formatNum, formatDate } from "../../lib/uiHelpers";
 
 function OutcomeBadge({ outcome }) {
   const map = {

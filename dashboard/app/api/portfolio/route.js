@@ -1,5 +1,6 @@
 import { query } from "../../../lib/db";
 import { NextResponse } from "next/server";
+import { validateTicker, validatePositiveNum } from "../../../lib/validate.js";
 
 // GET /api/portfolio — fetch all holdings
 export async function GET() {
@@ -10,10 +11,41 @@ export async function GET() {
     const closed = await query(
       `SELECT * FROM portfolio_holdings WHERE status = 'closed' ORDER BY closed_at DESC LIMIT 50`
     );
+
+    // News alerts for open positions
+    let newsAlerts = {};
+    const openTickers = open.rows.map((h) => h.ticker_code);
+    if (openTickers.length > 0) {
+      const newsResult = await query(
+        `SELECT
+           nat.ticker_code,
+           COUNT(*) as article_count,
+           ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
+           MAX(na.impact_level) as max_impact,
+           (array_agg(COALESCE(na.title_ja, na.title) ORDER BY na.published_at DESC))[1] as latest_headline
+         FROM news_article_tickers nat
+         JOIN news_articles na ON na.id = nat.article_id
+         WHERE nat.ticker_code = ANY($1)
+           AND na.is_analyzed = TRUE
+           AND na.published_at >= NOW() - INTERVAL '7 days'
+         GROUP BY nat.ticker_code`,
+        [openTickers]
+      );
+      for (const row of newsResult.rows) {
+        newsAlerts[row.ticker_code] = {
+          article_count: Number(row.article_count),
+          avg_sentiment: Number(row.avg_sentiment),
+          max_impact: row.max_impact,
+          latest_headline: row.latest_headline,
+        };
+      }
+    }
+
     return NextResponse.json({
       success: true,
       open: open.rows,
       closed: closed.rows,
+      newsAlerts,
     });
   } catch (err) {
     return NextResponse.json(
@@ -41,6 +73,22 @@ export async function POST(request) {
     if (!ticker_code || !entry_price) {
       return NextResponse.json(
         { success: false, error: "ticker_code and entry_price are required" },
+        { status: 400 }
+      );
+    }
+
+    const tv = validateTicker(ticker_code);
+    if (!tv.valid) {
+      return NextResponse.json(
+        { success: false, error: tv.error },
+        { status: 400 }
+      );
+    }
+
+    const pv = validatePositiveNum(entry_price, "entry_price");
+    if (!pv.valid) {
+      return NextResponse.json(
+        { success: false, error: pv.error },
         { status: 400 }
       );
     }

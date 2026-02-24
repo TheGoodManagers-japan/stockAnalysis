@@ -49,9 +49,23 @@ export async function GET() {
            (CASE WHEN tn.article_count > 0 THEN tn.recent_count::float / tn.article_count ELSE 0 END * 0.10) +
            (LEAST(tn.sources_count / 2.0, 1.0) * 0.10)
          )::numeric, 3) as composite_score,
-         tn.articles as articles_json
+         tn.articles as articles_json,
+         scan.is_buy_now,
+         scan.tier,
+         scan.market_regime
        FROM ticker_news tn
        LEFT JOIN tickers t ON t.code = tn.ticker_code
+       LEFT JOIN LATERAL (
+         SELECT sr.is_buy_now, sr.tier, sr.market_regime
+         FROM scan_results sr
+         WHERE sr.ticker_code = tn.ticker_code
+           AND sr.scan_id = (
+             SELECT scan_id FROM scan_runs
+             WHERE status = 'completed'
+             ORDER BY started_at DESC LIMIT 1
+           )
+         LIMIT 1
+       ) scan ON true
        ORDER BY composite_score DESC
        LIMIT 20`
     );

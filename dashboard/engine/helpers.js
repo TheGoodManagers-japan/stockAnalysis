@@ -36,6 +36,12 @@ export function normalizeReason(reasonRaw) {
   return r.toLowerCase();
 }
 
+/** Coerce to finite number, returning 0 on NaN/Infinity/null/undefined. */
+export function num(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+
 export function toFinite(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : NaN;
@@ -68,16 +74,8 @@ export function safeJsonParse(text) {
 /* ======================== Ticker helpers ======================== */
 
 import { allTickers } from "../data/tickers.js";
-
-export function normalizeTicker(input) {
-  if (!input) return null;
-  let s = String(input).trim().toUpperCase();
-  if (!/\.T$/.test(s)) {
-    s = s.replace(/\..*$/, "");
-    s = `${s}.T`;
-  }
-  return s;
-}
+import { normalizeTicker } from "../lib/tickers.js";
+export { normalizeTicker };
 
 const allByCode = new Map(allTickers.map((t) => [t.code.toUpperCase(), t]));
 
@@ -121,6 +119,35 @@ export function toTick(v, priceRefOrStock) {
     Number(priceRefOrStock?.tickSize) || inferTickFromPrice(p) || 0.1;
   const q = Math.round((Number(v) || 0) / tick);
   return Number((q * tick).toFixed(6));
+}
+
+/* ======================== Swing low helpers ======================== */
+
+/** Lowest swing low pivot within lookback window. Returns NaN if none found. */
+export function lastSwingLowMin(data, lookback = 12) {
+  if (!Array.isArray(data)) return NaN;
+  const w = data.slice(-lookback);
+  let low = Infinity;
+  for (let i = 2; i < w.length - 2; i++) {
+    const L = num(w[i]?.low ?? 0);
+    const Lp = num(w[i - 1]?.low ?? 0);
+    const Ln = num(w[i + 1]?.low ?? 0);
+    if (L < Lp && L < Ln) low = Math.min(low, L);
+  }
+  return isFinite(low) ? low : NaN;
+}
+
+/** Most recent swing low pivot (scanning backwards). Returns fallback if none found. */
+export function lastSwingLowRecent(data, lookback = 40) {
+  if (!Array.isArray(data) || data.length < 5) return 0;
+  const w = data.slice(-lookback);
+  for (let i = w.length - 3; i >= 2; i--) {
+    const l = Number(w[i]?.low ?? w[i]?.close ?? 0);
+    const l0 = Number(w[i - 1]?.low ?? w[i - 1]?.close ?? 0);
+    const l1 = Number(w[i + 1]?.low ?? w[i + 1]?.close ?? 0);
+    if (l < l0 && l < l1) return l;
+  }
+  return Number(w.at(-1)?.low ?? w.at(-1)?.close ?? 0);
 }
 
 /* ======================== Entry kind extraction ======================== */

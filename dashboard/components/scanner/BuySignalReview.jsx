@@ -4,11 +4,12 @@ import { useState } from "react";
 import Link from "next/link";
 import styles from "./BuySignalReview.module.css";
 import stockCardStyles from "./StockCard.module.css";
+import { VERDICT_CONFIG as BASE_VERDICT, formatSector } from "../../lib/uiHelpers";
 
 const VERDICT_CONFIG = {
-    CONFIRMED: { icon: "✅", label: "CONFIRMED", cssClass: styles.confirmed, cardClass: styles.verdictConfirmed },
-    CAUTION: { icon: "⚠️", label: "CAUTION", cssClass: styles.caution, cardClass: styles.verdictCaution },
-    AVOID: { icon: "❌", label: "AVOID", cssClass: styles.avoid, cardClass: styles.verdictAvoid },
+    CONFIRMED: { ...BASE_VERDICT.CONFIRMED, cssClass: styles.confirmed, cardClass: styles.verdictConfirmed },
+    CAUTION: { ...BASE_VERDICT.CAUTION, cssClass: styles.caution, cardClass: styles.verdictCaution },
+    AVOID: { ...BASE_VERDICT.AVOID, cssClass: styles.avoid, cardClass: styles.verdictAvoid },
 };
 
 export default function BuySignalReview() {
@@ -118,7 +119,7 @@ export default function BuySignalReview() {
                                                     marginTop: 2,
                                                 }}
                                             >
-                                                {r.sector.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                                                {formatSector(r.sector)}
                                             </div>
                                         )}
                                     </div>

@@ -3,52 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import styles from "./EnhancedStockCard.module.css";
-
-const VERDICT_CONFIG = {
-  CONFIRMED: { bg: "rgba(16, 185, 129, 0.15)", color: "#10b981", border: "#10b981" },
-  CAUTION: { bg: "rgba(245, 158, 11, 0.15)", color: "#f59e0b", border: "#f59e0b" },
-  AVOID: { bg: "rgba(239, 68, 68, 0.15)", color: "#ef4444", border: "#ef4444" },
-};
-
-function formatNum(v) {
-  if (v == null) return "-";
-  return Number(v).toLocaleString();
-}
-
-function formatSector(s) {
-  if (!s) return "";
-  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function scoreColor(v) {
-  if (v == null) return "var(--text-muted)";
-  const n = Number(v);
-  if (n >= 7) return "var(--accent-green)";
-  if (n >= 4) return "var(--accent-yellow)";
-  return "var(--accent-red)";
-}
-
-function rrColor(rr) {
-  if (rr == null) return "var(--text-muted)";
-  if (rr >= 2) return "var(--accent-green)";
-  if (rr >= 1) return "var(--accent-yellow)";
-  return "var(--accent-red)";
-}
-
-function computeRR(price, stop, target) {
-  if (!price || !stop || !target) return null;
-  const p = Number(price), s = Number(stop), t = Number(target);
-  const risk = Math.abs(p - s);
-  const reward = Math.abs(t - p);
-  if (risk === 0) return null;
-  return (reward / risk).toFixed(1);
-}
-
-function confidenceColor(c) {
-  if (c >= 70) return "var(--accent-green)";
-  if (c >= 40) return "var(--accent-yellow)";
-  return "var(--accent-red)";
-}
+import AddToPortfolioPopup from "./AddToPortfolioPopup";
+import NewsContextBadge from "../ui/NewsContextBadge";
+import { VERDICT_CONFIG, formatNum, formatSector, scoreColor, rrColor, computeRR, confidenceColor } from "../../lib/uiHelpers";
 
 function cardBorderClass(stock, review) {
   if (review?.verdict === "AVOID") return styles.cardAvoid;
@@ -60,6 +17,7 @@ function cardBorderClass(stock, review) {
 export default function EnhancedStockCard({
   stock,
   review,
+  newsContext,
   isAdded,
   onAddClick,
   onAiReview,
@@ -108,6 +66,37 @@ export default function EnhancedStockCard({
           )}
           {stock.is_buy_now && (
             <span className="badge badge-buy">BUY</span>
+          )}
+          {stock.is_buy_now && stock.other_data_json?.ml_signal_confidence != null && (
+            <span
+              className="badge"
+              style={{
+                background: stock.other_data_json.ml_signal_confidence > 0.65
+                  ? "rgba(0,200,83,0.15)"
+                  : stock.other_data_json.ml_signal_confidence > 0.4
+                  ? "rgba(255,193,7,0.15)"
+                  : "rgba(255,82,82,0.15)",
+                color: stock.other_data_json.ml_signal_confidence > 0.65
+                  ? "var(--accent-green)"
+                  : stock.other_data_json.ml_signal_confidence > 0.4
+                  ? "var(--accent-yellow, #ffc107)"
+                  : "var(--accent-red)",
+                border: "1px solid currentColor",
+                fontSize: "0.65rem",
+              }}
+              title={`ML Signal Confidence: ${Math.round(stock.other_data_json.ml_signal_confidence * 100)}%`}
+            >
+              ML {Math.round(stock.other_data_json.ml_signal_confidence * 100)}%
+            </span>
+          )}
+          {newsContext && newsContext.article_count > 0 && (
+            <NewsContextBadge
+              articleCount={newsContext.article_count}
+              avgSentiment={newsContext.avg_sentiment}
+              maxImpact={newsContext.max_impact}
+              onWatchlist={newsContext.on_watchlist}
+              latestHeadline={newsContext.latest_headline}
+            />
           )}
         </div>
       </div>
@@ -275,7 +264,7 @@ export default function EnhancedStockCard({
               </div>
             )}
           </>
-        ) : stock.is_buy_now ? (
+        ) : (
           <button
             className={styles.analyzeBtn}
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAiReview(stock.ticker_code); }}
@@ -290,7 +279,7 @@ export default function EnhancedStockCard({
               "Analyze with AI"
             )}
           </button>
-        ) : null}
+        )}
       </div>
 
       {/* Footer — add to portfolio */}
@@ -309,108 +298,16 @@ export default function EnhancedStockCard({
 
         {/* Add-to-portfolio popup */}
         {isAddingThis && (
-          <div className={styles.addPopup} ref={popupRef}>
-            {addStatus === "success" ? (
-              <div style={{ padding: 12, textAlign: "center", color: "var(--accent-green)", fontWeight: 600 }}>
-                Added to portfolio!
-              </div>
-            ) : (
-              <form onSubmit={onAddSubmit}>
-                <div style={{ fontWeight: 600, marginBottom: 10, fontSize: "0.85rem" }}>
-                  Add {stock.ticker_code} to Portfolio
-                </div>
-                <div className={styles.addPopupGrid}>
-                  <div>
-                    <label>Entry Price</label>
-                    <input
-                      type="number"
-                      value={addForm.entry_price}
-                      onChange={(e) => setAddForm((f) => ({ ...f, entry_price: e.target.value }))}
-                      required
-                      step="any"
-                    />
-                  </div>
-                  <div>
-                    <label>Shares</label>
-                    <input
-                      type="number"
-                      value={addForm.shares}
-                      onChange={(e) => setAddForm((f) => ({ ...f, shares: e.target.value }))}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label>Stop Loss</label>
-                    <input
-                      type="number"
-                      value={addForm.initial_stop}
-                      onChange={(e) => setAddForm((f) => ({ ...f, initial_stop: e.target.value }))}
-                      step="any"
-                    />
-                  </div>
-                  <div>
-                    <label>Target</label>
-                    <input
-                      type="number"
-                      value={addForm.price_target}
-                      onChange={(e) => setAddForm((f) => ({ ...f, price_target: e.target.value }))}
-                      step="any"
-                    />
-                  </div>
-                  <div>
-                    <label>Type</label>
-                    <select
-                      value={addForm.entry_kind}
-                      onChange={(e) => setAddForm((f) => ({ ...f, entry_kind: e.target.value }))}
-                    >
-                      <option value="DIP">DIP</option>
-                      <option value="BREAKOUT">BREAKOUT</option>
-                      <option value="RETEST">RETEST</option>
-                      <option value="OTHER">OTHER</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label>Date</label>
-                    <input
-                      type="date"
-                      value={addForm.entry_date}
-                      onChange={(e) => setAddForm((f) => ({ ...f, entry_date: e.target.value }))}
-                    />
-                  </div>
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <label>Reason</label>
-                  <input
-                    type="text"
-                    value={addForm.entry_reason}
-                    onChange={(e) => setAddForm((f) => ({ ...f, entry_reason: e.target.value }))}
-                    style={{ width: "100%" }}
-                  />
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={onAddCancel}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn btn-sm btn-primary"
-                    disabled={addStatus === "loading"}
-                  >
-                    {addStatus === "loading" ? "Adding..." : "Add"}
-                  </button>
-                </div>
-                {addStatus === "error" && (
-                  <div style={{ color: "var(--accent-red)", fontSize: "0.78rem", marginTop: 6 }}>
-                    Failed to add. Please try again.
-                  </div>
-                )}
-              </form>
-            )}
-          </div>
+          <AddToPortfolioPopup
+            tickerCode={stock.ticker_code}
+            form={addForm}
+            setForm={setAddForm}
+            status={addStatus}
+            onSubmit={onAddSubmit}
+            onClose={onAddCancel}
+            popupRef={popupRef}
+            styles={styles}
+          />
         )}
       </div>
     </div>

@@ -1,16 +1,25 @@
 import { NextResponse } from "next/server";
 import { getCachedHistory } from "../../../lib/cache.js";
+import { validateTicker } from "../../../lib/validate.js";
 
-// GET /api/history?ticker=7203.T&years=3
+// GET /api/history?ticker=7203.T&years=10
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const ticker = searchParams.get("ticker")?.trim();
-    const years = parseInt(searchParams.get("years") || "3", 10);
+    const years = parseInt(searchParams.get("years") || "10", 10);
 
     if (!ticker) {
       return NextResponse.json(
         { success: false, message: "Ticker is required" },
+        { status: 400 }
+      );
+    }
+
+    const tv = validateTicker(ticker);
+    if (!tv.valid) {
+      return NextResponse.json(
+        { success: false, message: tv.error },
         { status: 400 }
       );
     }

@@ -1,0 +1,320 @@
+/* Today's Report — Daily scan summary layout */
+
+.reportTitleRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.reportTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  margin: 0;
+}
+
+.reportDate {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.scanMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 0.78rem;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.statusCompleted {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--accent-green);
+}
+
+.statusRunning {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--accent-yellow);
+}
+
+.statusFailed {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}
+
+.statusStale {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--accent-yellow);
+}
+
+.staleBanner {
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+  color: var(--accent-yellow);
+}
+
+/* KPI Strip */
+.kpiStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.kpiCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.kpiLabel {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.kpiValue {
+  font-size: 1.25rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* Sections */
+.section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sectionTitle {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-heading);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionCount {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.viewAll {
+  font-size: 0.78rem;
+  color: var(--accent-blue);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.viewAll:hover {
+  text-decoration: underline;
+}
+
+/* Compact rows */
+.compactRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-primary);
+  position: relative;
+}
+
+.compactRow:last-child {
+  border-bottom: none;
+}
+
+.compactRow:hover {
+  background: var(--bg-hover);
+  margin: 0 -18px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+
+.rowTicker {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--accent-blue);
+  text-decoration: none;
+  min-width: 60px;
+}
+
+.rowTicker:hover {
+  text-decoration: underline;
+}
+
+.rowName {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.rowPrice {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.rowBadges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.rowMeta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* Score bar (mini) */
+.scoreBar {
+  width: 50px;
+  height: 5px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.scoreBarFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width var(--transition-fast);
+}
+
+/* Watchlist pills */
+.pillRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: 20px;
+  padding: 4px 12px 4px 10px;
+  text-decoration: none;
+  transition: border-color var(--transition-fast);
+}
+
+.pill:hover {
+  border-color: var(--accent-blue);
+}
+
+.pillTicker {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+}
+
+.pillScore {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.pillDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Space Fund KPI inline */
+.fundKpiRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.fundKpi {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.fundKpiLabel {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.fundKpiValue {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* Empty state */
+.emptyMsg {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 8px 0;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .compactRow {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .rowName {
+    width: 100%;
+    order: 3;
+  }
+
+  .reportTitleRow {
+    flex-direction: column;
+    gap: 4px;
+  }
+}

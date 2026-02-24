@@ -1,56 +1,14 @@
 // dashboard/engine/regime/regimeLabels.js
-// Extracted from public/scripts/core/main.js — regime detection functions
+// Regime detection functions
 // ESM — no browser globals
+
+// Re-export indicators used by orchestrator.js and other consumers
+export { sma, smaArr, calculateATR as calcATR } from "../indicators.js";
+import { smaArr } from "../indicators.js";
 
 /* ======================== Helpers ======================== */
 
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
-
-/**
- * Simple moving average over candle arrays (field = "close" by default).
- */
-export function sma(data, n, field = "close") {
-  if (!Array.isArray(data) || data.length < n) return 0;
-  let s = 0;
-  for (let i = data.length - n; i < data.length; i++) {
-    s += Number(data[i]?.[field]) || 0;
-  }
-  return s / n;
-}
-
-/**
- * SMA series for an array of numbers (returns NaN until window fills).
- */
-export function smaArr(arr, p) {
-  if (arr.length < p) return Array(arr.length).fill(NaN);
-  const out = new Array(arr.length).fill(NaN);
-  let sum = 0;
-  for (let i = 0; i < arr.length; i++) {
-    sum += arr[i];
-    if (i >= p) sum -= arr[i - p];
-    if (i >= p - 1) out[i] = sum / p;
-  }
-  return out;
-}
-
-/* ======================== ATR(p) ======================== */
-
-/**
- * Average True Range with safe fallbacks to 'close'.
- */
-export function calcATR(data, p = 14) {
-  if (!Array.isArray(data) || data.length < p + 1) return 0;
-  const trs = [];
-  for (let i = 1; i < data.length; i++) {
-    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
-    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
-    const pc = Number(data[i - 1]?.close ?? 0);
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-  }
-  const slice = trs.slice(-p);
-  const sum = slice.reduce((a, b) => a + b, 0);
-  return sum / p;
-}
 
 /* ======================== ADX(14) ======================== */
 

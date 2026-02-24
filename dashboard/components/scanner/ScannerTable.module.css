@@ -236,14 +236,6 @@
 
 /* --- Clickable row styles --- */
 
-/* Link overlay covering entire row */
-.rowLink {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  cursor: pointer;
-}
-
 /* Clickable row base */
 .clickableRow {
   position: relative;

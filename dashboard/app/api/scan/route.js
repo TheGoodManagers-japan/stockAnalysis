@@ -1,9 +1,13 @@
 import { query } from "../../../lib/db";
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { fetchStockAnalysis } from "../../../engine/orchestrator.js";
 import { saveScanResult, cacheStockSnapshot, getCachedHistory } from "../../../lib/cache.js";
 import { allTickers } from "../../../data/tickers.js";
 import { analyzeSectorRotation, sectorPoolsJP } from "../../../engine/sector/sectorRotationMonitor.js";
+import { validateTickerArray } from "../../../lib/validate.js";
+import { SCAN_TIMEOUT_MS, STALE_SCAN_MINUTES } from "../../../lib/constants.js";
+import { recordScannerSignal, recordValuePlaySignal, resolveOpenSignals } from "../../../lib/signalTracker.js";
 
 /**
  * Ensure benchmark + sector pool tickers exist in the tickers table.
@@ -28,13 +32,14 @@ async function ensureSectorTickers() {
   }
 }
 
-// In-memory guard against concurrent scans
+// In-memory fast-path guard (DB is source of truth)
 let activeScanId = null;
+
 
 // POST /api/scan — kick off a scan in the background, return immediately
 export async function POST(request) {
   try {
-    // Prevent concurrent scans
+    // Fast-path: in-memory guard
     if (activeScanId) {
       return NextResponse.json(
         { success: false, error: "Scan already running", scanId: activeScanId },
@@ -42,8 +47,35 @@ export async function POST(request) {
       );
     }
 
+    // DB-based lock: check for any recent running scan
+    const running = await query(
+      `SELECT scan_id FROM scan_runs
+       WHERE status = 'running'
+         AND started_at > NOW() - INTERVAL '${STALE_SCAN_MINUTES} minutes'
+       LIMIT 1`
+    );
+    if (running.rows.length > 0) {
+      activeScanId = running.rows[0].scan_id;
+      return NextResponse.json(
+        { success: false, error: "Scan already running", scanId: running.rows[0].scan_id },
+        { status: 409 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
-    const requestedTickers = body.tickers || [];
+    const rawTickers = body.tickers || [];
+
+    // Validate tickers if provided
+    if (rawTickers.length > 0) {
+      const v = validateTickerArray(rawTickers);
+      if (!v.valid) {
+        return NextResponse.json(
+          { success: false, error: v.error },
+          { status: 400 }
+        );
+      }
+    }
+    const requestedTickers = rawTickers;
 
     // Fetch open portfolio holdings for trade management signals
     const portfolioResult = await query(
@@ -78,6 +110,19 @@ export async function POST(request) {
 
     // Fire-and-forget: start scan in background
     (async () => {
+      // Timeout guard: auto-fail if scan runs too long
+      const timeoutTimer = setTimeout(async () => {
+        console.error(`Scan ${scanId} timed out after 30 minutes`);
+        await query(
+          `UPDATE scan_runs
+           SET status = 'failed', finished_at = NOW(),
+               errors = $2, current_ticker = NULL
+           WHERE scan_id = $1 AND status = 'running'`,
+          [scanId, JSON.stringify(["Scan timed out after 30 minutes"])]
+        ).catch(() => {});
+        activeScanId = null;
+      }, SCAN_TIMEOUT_MS);
+
       try {
         let buyCount = 0;
 
@@ -95,6 +140,10 @@ export async function POST(request) {
             stock.triggerType = stock.trigger || null;
             await saveScanResult(scanId, stock);
             await cacheStockSnapshot(stock.ticker, stock);
+
+            // Record paper trades for signal performance tracking
+            await recordScannerSignal(scanId, stock);
+            await recordValuePlaySignal(scanId, stock);
 
             buyCount = runningBuyCount;
 
@@ -132,6 +181,12 @@ export async function POST(request) {
             JSON.stringify(summary),
           ]
         );
+
+        // Invalidate cached pages so they show fresh scan data
+        revalidatePath("/");
+        revalidatePath("/scanner");
+        revalidatePath("/value-plays");
+        revalidatePath("/sectors");
 
         // Run sector rotation analysis using cached history data
         try {
@@ -217,6 +272,38 @@ export async function POST(request) {
         } catch (aiErr) {
           console.error("AI review auto-trigger failed:", aiErr);
         }
+
+        // Auto-persist news watchlist snapshot (non-fatal, no new API calls)
+        try {
+          const base = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3002}`;
+          const wlRes = await fetch(`${base}/api/news/watchlist`, { method: "POST" });
+          const wlData = await wlRes.json();
+          console.log(`News watchlist snapshot: ${wlData.saved || 0} entries saved`);
+        } catch (wlErr) {
+          console.error("News watchlist auto-persist failed:", wlErr);
+        }
+
+        // Resolve open signal trades using snapshot prices (has high/low)
+        try {
+          const latestPrices = await query(
+            `SELECT ticker_code, current_price, high_price, low_price
+             FROM stock_snapshots
+             WHERE snapshot_date = CURRENT_DATE`
+          );
+          const priceMap = new Map();
+          for (const row of latestPrices.rows) {
+            const close = Number(row.current_price);
+            priceMap.set(row.ticker_code, {
+              high: Number(row.high_price) || close,
+              low: Number(row.low_price) || close,
+              close,
+            });
+          }
+          const resolveResult = await resolveOpenSignals((ticker) => priceMap.get(ticker) || null);
+          console.log(`Signal tracker: resolved ${resolveResult.resolved} trades, ${resolveResult.errors.length} errors`);
+        } catch (sigErr) {
+          console.error("Signal tracker resolve failed:", sigErr);
+        }
       } catch (err) {
         console.error("Background scan failed:", err);
         await query(
@@ -229,6 +316,7 @@ export async function POST(request) {
           [scanId, JSON.stringify([err.message])]
         ).catch(() => {});
       } finally {
+        clearTimeout(timeoutTimer);
         activeScanId = null;
       }
     })();
@@ -248,9 +336,47 @@ export async function POST(request) {
   }
 }
 
+// DELETE /api/scan — force-clear stuck scans
+export async function DELETE(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const scanId = searchParams.get("scanId");
+
+    if (scanId) {
+      await query(
+        `UPDATE scan_runs SET status = 'failed', finished_at = NOW(),
+         errors = $2, current_ticker = NULL
+         WHERE scan_id = $1 AND status = 'running'`,
+        [scanId, JSON.stringify(["Manually cancelled"])]
+      );
+    } else {
+      await query(
+        `UPDATE scan_runs SET status = 'failed', finished_at = NOW(),
+         errors = '["Manually cancelled"]', current_ticker = NULL
+         WHERE status = 'running'`
+      );
+    }
+    activeScanId = null;
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err.message },
+      { status: 500 }
+    );
+  }
+}
+
 // GET /api/scan — get scan results (latest by default, or specific scan via ?scanId=)
 export async function GET(request) {
   try {
+    // Auto-cleanup stale scans that have been running > 45 minutes
+    await query(
+      `UPDATE scan_runs SET status = 'failed', finished_at = NOW(),
+       errors = '["Stale scan auto-failed"]', current_ticker = NULL
+       WHERE status = 'running'
+         AND started_at < NOW() - INTERVAL '${STALE_SCAN_MINUTES} minutes'`
+    ).catch(() => {});
+
     const { searchParams } = new URL(request.url);
     const requestedScanId = searchParams.get("scanId");
 

@@ -25,6 +25,9 @@
 // You can replace this with your own exact pools.
 // Format: { [sectorId]: [ { ticker, w?, name? }, ... ] }
 
+import { smaFromCloses } from "../indicators.js";
+import { normalizeTicker } from "../../lib/tickers.js";
+
 const DEFAULT_API_BASE = "";
 
 export const sectorPoolsJP = {
@@ -198,8 +201,7 @@ function weightedMean(values, weights) {
 
 function sma(closes, period) {
   if (!Array.isArray(closes) || closes.length < period) return null;
-  const slice = closes.slice(-period);
-  return mean(slice);
+  return smaFromCloses(closes, period);
 }
 
 function retOver(closes, bars) {
@@ -285,18 +287,7 @@ async function mapLimit(items, limit, mapper) {
 // ------------------------------
 const __historyCache = new Map();
 
-/**
- * Normalize tickers for JP equities:
- * - "7203" -> "7203.T"
- * - "7203.T" -> "7203.T"
- * - "7203.X" -> "7203.T" (strip any suffix then .T)
- */
-function normalizeTickerJP(input) {
-  if (!input) return "";
-  const s = String(input).trim().toUpperCase();
-  if (s.endsWith(".T")) return s;
-  return `${s.replace(/\..*$/, "")}.T`;
-}
+
 
 function normalizeBars(rawBars) {
   if (!Array.isArray(rawBars)) return [];
@@ -344,7 +335,7 @@ async function fetchHistoricalData(
   if (!fetchFn) throw new Error("No fetch function available.");
 
   // ✅ key fix: your API expects ".T"
-  ticker = normalizeTickerJP(ticker);
+  ticker = normalizeTicker(ticker);
 
   const key = `${historyEndpoint}::${ticker}::${years}`;
   if (useCache && __historyCache.has(key)) return __historyCache.get(key);
@@ -638,7 +629,7 @@ export async function analyzeSectorRotation({
   }
 
   // ✅ normalize benchmark too (safe)
-  benchmarkTicker = normalizeTickerJP(benchmarkTicker);
+  benchmarkTicker = normalizeTicker(benchmarkTicker);
 
   // 1) Benchmark snapshot
   const benchBars = await fetchHistoricalData(benchmarkTicker, {
@@ -670,7 +661,7 @@ export async function analyzeSectorRotation({
     if (!members.length) continue;
 
     const snaps = await mapLimit(members, concurrency, async (m) => {
-      const ticker = normalizeTickerJP(m.ticker); // ✅ key fix
+      const ticker = normalizeTicker(m.ticker); // ✅ key fix
       const poolWeight = safeNum(m.w) ?? 1;
 
       try {

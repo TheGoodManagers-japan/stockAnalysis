@@ -415,5 +415,5 @@ label {
 @media (max-width: 768px) {
   .main-content { margin-left: 0; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-  .page-container { padding: 16px; }
+  .page-container { padding: 16px; padding-bottom: 80px; }
 }

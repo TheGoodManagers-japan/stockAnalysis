@@ -1,8 +1,8 @@
 import { query } from "./db.js";
+import { GEMINI_MODEL, AI_REVIEW_BATCH_SIZE, AI_REVIEW_BATCH_DELAY_MS } from "./constants.js";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
-const BATCH_SIZE = 5;
-const BATCH_DELAY_MS = 1000;
+const BATCH_SIZE = AI_REVIEW_BATCH_SIZE;
+const BATCH_DELAY_MS = AI_REVIEW_BATCH_DELAY_MS;
 
 /**
  * Perform AI review of buy signals for a given scan.
@@ -22,7 +22,7 @@ export async function performAiReview(scanId, options = {}) {
   const { tickerFilter, limit } = options;
   const errors = [];
 
-  // 1. Get buy signals
+  // 1. Get signals — when a specific ticker is requested, analyze it regardless of buy status
   let signalQuery = `
     SELECT sr.ticker_code, t.short_name, t.sector,
            sr.current_price, sr.tier, sr.buy_now_reason, sr.trigger_type,
@@ -31,12 +31,14 @@ export async function performAiReview(scanId, options = {}) {
            sr.fundamental_score, sr.valuation_score, sr.value_quadrant
     FROM scan_results sr
     LEFT JOIN tickers t ON t.code = sr.ticker_code
-    WHERE sr.scan_id = $1 AND sr.is_buy_now = true`;
+    WHERE sr.scan_id = $1`;
   const params = [scanId];
 
   if (tickerFilter) {
     signalQuery += ` AND sr.ticker_code = $2`;
     params.push(tickerFilter);
+  } else {
+    signalQuery += ` AND sr.is_buy_now = true`;
   }
 
   signalQuery += ` ORDER BY sr.tier ASC, sr.short_term_score ASC`;
@@ -71,9 +73,10 @@ export async function performAiReview(scanId, options = {}) {
     });
   });
 
-  const signalsToAnalyze = buySignals.rows.filter(
-    (s) => !reviewMap.has(s.ticker_code)
-  );
+  // When a specific ticker is requested, always re-analyze (skip cache)
+  const signalsToAnalyze = tickerFilter
+    ? buySignals.rows
+    : buySignals.rows.filter((s) => !reviewMap.has(s.ticker_code));
 
   // 3. Gather macro context (shared across all signals)
   let macroNews = [];
@@ -130,7 +133,12 @@ export async function performAiReview(scanId, options = {}) {
           await query(
             `INSERT INTO ai_reviews (scan_id, ticker_code, verdict, reason, confidence, full_analysis)
              VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (scan_id, ticker_code) DO NOTHING`,
+             ON CONFLICT (scan_id, ticker_code) DO UPDATE SET
+               verdict = EXCLUDED.verdict,
+               reason = EXCLUDED.reason,
+               confidence = EXCLUDED.confidence,
+               full_analysis = EXCLUDED.full_analysis,
+               created_at = NOW()`,
             [
               scanId,
               rev.ticker_code,

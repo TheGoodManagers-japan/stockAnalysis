@@ -7,7 +7,7 @@ const nextConfig = {
   transpilePackages: [],
 
   // Server-side Node.js config
-  serverExternalPackages: ["pg", "yahoo-finance2"],
+  serverExternalPackages: ["pg", "yahoo-finance2", "@tensorflow/tfjs", "@tensorflow/tfjs-node"],
 
   // Increase API route timeout for long-running scans
   experimental: {

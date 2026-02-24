@@ -1,10 +1,6 @@
 // /scripts/exit_profile.js
 
-/* ---------------- Small numeric helpers (null-safe) ---------------- */
-function num(v) {
-  var x = Number(v);
-  return isNaN(x) ? 0 : x;
-}
+import { num, lastSwingLowMin } from "../helpers.js";
 
 /* ---------------- Core primitives used by profiles ---------------- */
 /** ATR fallback: use stock.atr14 or 0.5% of price, min epsilon. */
@@ -25,22 +21,7 @@ export function highestCloseSince(hist, fromIdx) {
 }
 
 /** Last swing low within lookback window using simple pivot logic. */
-export function lastSwingLow(hist, lookback) {
-  if (!Array.isArray(hist)) return NaN;
-  lookback = Number(lookback) || 12;
-  var w = hist.slice(-lookback);
-  var low = Infinity;
-  for (var i = 2; i < w.length - 2; i++) {
-    var wi = w[i] || {};
-    var wim1 = w[i - 1] || {};
-    var wip1 = w[i + 1] || {};
-    var L = num(wi.low);
-    var Lp = num(wim1.low);
-    var Ln = num(wip1.low);
-    if (L < Lp && L < Ln) low = Math.min(low, L);
-  }
-  return isFinite(low) ? low : NaN;
-}
+export const lastSwingLow = lastSwingLowMin;
 
 /** Simple moving average over `field` (defaults to 'close'). */
 export function maSMA(hist, nBars, field) {

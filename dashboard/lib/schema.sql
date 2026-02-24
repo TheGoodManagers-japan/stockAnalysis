@@ -125,12 +125,18 @@ CREATE TABLE IF NOT EXISTS scan_results (
     liq_vol                 NUMERIC(20,2),
     analytics_json          JSONB,
     other_data_json         JSONB,
+    is_value_candidate      BOOLEAN DEFAULT FALSE,
+    value_play_score        NUMERIC(5,1),
+    value_play_grade        TEXT,
+    value_play_class        TEXT,
+    value_play_json         JSONB,
     created_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
 CREATE INDEX IF NOT EXISTS idx_scan_results_ticker ON scan_results(ticker_code, scan_date DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_results_buy ON scan_results(is_buy_now, scan_date DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_results_value_play ON scan_results(is_value_candidate, scan_date DESC);
 
 -- 6. SECTOR ROTATION SNAPSHOTS
 CREATE TABLE IF NOT EXISTS sector_rotation_snapshots (
@@ -364,3 +370,129 @@ CREATE TABLE IF NOT EXISTS ai_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_reviews_scan ON ai_reviews(scan_id);
 CREATE INDEX IF NOT EXISTS idx_ai_reviews_ticker ON ai_reviews(ticker_code, created_at DESC);
+
+-- ==========================================
+-- SPACE FUND TABLES
+-- ==========================================
+
+-- 19. SPACE FUND MEMBERS (curated stock basket with target weights)
+CREATE TABLE IF NOT EXISTS space_fund_members (
+    id              BIGSERIAL PRIMARY KEY,
+    ticker_code     TEXT NOT NULL,
+    short_name      TEXT,
+    currency        TEXT NOT NULL DEFAULT 'USD',
+    exchange        TEXT NOT NULL DEFAULT 'US',
+    target_weight   NUMERIC(6,4) NOT NULL,
+    category        TEXT,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(ticker_code)
+);
+
+-- 20. SPACE FUND TRANSACTIONS (DCA purchases, buys, sells)
+CREATE TABLE IF NOT EXISTS space_fund_transactions (
+    id                  BIGSERIAL PRIMARY KEY,
+    ticker_code         TEXT NOT NULL REFERENCES space_fund_members(ticker_code),
+    transaction_type    TEXT NOT NULL,
+    transaction_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+    shares              NUMERIC(14,4) NOT NULL,
+    price_per_share     NUMERIC(14,4) NOT NULL,
+    total_amount        NUMERIC(16,4) NOT NULL,
+    currency            TEXT NOT NULL DEFAULT 'USD',
+    fees                NUMERIC(10,4) DEFAULT 0,
+    notes               TEXT,
+    dca_month           TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sf_transactions_ticker ON space_fund_transactions(ticker_code, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sf_transactions_date ON space_fund_transactions(transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sf_transactions_dca ON space_fund_transactions(dca_month);
+
+-- 21. SPACE FUND SNAPSHOTS (daily fund valuation for equity curve)
+CREATE TABLE IF NOT EXISTS space_fund_snapshots (
+    id                  BIGSERIAL PRIMARY KEY,
+    snapshot_date       DATE NOT NULL DEFAULT CURRENT_DATE,
+    total_value         NUMERIC(20,4),
+    total_cost          NUMERIC(20,4),
+    unrealized_pnl      NUMERIC(20,4),
+    unrealized_pnl_pct  NUMERIC(8,4),
+    usd_jpy_rate        NUMERIC(10,4),
+    holdings_json       JSONB,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sf_snapshots_date ON space_fund_snapshots(snapshot_date DESC);
+
+-- 22. SIGNAL TRADES (paper trading: tracks every signal's performance)
+CREATE TABLE IF NOT EXISTS signal_trades (
+    id                  BIGSERIAL PRIMARY KEY,
+    source              TEXT NOT NULL,              -- 'scanner' | 'value_play' | 'space_fund'
+    ticker_code         TEXT NOT NULL,
+    entry_date          DATE NOT NULL DEFAULT CURRENT_DATE,
+    entry_price         NUMERIC(14,4) NOT NULL,
+    stop_loss           NUMERIC(14,4),
+    price_target        NUMERIC(14,4),
+    time_horizon_days   INTEGER,                    -- NULL except value plays
+    trigger_type        TEXT,                       -- DIP/BREAKOUT/etc | DEEP_VALUE/QARP/etc | DCA_BUY
+    status              TEXT NOT NULL DEFAULT 'OPEN',
+    exit_date           DATE,
+    exit_price          NUMERIC(14,4),
+    exit_reason         TEXT,                       -- TARGET_HIT | STOP_HIT | TIME_EXPIRED
+    pnl_pct             NUMERIC(8,4),
+    r_multiple          NUMERIC(8,4),
+    scan_run_id         UUID REFERENCES scan_runs(scan_id) ON DELETE SET NULL,
+    source_tx_id        BIGINT,                     -- informal FK to space_fund_transactions.id
+    metadata            JSONB,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Partial unique index: one OPEN trade per ticker per source
+CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_trades_open_dedup
+    ON signal_trades(source, ticker_code) WHERE status = 'OPEN';
+CREATE INDEX IF NOT EXISTS idx_signal_trades_status ON signal_trades(status, source);
+CREATE INDEX IF NOT EXISTS idx_signal_trades_ticker ON signal_trades(ticker_code, entry_date DESC);
+
+-- 23. ML MODELS (persisted model weights for all ML models)
+CREATE TABLE IF NOT EXISTS ml_models (
+    id              BIGSERIAL PRIMARY KEY,
+    model_name      TEXT NOT NULL,
+    model_version   INTEGER NOT NULL DEFAULT 1,
+    architecture    JSONB NOT NULL,
+    weights_json    JSONB NOT NULL,
+    normalization   JSONB,
+    metrics         JSONB,
+    training_samples INTEGER,
+    trained_at      TIMESTAMPTZ DEFAULT NOW(),
+    is_active       BOOLEAN DEFAULT TRUE,
+    UNIQUE(model_name, model_version)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_models_active ON ml_models(model_name, is_active);
+
+-- 24. ML RANKINGS (daily stock rankings from the ranking model)
+CREATE TABLE IF NOT EXISTS ml_rankings (
+    id                      BIGSERIAL PRIMARY KEY,
+    scan_id                 UUID REFERENCES scan_runs(scan_id),
+    ticker_code             TEXT NOT NULL,
+    ranking_date            DATE NOT NULL DEFAULT CURRENT_DATE,
+    predicted_return_10d    NUMERIC(8,4),
+    rank_position           INTEGER,
+    model_version           INTEGER,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(ticker_code, ranking_date)
+);
+CREATE INDEX IF NOT EXISTS idx_ml_rankings_date ON ml_rankings(ranking_date DESC, rank_position ASC);
+
+-- 25. PREDICTIONS TABLE: Add multi-horizon + uncertainty columns (Phase 3)
+ALTER TABLE predictions
+  ADD COLUMN IF NOT EXISTS predicted_max_5d NUMERIC(14,4),
+  ADD COLUMN IF NOT EXISTS predicted_max_10d NUMERIC(14,4),
+  ADD COLUMN IF NOT EXISTS predicted_max_20d NUMERIC(14,4),
+  ADD COLUMN IF NOT EXISTS uncertainty_5d NUMERIC(8,4),
+  ADD COLUMN IF NOT EXISTS uncertainty_10d NUMERIC(8,4),
+  ADD COLUMN IF NOT EXISTS uncertainty_20d NUMERIC(8,4),
+  ADD COLUMN IF NOT EXISTS uncertainty_30d NUMERIC(8,4),
+  ADD COLUMN IF NOT EXISTS model_version INTEGER;

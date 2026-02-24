@@ -1,4 +1,5 @@
-// trchFundValAnalysis.js (JP-only, value-first, patched)
+// techFundValAnalysis.js (JP-only, value-first, patched)
+import { num as n } from "../helpers.js";
 
 /* =============================================================================
  * Helpers
@@ -18,7 +19,7 @@ export function toRatio(x) {
   return v > 10 ? v / 100 : v;
 }
 
-function clamp(v, lo, hi) {
+export function clamp(v, lo, hi) {
   const n = Number.isFinite(v) ? v : lo;
   return Math.max(lo, Math.min(hi, n));
 }
@@ -30,7 +31,7 @@ function wins(v, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function nz(v, d = 0) {
+export function nz(v, d = 0) {
   return Number.isFinite(v) ? v : d;
 }
 
@@ -38,7 +39,7 @@ function nz(v, d = 0) {
  * Sets / sector groupings
  * =============================================================================
  */
-const HIGH_GROWTH_SECTORS = new Set([
+export const HIGH_GROWTH_SECTORS = new Set([
   // Growth-leaning groups (expanded to match your universe labels)
   "Technology",
   "Communication Services", // synonym for "Communications"
@@ -52,7 +53,7 @@ const HIGH_GROWTH_SECTORS = new Set([
   "Technology Hardware",
   "Semiconductors",
 ]);
-const DIVIDEND_FOCUS_SECTORS = new Set([
+export const DIVIDEND_FOCUS_SECTORS = new Set([
   // More defensive / income-oriented
   "Utilities",
   "Electric Power",
@@ -63,7 +64,7 @@ const DIVIDEND_FOCUS_SECTORS = new Set([
   "Banking",
   "Insurance",
 ]);
-const FINANCIAL_SECTORS = new Set([
+export const FINANCIAL_SECTORS = new Set([
   // Anything we should treat with financials logic (ignore PS, D/E, etc.)
   "Financial Services",
   "Banking",
@@ -80,8 +81,6 @@ const FINANCIAL_SECTORS = new Set([
  * =============================================================================
  */
 export function getQualityScore(stock) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-
   const sector = stock?.sector || "";
   const isHGrowth = HIGH_GROWTH_SECTORS.has(sector);
   const isDivFocus = DIVIDEND_FOCUS_SECTORS.has(sector);
@@ -175,8 +174,6 @@ export const getAdvancedFundamentalScore = getQualityScore; // alias
  * =============================================================================
  */
 export function getValuationScore(stock, weightOverrides = {}) {
-  const n = (v) => (Number.isFinite(v) ? v : 0);
-
   const sector = stock?.sector || "";
   const isHG = HIGH_GROWTH_SECTORS.has(sector);
   const isVAL = DIVIDEND_FOCUS_SECTORS.has(sector) || ["Utilities","Real Estate"].includes(sector);

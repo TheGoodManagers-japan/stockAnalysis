@@ -34,7 +34,7 @@ import {
   calcATR,
 } from "./regime/regimeLabels.js";
 
-import { enrichForTechnicalScore } from "./scoring/enrichForTechnicalScore.js";
+import { enrichForTechnicalScore, computeTechnicalScore } from "./scoring/enrichForTechnicalScore.js";
 
 import {
   scanAnalytics,
@@ -61,9 +61,9 @@ import {
   classifyValueQuadrant,
 } from "./analysis/techFundValAnalysis.js";
 
-/* ======================== Constants ======================== */
+import { analyzeValuePlay } from "./analysis/valuePlay.js";
 
-const DEFAULT_REGIME_TICKER = "1306.T"; // Nikkei 225 ETF proxy
+import { DEFAULT_REGIME_TICKER } from "../lib/constants.js";
 
 /* ======================== Main scan ======================== */
 
@@ -317,7 +317,7 @@ export async function fetchStockAnalysis({
       enrichForTechnicalScore(stock);
 
       // 4) Scores (value-first JP)
-      stock.technicalScore = 0;
+      stock.technicalScore = computeTechnicalScore(stock);
       stock.fundamentalScore = getAdvancedFundamentalScore(stock);
       stock.valuationScore = getValuationScore(stock);
       stock.tier = getNumericTier(
@@ -333,6 +333,14 @@ export async function fetchStockAnalysis({
       const quad = classifyValueQuadrant(stock);
       stock.valueQuadrant = quad.label;
       stock.valueVerdict = quad.verdict;
+
+      // 4b) Value play analysis
+      const vp = analyzeValuePlay(stock, historicalData);
+      stock.valuePlay = vp;
+      stock.isValueCandidate = vp.isValueCandidate;
+      stock.valuePlayScore = vp.valuePlayScore;
+      stock.valuePlayGrade = vp.grade;
+      stock.valuePlayClassification = vp.classification;
 
       // 5) Sentiment horizons
       const horizons = getComprehensiveMarketSentiment(stock, historicalData);

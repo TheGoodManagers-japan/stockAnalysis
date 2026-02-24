@@ -8,6 +8,9 @@ import { fetchStockAnalysis } from "../engine/orchestrator.js";
 import { saveScanResult, cacheStockSnapshot } from "../lib/cache.js";
 import { query } from "../lib/db.js";
 import { predictForTicker } from "../engine/ml/predictions.js";
+import { predictBatch as predictSignalQuality, disposeModel as disposeSignalQualityModel } from "../engine/ml/signalQuality.js";
+import { rankStocks, disposeModel as disposeRankerModel } from "../engine/ml/stockRanker.js";
+import { predictBatch as predictLstmV2, disposeModel as disposeLstmV2Model } from "../engine/ml/lstmV2.js";
 import { allTickers } from "../data/tickers.js";
 
 const DASHBOARD_URL = "https://info-27641--dashboard.modal.run";
@@ -62,7 +65,7 @@ async function runNewsPipeline() {
 }
 
 // ── Discord Morning Report ─────────────────────────────────────
-async function sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount, elapsed, newsReport }) {
+async function sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount, mlScoredCount = 0, mlRankedCount = 0, elapsed, newsReport }) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn("[CRON] DISCORD_WEBHOOK_URL not set, skipping alert.");
@@ -79,7 +82,7 @@ async function sendMorningReport({ results, myPortfolio, count, buyCount, errors
     fields: [
       {
         name: "Scan Summary",
-        value: `${count} scanned | **${buyCount} buys** | ${errors.length} errors | ${predCount} predictions\nCompleted in ${elapsed} min`,
+        value: `${count} scanned | **${buyCount} buys** | ${errors.length} errors | ${predCount} predictions | ${mlScoredCount} ML scored | ${mlRankedCount} ranked\nCompleted in ${elapsed} min`,
         inline: false,
       },
     ],
@@ -277,10 +280,7 @@ async function runScan() {
     const scanElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
     console.log(`[CRON] Scan complete in ${scanElapsed} min. ${count} tickers, ${buyCount} buys, ${errors.length} errors.`);
 
-    // --- Run ML predictions for priority stocks ---
-    console.log(`[CRON] Running ML predictions...`);
-
-    // Priority: buy signals > open positions > tier 1-2
+    // --- Build prediction ticker set (for legacy fallback) ---
     const predictionTickers = new Set();
     for (const r of results) {
       if (r.isBuyNow) predictionTickers.add(r.ticker);
@@ -291,47 +291,241 @@ async function runScan() {
     for (const r of results) {
       if (r.tier <= 2 && predictionTickers.size < 100) predictionTickers.add(r.ticker);
     }
-
     let predCount = 0;
-    for (const ticker of predictionTickers) {
-      try {
-        // Fetch historical data for the ticker
-        const histResult = await query(
-          `SELECT date, close, volume FROM price_history
-           WHERE ticker_code = $1 ORDER BY date ASC`,
-          [ticker]
-        );
-        if (histResult.rows.length < 60) continue;
 
-        const histData = histResult.rows.map((r) => ({
-          price: Number(r.close),
-          volume: Number(r.volume),
+    // --- ML Signal Quality Scoring (Phase 1) ---
+    let mlScoredCount = 0;
+    try {
+      const buySignals = results.filter((r) => r.isBuyNow);
+      if (buySignals.length > 0) {
+        console.log(`[CRON] Running ML signal quality scoring for ${buySignals.length} buy signals...`);
+
+        // Build scan_results-shaped objects for the feature extractor
+        const scanResultRows = buySignals.map((r) => ({
+          ticker_code: r.ticker,
+          current_price: r.currentPrice,
+          fundamental_score: r.fundamentalScore,
+          valuation_score: r.valuationScore,
+          technical_score: r.technicalScore,
+          tier: r.tier,
+          short_term_score: r.shortTermScore,
+          long_term_score: r.longTermScore,
+          short_term_conf: r.shortTermConf,
+          long_term_conf: r.longTermConf,
+          trigger_type: r.triggerType || r.trigger,
+          market_regime: r.marketRegime,
+          liq_pass: r.liqPass,
+          liq_adv: r.liqAdv,
+          value_play_score: r.valuePlayScore,
+          stop_loss: r.stopLoss,
+          price_target: r.priceTarget,
+          flip_bars_ago: r.flipBarsAgo,
+          golden_cross_bars_ago: r.goldenCrossBarsAgo,
+          other_data_json: {
+            rsi14: r.rsi14,
+            macd: r.macd,
+            macdSignal: r.macdSignal,
+            atr14: r.atr14,
+            peRatio: r.peRatio,
+            pbRatio: r.pbRatio,
+            dividendYield: r.dividendYield,
+            fiftyTwoWeekHigh: r.fiftyTwoWeekHigh,
+            fiftyTwoWeekLow: r.fiftyTwoWeekLow,
+            evToEbitda: r.evToEbitda,
+            fcfYieldPct: r.fcfYieldPct,
+          },
         }));
 
-        const pred = await predictForTicker(histData, ticker);
-        if (pred.predictedPrice) {
-          await query(
-            `INSERT INTO predictions
-             (scan_id, ticker_code, prediction_date, predicted_max_30d,
-              predicted_pct_change, confidence, model_type, current_price)
-             VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7)
-             ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
-               scan_id = EXCLUDED.scan_id,
-               predicted_max_30d = EXCLUDED.predicted_max_30d,
-               predicted_pct_change = EXCLUDED.predicted_pct_change,
-               confidence = EXCLUDED.confidence,
-               model_type = EXCLUDED.model_type,
-               current_price = EXCLUDED.current_price`,
-            [scanId, ticker, pred.predictedPrice, pred.pctChange, pred.confidence, pred.method, histData[histData.length - 1].price]
-          );
-          predCount++;
+        const confidenceMap = await predictSignalQuality(scanResultRows);
+
+        // Update scan_results with ML confidence
+        for (const [ticker, confidence] of confidenceMap) {
+          try {
+            await query(
+              `UPDATE scan_results
+               SET other_data_json = COALESCE(other_data_json, '{}'::jsonb) || $2::jsonb
+               WHERE scan_id = $1 AND ticker_code = $3`,
+              [scanId, JSON.stringify({ ml_signal_confidence: confidence }), ticker]
+            );
+            mlScoredCount++;
+          } catch (err) {
+            console.warn(`[CRON] ML score update failed for ${ticker}: ${err.message}`);
+          }
         }
-      } catch (err) {
-        console.warn(`[CRON] Prediction failed for ${ticker}: ${err.message}`);
+
+        console.log(`[CRON] ML signal quality: scored ${mlScoredCount}/${buySignals.length} buy signals.`);
       }
+    } catch (err) {
+      console.warn(`[CRON] ML signal quality scoring failed: ${err.message}\n${err.stack}`);
+    } finally {
+      disposeSignalQualityModel();
     }
 
-    console.log(`[CRON] Predictions complete: ${predCount}/${predictionTickers.size} tickers.`);
+    // --- ML Stock Ranking (Phase 2) ---
+    let mlRankedCount = 0;
+    try {
+      console.log(`[CRON] Running ML stock ranking for ${results.length} stocks...`);
+
+      // Build scan_results-shaped objects for all stocks
+      const allScanRows = results.map((r) => ({
+        ticker_code: r.ticker,
+        current_price: r.currentPrice,
+        fundamental_score: r.fundamentalScore,
+        valuation_score: r.valuationScore,
+        technical_score: r.technicalScore,
+        tier: r.tier,
+        short_term_score: r.shortTermScore,
+        long_term_score: r.longTermScore,
+        short_term_conf: r.shortTermConf,
+        long_term_conf: r.longTermConf,
+        trigger_type: r.triggerType || r.trigger,
+        market_regime: r.marketRegime,
+        liq_pass: r.liqPass,
+        liq_adv: r.liqAdv,
+        value_play_score: r.valuePlayScore,
+        stop_loss: r.stopLoss,
+        price_target: r.priceTarget,
+        flip_bars_ago: r.flipBarsAgo,
+        golden_cross_bars_ago: r.goldenCrossBarsAgo,
+        is_buy_now: r.isBuyNow,
+        other_data_json: {
+          rsi14: r.rsi14, macd: r.macd, macdSignal: r.macdSignal,
+          atr14: r.atr14, peRatio: r.peRatio, pbRatio: r.pbRatio,
+          dividendYield: r.dividendYield, fiftyTwoWeekHigh: r.fiftyTwoWeekHigh,
+          fiftyTwoWeekLow: r.fiftyTwoWeekLow, evToEbitda: r.evToEbitda,
+          fcfYieldPct: r.fcfYieldPct, epsGrowthRate: r.epsGrowthRate,
+          shareholderYieldPct: r.shareholderYieldPct,
+        },
+        analytics_json: r.analyticsJson || {},
+      }));
+
+      const ranked = await rankStocks(allScanRows);
+
+      if (ranked.length > 0) {
+        // Get model version for the record
+        const modelInfo = ranked.length > 0 ? 1 : null;
+
+        // Batch insert rankings
+        for (const item of ranked) {
+          try {
+            await query(
+              `INSERT INTO ml_rankings
+                 (scan_id, ticker_code, ranking_date, predicted_return_10d, rank_position, model_version)
+               VALUES ($1, $2, CURRENT_DATE, $3, $4, $5)
+               ON CONFLICT (ticker_code, ranking_date) DO UPDATE SET
+                 scan_id = EXCLUDED.scan_id,
+                 predicted_return_10d = EXCLUDED.predicted_return_10d,
+                 rank_position = EXCLUDED.rank_position,
+                 model_version = EXCLUDED.model_version`,
+              [scanId, item.ticker, item.predictedReturn, item.rank, modelInfo]
+            );
+            mlRankedCount++;
+          } catch (err) {
+            console.warn(`[CRON] Ranking insert failed for ${item.ticker}: ${err.message}`);
+          }
+        }
+        console.log(`[CRON] ML stock ranking: ranked ${mlRankedCount}/${results.length} stocks.`);
+      } else {
+        console.log(`[CRON] ML stock ranking: no trained model available, skipping.`);
+      }
+    } catch (err) {
+      console.warn(`[CRON] ML stock ranking failed: ${err.message}\n${err.stack}`);
+    } finally {
+      disposeRankerModel();
+    }
+
+    // --- ML LSTM v2 Multi-Horizon Predictions (Phase 3) ---
+    let lstmPredCount = 0;
+    try {
+      console.log(`[CRON] Running LSTM v2 predictions for all stocks...`);
+
+      const predResults = await predictLstmV2(allTickers);
+
+      if (predResults && predResults.size > 0) {
+        for (const [ticker, pred] of predResults) {
+          try {
+            await query(
+              `INSERT INTO predictions
+                 (scan_id, ticker_code, prediction_date, predicted_max_30d,
+                  predicted_pct_change, confidence, model_type, current_price,
+                  predicted_max_5d, predicted_max_10d, predicted_max_20d,
+                  uncertainty_5d, uncertainty_10d, uncertainty_20d, uncertainty_30d,
+                  model_version)
+               VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 'lstm_v2', $6,
+                       $7, $8, $9, $10, $11, $12, $13, $14)
+               ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
+                 scan_id = EXCLUDED.scan_id,
+                 predicted_max_30d = EXCLUDED.predicted_max_30d,
+                 predicted_pct_change = EXCLUDED.predicted_pct_change,
+                 confidence = EXCLUDED.confidence,
+                 model_type = EXCLUDED.model_type,
+                 current_price = EXCLUDED.current_price,
+                 predicted_max_5d = EXCLUDED.predicted_max_5d,
+                 predicted_max_10d = EXCLUDED.predicted_max_10d,
+                 predicted_max_20d = EXCLUDED.predicted_max_20d,
+                 uncertainty_5d = EXCLUDED.uncertainty_5d,
+                 uncertainty_10d = EXCLUDED.uncertainty_10d,
+                 uncertainty_20d = EXCLUDED.uncertainty_20d,
+                 uncertainty_30d = EXCLUDED.uncertainty_30d,
+                 model_version = EXCLUDED.model_version`,
+              [
+                scanId, ticker,
+                pred.predicted_max_30d, pred.predicted_pct_change, pred.confidence,
+                pred.current_price,
+                pred.predicted_max_5d, pred.predicted_max_10d, pred.predicted_max_20d,
+                pred.uncertainty_5d, pred.uncertainty_10d, pred.uncertainty_20d, pred.uncertainty_30d,
+                pred.model_version,
+              ]
+            );
+            lstmPredCount++;
+          } catch (err) {
+            console.warn(`[CRON] LSTM v2 prediction insert failed for ${ticker}: ${err.message}`);
+          }
+        }
+        console.log(`[CRON] LSTM v2 predictions: ${lstmPredCount}/${predResults.size} stocks.`);
+      } else {
+        console.log(`[CRON] LSTM v2: no trained model available, falling back to legacy predictions.`);
+        // Fall back to legacy per-ticker predictions
+        for (const ticker of predictionTickers) {
+          try {
+            const histResult = await query(
+              `SELECT date, close, volume FROM price_history
+               WHERE ticker_code = $1 ORDER BY date ASC`,
+              [ticker]
+            );
+            if (histResult.rows.length < 60) continue;
+            const histData = histResult.rows.map((r) => ({
+              price: Number(r.close), volume: Number(r.volume),
+            }));
+            const pred = await predictForTicker(histData, ticker);
+            if (pred.predictedPrice) {
+              await query(
+                `INSERT INTO predictions
+                   (scan_id, ticker_code, prediction_date, predicted_max_30d,
+                    predicted_pct_change, confidence, model_type, current_price)
+                 VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7)
+                 ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
+                   scan_id = EXCLUDED.scan_id,
+                   predicted_max_30d = EXCLUDED.predicted_max_30d,
+                   predicted_pct_change = EXCLUDED.predicted_pct_change,
+                   confidence = EXCLUDED.confidence,
+                   model_type = EXCLUDED.model_type,
+                   current_price = EXCLUDED.current_price`,
+                [scanId, ticker, pred.predictedPrice, pred.pctChange, pred.confidence, pred.method, histData[histData.length - 1].price]
+              );
+              lstmPredCount++;
+            }
+          } catch (err) {
+            console.warn(`[CRON] Legacy prediction failed for ${ticker}: ${err.message}`);
+          }
+        }
+        console.log(`[CRON] Legacy predictions: ${lstmPredCount}/${predictionTickers.size} tickers.`);
+      }
+    } catch (err) {
+      console.warn(`[CRON] LSTM v2 predictions failed: ${err.message}\n${err.stack}`);
+    } finally {
+      disposeLstmV2Model();
+    }
 
     // --- Snapshot portfolio ---
     try {
@@ -391,7 +585,7 @@ async function runScan() {
     const totalElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
     console.log(`[CRON] All done in ${totalElapsed} min.`);
 
-    await sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount, elapsed: totalElapsed, newsReport });
+    await sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount: lstmPredCount || predCount, mlScoredCount, mlRankedCount, elapsed: totalElapsed, newsReport });
     process.exit(0);
   } catch (err) {
     console.error(`[CRON] Fatal error:`, err);

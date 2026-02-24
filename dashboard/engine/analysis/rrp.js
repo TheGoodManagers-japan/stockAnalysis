@@ -12,8 +12,15 @@
 // }
 //
 // Notes:
-// - Keep this conservative; it is evaluated only if earlier playbooks didn’t
+// - Keep this conservative; it is evaluated only if earlier playbooks didn't
 //   produce a candidate. The orchestrator will still run analyzeRR() and guards.
+
+import {
+  findResistancesAbove as _findResAbove,
+  findSupportsBelow,
+} from "./entry/entryHelpers/levels.js";
+
+const RRP_LEVELS_CFG = { resistanceLookbackBars: 60, include52wAsResistance: true };
 
 export function detectRRProbation(stock, data, cfg = {}, U = {}) {
   const out = baseOut();
@@ -107,9 +114,7 @@ export function detectRRProbation(stock, data, cfg = {}, U = {}) {
 
     // ---- Support / reclaim quality (need one)
     const supports =
-      (U.findSupportsBelow
-        ? U.findSupportsBelow(data, px)
-        : findSupportsBelowLocal(data, px)) || [];
+      (U.findSupportsBelow || findSupportsBelow)(data, px) || [];
     const stopFromSwing = Number.isFinite(supports?.[0])
       ? supports[0] - 0.4 * atr
       : NaN;
@@ -146,7 +151,7 @@ export function detectRRProbation(stock, data, cfg = {}, U = {}) {
     // ---- Resistances / target promotion logic
     const resListRaw = U.findResistancesAbove
       ? U.findResistancesAbove(data, px, stock)
-      : findResistancesAboveLocal(data, px, stock, atr);
+      : _findResAbove(data, px, stock, RRP_LEVELS_CFG);
     const resList = Array.isArray(resListRaw) ? resListRaw.slice() : [];
     let nearestRes = Number.isFinite(resList[0]) ? resList[0] : null;
 
@@ -286,62 +291,3 @@ function calcBounceStrengthATR(data, atr) {
   return (px - recentLow) / Math.max(atr, 1e-6);
 }
 
-function findSupportsBelowLocal(data, px) {
-  const downs = [];
-  const win = data.slice(-60);
-  for (let i = 2; i < win.length - 2; i++) {
-    const l = Number(win[i].low) || 0;
-    if (
-      l < px &&
-      l < (Number(win[i - 1].low) || 0) &&
-      l < (Number(win[i + 1].low) || 0)
-    )
-      downs.push(l);
-  }
-  const uniq = Array.from(
-    new Set(downs.map((v) => +Number(v).toFixed(2)))
-  ).sort((a, b) => b - a);
-  return uniq;
-}
-
-function findResistancesAboveLocal(data, px, stock, atr) {
-  const ups = [];
-  const win = data.slice(-60);
-  for (let i = 2; i < win.length - 2; i++) {
-    const h = Number(win[i].high) || 0;
-    if (
-      h > px &&
-      h > (Number(win[i - 1].high) || 0) &&
-      h > (Number(win[i + 1].high) || 0)
-    )
-      ups.push(h);
-  }
-  const yHigh = Number(stock?.fiftyTwoWeekHigh) || 0;
-  if (yHigh > px) ups.push(yHigh);
-  // cluster nearby lids to avoid micro-resistances
-  return clusterLevelsLocal(ups, atr, 0.3);
-}
-
-function clusterLevelsLocal(levels, atrVal, thMul = 0.3) {
-  const th = thMul * Math.max(atrVal, 1e-9);
-  const uniq = Array.from(
-    new Set(levels.map((v) => +Number(v).toFixed(2)))
-  ).sort((a, b) => a - b);
-  const out = [];
-  let bucket = [];
-  for (let i = 0; i < uniq.length; i++) {
-    if (!bucket.length || Math.abs(uniq[i] - bucket[bucket.length - 1]) <= th)
-      bucket.push(uniq[i]);
-    else {
-      out.push(avg(bucket));
-      bucket = [uniq[i]];
-    }
-  }
-  if (bucket.length) out.push(avg(bucket));
-  return out;
-}
-function avg(arr) {
-  return arr.length
-    ? arr.reduce((a, b) => a + (Number(b) || 0), 0) / arr.length
-    : 0;
-}

@@ -1,13 +1,14 @@
 import { query } from "../../../lib/db";
 import Link from "next/link";
-import PriceChart from "../../../components/stock/PriceChart";
-import ScanHistoryChart from "../../../components/stock/ScanHistoryChart";
+import { PriceChart, ScanHistoryChart } from "./Charts";
+import AIAnalysisSection from "../../../components/stock/AIAnalysisSection";
+import { formatNum } from "../../../lib/uiHelpers";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 600;
 
 async function getStockDetail(tickerCode) {
   try {
-    const [scanResult, history, snapshot, news, prediction, recentNews] = await Promise.all([
+    const [scanResult, history, snapshot, news, prediction, recentNews, aiReview] = await Promise.all([
       query(
         `SELECT sr.*, t.short_name, t.sector
          FROM scan_results sr
@@ -51,6 +52,14 @@ async function getStockDetail(tickerCode) {
          LIMIT 10`,
         [tickerCode]
       ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT verdict, reason as verdict_reason, confidence, full_analysis
+         FROM ai_reviews
+         WHERE ticker_code = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [tickerCode]
+      ).catch(() => ({ rows: [] })),
     ]);
 
     return {
@@ -60,16 +69,13 @@ async function getStockDetail(tickerCode) {
       news: news.rows[0] || null,
       prediction: prediction.rows[0] || null,
       recentNews: recentNews.rows || [],
+      aiReview: aiReview.rows[0] || null,
     };
   } catch {
-    return { scan: null, history: [], snapshot: null, news: null, prediction: null };
+    return { scan: null, history: [], snapshot: null, news: null, prediction: null, recentNews: [], aiReview: null };
   }
 }
 
-function formatNum(v) {
-  if (v == null) return "-";
-  return Number(v).toLocaleString();
-}
 
 function ScoreRow({ label, value, max = 10 }) {
   const pct = value != null ? (Number(value) / max) * 100 : 0;
@@ -102,7 +108,7 @@ function ScoreRow({ label, value, max = 10 }) {
 export default async function StockDetailPage({ params }) {
   const { ticker } = await params;
   const tickerCode = decodeURIComponent(ticker);
-  const { scan, history, snapshot, news, prediction, recentNews } = await getStockDetail(tickerCode);
+  const { scan, history, snapshot, news, prediction, recentNews, aiReview } = await getStockDetail(tickerCode);
 
   return (
     <>
@@ -204,32 +210,84 @@ export default async function StockDetailPage({ params }) {
 
         {/* ML Prediction */}
         <div className="card">
-          <div className="card-title mb-md">ML Prediction (30d)</div>
+          <div className="card-title mb-md">
+            ML Price Forecast
+            {prediction?.model_type && (
+              <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
+                {prediction.model_type.toUpperCase()} v{prediction.model_version || "?"}
+              </span>
+            )}
+          </div>
           {prediction ? (
             <div style={{ display: "grid", gap: 10 }}>
-              <div className="flex-between">
-                <span className="text-secondary">Predicted Max</span>
-                <span className="text-mono" style={{ fontWeight: 600, color: "var(--accent-blue)" }}>
-                  {Number(prediction.predicted_max_30d).toLocaleString()}
-                </span>
-              </div>
-              <div className="flex-between">
-                <span className="text-secondary">Expected Change</span>
-                <span
-                  className="text-mono"
-                  style={{
-                    fontWeight: 600,
-                    color: Number(prediction.predicted_pct_change) >= 0 ? "var(--accent-green)" : "var(--accent-red)",
-                  }}
-                >
-                  {Number(prediction.predicted_pct_change) >= 0 ? "+" : ""}
-                  {Number(prediction.predicted_pct_change).toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex-between">
-                <span className="text-secondary">Model</span>
-                <span className="text-muted">{prediction.model_type?.toUpperCase() || "LSTM"}</span>
-              </div>
+              {/* Multi-horizon predictions */}
+              {prediction.predicted_max_5d ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                  {[
+                    { label: "5d", max: prediction.predicted_max_5d, unc: prediction.uncertainty_5d },
+                    { label: "10d", max: prediction.predicted_max_10d, unc: prediction.uncertainty_10d },
+                    { label: "20d", max: prediction.predicted_max_20d, unc: prediction.uncertainty_20d },
+                    { label: "30d", max: prediction.predicted_max_30d, unc: prediction.uncertainty_30d },
+                  ].map(({ label, max, unc }) => {
+                    const maxVal = Number(max);
+                    const currentVal = Number(prediction.current_price || scan?.current_price);
+                    const pct = currentVal > 0 ? ((maxVal - currentVal) / currentVal) * 100 : 0;
+                    const uncVal = Number(unc) || 0;
+                    return (
+                      <div
+                        key={label}
+                        style={{
+                          background: "var(--bg-primary)",
+                          borderRadius: 6,
+                          padding: "8px 10px",
+                          textAlign: "center",
+                        }}
+                      >
+                        <div className="text-muted" style={{ fontSize: "0.68rem", marginBottom: 4 }}>{label}</div>
+                        <div className="text-mono" style={{ fontWeight: 600, color: "var(--accent-blue)", fontSize: "0.85rem" }}>
+                          {Math.round(maxVal).toLocaleString()}
+                        </div>
+                        <div
+                          className="text-mono"
+                          style={{
+                            fontSize: "0.75rem",
+                            color: pct >= 0 ? "var(--accent-green)" : "var(--accent-red)",
+                          }}
+                        >
+                          {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
+                        </div>
+                        {uncVal > 0 && (
+                          <div className="text-muted" style={{ fontSize: "0.62rem", marginTop: 2 }}>
+                            ±{uncVal.toFixed(1)}%
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <div className="flex-between">
+                    <span className="text-secondary">Predicted Max (30d)</span>
+                    <span className="text-mono" style={{ fontWeight: 600, color: "var(--accent-blue)" }}>
+                      {Number(prediction.predicted_max_30d).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex-between">
+                    <span className="text-secondary">Expected Change</span>
+                    <span
+                      className="text-mono"
+                      style={{
+                        fontWeight: 600,
+                        color: Number(prediction.predicted_pct_change) >= 0 ? "var(--accent-green)" : "var(--accent-red)",
+                      }}
+                    >
+                      {Number(prediction.predicted_pct_change) >= 0 ? "+" : ""}
+                      {Number(prediction.predicted_pct_change).toFixed(1)}%
+                    </span>
+                  </div>
+                </>
+              )}
               <div>
                 <div className="flex-between mb-sm">
                   <span className="text-secondary">Confidence</span>
@@ -256,6 +314,9 @@ export default async function StockDetailPage({ params }) {
           )}
         </div>
       </div>
+
+      {/* AI Analysis */}
+      <AIAnalysisSection tickerCode={tickerCode} initialReview={aiReview} />
 
       {/* Sentiment & Management */}
       <div className="card mb-lg">

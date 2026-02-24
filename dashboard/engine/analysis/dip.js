@@ -40,11 +40,13 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
   const slopeComboFlag = slopeDown20 && slopeDown25 && px < ma20;
 
   // --- Pullback depth ---
-  const recentBars = data.slice(-10);
+  const pullbackLookback = cfg.dipPullbackLookbackBars ?? 15;
+  const recentBars = data.slice(-pullbackLookback);
+  const halfLook = Math.floor(pullbackLookback / 2);
   const recentHigh = Math.max(
-    ...recentBars.slice(0, 5).map((d) => num(d.high))
+    ...recentBars.slice(0, halfLook + 2).map((d) => num(d.high))
   );
-  const dipLow = Math.min(...recentBars.slice(-5).map((d) => num(d.low)));
+  const dipLow = Math.min(...recentBars.slice(-Math.ceil(pullbackLookback / 2)).map((d) => num(d.low)));
 
   const pullbackPct =
     recentHigh > 0 ? ((recentHigh - dipLow) / recentHigh) * 100 : 0;
@@ -176,7 +178,7 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
       ) {
         touches++;
         lastTouchIdx = i;
-        if (touches >= Math.min(cfg.dipStructMinTouches ?? 1, 2)) return true;
+        if (touches >= (cfg.dipStructMinTouches ?? 2)) return true;
       }
     }
     return false;
@@ -260,7 +262,7 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
       ? pullbackVol <= safeAvgVol20 / dryFactor // FIXED: divide, not multiply
       : true;
 
-  const bounceHotX = Math.min(cfg.bounceHotFactor || 1.0, 1.18);
+  const bounceHotX = Math.max(cfg.bounceHotFactor || 1.2, 1.0);
   const bounceVolHot =
     safeAvgVol20 > 0 ? num(d0.volume) >= safeAvgVol20 * bounceHotX : true;
 
@@ -339,7 +341,7 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
   const bodyQuality = body >= 0.3 * barRange;
   const closeQuality =
     num(d0.close) >= Math.max(ma5, midPrev) && num(d0.close) > num(d0.open);
-  const v20ok = safeAvgVol20 > 0 ? num(d0.volume) >= 0.97 * safeAvgVol20 : true;
+  const v20ok = safeAvgVol20 > 0 ? num(d0.volume) >= (cfg.bounceMinV20Ratio ?? 1.0) * safeAvgVol20 : true;
 
   const patternOK =
     closeAboveYHigh || hammer || engulf || twoBarRev || basicCloseUp;
@@ -445,7 +447,9 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     const p2 = num(data[hi2].high);
     const r1 = rsiSeries[rsiSeries.length - 1];
     const r2 = rsiSeries[Math.max(0, rsiSeries.length - 8)];
-    bearishDiv = p1 <= p2 * 1.01 && r1 < r2 - 3;
+    const divPriceTol = cfg.rsiDivPriceTol ?? 1.01;
+    const divRSIDelta = cfg.rsiDivRSIDelta ?? 3;
+    bearishDiv = p1 <= p2 * divPriceTol && r1 < r2 - divRSIDelta;
     if (bearishDiv && !(closeAboveYHigh || bounceStrengthATR >= 1.05)) {
       const why = "bearish RSI divergence into resistance";
       reasonTrace.push(why);
@@ -491,10 +495,10 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     (ma25 > ma50 && ma50 > ma200) || (ma20 > ma25 && ma25 > ma50);
   const upLike = (ma25 >= ma50 && ma50 >= 0) || ma20 >= ma25;
 
-  let maxRec = cfg.dipMaxRecoveryPct;
-  if (strongUpLike) maxRec = Math.min(cfg.dipMaxRecoveryStrongUp ?? 165, 165);
-  else if (upLike) maxRec = Math.min(155, 155);
-  else maxRec = Math.min(140, 140);
+  let maxRec;
+  if (strongUpLike) maxRec = cfg.dipMaxRecoveryStrongUp ?? 165;
+  else if (upLike) maxRec = cfg.dipMaxRecoveryUpLike ?? 155;
+  else maxRec = cfg.dipMaxRecoveryPct ?? 140;
 
   if (recoveryPctCapped > maxRec) {
     if (headroomATR != null && headroomATR >= 1.2 && bounceStrengthATR >= 1.0) {
@@ -615,8 +619,8 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
   }
 
   // --- Targets & stops ---
-  // FIX #4: findResistancesAbove already returns clustered levels
-  const resList = findResistancesAbove(data, px, stock);
+  // Reuse cached resistance list from pre-entry headroom check
+  const resList = resListEarly;
   const nearestRes = resList.length ? resList[0] : null;
   const recentHigh20 = Math.max(...data.slice(-20).map((d) => num(d.high)));
 
@@ -655,6 +659,9 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     }
   }
 
+  // --- Weekly candle confirmation bonus (informational, not a gate) ---
+  const weeklyBonus = assessWeeklyCandle(data, num);
+
   const why = `Retrace at MA/structure; quality/strong bounce (${bounceStrengthATR.toFixed(
     2
   )} ATR); recovery ${recoveryPctCapped.toFixed(0)}%.`;
@@ -683,11 +690,77 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
       headroomPct,
       nearestResEarly,
       headroomOK,
+      weeklyBonus,
       passedPreBounce: true,
       code: "DIP_TRIGGER",
     },
     reasonTrace,
   };
+}
+
+// ========== WEEKLY CANDLE CONFIRMATION (informational bonus) ==========
+
+function assessWeeklyCandle(dailyData, num) {
+  const sorted = [...dailyData].sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const weeks = resampleToWeeksInternal(sorted);
+  if (weeks.length < 3) return { score: 0, isHammer: false, isEngulfing: false, closeAbovePriorWeekHigh: false };
+
+  const cur = weeks.at(-1);
+  const prev = weeks.at(-2);
+
+  const cOpen = +cur.open || 0;
+  const cHigh = +cur.high || 0;
+  const cLow = +cur.low || 0;
+  const cClose = +cur.close || 0;
+  const pOpen = +prev.open || 0;
+  const pHigh = +prev.high || 0;
+  const pClose = +prev.close || 0;
+
+  const range = cHigh - cLow;
+  const body = Math.abs(cClose - cOpen);
+  const lowerWick = Math.min(cClose, cOpen) - cLow;
+
+  const isHammer = range > 0 && body < 0.4 * range && lowerWick > 1.3 * body && cClose >= cOpen;
+  const isEngulfing = pClose < pOpen && cClose > cOpen && cClose > pOpen && cOpen <= pClose;
+  const closeAbovePriorWeekHigh = cClose > pHigh;
+
+  let score = 0;
+  if (isHammer) score++;
+  if (isEngulfing) score++;
+  if (closeAbovePriorWeekHigh) score++;
+
+  return { score, isHammer, isEngulfing, closeAbovePriorWeekHigh };
+}
+
+// Internal weekly resampler shared by assessWeeklyCandle
+function resampleToWeeksInternal(daily) {
+  const out = [];
+  let curKey = "";
+  let agg = null;
+  for (const d of daily) {
+    const dt = new Date(d.date);
+    const y = dt.getUTCFullYear();
+    const w = isoWeek(dt);
+    const key = `${y}-W${w}`;
+    const o = +d.open || +d.close || 0;
+    const h = +d.high || +d.close || 0;
+    const l = +d.low || +d.close || 0;
+    const c = +d.close || 0;
+    const v = +d.volume || 0;
+    if (key !== curKey) {
+      if (agg) out.push(agg);
+      agg = { date: d.date, open: o, high: h, low: l, close: c, volume: v };
+      curKey = key;
+    } else {
+      agg.date = d.date;
+      agg.high = Math.max(agg.high, h);
+      agg.low = Math.min(agg.low, l);
+      agg.close = c;
+      agg.volume += v;
+    }
+  }
+  if (agg) out.push(agg);
+  return out;
 }
 
 // ========== WEEKLY RANGE WITH TREND CONTEXT ==========

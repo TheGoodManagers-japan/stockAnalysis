@@ -4,11 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import ScanPicker from "../scanner/ScanPicker";
 import styles from "./InsightsSection.module.css";
-
-function formatSector(s) {
-  if (!s) return "-";
-  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
+import { formatSector } from "../../lib/uiHelpers";
 
 function DiffArrow({ a, b, improved }) {
   if (a == null && b == null) return <span className={styles.diffUnchanged}>-</span>;

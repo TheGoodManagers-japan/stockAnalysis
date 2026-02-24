@@ -1,0 +1,229 @@
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.summaryCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.summaryLabel {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summaryValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* Holdings table */
+.holdingsLayout {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 1024px) {
+  .holdingsLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Spike warnings */
+.spikeWarning {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.spikeWarning[data-severity="warning"] {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--accent-yellow);
+}
+
+.spikeWarning[data-severity="danger"] {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+}
+
+/* Drift bar */
+.driftBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.driftBarTrack {
+  position: relative;
+  width: 80px;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: visible;
+}
+
+.driftBarCenter {
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  width: 1px;
+  height: 8px;
+  background: var(--text-muted);
+}
+
+.driftBarFill {
+  position: absolute;
+  top: 0;
+  height: 6px;
+  border-radius: 3px;
+}
+
+/* DCA planner */
+.budgetInput {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.budgetInput input {
+  max-width: 200px;
+}
+
+.dcaResidual {
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+
+/* Member manager modal */
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalContent {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.modalClose {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.memberForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.weightWarning {
+  padding: 8px 12px;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid var(--accent-yellow);
+  border-radius: var(--radius-md);
+  color: var(--accent-yellow);
+  font-size: 0.8rem;
+  margin-bottom: 12px;
+}
+
+/* Allocation chart placeholder */
+.pieContainer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* News card */
+.newsCard {
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--accent-blue);
+}
+
+.newsCard[data-sentiment="Bullish"] {
+  border-left-color: var(--accent-green);
+}
+
+.newsCard[data-sentiment="Bearish"] {
+  border-left-color: var(--accent-red);
+}
+
+/* Performance metrics */
+.metricsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+/* Category badge */
+.categoryBadge {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-blue);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Transaction row */
+.txRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 0.85rem;
+}
+
+.txRow:last-child {
+  border-bottom: none;
+}
