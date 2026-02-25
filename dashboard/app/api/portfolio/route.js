@@ -22,7 +22,7 @@ export async function GET() {
            COUNT(*) as article_count,
            ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
            MAX(na.impact_level) as max_impact,
-           (array_agg(COALESCE(na.title_ja, na.title) ORDER BY na.published_at DESC))[1] as latest_headline
+           (array_agg(COALESCE(na.title, na.title_ja) ORDER BY na.published_at DESC))[1] as latest_headline
          FROM news_article_tickers nat
          JOIN news_articles na ON na.id = nat.article_id
          WHERE nat.ticker_code = ANY($1)

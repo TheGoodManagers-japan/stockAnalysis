@@ -4,11 +4,51 @@
 
 import { query } from "./db.js";
 
+// Lazy table creation guard — runs DDL once per process lifetime
+let tableEnsured = false;
+async function ensureSignalTable() {
+  if (tableEnsured) return;
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS signal_trades (
+        id                  BIGSERIAL PRIMARY KEY,
+        source              TEXT NOT NULL,
+        ticker_code         TEXT NOT NULL,
+        entry_date          DATE NOT NULL DEFAULT CURRENT_DATE,
+        entry_price         NUMERIC(14,4) NOT NULL,
+        stop_loss           NUMERIC(14,4),
+        price_target        NUMERIC(14,4),
+        time_horizon_days   INTEGER,
+        trigger_type        TEXT,
+        status              TEXT NOT NULL DEFAULT 'OPEN',
+        exit_date           DATE,
+        exit_price          NUMERIC(14,4),
+        exit_reason         TEXT,
+        pnl_pct             NUMERIC(8,4),
+        r_multiple          NUMERIC(8,4),
+        scan_run_id         UUID REFERENCES scan_runs(scan_id) ON DELETE SET NULL,
+        source_tx_id        BIGINT,
+        metadata            JSONB,
+        created_at          TIMESTAMPTZ DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_signal_trades_open_dedup
+        ON signal_trades(source, ticker_code) WHERE status = 'OPEN';
+      CREATE INDEX IF NOT EXISTS idx_signal_trades_status ON signal_trades(status, source);
+      CREATE INDEX IF NOT EXISTS idx_signal_trades_ticker ON signal_trades(ticker_code, entry_date DESC);
+    `);
+    tableEnsured = true;
+  } catch (err) {
+    console.error("Failed to ensure signal_trades table:", err.message);
+  }
+}
+
 /**
  * Record a scanner buy signal as a paper trade.
  * Dedup: partial unique index on (source, ticker_code) WHERE status='OPEN'.
  */
 export async function recordScannerSignal(scanId, stock) {
+  await ensureSignalTable();
   if (!stock.isBuyNow) return;
 
   const entryPrice = Number(stock.currentPrice);
@@ -51,6 +91,7 @@ export async function recordScannerSignal(scanId, stock) {
  * Record a value play signal as a paper trade.
  */
 export async function recordValuePlaySignal(scanId, stock) {
+  await ensureSignalTable();
   if (!stock.isValueCandidate) return;
 
   const entryPrice = Number(stock.currentPrice);
@@ -97,6 +138,7 @@ export async function recordValuePlaySignal(scanId, stock) {
  * Record a space fund buy transaction as a paper trade.
  */
 export async function recordSpaceFundSignal(transaction) {
+  await ensureSignalTable();
   const type = (transaction.transaction_type || "").toUpperCase();
   if (type !== "BUY" && type !== "DCA_BUY") return;
 
@@ -139,6 +181,7 @@ export async function recordSpaceFundSignal(transaction) {
  * @returns {{ resolved: number, errors: string[] }}
  */
 export async function resolveOpenSignals(getQuoteFn) {
+  await ensureSignalTable();
   const openTrades = await query(
     `SELECT id, source, ticker_code, entry_price, stop_loss, price_target,
             time_horizon_days, entry_date

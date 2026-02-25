@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import NewsContextBadge from "../../components/ui/NewsContextBadge";
-import { formatNum, formatSector, sentimentColor, VERDICT_CONFIG } from "../../lib/uiHelpers";
+import { formatNum, formatSector, sentimentColor, scoreColor, VERDICT_CONFIG } from "../../lib/uiHelpers";
 
 export default function SuggestionsPage() {
   const [data, setData] = useState(null);
@@ -38,28 +38,85 @@ export default function SuggestionsPage() {
     return (
       <>
         <h2 className="mb-lg" style={{ color: "var(--text-heading)" }}>Daily Briefing</h2>
-        <div className="card"><p className="text-muted">No data available. Run a scan first.</p></div>
+        <div className="card">
+          <p className="text-muted">
+            No scan data available yet.{" "}
+            <Link href="/scanner" style={{ color: "var(--accent-blue)", textDecoration: "none" }}>
+              Run a scan
+            </Link>{" "}
+            to populate the daily briefing.
+          </p>
+        </div>
       </>
     );
   }
 
   const report = data.dailyReport;
   const newsCtx = data.newsContext || {};
+  const meta = data.scanMeta;
 
   return (
     <>
       <h2 className="mb-lg" style={{ color: "var(--text-heading)" }}>Daily Briefing</h2>
 
+      {/* Scan Freshness Banner */}
+      {meta && (
+        <div
+          className="card mb-lg"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            padding: "10px 16px",
+            borderLeft: `3px solid ${
+              meta.ageDays <= 1 ? "var(--accent-green)"
+                : meta.ageDays <= 3 ? "var(--accent-yellow)"
+                : "var(--accent-red)"
+            }`,
+          }}
+        >
+          <div style={{ fontSize: "0.82rem", color: "var(--text-primary)" }}>
+            <strong>Last scan:</strong>{" "}
+            {meta.finishedAt
+              ? new Date(meta.finishedAt).toLocaleDateString("en-US", {
+                  month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                })
+              : "Unknown"}
+            <span style={{
+              marginLeft: 8,
+              color: meta.ageDays <= 1 ? "var(--accent-green)"
+                : meta.ageDays <= 3 ? "var(--accent-yellow)"
+                : "var(--accent-red)",
+              fontWeight: 600,
+            }}>
+              ({meta.ageDays === 0 ? "today" : `${meta.ageDays}d ago`})
+            </span>
+          </div>
+          <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", display: "flex", gap: 12 }}>
+            <span>{meta.totalTickers || meta.tickerCount || "?"} tickers</span>
+            <span>{meta.buyCount || 0} buy signals</span>
+          </div>
+          {meta.ageDays >= 3 && (
+            <Link
+              href="/scanner"
+              style={{ marginLeft: "auto", fontSize: "0.78rem", color: "var(--accent-blue)", textDecoration: "none" }}
+            >
+              Run new scan &rarr;
+            </Link>
+          )}
+        </div>
+      )}
+
       {/* Market Pulse — daily report summary */}
-      {report && (
-        <div className="card mb-lg" style={{ borderLeft: "3px solid var(--accent-blue)" }}>
-          <div
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
-            onClick={() => setPulseExpanded(!pulseExpanded)}
-          >
-            <div className="card-title" style={{ color: "var(--accent-blue)", marginBottom: 0 }}>
-              Market Pulse
-            </div>
+      <div className="card mb-lg" style={{ borderLeft: "3px solid var(--accent-blue)" }}>
+        <div
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: report ? "pointer" : "default" }}
+          onClick={() => report && setPulseExpanded(!pulseExpanded)}
+        >
+          <div className="card-title" style={{ color: "var(--accent-blue)", marginBottom: 0 }}>
+            Market Pulse
+          </div>
+          {report && (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               {report.high_impact_events?.length > 0 && (
                 <span className="badge badge-sell" style={{ fontSize: "0.65rem" }}>
@@ -70,8 +127,10 @@ export default function SuggestionsPage() {
                 {pulseExpanded ? "\u25B2" : "\u25BC"}
               </span>
             </div>
-          </div>
-          {pulseExpanded && (
+          )}
+        </div>
+        {report ? (
+          pulseExpanded && (
             <div style={{ marginTop: 12 }}>
               {report.market_overview && (
                 <p style={{ fontSize: "0.85rem", lineHeight: 1.6, color: "var(--text-primary)", marginBottom: 12 }}>
@@ -89,19 +148,23 @@ export default function SuggestionsPage() {
                 </Link>
               </div>
             </div>
-          )}
-        </div>
-      )}
+          )
+        ) : (
+          <p className="text-muted" style={{ marginTop: 8, fontSize: "0.82rem" }}>
+            No daily report generated yet. Run the news analysis pipeline to generate market context.
+          </p>
+        )}
+      </div>
 
       {/* News Catalysts — tickers with both news activity AND buy signals */}
-      {data.newsCatalysts?.length > 0 && (
-        <div className="card mb-lg">
-          <div className="card-title mb-md" style={{ color: "var(--accent-purple)" }}>
-            News Catalysts
-            <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
-              News watchlist + scan signals
-            </span>
-          </div>
+      <div className="card mb-lg">
+        <div className="card-title mb-md" style={{ color: "var(--accent-purple)" }}>
+          News Catalysts
+          <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
+            News watchlist + scan signals
+          </span>
+        </div>
+        {data.newsCatalysts?.length > 0 ? (
           <div className="table-wrapper">
             <table>
               <thead>
@@ -176,15 +239,19 @@ export default function SuggestionsPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-muted" style={{ fontSize: "0.82rem" }}>
+            No news catalysts today. Run the news analysis pipeline to generate watchlist data.
+          </p>
+        )}
+      </div>
 
       {/* Position Actions — urgent, shown after context */}
-      {data.positionActions.length > 0 && (
-        <div className="card mb-lg">
-          <div className="card-title mb-md" style={{ color: "var(--accent-orange)" }}>
-            Position Actions
-          </div>
+      <div className="card mb-lg">
+        <div className="card-title mb-md" style={{ color: "var(--accent-orange)" }}>
+          Position Actions
+        </div>
+        {data.positionActions.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {data.positionActions.map((pos) => {
               const posNews = newsCtx[pos.ticker_code];
@@ -266,8 +333,14 @@ export default function SuggestionsPage() {
               );
             })}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-muted" style={{ fontSize: "0.82rem" }}>
+            No open positions. Add holdings via the{" "}
+            <Link href="/portfolio" style={{ color: "var(--accent-blue)", textDecoration: "none" }}>Portfolio</Link>{" "}
+            page to see trade management signals here.
+          </p>
+        )}
+      </div>
 
       {/* Buy Opportunities */}
       <div className="card mb-lg">
@@ -349,12 +422,84 @@ export default function SuggestionsPage() {
         )}
       </div>
 
-      {/* Watchlist Alerts */}
-      {data.watchlistAlerts.length > 0 && (
-        <div className="card">
-          <div className="card-title mb-md" style={{ color: "var(--accent-purple)" }}>
-            Watchlist Alerts (High Predicted Upside)
+      {/* Top Rated Stocks — always has data from scan_results */}
+      {data.topRated?.length > 0 && (
+        <div className="card mb-lg">
+          <div className="card-title mb-md" style={{ color: "var(--accent-blue)" }}>
+            Top Rated Stocks
+            <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
+              Best tier + fundamental/valuation scores from latest scan
+            </span>
           </div>
+          <div className="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Sector</th>
+                  <th>Price</th>
+                  <th>Tier</th>
+                  <th>Fund.</th>
+                  <th>Val.</th>
+                  <th>ST</th>
+                  <th>LT</th>
+                  <th>Regime</th>
+                  <th>Signal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.topRated.map((stock) => (
+                  <tr key={stock.ticker_code} className={stock.is_buy_now ? "buy-signal" : ""}>
+                    <td>
+                      <Link
+                        href={`/scanner/${stock.ticker_code}`}
+                        style={{ color: "var(--accent-blue)", textDecoration: "none", fontWeight: 600 }}
+                      >
+                        {stock.ticker_code}
+                      </Link>
+                      {stock.short_name && (
+                        <div className="text-muted" style={{ fontSize: "0.72rem" }}>{stock.short_name}</div>
+                      )}
+                    </td>
+                    <td className="text-muted" style={{ fontSize: "0.78rem" }}>
+                      {stock.sector ? stock.sector.replace(/_/g, " ") : "-"}
+                    </td>
+                    <td className="text-mono">{formatNum(stock.current_price)}</td>
+                    <td>
+                      <span className={`badge badge-tier-${stock.tier || 3}`}>T{stock.tier || "?"}</span>
+                    </td>
+                    <td className="text-mono" style={{ color: scoreColor(stock.fundamental_score) }}>
+                      {stock.fundamental_score != null ? Number(stock.fundamental_score).toFixed(1) : "-"}
+                    </td>
+                    <td className="text-mono" style={{ color: scoreColor(stock.valuation_score) }}>
+                      {stock.valuation_score != null ? Number(stock.valuation_score).toFixed(1) : "-"}
+                    </td>
+                    <td className="text-mono">{stock.short_term_score ?? "-"}</td>
+                    <td className="text-mono">{stock.long_term_score ?? "-"}</td>
+                    <td className="text-muted" style={{ fontSize: "0.78rem" }}>{stock.market_regime || "-"}</td>
+                    <td>
+                      {stock.is_buy_now ? (
+                        <span className="badge badge-buy" style={{ fontSize: "0.7rem" }}>
+                          {stock.trigger_type || "BUY"}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Watchlist Alerts */}
+      <div className="card">
+        <div className="card-title mb-md" style={{ color: "var(--accent-purple)" }}>
+          Watchlist Alerts (High Predicted Upside)
+        </div>
+        {data.watchlistAlerts?.length > 0 ? (
           <div className="table-wrapper">
             <table>
               <thead>
@@ -422,8 +567,12 @@ export default function SuggestionsPage() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-muted" style={{ fontSize: "0.82rem" }}>
+            No ML prediction alerts. Run the ML training pipeline to generate price predictions.
+          </p>
+        )}
+      </div>
     </>
   );
 }

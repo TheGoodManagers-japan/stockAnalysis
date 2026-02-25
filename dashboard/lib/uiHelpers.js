@@ -1,6 +1,13 @@
 // Shared UI formatting helpers used across scanner components
 
 export const VERDICT_CONFIG = {
+  STRONG_BUY: {
+    label: "STRONG BUY",
+    icon: "\uD83D\uDE80",
+    bg: "rgba(5, 150, 105, 0.25)",
+    color: "#059669",
+    border: "#059669",
+  },
   CONFIRMED: {
     label: "CONFIRMED",
     icon: "\u2705",

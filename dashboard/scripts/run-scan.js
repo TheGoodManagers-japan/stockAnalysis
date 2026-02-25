@@ -13,7 +13,7 @@ import { rankStocks, disposeModel as disposeRankerModel } from "../engine/ml/sto
 import { predictBatch as predictLstmV2, disposeModel as disposeLstmV2Model } from "../engine/ml/lstmV2.js";
 import { allTickers } from "../data/tickers.js";
 
-const DASHBOARD_URL = "https://info-27641--dashboard.modal.run";
+const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
 
 // ── News Pipeline ──────────────────────────────────────────────
 async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
@@ -439,10 +439,10 @@ async function runScan() {
     try {
       console.log(`[CRON] Running LSTM v2 predictions for all stocks...`);
 
-      const predResults = await predictLstmV2(allTickers);
+      const predResults = await predictLstmV2(allTickers.map((t) => t.code));
 
-      if (predResults && predResults.size > 0) {
-        for (const [ticker, pred] of predResults) {
+      if (predResults && predResults.predictions.size > 0) {
+        for (const [ticker, pred] of predResults.predictions) {
           try {
             await query(
               `INSERT INTO predictions
@@ -450,9 +450,9 @@ async function runScan() {
                   predicted_pct_change, confidence, model_type, current_price,
                   predicted_max_5d, predicted_max_10d, predicted_max_20d,
                   uncertainty_5d, uncertainty_10d, uncertainty_20d, uncertainty_30d,
-                  model_version)
+                  model_version, skip_reason)
                VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, 'lstm_v2', $6,
-                       $7, $8, $9, $10, $11, $12, $13, $14)
+                       $7, $8, $9, $10, $11, $12, $13, $14, NULL)
                ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
                  scan_id = EXCLUDED.scan_id,
                  predicted_max_30d = EXCLUDED.predicted_max_30d,
@@ -467,7 +467,8 @@ async function runScan() {
                  uncertainty_10d = EXCLUDED.uncertainty_10d,
                  uncertainty_20d = EXCLUDED.uncertainty_20d,
                  uncertainty_30d = EXCLUDED.uncertainty_30d,
-                 model_version = EXCLUDED.model_version`,
+                 model_version = EXCLUDED.model_version,
+                 skip_reason = NULL`,
               [
                 scanId, ticker,
                 pred.predicted_max_30d, pred.predicted_pct_change, pred.confidence,
@@ -482,9 +483,29 @@ async function runScan() {
             console.warn(`[CRON] LSTM v2 prediction insert failed for ${ticker}: ${err.message}`);
           }
         }
-        console.log(`[CRON] LSTM v2 predictions: ${lstmPredCount}/${predResults.size} stocks.`);
+        // Persist skip reasons for tickers that were skipped
+        let skipCount = 0;
+        for (const [ticker, reason] of predResults.skips) {
+          try {
+            await query(
+              `INSERT INTO predictions
+                 (scan_id, ticker_code, prediction_date, skip_reason, model_type)
+               VALUES ($1, $2, CURRENT_DATE, $3, 'lstm_v2')
+               ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
+                 scan_id = EXCLUDED.scan_id,
+                 skip_reason = EXCLUDED.skip_reason,
+                 model_type = EXCLUDED.model_type`,
+              [scanId, ticker, reason]
+            );
+            skipCount++;
+          } catch (err) {
+            // Best effort — don't fail the scan for skip tracking
+          }
+        }
+        console.log(`[CRON] LSTM v2: ${lstmPredCount}/${predResults.predictions.size} predictions, ${skipCount} skip reasons recorded.`);
       } else {
-        console.log(`[CRON] LSTM v2: no trained model available, falling back to legacy predictions.`);
+        const noModelReason = "No trained LSTM v2 model available";
+        console.log(`[CRON] LSTM v2: ${noModelReason}, falling back to legacy predictions.`);
         // Fall back to legacy per-ticker predictions
         for (const ticker of predictionTickers) {
           try {
@@ -493,7 +514,16 @@ async function runScan() {
                WHERE ticker_code = $1 ORDER BY date ASC`,
               [ticker]
             );
-            if (histResult.rows.length < 60) continue;
+            if (histResult.rows.length < 60) {
+              await query(
+                `INSERT INTO predictions (scan_id, ticker_code, prediction_date, skip_reason, model_type)
+                 VALUES ($1, $2, CURRENT_DATE, $3, 'legacy')
+                 ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
+                   scan_id = EXCLUDED.scan_id, skip_reason = EXCLUDED.skip_reason, model_type = EXCLUDED.model_type`,
+                [scanId, ticker, `Insufficient price history for legacy model (${histResult.rows.length}/60 days)`]
+              );
+              continue;
+            }
             const histData = histResult.rows.map((r) => ({
               price: Number(r.close), volume: Number(r.volume),
             }));
@@ -502,21 +532,48 @@ async function runScan() {
               await query(
                 `INSERT INTO predictions
                    (scan_id, ticker_code, prediction_date, predicted_max_30d,
-                    predicted_pct_change, confidence, model_type, current_price)
-                 VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7)
+                    predicted_pct_change, confidence, model_type, current_price, skip_reason)
+                 VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, NULL)
                  ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
                    scan_id = EXCLUDED.scan_id,
                    predicted_max_30d = EXCLUDED.predicted_max_30d,
                    predicted_pct_change = EXCLUDED.predicted_pct_change,
                    confidence = EXCLUDED.confidence,
                    model_type = EXCLUDED.model_type,
-                   current_price = EXCLUDED.current_price`,
+                   current_price = EXCLUDED.current_price,
+                   skip_reason = NULL`,
                 [scanId, ticker, pred.predictedPrice, pred.pctChange, pred.confidence, pred.method, histData[histData.length - 1].price]
               );
               lstmPredCount++;
+            } else {
+              await query(
+                `INSERT INTO predictions (scan_id, ticker_code, prediction_date, skip_reason, model_type)
+                 VALUES ($1, $2, CURRENT_DATE, $3, 'legacy')
+                 ON CONFLICT (ticker_code, prediction_date) DO UPDATE SET
+                   scan_id = EXCLUDED.scan_id, skip_reason = EXCLUDED.skip_reason, model_type = EXCLUDED.model_type`,
+                [scanId, ticker, "Legacy model returned no prediction"]
+              );
             }
           } catch (err) {
             console.warn(`[CRON] Legacy prediction failed for ${ticker}: ${err.message}`);
+            await query(
+              `INSERT INTO predictions (scan_id, ticker_code, prediction_date, skip_reason, model_type)
+               VALUES ($1, $2, CURRENT_DATE, $3, 'legacy')
+               ON CONFLICT (ticker_code, prediction_date) DO NOTHING`,
+              [scanId, ticker, `Legacy prediction error: ${err.message}`]
+            ).catch(() => {});
+          }
+        }
+        // Record skip for tickers not in legacy set (no model)
+        const allCodes = allTickers.map((t) => t.code);
+        for (const ticker of allCodes) {
+          if (!predictionTickers.has(ticker)) {
+            await query(
+              `INSERT INTO predictions (scan_id, ticker_code, prediction_date, skip_reason, model_type)
+               VALUES ($1, $2, CURRENT_DATE, $3, 'lstm_v2')
+               ON CONFLICT (ticker_code, prediction_date) DO NOTHING`,
+              [scanId, ticker, noModelReason]
+            ).catch(() => {});
           }
         }
         console.log(`[CRON] Legacy predictions: ${lstmPredCount}/${predictionTickers.size} tickers.`);

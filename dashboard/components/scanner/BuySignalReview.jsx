@@ -7,6 +7,7 @@ import stockCardStyles from "./StockCard.module.css";
 import { VERDICT_CONFIG as BASE_VERDICT, formatSector } from "../../lib/uiHelpers";
 
 const VERDICT_CONFIG = {
+    STRONG_BUY: { ...BASE_VERDICT.STRONG_BUY, cssClass: styles.strongBuy, cardClass: styles.verdictStrongBuy },
     CONFIRMED: { ...BASE_VERDICT.CONFIRMED, cssClass: styles.confirmed, cardClass: styles.verdictConfirmed },
     CAUTION: { ...BASE_VERDICT.CAUTION, cssClass: styles.caution, cardClass: styles.verdictCaution },
     AVOID: { ...BASE_VERDICT.AVOID, cssClass: styles.avoid, cardClass: styles.verdictAvoid },
@@ -189,6 +190,46 @@ export default function BuySignalReview() {
                                         {r.earnings_status || "-"}
                                     </div>
                                 </div>
+
+                                {/* Bull / Bear Cases */}
+                                {(r.bull_points?.length > 0 || r.bear_points?.length > 0) && (
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                                        {r.bull_points?.length > 0 && (
+                                            <div style={{ padding: "8px 10px", borderLeft: "2px solid var(--accent-green)", background: "rgba(16, 185, 129, 0.05)", borderRadius: "0 4px 4px 0" }}>
+                                                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--accent-green)", marginBottom: 4, textTransform: "uppercase" }}>Bull</div>
+                                                <ul style={{ margin: 0, paddingLeft: 14, fontSize: "0.75rem", lineHeight: 1.5 }}>
+                                                    {r.bull_points.map((p, i) => <li key={i}>{p}</li>)}
+                                                </ul>
+                                            </div>
+                                        )}
+                                        {r.bear_points?.length > 0 && (
+                                            <div style={{ padding: "8px 10px", borderLeft: "2px solid var(--accent-red)", background: "rgba(239, 68, 68, 0.05)", borderRadius: "0 4px 4px 0" }}>
+                                                <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--accent-red)", marginBottom: 4, textTransform: "uppercase" }}>Bear</div>
+                                                <ul style={{ margin: 0, paddingLeft: 14, fontSize: "0.75rem", lineHeight: 1.5 }}>
+                                                    {r.bear_points.map((p, i) => <li key={i}>{p}</li>)}
+                                                </ul>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Key Catalyst + Watch For */}
+                                {(r.key_catalyst || r.watch_for) && (
+                                    <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                                        {r.key_catalyst && (
+                                            <div style={{ flex: 1, minWidth: 140, padding: "6px 10px", background: "var(--bg-tertiary)", borderRadius: 4, fontSize: "0.75rem" }}>
+                                                <span style={{ fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", fontSize: "0.65rem" }}>Catalyst: </span>
+                                                <span style={{ color: "var(--text-primary)" }}>{r.key_catalyst}</span>
+                                            </div>
+                                        )}
+                                        {r.watch_for && (
+                                            <div style={{ flex: 1, minWidth: 140, padding: "6px 10px", background: "var(--bg-tertiary)", borderRadius: 4, fontSize: "0.75rem" }}>
+                                                <span style={{ fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", fontSize: "0.65rem" }}>Watch: </span>
+                                                <span style={{ color: "var(--text-primary)" }}>{r.watch_for}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* Verdict Reason */}
                                 <div

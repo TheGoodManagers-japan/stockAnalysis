@@ -2,7 +2,6 @@ import { query } from "../../lib/db.js";
 import ValuePlaysTable from "../../components/value-plays/ValuePlaysTable";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 600;
 
 export default async function ValuePlaysPage() {
   // Get latest completed full scan (prefer largest ticker_count to skip small test scans)

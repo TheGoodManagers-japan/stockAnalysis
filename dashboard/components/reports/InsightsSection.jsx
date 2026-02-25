@@ -8,16 +8,22 @@ import { formatNum, formatSector } from "../../lib/uiHelpers";
 export default function InsightsSection({ days }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     async function fetchData() {
       try {
         const res = await fetch(`/api/reports/insights?days=${days}`);
         const json = await res.json();
-        if (json.success) setData(json);
-      } catch {
-        // silently fail
+        if (json.success) {
+          setData(json);
+        } else {
+          setError(json.error || "API returned an error");
+        }
+      } catch (err) {
+        setError(err.message || "Failed to load insights");
       } finally {
         setLoading(false);
       }
@@ -29,6 +35,10 @@ export default function InsightsSection({ days }) {
     return <div style={{ padding: 40, textAlign: "center" }}><span className="spinner" /></div>;
   }
 
+  if (error) {
+    return <div className="card" style={{ color: "var(--accent-red)" }}>Error: {error}</div>;
+  }
+
   if (!data) {
     return <div className="card text-muted">No insights data available. Run scans to accumulate data.</div>;
   }
@@ -38,7 +48,11 @@ export default function InsightsSection({ days }) {
       {/* Improvement Insights */}
       {data.insights.length === 0 ? (
         <div className="card text-muted" style={{ textAlign: "center", padding: 40 }}>
-          Not enough data to generate insights yet. Keep running daily scans!
+          <div style={{ marginBottom: 8 }}>Not enough resolved signals to generate insights yet.</div>
+          <div style={{ fontSize: "0.8rem" }}>
+            Currently tracking {data.signalStats?.totalSignals || 0} buy signal{data.signalStats?.totalSignals !== 1 ? "s" : ""} ({data.signalStats?.resolvedSignals || 0} resolved).
+            Insights require at least 3 resolved signals per trigger/regime combination.
+          </div>
         </div>
       ) : (
         <div className="mb-lg">

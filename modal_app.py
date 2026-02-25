@@ -83,7 +83,7 @@ def daily_scan():
         capture_output=True,
         text=True,
         timeout=3300,
-        env={**os.environ},
+        env={**os.environ, "DASHBOARD_URL": "https://info-27641--dashboard.modal.run"},
     )
     print(result.stdout)
     if result.returncode != 0:
@@ -164,6 +164,26 @@ def migrate_db():
         print("  ✓ predictions table")
     except Exception as e:
         print(f"  ✗ predictions table: {e}")
+
+    # Create ml_rankings table if missing (needed for ML Phase 2 stock ranker)
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ml_rankings (
+                id                      BIGSERIAL PRIMARY KEY,
+                scan_id                 UUID REFERENCES scan_runs(scan_id),
+                ticker_code             TEXT NOT NULL,
+                ranking_date            DATE NOT NULL DEFAULT CURRENT_DATE,
+                predicted_return_10d    NUMERIC(8,4),
+                rank_position           INTEGER,
+                model_version           INTEGER,
+                created_at              TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(ticker_code, ranking_date)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ml_rankings_date ON ml_rankings(ranking_date DESC, rank_position ASC)")
+        print("  ✓ ml_rankings table")
+    except Exception as e:
+        print(f"  ✗ ml_rankings table: {e}")
 
     cur.close()
     conn.close()

@@ -341,9 +341,10 @@ CREATE TABLE IF NOT EXISTS news_watchlist (
     max_impact      TEXT,
     sources_count   INTEGER DEFAULT 0,
     top_reason      TEXT,
-    articles_json   JSONB,
-    UNIQUE(ticker_code, (generated_at::date))
+    articles_json   JSONB
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_news_watchlist_dedup
+    ON news_watchlist(ticker_code, ((generated_at AT TIME ZONE 'UTC')::date));
 
 -- 17. DAILY NEWS REPORTS (cached Gemini-generated daily narratives)
 CREATE TABLE IF NOT EXISTS daily_news_reports (
@@ -495,4 +496,5 @@ ALTER TABLE predictions
   ADD COLUMN IF NOT EXISTS uncertainty_10d NUMERIC(8,4),
   ADD COLUMN IF NOT EXISTS uncertainty_20d NUMERIC(8,4),
   ADD COLUMN IF NOT EXISTS uncertainty_30d NUMERIC(8,4),
-  ADD COLUMN IF NOT EXISTS model_version INTEGER;
+  ADD COLUMN IF NOT EXISTS model_version INTEGER,
+  ADD COLUMN IF NOT EXISTS skip_reason TEXT;

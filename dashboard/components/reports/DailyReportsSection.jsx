@@ -204,10 +204,15 @@ function ReportCard({ report, date, articleCount, generatedAt, isExpanded, onTog
 export default function DailyReportsSection({ days }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [expandedDate, setExpandedDate] = useState(null);
+  const [backfillInfo, setBackfillInfo] = useState(null);
+  const [generating, setGenerating] = useState(false);
+  const [genProgress, setGenProgress] = useState(null);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     async function fetchReports() {
       try {
         const res = await fetch(`/api/news/daily-report?list=true&days=${days}`);
@@ -217,21 +222,75 @@ export default function DailyReportsSection({ days }) {
           if (json.reports.length > 0) {
             setExpandedDate(json.reports[0].report_date);
           }
+        } else if (!json.success) {
+          setError(json.error || "Failed to load reports");
         }
-      } catch {
-        // silently fail
+      } catch (err) {
+        setError(err.message || "Failed to load reports");
       } finally {
         setLoading(false);
       }
+
+      // Check for dates that have articles but no reports
+      try {
+        const backfillRes = await fetch("/api/news/daily-report/backfill");
+        const backfillJson = await backfillRes.json();
+        if (backfillJson.success && backfillJson.missingDates > 0) {
+          setBackfillInfo(backfillJson);
+        }
+      } catch {}
     }
     fetchReports();
   }, [days]);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    setGenProgress("Generating reports...");
+    try {
+      let totalGenerated = 0;
+      let remaining = 1;
+
+      while (remaining > 0) {
+        const res = await fetch("/api/news/daily-report/backfill", { method: "POST" });
+        const json = await res.json();
+        if (!json.success) {
+          setGenProgress(`Error: ${json.error}`);
+          break;
+        }
+        totalGenerated += json.generated.length;
+        remaining = json.remaining;
+        setGenProgress(
+          `Generated ${totalGenerated} report${totalGenerated !== 1 ? "s" : ""}` +
+          (remaining > 0 ? `, ${remaining} remaining...` : " — done!")
+        );
+      }
+
+      // Refresh the reports list
+      const res = await fetch(`/api/news/daily-report?list=true&days=${days}`);
+      const json = await res.json();
+      if (json.success && json.reports) {
+        setReports(json.reports);
+        if (json.reports.length > 0) {
+          setExpandedDate(json.reports[0].report_date);
+        }
+      }
+      setBackfillInfo(null);
+    } catch (err) {
+      setGenProgress(`Error: ${err.message}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   if (loading) {
     return <div style={{ padding: 40, textAlign: "center" }}><span className="spinner" /></div>;
   }
 
-  if (reports.length === 0) {
+  if (error) {
+    return <div className="card" style={{ color: "var(--accent-red)" }}>Error: {error}</div>;
+  }
+
+  if (reports.length === 0 && !backfillInfo) {
     return (
       <div className="card text-muted" style={{ textAlign: "center", padding: 40 }}>
         No daily reports yet. Reports are generated automatically with each morning scan.
@@ -241,6 +300,50 @@ export default function DailyReportsSection({ days }) {
 
   return (
     <div>
+      {/* Backfill banner */}
+      {backfillInfo && backfillInfo.missingDates > 0 && (
+        <div
+          className="card mb-md"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            background: "var(--bg-tertiary)",
+            borderLeft: "3px solid var(--accent-blue, #3b82f6)",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-heading)" }}>
+              {backfillInfo.missingDates} date{backfillInfo.missingDates !== 1 ? "s" : ""} with analyzed articles but no report
+            </div>
+            {genProgress && (
+              <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 4 }}>
+                {genProgress}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            style={{
+              padding: "6px 16px",
+              borderRadius: 6,
+              border: "none",
+              background: "var(--accent-blue, #3b82f6)",
+              color: "#fff",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              cursor: generating ? "not-allowed" : "pointer",
+              opacity: generating ? 0.6 : 1,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {generating ? "Generating..." : "Generate Reports"}
+          </button>
+        </div>
+      )}
+
       {reports.map((r) => (
         <ReportCard
           key={r.report_date}

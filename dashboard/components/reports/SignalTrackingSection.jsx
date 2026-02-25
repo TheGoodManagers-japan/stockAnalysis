@@ -30,19 +30,25 @@ function WinRateCell({ rate, total }) {
 export default function SignalTrackingSection({ days }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [outcomeFilter, setOutcomeFilter] = useState("all");
   const [sortKey, setSortKey] = useState("scanDate");
   const [sortDir, setSortDir] = useState("desc");
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     async function fetchData() {
       try {
         const res = await fetch(`/api/reports/signal-tracking?days=${days}`);
         const json = await res.json();
-        if (json.success) setData(json);
-      } catch {
-        // silently fail
+        if (json.success) {
+          setData(json);
+        } else {
+          setError(json.error || "API returned an error");
+        }
+      } catch (err) {
+        setError(err.message || "Failed to load signal tracking data");
       } finally {
         setLoading(false);
       }
@@ -79,8 +85,12 @@ export default function SignalTrackingSection({ days }) {
     return <div style={{ padding: 40, textAlign: "center" }}><span className="spinner" /></div>;
   }
 
+  if (error) {
+    return <div className="card" style={{ color: "var(--accent-red)" }}>Error: {error}</div>;
+  }
+
   if (!data) {
-    return <div className="card text-muted">No signal tracking data available. Run scans first.</div>;
+    return <div className="card text-muted">No buy signals found in the last {days} days. Signals appear when the scanner identifies entry opportunities (DIP, BREAKOUT, RETEST, RECLAIM, or INSIDE triggers).</div>;
   }
 
   const { aggregates } = data;

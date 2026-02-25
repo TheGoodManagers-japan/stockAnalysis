@@ -72,6 +72,7 @@ export async function POST(request) {
                news_category = $6,
                ai_summary = $7,
                analysis_json = $8,
+               title = COALESCE(NULLIF($9, ''), title),
                analyzed_at = NOW()
              WHERE id = $1`,
             [
@@ -83,6 +84,7 @@ export async function POST(request) {
               analysis.news_category || "other",
               analysis.summary || null,
               JSON.stringify(analysis),
+              analysis.title_en || null,
             ]
           );
 
@@ -158,6 +160,7 @@ For each article return:
 - "sentiment": "Bullish" | "Bearish" | "Neutral"
 - "sentiment_score": -1.0 to 1.0 (negative = bearish, positive = bullish)
 - "news_category": one of ["earnings", "guidance", "M&A", "restructuring", "macro", "dividend", "buyback", "regulation", "product", "other"]
+- "title_en": English translation of the article title (concise, preserve meaning and key terms)
 - "summary": one-sentence English summary of the article
 - "extracted_tickers": array of 4-digit Japanese stock codes explicitly mentioned in the text (e.g. ["7203", "6758"])
 - "inferred_tickers": array of objects for companies discussed in the article, even if the stock code is not written. Identify the company by name and provide its 4-digit TSE/JPX stock code. Example: [{"company": "トヨタ自動車", "code": "7203"}, {"company": "ソニーグループ", "code": "6758"}]. Only include companies listed on TSE/JPX. If no specific company is discussed, return an empty array.
@@ -182,6 +185,7 @@ ${articlesText}`;
               type: "STRING",
               enum: ["earnings", "guidance", "M&A", "restructuring", "macro", "dividend", "buyback", "regulation", "product", "other"],
             },
+            title_en: { type: "STRING" },
             summary: { type: "STRING" },
             extracted_tickers: { type: "ARRAY", items: { type: "STRING" } },
             inferred_tickers: {
@@ -196,7 +200,7 @@ ${articlesText}`;
               },
             },
           },
-          required: ["relevance_score", "impact_level", "sentiment", "sentiment_score", "news_category", "summary", "extracted_tickers", "inferred_tickers"],
+          required: ["relevance_score", "impact_level", "sentiment", "sentiment_score", "news_category", "title_en", "summary", "extracted_tickers", "inferred_tickers"],
         },
       },
     },

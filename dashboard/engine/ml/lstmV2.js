@@ -214,22 +214,26 @@ async function loadLstmV2Model() {
 
 /**
  * Predict multi-horizon prices for a batch of tickers.
- * @param {string[]} tickers - Array of ticker codes
- * @returns {Map<string, Object>} Map of ticker → prediction object
+ * @param {(string|{code:string})[]} tickers - Array of ticker codes or ticker objects
+ * @returns {{ predictions: Map<string, Object>, skips: Map<string, string> } | null}
  */
 export async function predictBatch(tickers) {
   const modelData = await loadLstmV2Model();
   if (!modelData) return null;
 
+  // Normalize: accept both string[] and {code}[]
+  const tickerCodes = tickers.map((t) => (typeof t === "string" ? t : t.code));
+
   const { model, normalization } = modelData;
   const { labelStats } = normalization;
   const horizons = [5, 10, 20, 30];
   const results = new Map();
+  const skips = new Map();
 
   // Process in batches to manage memory
   const BATCH = 50;
-  for (let b = 0; b < tickers.length; b += BATCH) {
-    const batch = tickers.slice(b, b + BATCH);
+  for (let b = 0; b < tickerCodes.length; b += BATCH) {
+    const batch = tickerCodes.slice(b, b + BATCH);
     const validEntries = [];
 
     for (const ticker of batch) {
@@ -241,7 +245,10 @@ export async function predictBatch(tickers) {
           [ticker]
         );
 
-        if (histResult.rows.length < SEQUENCE_LENGTH) continue;
+        if (histResult.rows.length < SEQUENCE_LENGTH) {
+          skips.set(ticker, `Insufficient price history (${histResult.rows.length}/${SEQUENCE_LENGTH} days)`);
+          continue;
+        }
 
         const prices = histResult.rows.map((r) => ({
           close: Number(r.close),
@@ -251,10 +258,14 @@ export async function predictBatch(tickers) {
         }));
 
         const { sequence, currentPrice } = buildFeatureSequence(prices);
-        if (currentPrice <= 0) continue;
+        if (currentPrice <= 0) {
+          skips.set(ticker, "Invalid current price");
+          continue;
+        }
 
         validEntries.push({ ticker, sequence, currentPrice });
       } catch (err) {
+        skips.set(ticker, `Feature error: ${err.message}`);
         console.warn(`[ML] LSTM v2: skipping ${ticker}: ${err.message}`);
       }
     }
@@ -318,16 +329,16 @@ export async function predictBatch(tickers) {
     predictions.dispose();
   }
 
-  return results;
+  return { predictions: results, skips };
 }
 
 /**
  * Predict for a single ticker. Convenience wrapper.
  */
 export async function predictForTicker(ticker) {
-  const results = await predictBatch([ticker]);
-  if (!results) return null;
-  return results.get(ticker) || null;
+  const result = await predictBatch([ticker]);
+  if (!result) return null;
+  return result.predictions.get(ticker) || null;
 }
 
 /**

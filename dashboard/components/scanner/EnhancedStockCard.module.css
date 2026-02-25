@@ -46,6 +46,7 @@
 }
 
 .cardBuy { border-left-color: var(--accent-green); }
+.cardStrongBuy { border-left-color: #059669; }
 .cardCaution { border-left-color: var(--accent-yellow); }
 .cardAvoid { border-left-color: var(--accent-red); }
 

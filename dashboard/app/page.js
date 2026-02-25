@@ -9,7 +9,6 @@ import SpaceFundSection from "../components/dashboard/SpaceFundSection";
 import WatchlistSection from "../components/dashboard/WatchlistSection";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 300;
 
 // --- Data fetchers (all run in parallel) ---
 

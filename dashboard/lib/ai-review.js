@@ -220,10 +220,38 @@ async function gatherStockContext(signals) {
       [signal.ticker_code]
     );
 
+    const fundamentals = snapshot.rows[0] || null;
+
+    // Compute derived metrics for richer context
+    const price = Number(signal.current_price) || 0;
+    const stop = Number(signal.stop_loss) || 0;
+    const target = Number(signal.price_target) || 0;
+    const high52 = Number(fundamentals?.fifty_two_week_high) || 0;
+    const low52 = Number(fundamentals?.fifty_two_week_low) || 0;
+
+    const risk = Math.abs(price - stop);
+    const reward = Math.abs(target - price);
+    const riskRewardRatio = risk > 0 ? (reward / risk).toFixed(2) : null;
+    const riskPct = price > 0 ? ((risk / price) * 100).toFixed(1) : null;
+    const rewardPct = price > 0 ? ((reward / price) * 100).toFixed(1) : null;
+    const pctFrom52High = high52 > 0 ? (((price - high52) / high52) * 100).toFixed(1) : null;
+    const pctFrom52Low = low52 > 0 ? (((price - low52) / low52) * 100).toFixed(1) : null;
+    const daysToEarnings = fundamentals?.next_earnings_date
+      ? Math.ceil((new Date(fundamentals.next_earnings_date) - new Date()) / 86400000)
+      : null;
+
     stockData.push({
       ...signal,
       recentNews: news.rows,
-      fundamentals: snapshot.rows[0] || null,
+      fundamentals,
+      computed: {
+        riskRewardRatio,
+        riskPct,
+        rewardPct,
+        pctFrom52High,
+        pctFrom52Low,
+        daysToEarnings,
+      },
     });
   }
   return stockData;
@@ -236,7 +264,7 @@ function buildPrompt(stockData, macroNews, sectorRotation) {
     const macroLines = macroNews
       .map(
         (n) =>
-          `- [${n.impact_level}] ${n.title_ja || n.title} (${n.sentiment}, ${n.news_category})`
+          `- [${n.impact_level}] ${n.title || n.title_ja} (${n.sentiment}, ${n.news_category})`
       )
       .join("\n");
     macroSection = `\nMACRO MARKET CONTEXT (last 7 days):\n${macroLines}\n`;
@@ -269,10 +297,10 @@ function buildPrompt(stockData, macroNews, sectorRotation) {
           ? s.recentNews
               .map(
                 (n) =>
-                  `  - [${n.news_category || "other"}] ${n.title_ja || n.title} (${n.sentiment}, impact: ${n.impact_level})`
+                  `  - [${n.news_category || "other"}] ${n.title || n.title_ja} (${n.sentiment}, impact: ${n.impact_level})`
               )
               .join("\n")
-          : "  No recent news found.";
+          : "  No recent news — neutral for swing trade timing.";
 
       const fundText = s.fundamentals
         ? `  P/E: ${s.fundamentals.pe_ratio || "N/A"}, P/B: ${s.fundamentals.pb_ratio || "N/A"}, ` +
@@ -283,6 +311,13 @@ function buildPrompt(stockData, macroNews, sectorRotation) {
           `Next Earnings: ${s.fundamentals.next_earnings_date ? new Date(s.fundamentals.next_earnings_date).toLocaleDateString() : "N/A"}`
         : "  No fundamental data available.";
 
+      const c = s.computed || {};
+      const computedText = [
+        `  Risk/Reward: ${c.riskRewardRatio || "N/A"}x (Risk: ${c.riskPct || "N/A"}% downside / Reward: ${c.rewardPct || "N/A"}% upside)`,
+        `  52W Position: ${c.pctFrom52High || "N/A"}% from high, +${c.pctFrom52Low || "N/A"}% from low`,
+        `  Days to Next Earnings: ${c.daysToEarnings != null ? c.daysToEarnings : "Unknown"}`,
+      ].join("\n");
+
       return `
 ### ${s.ticker_code} — ${s.short_name || "Unknown"} (${s.sector || "Unknown sector"})
 - Price: ¥${Number(s.current_price || 0).toLocaleString()} | Tier: ${s.tier} | Regime: ${s.market_regime || "N/A"}
@@ -290,6 +325,8 @@ function buildPrompt(stockData, macroNews, sectorRotation) {
 - Scores: Fundamental ${s.fundamental_score || "N/A"}/10, Valuation ${s.valuation_score || "N/A"}/10
 - ST Score: ${s.short_term_score ?? "N/A"}, LT Score: ${s.long_term_score ?? "N/A"}
 - Stop: ¥${s.stop_loss ? Number(s.stop_loss).toLocaleString() : "N/A"} | Target: ¥${s.price_target ? Number(s.price_target).toLocaleString() : "N/A"}
+**Computed Metrics:**
+${computedText}
 **Recent News (micro):**
 ${newsText}
 **Fundamentals:**
@@ -297,21 +334,41 @@ ${fundText}`;
     })
     .join("\n");
 
-  return `You are a Japanese stock market analyst reviewing swing trade buy signals for JPX-listed stocks.
-${macroSection}${sectorSection}
-For each stock below, provide:
-1. **company_description**: A brief 1-sentence description of what the company does
-2. **news_summary**: Summary of recent micro news impact on this specific stock (or "No recent news" if none)
-3. **macro_context**: How current macro conditions (BOJ policy, USD/JPY, global risk appetite, sector trends) affect this stock's sector and business. Reference the macro news and sector rotation data above.
-4. **earnings_status**: Assessment of fundamentals/earnings outlook
-5. **verdict**: One of "CONFIRMED", "CAUTION", or "AVOID"
-6. **verdict_reason**: 1-2 sentence explanation of your verdict
-7. **confidence**: 0-100 integer. 0 = pure guess/no data, 50 = mixed signals, 80+ = strong conviction with aligned technical+fundamental+news signals.
+  return `You are a decisive Japanese stock market analyst reviewing swing trade buy signals.
 
-Criteria for verdicts:
-- CONFIRMED: Technical signal aligns with fundamentals, no red flags in news, macro is supportive — safe to buy
-- CAUTION: Some concerns (upcoming earnings, mixed news, high valuation, adverse macro) — proceed with smaller position
-- AVOID: Red flags found (bad news, deteriorating fundamentals, earnings risk, governance issues, hostile macro)
+CRITICAL RULES — follow these exactly:
+- Do NOT hedge. Never say "mixed signals", "proceed with caution", "monitor closely", or "it depends". Be SPECIFIC.
+- Every bull_point MUST cite a specific number, price level, ratio, or dated event from the data provided.
+- Every bear_point MUST cite a specific number, price level, ratio, or dated event from the data provided.
+- Absence of news is NEUTRAL, not negative. Do not penalize stocks for having no recent news.
+- If a stock lacks fundamental data, say so directly — do not invent concerns.
+
+CONFIDENCE CALIBRATION (follow strictly):
+- 20-35: Data is missing or contradictory. Example: No fundamentals, unclear regime, no news.
+- 40-55: Slight lean one way. Example: Decent fundamentals but earnings in 10 days with no guidance.
+- 60-75: Clear directional evidence. Example: Strong technicals + good fundamentals + supportive sector, one minor risk.
+- 80-90: Multiple factors strongly aligned. Example: Tier 1, UP/STRONG_UP regime, R:R >= 2.0, fund score >= 7, positive sector rotation.
+- 91+: Extraordinary alignment across all dimensions. Rare.
+
+VERDICT CRITERIA:
+- STRONG_BUY: Tier 1-2, regime UP or STRONG_UP, R:R >= 2.0, fundamental score >= 7, no earnings within 14 days. Everything aligned — full position.
+- CONFIRMED: At least 3 of 5 factors positive (technicals, fundamentals, news, macro, risk/reward). Good setup — standard position.
+- CAUTION: You must name the ONE specific concern and what would RESOLVE it. Example: "Earnings in 8 days — wait for results or use half position."
+- AVOID: At least 2 concrete red flags. Name them explicitly.
+${macroSection}${sectorSection}
+For each stock, provide ALL of the following:
+1. **company_description**: 1 sentence — what the company does and its market position
+2. **news_summary**: Impact of recent micro news on this stock. If no news, say "No recent news — neutral for swing trade timing"
+3. **macro_context**: How current macro specifically affects THIS stock's sector. Name the transmission mechanism.
+4. **earnings_status**: Fundamental health + next earnings risk. If earnings >30 days away, state that explicitly.
+5. **bull_points**: Array of 2-4 specific bullish factors. Each MUST reference a number from the data.
+6. **bear_points**: Array of 1-3 specific risks. Each MUST reference a number from the data.
+7. **risk_reward_assessment**: 1 sentence evaluating the stop/target setup. Reference the R:R ratio.
+8. **key_catalyst**: The single most important upcoming event or factor for this stock.
+9. **watch_for**: What specific condition would UPGRADE or DOWNGRADE your verdict.
+10. **verdict**: One of STRONG_BUY, CONFIRMED, CAUTION, AVOID
+11. **verdict_reason**: 2-3 sentences. Sentence 1 = your verdict rationale. Sentence 2 = the biggest risk. Sentence 3 = what would change your mind.
+12. **confidence**: 0-100 integer per the calibration above.
 
 Stocks to review:
 ${stockSummaries}`;
@@ -327,7 +384,12 @@ const RESPONSE_SCHEMA = {
       news_summary: { type: "STRING" },
       macro_context: { type: "STRING" },
       earnings_status: { type: "STRING" },
-      verdict: { type: "STRING", enum: ["CONFIRMED", "CAUTION", "AVOID"] },
+      bull_points: { type: "ARRAY", items: { type: "STRING" } },
+      bear_points: { type: "ARRAY", items: { type: "STRING" } },
+      risk_reward_assessment: { type: "STRING" },
+      key_catalyst: { type: "STRING" },
+      watch_for: { type: "STRING" },
+      verdict: { type: "STRING", enum: ["STRONG_BUY", "CONFIRMED", "CAUTION", "AVOID"] },
       verdict_reason: { type: "STRING" },
       confidence: { type: "INTEGER" },
     },
@@ -337,6 +399,11 @@ const RESPONSE_SCHEMA = {
       "news_summary",
       "macro_context",
       "earnings_status",
+      "bull_points",
+      "bear_points",
+      "risk_reward_assessment",
+      "key_catalyst",
+      "watch_for",
       "verdict",
       "verdict_reason",
       "confidence",
@@ -351,7 +418,7 @@ async function callGemini(stockData, macroNews, sectorRotation, apiKey) {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
       temperature: 0.3,
-      maxOutputTokens: 4096,
+      maxOutputTokens: 8192,
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
     },

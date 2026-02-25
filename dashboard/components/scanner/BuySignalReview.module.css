@@ -16,6 +16,10 @@
   height: 3px;
 }
 
+.verdictStrongBuy::before {
+  background: linear-gradient(90deg, #059669, var(--accent-green));
+}
+
 .verdictConfirmed::before {
   background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
 }
@@ -45,6 +49,11 @@
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+.strongBuy {
+  background: rgba(5, 150, 105, 0.2);
+  color: #059669;
 }
 
 .confirmed {

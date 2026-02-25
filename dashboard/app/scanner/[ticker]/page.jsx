@@ -4,7 +4,7 @@ import { PriceChart, ScanHistoryChart } from "./Charts";
 import AIAnalysisSection from "../../../components/stock/AIAnalysisSection";
 import { formatNum } from "../../../lib/uiHelpers";
 
-export const revalidate = 600;
+export const dynamic = "force-dynamic";
 
 async function getStockDetail(tickerCode) {
   try {
@@ -212,13 +212,27 @@ export default async function StockDetailPage({ params }) {
         <div className="card">
           <div className="card-title mb-md">
             ML Price Forecast
-            {prediction?.model_type && (
+            {prediction?.model_type && !prediction.skip_reason && (
               <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
                 {prediction.model_type.toUpperCase()} v{prediction.model_version || "?"}
               </span>
             )}
           </div>
-          {prediction ? (
+          {prediction && prediction.skip_reason ? (
+            <div style={{ padding: "4px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ color: "var(--accent-yellow)", fontSize: "0.85rem", fontWeight: 600 }}>
+                  Prediction Skipped
+                </span>
+              </div>
+              <p className="text-muted" style={{ fontSize: "0.82rem", lineHeight: 1.5, margin: 0 }}>
+                {prediction.skip_reason}
+              </p>
+              <div className="text-muted" style={{ fontSize: "0.72rem", marginTop: 8 }}>
+                Date: {String(prediction.prediction_date).split("T")[0]}
+              </div>
+            </div>
+          ) : prediction ? (
             <div style={{ display: "grid", gap: 10 }}>
               {/* Multi-horizon predictions */}
               {prediction.predicted_max_5d ? (
@@ -400,10 +414,10 @@ export default async function StockDetailPage({ params }) {
                   {n.source_url ? (
                     <a href={n.source_url} target="_blank" rel="noopener noreferrer"
                        style={{ color: "var(--text-heading)", textDecoration: "none", fontSize: "0.85rem", fontWeight: 500 }}>
-                      {n.title_ja || n.title}
+                      {n.title || n.title_ja}
                     </a>
                   ) : (
-                    <span style={{ fontSize: "0.85rem" }}>{n.title_ja || n.title}</span>
+                    <span style={{ fontSize: "0.85rem" }}>{n.title || n.title_ja}</span>
                   )}
                   {n.ai_summary && (
                     <div className="text-muted" style={{ fontSize: "0.75rem", marginTop: 3 }}>{n.ai_summary}</div>

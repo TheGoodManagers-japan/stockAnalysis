@@ -10,6 +10,34 @@ export async function GET(request) {
 
     const insights = [];
 
+    // 0. Count total buy signals for context
+    const countResult = await query(
+      `SELECT COUNT(*) as total_signals,
+              COUNT(*) FILTER (WHERE outcome IN ('target_hit', 'stop_hit')) as resolved_signals
+       FROM (
+         SELECT DISTINCT ON (sr.ticker_code, sr.scan_date::date)
+           sr.ticker_code, sr.scan_date,
+           CASE
+             WHEN (SELECT MAX(high) FROM price_history WHERE ticker_code = sr.ticker_code
+                   AND date > sr.scan_date::date AND date <= sr.scan_date::date + INTERVAL '30 days'
+                  ) >= sr.price_target THEN 'target_hit'
+             WHEN (SELECT MIN(low) FROM price_history WHERE ticker_code = sr.ticker_code
+                   AND date > sr.scan_date::date AND date <= sr.scan_date::date + INTERVAL '30 days'
+                  ) <= sr.stop_loss THEN 'stop_hit'
+             ELSE 'open'
+           END as outcome
+         FROM scan_results sr
+         JOIN scan_runs s ON s.scan_id = sr.scan_id
+         WHERE sr.is_buy_now = true AND s.status = 'completed'
+           AND sr.scan_date >= NOW() - INTERVAL '1 day' * $1
+           AND sr.price_target IS NOT NULL AND sr.stop_loss IS NOT NULL
+         ORDER BY sr.ticker_code, sr.scan_date::date, sr.scan_date DESC
+       ) sub`,
+      [days]
+    );
+    const totalSignals = Number(countResult.rows[0]?.total_signals || 0);
+    const resolvedSignals = Number(countResult.rows[0]?.resolved_signals || 0);
+
     // 1. Win rate by trigger type x regime combination
     const comboResult = await query(
       `WITH buy_signals AS (
@@ -192,6 +220,7 @@ export async function GET(request) {
       success: true,
       insights,
       nearMisses,
+      signalStats: { totalSignals, resolvedSignals },
     });
   } catch (err) {
     return NextResponse.json(

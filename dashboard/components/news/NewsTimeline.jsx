@@ -49,11 +49,11 @@ export default function NewsTimeline({ articles, loading, page, totalPages, onPa
             {/* Title */}
             <div style={{ fontWeight: 600, marginBottom: 6, lineHeight: 1.4 }}>
               {article.source_url ? (
-                <a href={article.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-heading)", textDecoration: "none" }}>
-                  {article.title_ja || article.title}
+                <a href={article.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-heading)", textDecoration: "none" }} title={article.title_ja || undefined}>
+                  {article.title || article.title_ja}
                 </a>
               ) : (
-                article.title_ja || article.title
+                <span title={article.title_ja || undefined}>{article.title || article.title_ja}</span>
               )}
             </div>
 

@@ -1,7 +1,7 @@
 import { query } from "../../lib/db";
 import ScannerTable from "../../components/scanner/ScannerTable";
 
-export const revalidate = 300;
+export const dynamic = "force-dynamic";
 
 async function getLatestScanResults() {
   try {

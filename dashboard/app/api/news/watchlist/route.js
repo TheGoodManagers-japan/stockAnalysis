@@ -18,7 +18,7 @@ export async function GET() {
            (array_agg(na.ai_summary ORDER BY na.published_at DESC))[1] as latest_summary,
            json_agg(json_build_object(
              'id', na.id,
-             'title', COALESCE(na.title_ja, na.title),
+             'title', COALESCE(na.title, na.title_ja),
              'source', na.source,
              'sentiment', na.sentiment,
              'impact_level', na.impact_level,

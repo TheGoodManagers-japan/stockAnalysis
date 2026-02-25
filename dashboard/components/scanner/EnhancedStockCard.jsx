@@ -10,6 +10,7 @@ import { VERDICT_CONFIG, formatNum, formatSector, scoreColor, rrColor, computeRR
 function cardBorderClass(stock, review) {
   if (review?.verdict === "AVOID") return styles.cardAvoid;
   if (review?.verdict === "CAUTION") return styles.cardCaution;
+  if (review?.verdict === "STRONG_BUY") return styles.cardStrongBuy;
   if (stock.is_buy_now) return styles.cardBuy;
   return "";
 }
@@ -229,6 +230,34 @@ export default function EnhancedStockCard({
                   <div className={styles.aiDetailTitle}>Earnings</div>
                   <div className={styles.aiDetailText}>{review.earnings_status || "-"}</div>
                 </div>
+                {review.bull_points?.length > 0 && (
+                  <div className={styles.aiDetailSection} style={{ borderLeft: "2px solid var(--accent-green)" }}>
+                    <div className={styles.aiDetailTitle} style={{ color: "var(--accent-green)" }}>Bull Case</div>
+                    <ul style={{ margin: 0, paddingLeft: 16, fontSize: "0.75rem", lineHeight: 1.5 }}>
+                      {review.bull_points.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {review.bear_points?.length > 0 && (
+                  <div className={styles.aiDetailSection} style={{ borderLeft: "2px solid var(--accent-red)" }}>
+                    <div className={styles.aiDetailTitle} style={{ color: "var(--accent-red)" }}>Bear Case</div>
+                    <ul style={{ margin: 0, paddingLeft: 16, fontSize: "0.75rem", lineHeight: 1.5 }}>
+                      {review.bear_points.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {review.key_catalyst && (
+                  <div className={styles.aiDetailSection}>
+                    <div className={styles.aiDetailTitle}>Key Catalyst</div>
+                    <div className={styles.aiDetailText}>{review.key_catalyst}</div>
+                  </div>
+                )}
+                {review.watch_for && (
+                  <div className={styles.aiDetailSection}>
+                    <div className={styles.aiDetailTitle}>Watch For</div>
+                    <div className={styles.aiDetailText}>{review.watch_for}</div>
+                  </div>
+                )}
                 <div className={styles.aiVerdictRow}>
                   <div>
                     <span

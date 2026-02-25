@@ -1,12 +1,24 @@
 import { query } from "../../../lib/db";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
+async function safeQuery(sql, params, fallback = { rows: [] }) {
+  try {
+    return await query(sql, params);
+  } catch (err) {
+    console.warn(`[suggestions] query failed: ${err.message}`);
+    return fallback;
+  }
+}
+
 // GET /api/suggestions — daily actionable briefing
 export async function GET() {
   try {
-    // Get latest completed scan ID
+    // Get latest completed scan with metadata
     const scanRun = await query(
-      `SELECT scan_id FROM scan_runs
+      `SELECT scan_id, started_at, finished_at, ticker_count, total_tickers, buy_count, status
+       FROM scan_runs
        WHERE status = 'completed'
        ORDER BY started_at DESC LIMIT 1`
     );
@@ -14,46 +26,76 @@ export async function GET() {
     if (scanRun.rows.length === 0) {
       return NextResponse.json({
         success: true,
+        scanMeta: null,
         buyOpportunities: [],
         positionActions: [],
         watchlistAlerts: [],
+        newsCatalysts: [],
+        topRated: [],
+        newsContext: {},
+        dailyReport: null,
       });
     }
 
-    const scanId = scanRun.rows[0].scan_id;
+    const scan = scanRun.rows[0];
+    const scanId = scan.scan_id;
+    const scanMeta = {
+      scanId,
+      startedAt: scan.started_at,
+      finishedAt: scan.finished_at,
+      tickerCount: scan.ticker_count,
+      totalTickers: scan.total_tickers,
+      buyCount: scan.buy_count,
+      ageDays: Math.floor(
+        (Date.now() - new Date(scan.finished_at || scan.started_at).getTime()) / 86400000
+      ),
+    };
 
-    // 1. Top buy opportunities (buy signals sorted by tier + prediction upside)
-    const buyOpportunities = await query(
+    // 1. Top buy opportunities (buy signals sorted by tier + scores)
+    const buyOpportunities = await safeQuery(
       `SELECT
          sr.ticker_code, t.short_name, t.sector,
          sr.current_price, sr.tier, sr.buy_now_reason, sr.trigger_type,
          sr.short_term_score, sr.long_term_score,
          sr.stop_loss, sr.price_target, sr.limit_buy_order,
-         sr.market_regime,
-         p.predicted_max_30d, p.predicted_pct_change, p.confidence as pred_confidence
+         sr.market_regime
        FROM scan_results sr
        LEFT JOIN tickers t ON t.code = sr.ticker_code
-       LEFT JOIN LATERAL (
-         SELECT predicted_max_30d, predicted_pct_change, confidence
-         FROM predictions
-         WHERE ticker_code = sr.ticker_code
-         ORDER BY prediction_date DESC LIMIT 1
-       ) p ON true
        WHERE sr.scan_id = $1 AND sr.is_buy_now = true
-       ORDER BY sr.tier ASC, p.predicted_pct_change DESC NULLS LAST, sr.short_term_score ASC
+       ORDER BY sr.tier ASC, sr.short_term_score ASC
        LIMIT 10`,
       [scanId]
     );
 
+    // Enrich buy opportunities with predictions (if table exists)
+    const buyTickers = buyOpportunities.rows.map(r => r.ticker_code);
+    let predMap = {};
+    if (buyTickers.length > 0) {
+      const predResult = await safeQuery(
+        `SELECT DISTINCT ON (ticker_code)
+           ticker_code, predicted_max_30d, predicted_pct_change, confidence
+         FROM predictions
+         WHERE ticker_code = ANY($1)
+         ORDER BY ticker_code, prediction_date DESC`,
+        [buyTickers]
+      );
+      for (const p of predResult.rows) predMap[p.ticker_code] = p;
+    }
+    const enrichedBuys = buyOpportunities.rows.map(r => ({
+      ...r,
+      predicted_max_30d: predMap[r.ticker_code]?.predicted_max_30d || null,
+      predicted_pct_change: predMap[r.ticker_code]?.predicted_pct_change || null,
+      pred_confidence: predMap[r.ticker_code]?.confidence || null,
+    }));
+
     // 2. Position actions (open positions with management signals)
-    const positionActions = await query(
+    const positionActions = await safeQuery(
       `SELECT
          ph.id, ph.ticker_code, t.short_name, t.sector,
          ph.entry_price, ph.shares, ph.current_stop, ph.initial_stop, ph.price_target,
          ph.entry_date, ph.entry_kind,
          sr.current_price, sr.mgmt_signal_status, sr.mgmt_signal_reason,
-         sr.short_term_score, sr.long_term_score, sr.market_regime,
-         p.predicted_max_30d, p.predicted_pct_change
+         sr.short_term_score, sr.long_term_score, sr.market_regime
        FROM portfolio_holdings ph
        LEFT JOIN tickers t ON t.code = ph.ticker_code
        LEFT JOIN LATERAL (
@@ -63,12 +105,6 @@ export async function GET() {
          WHERE ticker_code = ph.ticker_code AND scan_id = $1
          LIMIT 1
        ) sr ON true
-       LEFT JOIN LATERAL (
-         SELECT predicted_max_30d, predicted_pct_change
-         FROM predictions
-         WHERE ticker_code = ph.ticker_code
-         ORDER BY prediction_date DESC LIMIT 1
-       ) p ON true
        WHERE ph.status = 'open'
        ORDER BY
          CASE sr.mgmt_signal_status
@@ -81,7 +117,7 @@ export async function GET() {
     );
 
     // 3. Watchlist alerts (high prediction upside stocks not currently buy signals)
-    const watchlistAlerts = await query(
+    const watchlistAlerts = await safeQuery(
       `SELECT
          p.ticker_code, t.short_name, t.sector,
          p.predicted_max_30d, p.predicted_pct_change, p.confidence, p.current_price,
@@ -107,7 +143,7 @@ export async function GET() {
     );
 
     // 4. News catalysts — tickers on news watchlist that also have buy signals
-    const newsCatalysts = await query(
+    const newsCatalysts = await safeQuery(
       `SELECT
          nw.ticker_code, t.short_name, t.sector,
          nw.composite_score as news_score, nw.avg_sentiment, nw.max_impact,
@@ -127,19 +163,19 @@ export async function GET() {
 
     // 5. News context for all relevant tickers (buy opps + positions)
     const allTickers = [
-      ...buyOpportunities.rows.map((r) => r.ticker_code),
+      ...enrichedBuys.map((r) => r.ticker_code),
       ...positionActions.rows.map((r) => r.ticker_code),
     ];
     let newsContext = {};
     if (allTickers.length > 0) {
       const uniqueTickers = [...new Set(allTickers)];
-      const newsCtxResult = await query(
+      const newsCtxResult = await safeQuery(
         `SELECT
            nat.ticker_code,
            COUNT(*) as article_count,
            ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
            MAX(na.impact_level) as max_impact,
-           (array_agg(COALESCE(na.title_ja, na.title) ORDER BY na.published_at DESC))[1] as latest_headline
+           (array_agg(COALESCE(na.title, na.title_ja) ORDER BY na.published_at DESC))[1] as latest_headline
          FROM news_article_tickers nat
          JOIN news_articles na ON na.id = nat.article_id
          WHERE nat.ticker_code = ANY($1)
@@ -159,7 +195,7 @@ export async function GET() {
     }
 
     // 6. Daily report (cached, if available for today)
-    const dailyReportResult = await query(
+    const dailyReportResult = await safeQuery(
       `SELECT report_json, article_count
        FROM daily_news_reports
        WHERE report_date = CURRENT_DATE
@@ -168,6 +204,24 @@ export async function GET() {
     const dailyReport = dailyReportResult.rows.length > 0
       ? dailyReportResult.rows[0].report_json
       : null;
+
+    // 7. Top rated stocks (fallback — always has data from scan_results)
+    const topRated = await safeQuery(
+      `SELECT
+         sr.ticker_code, t.short_name, t.sector,
+         sr.current_price, sr.tier,
+         sr.fundamental_score, sr.valuation_score, sr.technical_score,
+         sr.short_term_score, sr.long_term_score,
+         sr.market_regime, sr.is_buy_now, sr.trigger_type
+       FROM scan_results sr
+       LEFT JOIN tickers t ON t.code = sr.ticker_code
+       WHERE sr.scan_id = $1 AND sr.tier IS NOT NULL
+       ORDER BY sr.tier ASC,
+         (COALESCE(sr.fundamental_score, 0) + COALESCE(sr.valuation_score, 0)) DESC,
+         sr.short_term_score ASC
+       LIMIT 15`,
+      [scanId]
+    );
 
     // Compute unrealized P&L for position actions
     const enrichedPositions = positionActions.rows.map((pos) => {
@@ -195,12 +249,14 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       scanId,
-      buyOpportunities: buyOpportunities.rows,
+      scanMeta,
+      buyOpportunities: enrichedBuys,
       positionActions: enrichedPositions,
       watchlistAlerts: watchlistAlerts.rows,
       newsCatalysts: newsCatalysts.rows,
       newsContext,
       dailyReport,
+      topRated: topRated.rows,
     });
   } catch (err) {
     return NextResponse.json(

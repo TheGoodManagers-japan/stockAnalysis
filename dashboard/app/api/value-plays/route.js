@@ -148,7 +148,7 @@ export async function POST(request) {
     // Build prompt
     const newsText = recentNews.length > 0
       ? recentNews.map((n) =>
-          `- [${n.news_category || "other"}] ${n.title_ja || n.title} (${n.sentiment}, impact: ${n.impact_level})`
+          `- [${n.news_category || "other"}] ${n.title || n.title_ja} (${n.sentiment}, impact: ${n.impact_level})`
         ).join("\n")
       : "No recent news found.";
 

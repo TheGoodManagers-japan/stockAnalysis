@@ -25,7 +25,7 @@ export async function GET(request) {
            ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
            MAX(CASE na.impact_level WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END) as max_impact_num,
            MAX(na.impact_level) as max_impact,
-           (array_agg(COALESCE(na.title_ja, na.title) ORDER BY na.published_at DESC))[1] as latest_headline,
+           (array_agg(COALESCE(na.title, na.title_ja) ORDER BY na.published_at DESC))[1] as latest_headline,
            MAX(na.published_at) as latest_date
          FROM news_article_tickers nat
          JOIN news_articles na ON na.id = nat.article_id
