@@ -8,6 +8,7 @@ import ValuePlaysSection from "../components/dashboard/ValuePlaysSection";
 import SpaceFundSection from "../components/dashboard/SpaceFundSection";
 import WatchlistSection from "../components/dashboard/WatchlistSection";
 
+export const dynamic = "force-dynamic";
 export const revalidate = 300;
 
 // --- Data fetchers (all run in parallel) ---
@@ -377,7 +378,7 @@ async function NewsBlock() {
                   </span>
                 </div>
                 <div style={{ fontSize: "0.85rem", fontWeight: 500, marginBottom: 2 }}>
-                  {n.title_ja || n.title}
+                  {n.title || n.title_ja}
                 </div>
                 {tickers.length > 0 && (
                   <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
