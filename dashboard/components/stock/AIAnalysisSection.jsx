@@ -25,7 +25,6 @@ function normalizeReview(raw) {
 export default function AIAnalysisSection({ tickerCode, initialReview }) {
   const [rawReview, setRawReview] = useState(initialReview);
   const [loading, setLoading] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const review = normalizeReview(rawReview);
 
@@ -146,6 +145,36 @@ export default function AIAnalysisSection({ tickerCode, initialReview }) {
         )}
       </div>
 
+      {/* Company / News / Macro / Earnings grid */}
+      {(review.company_description || review.news_summary || review.macro_context || review.earnings_status) && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          {review.company_description && (
+            <div style={{ padding: "8px 10px", background: "var(--bg-tertiary)", borderRadius: 4, border: "1px solid var(--border-primary)" }}>
+              <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>Company</div>
+              <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.company_description}</div>
+            </div>
+          )}
+          {review.news_summary && (
+            <div style={{ padding: "8px 10px", background: "var(--bg-tertiary)", borderRadius: 4, border: "1px solid var(--border-primary)" }}>
+              <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>News</div>
+              <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.news_summary}</div>
+            </div>
+          )}
+          {review.macro_context && (
+            <div style={{ padding: "8px 10px", background: "var(--bg-tertiary)", borderRadius: 4, border: "1px solid var(--border-primary)" }}>
+              <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>Macro</div>
+              <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.macro_context}</div>
+            </div>
+          )}
+          {review.earnings_status && (
+            <div style={{ padding: "8px 10px", background: "var(--bg-tertiary)", borderRadius: 4, border: "1px solid var(--border-primary)" }}>
+              <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>Earnings</div>
+              <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.earnings_status}</div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Verdict reason */}
       <div style={{ fontSize: "0.9rem", color: "var(--text-primary)", lineHeight: 1.6, marginBottom: 16 }}>
         {review.verdict_reason}
@@ -201,55 +230,6 @@ export default function AIAnalysisSection({ tickerCode, initialReview }) {
         </div>
       )}
 
-      {/* Collapsible details */}
-      {(review.company_description || review.news_summary || review.macro_context || review.earnings_status) && (
-        <div>
-          <button
-            onClick={() => setDetailsOpen(!detailsOpen)}
-            style={{
-              background: "none",
-              border: "none",
-              color: "var(--text-secondary)",
-              fontSize: "0.78rem",
-              cursor: "pointer",
-              padding: "4px 0",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            {detailsOpen ? "\u25B2" : "\u25BC"} Details
-          </button>
-          {detailsOpen && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
-              {review.company_description && (
-                <div style={{ padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 4 }}>
-                  <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3 }}>Company</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.company_description}</div>
-                </div>
-              )}
-              {review.news_summary && (
-                <div style={{ padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 4 }}>
-                  <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3 }}>News</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.news_summary}</div>
-                </div>
-              )}
-              {review.macro_context && (
-                <div style={{ padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 4 }}>
-                  <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3 }}>Macro</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.macro_context}</div>
-                </div>
-              )}
-              {review.earnings_status && (
-                <div style={{ padding: "8px 10px", background: "var(--bg-secondary)", borderRadius: 4 }}>
-                  <div style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", marginBottom: 3 }}>Earnings</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-primary)", lineHeight: 1.4 }}>{review.earnings_status}</div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

@@ -180,6 +180,47 @@ export default function EnhancedStockCard({
         )}
       </div>
 
+      {/* ML Prediction section */}
+      {stock.predicted_max_5d && !stock.ml_skip_reason && (
+        <div className={`${styles.mlSection} ${styles.cardInteractive}`} style={{ pointerEvents: "none" }}>
+          <div className={styles.mlHeader}>
+            <span className={styles.mlTitle}>ML Forecast</span>
+            {stock.ml_confidence != null && (
+              <span className={styles.mlConfidence}>
+                {(Number(stock.ml_confidence) * 100).toFixed(0)}% conf
+              </span>
+            )}
+          </div>
+          <div className={styles.mlGrid}>
+            {[
+              { label: "5d", max: stock.predicted_max_5d, unc: stock.uncertainty_5d },
+              { label: "10d", max: stock.predicted_max_10d, unc: stock.uncertainty_10d },
+              { label: "20d", max: stock.predicted_max_20d, unc: stock.uncertainty_20d },
+              { label: "30d", max: stock.predicted_max_30d, unc: stock.uncertainty_30d },
+            ].map(({ label, max, unc }) => {
+              const maxVal = Number(max);
+              const currentVal = Number(stock.ml_current_price || stock.current_price);
+              const pct = currentVal > 0 ? ((maxVal - currentVal) / currentVal) * 100 : 0;
+              const uncVal = Number(unc) || 0;
+              return (
+                <div key={label} className={styles.mlCell}>
+                  <div className={styles.mlCellLabel}>{label}</div>
+                  <div
+                    className={styles.mlCellValue}
+                    style={{ color: pct >= 0 ? "var(--accent-green)" : "var(--accent-red)" }}
+                  >
+                    {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
+                  </div>
+                  {uncVal > 0 && (
+                    <div className={styles.mlCellUnc}>±{uncVal.toFixed(1)}%</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* AI section */}
       <div className={`${styles.aiSection} ${styles.cardInteractive}`}>
         {review ? (

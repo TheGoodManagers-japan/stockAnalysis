@@ -193,6 +193,68 @@
   overflow: hidden;
 }
 
+/* --- ML Prediction section --- */
+.mlSection {
+  border-top: 1px solid var(--border-primary);
+  padding-top: 10px;
+  margin-bottom: 0;
+}
+
+.mlHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mlTitle {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.mlConfidence {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+}
+
+.mlGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.mlCell {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  padding: 5px 4px;
+  text-align: center;
+}
+
+.mlCellLabel {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.mlCellValue {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.mlCellUnc {
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
 /* --- AI section --- */
 .aiSection {
   border-top: 1px solid var(--border-primary);

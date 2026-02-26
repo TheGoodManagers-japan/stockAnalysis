@@ -24,10 +24,20 @@ async function getLatestScanResults() {
       results = await query(
         `SELECT sr.*, t.short_name, t.sector,
                 ar.verdict AS ai_verdict, ar.reason AS ai_reason,
-                ar.confidence AS ai_confidence, ar.full_analysis AS ai_full_analysis
+                ar.confidence AS ai_confidence, ar.full_analysis AS ai_full_analysis,
+                p.predicted_max_5d, p.predicted_max_10d, p.predicted_max_20d, p.predicted_max_30d,
+                p.predicted_pct_change, p.confidence AS ml_confidence, p.model_type AS ml_model_type,
+                p.uncertainty_5d, p.uncertainty_10d, p.uncertainty_20d, p.uncertainty_30d,
+                p.prediction_date AS ml_prediction_date, p.skip_reason AS ml_skip_reason,
+                p.current_price AS ml_current_price
          FROM scan_results sr
          LEFT JOIN tickers t ON t.code = sr.ticker_code
          LEFT JOIN ai_reviews ar ON ar.scan_id = sr.scan_id AND ar.ticker_code = sr.ticker_code
+         LEFT JOIN LATERAL (
+           SELECT * FROM predictions pred
+           WHERE pred.ticker_code = sr.ticker_code
+           ORDER BY pred.prediction_date DESC LIMIT 1
+         ) p ON true
          WHERE sr.scan_id = $1
          ORDER BY sr.is_buy_now DESC, sr.tier ASC, sr.ticker_code ASC`,
         [scan.scan_id]
@@ -36,9 +46,19 @@ async function getLatestScanResults() {
       // If ai_reviews table doesn't exist, query without it
       console.warn("ai_reviews table not available, querying without AI data:", aiTableErr.message);
       results = await query(
-        `SELECT sr.*, t.short_name, t.sector
+        `SELECT sr.*, t.short_name, t.sector,
+                p.predicted_max_5d, p.predicted_max_10d, p.predicted_max_20d, p.predicted_max_30d,
+                p.predicted_pct_change, p.confidence AS ml_confidence, p.model_type AS ml_model_type,
+                p.uncertainty_5d, p.uncertainty_10d, p.uncertainty_20d, p.uncertainty_30d,
+                p.prediction_date AS ml_prediction_date, p.skip_reason AS ml_skip_reason,
+                p.current_price AS ml_current_price
          FROM scan_results sr
          LEFT JOIN tickers t ON t.code = sr.ticker_code
+         LEFT JOIN LATERAL (
+           SELECT * FROM predictions pred
+           WHERE pred.ticker_code = sr.ticker_code
+           ORDER BY pred.prediction_date DESC LIMIT 1
+         ) p ON true
          WHERE sr.scan_id = $1
          ORDER BY sr.is_buy_now DESC, sr.tier ASC, sr.ticker_code ASC`,
         [scan.scan_id]
