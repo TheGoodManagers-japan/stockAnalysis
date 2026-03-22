@@ -78,9 +78,21 @@ export async function getCachedHistory(tickerCode, years = 10) {
 async function upsertPriceHistory(tickerCode, bars) {
   if (!bars || bars.length === 0) return;
 
+  // Deduplicate by date (keep last occurrence) to avoid
+  // "ON CONFLICT DO UPDATE cannot affect row a second time"
+  const seen = new Map();
+  for (const bar of bars) {
+    const dateStr =
+      bar.date instanceof Date
+        ? bar.date.toISOString().split("T")[0]
+        : String(bar.date).split("T")[0];
+    seen.set(dateStr, bar);
+  }
+  const dedupedBars = [...seen.values()];
+
   const batchSize = 100;
-  for (let i = 0; i < bars.length; i += batchSize) {
-    const batch = bars.slice(i, i + batchSize);
+  for (let i = 0; i < dedupedBars.length; i += batchSize) {
+    const batch = dedupedBars.slice(i, i + batchSize);
     const values = [];
     const params = [];
     let idx = 1;
