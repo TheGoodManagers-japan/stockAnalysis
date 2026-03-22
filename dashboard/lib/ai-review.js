@@ -359,25 +359,27 @@ CRITICAL RULES — follow these exactly:
 - Absence of news is NEUTRAL, not negative. Do not penalize stocks for having no recent news.
 - If a stock lacks fundamental data, say so directly — do not invent concerns.
 
-CONFIDENCE CALIBRATION (follow strictly):
-- 20-35: Data is missing or contradictory. Example: No fundamentals, unclear regime, no news.
-- 40-55: Slight lean one way. Example: Decent fundamentals but earnings in 10 days with no guidance.
-- 60-75: Clear directional evidence. Example: Strong technicals + good fundamentals + supportive sector, one minor risk.
-- 80-90: Multiple factors strongly aligned. Example: Tier 1, UP/STRONG_UP regime, R:R >= 2.0, fund score >= 7, positive sector rotation.
-- 91+: Extraordinary alignment across all dimensions. Rare.
+CONFIDENCE CALIBRATION — use the FULL 0-100 range, do NOT cluster around 45:
+- 15-30: Severe data gaps or multiple red flags. Example: No fundamentals AND bearish regime AND weak technicals.
+- 35-50: More negatives than positives, but tradeable with tight risk management.
+- 55-65: Balanced setup with identifiable edge. This is where most decent swing trades should fall.
+- 70-80: Strong setup with clear catalyst and good risk/reward. Multiple factors aligned.
+- 85-95: Exceptional alignment across technicals, fundamentals, and macro. Rare but real.
+
+IMPORTANT: Differentiate your confidence scores between stocks. If you review 10 stocks, they should NOT all get the same confidence. Use the data to rank them relative to each other.
 
 SCORING CONTEXT:
 - Master Score (0-100): Composite of all scoring dimensions. >=70 = strong, >=50 = decent, <30 = weak.
-- If "SCORES CONFLICTED" appears, the fundamental, valuation, and technical scores strongly disagree — investigate why and note it.
+- If "SCORES CONFLICTED" appears, investigate which scores disagree and why — but conflicted scores do NOT automatically mean CAUTION. A stock with great technicals (8/10) and weak fundamentals (2/10) can still be CONFIRMED for a swing trade if the technical setup is compelling.
 - If "Trajectory: improving", fundamentals are trending better vs. 30+ days ago. If "deteriorating", they're worsening.
-- If "Data Freshness: aging/stale", fundamental data may be outdated — weight technical signals more heavily and note data staleness.
-- Data Confidence <40% means key metrics are missing — lower your confidence accordingly.
+- If "Data Freshness: aging/stale", fundamental data may be outdated — weight technical signals more heavily.
+- Data Confidence <40% means key metrics are missing — note it but don't let it override a strong technical setup.
 
-VERDICT CRITERIA:
-- STRONG_BUY: Tier 1-2, regime UP or STRONG_UP, R:R >= 2.0, fundamental score >= 7, no earnings within 14 days, master score >= 65. Everything aligned — full position.
-- CONFIRMED: At least 3 of 5 factors positive (technicals, fundamentals, news, macro, risk/reward). Good setup — standard position.
-- CAUTION: You must name the ONE specific concern and what would RESOLVE it. Example: "Earnings in 8 days — wait for results or use half position." Conflicted scores alone warrant CAUTION.
-- AVOID: At least 2 concrete red flags. Name them explicitly.
+VERDICT CRITERIA — for swing trades (5-30 day hold), technicals and risk/reward matter MORE than fundamentals:
+- STRONG_BUY: R:R >= 2.5, strong technical trigger (DIP/BREAKOUT), supportive regime, no imminent earnings risk. Fundamentals are a bonus, not a requirement.
+- CONFIRMED: Clear technical entry with R:R >= 1.5, and no major red flags. This should be your MOST COMMON verdict for stocks with valid buy signals. These stocks already passed the scanner's entry criteria.
+- CAUTION: A specific, identifiable risk that could invalidate the trade within the hold period. Name the concern and what would resolve it. Example: "Earnings in 8 days — wait for results."
+- AVOID: The trade setup is fundamentally broken — stop loss too wide, bearish regime, or company-specific crisis (fraud, delisting risk, etc.).
 ${macroSection}${sectorSection}
 For each stock, provide ALL of the following:
 1. **company_description**: 1 sentence — what the company does and its market position
