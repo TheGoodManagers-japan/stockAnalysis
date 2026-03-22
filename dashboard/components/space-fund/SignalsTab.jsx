@@ -270,7 +270,7 @@ function SignalCard({ signal }) {
 
 export default function SignalsTab({ signals, loading, onRefresh }) {
   const [refreshing, setRefreshing] = useState(false);
-  const [progressLabel, setProgressLabel] = useState("");
+  const [progressData, setProgressData] = useState(null);
   const pollRef = useRef(null);
   const timeoutRef = useRef(null);
 
@@ -283,7 +283,7 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    setProgressLabel("Starting...");
+    setProgressData(null);
     try {
       // Spawn the full pipeline script (news fetch → signals → Discord report)
       const res = await fetch("/api/space-fund/signals/run-script", { method: "POST" });
@@ -291,7 +291,7 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
       if (!data.success) {
         console.error("Signal refresh failed:", data.error);
         setRefreshing(false);
-        setProgressLabel("");
+        setProgressData(null);
         return;
       }
       // Poll progress endpoint for step updates
@@ -303,11 +303,11 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
           if (prog) {
             if (prog.status === "completed" || prog.status === "failed") {
               stopPolling();
-              setProgressLabel("");
+              setProgressData(null);
               setRefreshing(false);
               if (onRefresh) await onRefresh();
-            } else if (prog.label) {
-              setProgressLabel(prog.label);
+            } else {
+              setProgressData(prog);
             }
           }
         } catch {}
@@ -315,14 +315,14 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
       // Safety timeout: stop polling after 5 minutes
       timeoutRef.current = setTimeout(() => {
         stopPolling();
-        setProgressLabel("");
+        setProgressData(null);
         setRefreshing(false);
         if (onRefresh) onRefresh();
       }, 300000);
     } catch (err) {
       console.error("Signal refresh error:", err);
       setRefreshing(false);
-      setProgressLabel("");
+      setProgressData(null);
     }
   };
 
@@ -370,17 +370,72 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {refreshing && progressLabel && (
-            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
-              {progressLabel}
-            </span>
+          {refreshing && progressData && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {/* Progress bar */}
+              <div
+                style={{
+                  width: 120,
+                  height: 6,
+                  background: "var(--bg-tertiary, #333)",
+                  borderRadius: 3,
+                  overflow: "hidden",
+                }}
+              >
+                {progressData.tickerProgress > 0 ? (
+                  <div
+                    style={{
+                      width: `${Math.round((progressData.tickerProgress / (progressData.tickerTotal || 1)) * 100)}%`,
+                      height: "100%",
+                      background: "var(--accent-blue, #3b82f6)",
+                      borderRadius: 3,
+                      transition: "width 300ms ease",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: "40%",
+                      height: "100%",
+                      background: "var(--accent-blue, #3b82f6)",
+                      borderRadius: 3,
+                      animation: "sf-indeterminate 1.5s ease-in-out infinite",
+                    }}
+                  />
+                )}
+              </div>
+
+              {/* Step label + ticker progress */}
+              {progressData.tickerProgress > 0 ? (
+                <>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary, #eee)", whiteSpace: "nowrap" }}>
+                    {Math.round((progressData.tickerProgress / (progressData.tickerTotal || 1)) * 100)}%
+                  </span>
+                  <span style={{ fontSize: "0.78rem", color: "var(--text-secondary, #aaa)", whiteSpace: "nowrap" }}>
+                    {progressData.tickerProgress}/{progressData.tickerTotal}
+                  </span>
+                </>
+              ) : (
+                <span style={{ fontSize: "0.78rem", fontWeight: 500, color: "var(--text-secondary, #aaa)", whiteSpace: "nowrap" }}>
+                  {progressData.label || "Starting..."}
+                </span>
+              )}
+
+              <style>{`
+                @keyframes sf-indeterminate {
+                  0% { transform: translateX(-100%); }
+                  50% { transform: translateX(200%); }
+                  100% { transform: translateX(-100%); }
+                }
+              `}</style>
+            </div>
           )}
           <button
             className="btn btn-sm btn-primary"
             onClick={handleRefresh}
             disabled={refreshing}
           >
-            {refreshing && <span className="spinner" style={{ marginRight: 6 }} />}
+            {refreshing && !progressData && <span className="spinner" style={{ marginRight: 6 }} />}
             {refreshing ? "Running..." : "Run Signals"}
           </button>
         </div>
