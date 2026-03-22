@@ -2,7 +2,8 @@ import { query } from "../../../lib/db";
 import Link from "next/link";
 import { PriceChart, ScanHistoryChart } from "./Charts";
 import AIAnalysisSection from "../../../components/stock/AIAnalysisSection";
-import { formatNum } from "../../../lib/uiHelpers";
+import MLPredictionSection from "../../../components/stock/MLPredictionSection";
+import { formatNum, masterScoreColor } from "../../../lib/uiHelpers";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,16 @@ async function getStockDetail(tickerCode) {
   try {
     const [scanResult, history, snapshot, news, prediction, recentNews, aiReview] = await Promise.all([
       query(
-        `SELECT sr.*, t.short_name, t.sector
+        `SELECT sr.*, t.short_name, t.sector,
+                sr.master_score,
+                (sr.other_data_json->>'scoring_confidence')::numeric AS scoring_confidence,
+                (sr.other_data_json->>'data_freshness') AS data_freshness,
+                (sr.other_data_json->>'tier_trajectory') AS tier_trajectory,
+                (sr.other_data_json->>'is_conflicted')::boolean AS is_conflicted,
+                (sr.other_data_json->>'score_disagreement')::numeric AS score_disagreement,
+                (sr.other_data_json->>'fundPctile')::int AS fund_pctile,
+                (sr.other_data_json->>'valPctile')::int AS val_pctile,
+                (sr.other_data_json->>'techPctile')::int AS tech_pctile
          FROM scan_results sr
          JOIN tickers t ON t.code = sr.ticker_code
          WHERE sr.ticker_code = $1
@@ -132,9 +142,18 @@ export default async function StockDetailPage({ params }) {
               </span>
             )}
           </h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {scan?.sector && <span className="badge badge-neutral">{scan.sector.replace(/_/g, " ")}</span>}
-            {scan?.tier && <span className={`badge badge-tier-${scan.tier}`}>Tier {scan.tier}</span>}
+            {scan?.tier && (
+              <span className={`badge badge-tier-${scan.tier}`}>
+                Tier {scan.tier}
+                {scan.tier_trajectory && scan.tier_trajectory !== "stable" && (
+                  <span style={{ marginLeft: 4, fontSize: "0.7rem" }}>
+                    {scan.tier_trajectory === "improving" ? "\u25B2" : "\u25BC"}
+                  </span>
+                )}
+              </span>
+            )}
             {scan?.is_buy_now && <span className="badge badge-buy">BUY</span>}
             {scan?.market_regime && (
               <span
@@ -149,20 +168,53 @@ export default async function StockDetailPage({ params }) {
                 {scan.market_regime}
               </span>
             )}
+            {scan?.is_conflicted && (
+              <span className="badge badge-sell" style={{ fontSize: "0.65rem" }}>
+                CONFLICTED
+              </span>
+            )}
+            {scan?.data_freshness && scan.data_freshness !== "fresh" && (
+              <span className="badge badge-neutral" style={{ fontSize: "0.65rem", color: scan.data_freshness === "stale" ? "var(--accent-red)" : "var(--accent-yellow)" }}>
+                {scan.data_freshness.toUpperCase()} DATA
+              </span>
+            )}
           </div>
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div
-            style={{
-              fontSize: "1.8rem",
-              fontWeight: 700,
-              fontFamily: "var(--font-mono)",
-              color: "var(--text-heading)",
-            }}
-          >
-            {formatNum(scan?.current_price)}
+        <div style={{ textAlign: "right", display: "flex", alignItems: "center", gap: 16 }}>
+          {scan?.master_score != null && (
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: "50%",
+                border: `3px solid ${masterScoreColor(scan.master_score)}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexDirection: "column",
+                background: "var(--bg-tertiary)",
+              }}
+              title={`Master Score: ${scan.master_score}/100`}
+            >
+              <span style={{ fontSize: "1.2rem", fontWeight: 800, fontFamily: "var(--font-mono)", color: masterScoreColor(scan.master_score) }}>
+                {scan.master_score}
+              </span>
+              <span style={{ fontSize: "0.5rem", color: "var(--text-muted)" }}>SCORE</span>
+            </div>
+          )}
+          <div>
+            <div
+              style={{
+                fontSize: "1.8rem",
+                fontWeight: 700,
+                fontFamily: "var(--font-mono)",
+                color: "var(--text-heading)",
+              }}
+            >
+              {formatNum(scan?.current_price)}
+            </div>
+            <div className="text-muted" style={{ fontSize: "0.8rem" }}>JPY</div>
           </div>
-          <div className="text-muted" style={{ fontSize: "0.8rem" }}>JPY</div>
         </div>
       </div>
 
@@ -171,8 +223,33 @@ export default async function StockDetailPage({ params }) {
         <div className="card">
           <div className="card-title mb-md">Analysis Scores</div>
           <ScoreRow label="Fundamental" value={scan?.fundamental_score} />
+          {scan?.fund_pctile != null && (
+            <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: -6, marginBottom: 8 }}>
+              Top {100 - scan.fund_pctile}% of scanned stocks
+            </div>
+          )}
           <ScoreRow label="Valuation" value={scan?.valuation_score} />
+          {scan?.val_pctile != null && (
+            <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: -6, marginBottom: 8 }}>
+              Top {100 - scan.val_pctile}% of scanned stocks
+            </div>
+          )}
           <ScoreRow label="Technical" value={scan?.technical_score} />
+          {scan?.tech_pctile != null && (
+            <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: -6, marginBottom: 8 }}>
+              Top {100 - scan.tech_pctile}% of scanned stocks
+            </div>
+          )}
+          {scan?.scoring_confidence != null && (
+            <div style={{ marginTop: 8, fontSize: "0.72rem", color: "var(--text-muted)", borderTop: "1px solid var(--border-primary)", paddingTop: 8 }}>
+              Data confidence: {Math.round(scan.scoring_confidence * 100)}%
+              {scan.score_disagreement != null && (
+                <span style={{ marginLeft: 8 }}>
+                  | Disagreement: {Number(scan.score_disagreement).toFixed(2)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="card">
@@ -209,124 +286,11 @@ export default async function StockDetailPage({ params }) {
         </div>
 
         {/* ML Prediction */}
-        <div className="card">
-          <div className="card-title mb-md">
-            ML Price Forecast
-            {prediction?.model_type && !prediction.skip_reason && (
-              <span className="text-muted" style={{ fontSize: "0.72rem", fontWeight: 400, marginLeft: 8 }}>
-                {prediction.model_type.toUpperCase()} v{prediction.model_version || "?"}
-              </span>
-            )}
-          </div>
-          {prediction && prediction.skip_reason ? (
-            <div style={{ padding: "4px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <span style={{ color: "var(--accent-yellow)", fontSize: "0.85rem", fontWeight: 600 }}>
-                  Prediction Skipped
-                </span>
-              </div>
-              <p className="text-muted" style={{ fontSize: "0.82rem", lineHeight: 1.5, margin: 0 }}>
-                {prediction.skip_reason}
-              </p>
-              <div className="text-muted" style={{ fontSize: "0.72rem", marginTop: 8 }}>
-                Date: {String(prediction.prediction_date).split("T")[0]}
-              </div>
-            </div>
-          ) : prediction ? (
-            <div style={{ display: "grid", gap: 10 }}>
-              {/* Multi-horizon predictions */}
-              {prediction.predicted_max_5d ? (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                  {[
-                    { label: "5d", max: prediction.predicted_max_5d, unc: prediction.uncertainty_5d },
-                    { label: "10d", max: prediction.predicted_max_10d, unc: prediction.uncertainty_10d },
-                    { label: "20d", max: prediction.predicted_max_20d, unc: prediction.uncertainty_20d },
-                    { label: "30d", max: prediction.predicted_max_30d, unc: prediction.uncertainty_30d },
-                  ].map(({ label, max, unc }) => {
-                    const maxVal = Number(max);
-                    const currentVal = Number(prediction.current_price || scan?.current_price);
-                    const pct = currentVal > 0 ? ((maxVal - currentVal) / currentVal) * 100 : 0;
-                    const uncVal = Number(unc) || 0;
-                    return (
-                      <div
-                        key={label}
-                        style={{
-                          background: "var(--bg-primary)",
-                          borderRadius: 6,
-                          padding: "8px 10px",
-                          textAlign: "center",
-                        }}
-                      >
-                        <div className="text-muted" style={{ fontSize: "0.68rem", marginBottom: 4 }}>{label}</div>
-                        <div className="text-mono" style={{ fontWeight: 600, color: "var(--accent-blue)", fontSize: "0.85rem" }}>
-                          {Math.round(maxVal).toLocaleString()}
-                        </div>
-                        <div
-                          className="text-mono"
-                          style={{
-                            fontSize: "0.75rem",
-                            color: pct >= 0 ? "var(--accent-green)" : "var(--accent-red)",
-                          }}
-                        >
-                          {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
-                        </div>
-                        {uncVal > 0 && (
-                          <div className="text-muted" style={{ fontSize: "0.62rem", marginTop: 2 }}>
-                            ±{uncVal.toFixed(1)}%
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <>
-                  <div className="flex-between">
-                    <span className="text-secondary">Predicted Max (30d)</span>
-                    <span className="text-mono" style={{ fontWeight: 600, color: "var(--accent-blue)" }}>
-                      {Number(prediction.predicted_max_30d).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex-between">
-                    <span className="text-secondary">Expected Change</span>
-                    <span
-                      className="text-mono"
-                      style={{
-                        fontWeight: 600,
-                        color: Number(prediction.predicted_pct_change) >= 0 ? "var(--accent-green)" : "var(--accent-red)",
-                      }}
-                    >
-                      {Number(prediction.predicted_pct_change) >= 0 ? "+" : ""}
-                      {Number(prediction.predicted_pct_change).toFixed(1)}%
-                    </span>
-                  </div>
-                </>
-              )}
-              <div>
-                <div className="flex-between mb-sm">
-                  <span className="text-secondary">Confidence</span>
-                  <span className="text-mono" style={{ fontSize: "0.85rem" }}>
-                    {(Number(prediction.confidence) * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="score-bar-track">
-                  <div
-                    className="score-bar-fill"
-                    style={{
-                      width: `${Number(prediction.confidence) * 100}%`,
-                      background: "var(--accent-blue)",
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="text-muted" style={{ fontSize: "0.72rem", marginTop: 4 }}>
-                Prediction date: {String(prediction.prediction_date).split("T")[0]}
-              </div>
-            </div>
-          ) : (
-            <p className="text-muted">No prediction available yet.</p>
-          )}
-        </div>
+        <MLPredictionSection
+          tickerCode={tickerCode}
+          initialPrediction={prediction}
+          currentPrice={scan?.current_price}
+        />
       </div>
 
       {/* AI Analysis */}

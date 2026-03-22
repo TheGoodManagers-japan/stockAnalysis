@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import TabBar from "../../components/ui/TabBar";
 import PositionsTab from "../../components/portfolio/PositionsTab";
@@ -48,7 +48,23 @@ export default function PortfolioPage() {
   const fetchSnapshots = useCallback(async () => { const d = await fetchJson("/api/portfolio/snapshots"); if (d.success) setSnapshots(d.snapshots || []); }, [fetchJson]);
   const fetchJournal = useCallback(async () => { const d = await fetchJson("/api/portfolio/journal"); if (d.success) setJournal(d.entries || []); }, [fetchJson]);
 
-  useEffect(() => { fetchPortfolio(); fetchAnalytics(); fetchSnapshots(); fetchJournal(); }, [fetchPortfolio, fetchAnalytics, fetchSnapshots, fetchJournal]);
+  const fetchedTabs = useRef(new Set(["Positions"]));
+
+  // Only fetch portfolio data on mount
+  useEffect(() => { fetchPortfolio(); }, [fetchPortfolio]);
+
+  // Defer other tab data until the tab is activated
+  useEffect(() => {
+    if ((activeTab === "Analytics" || activeTab === "Risk") && !fetchedTabs.current.has("Analytics")) {
+      fetchedTabs.current.add("Analytics");
+      fetchAnalytics();
+      fetchSnapshots();
+    }
+    if (activeTab === "Journal" && !fetchedTabs.current.has("Journal")) {
+      fetchedTabs.current.add("Journal");
+      fetchJournal();
+    }
+  }, [activeTab, fetchAnalytics, fetchSnapshots, fetchJournal]);
 
   const patchPortfolio = useCallback(async (body) => {
     try { await fetch("/api/portfolio", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch (e) { console.error("PATCH portfolio:", e); }

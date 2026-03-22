@@ -65,7 +65,9 @@ export async function GET(request) {
       };
     }
 
-    return NextResponse.json({ success: true, context });
+    const response = NextResponse.json({ success: true, context });
+    response.headers.set("Cache-Control", "public, max-age=60");
+    return response;
   } catch (err) {
     console.error("[news/ticker-context] Error:", err);
     return NextResponse.json(

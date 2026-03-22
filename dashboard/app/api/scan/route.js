@@ -2,7 +2,7 @@ import { query } from "../../../lib/db";
 import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { fetchStockAnalysis } from "../../../engine/orchestrator.js";
-import { saveScanResult, cacheStockSnapshot, getCachedHistory } from "../../../lib/cache.js";
+import { saveScanResult, cacheStockSnapshot, getCachedHistory, updatePercentiles } from "../../../lib/cache.js";
 import { allTickers } from "../../../data/tickers.js";
 import { analyzeSectorRotation, sectorPoolsJP } from "../../../engine/sector/sectorRotationMonitor.js";
 import { validateTickerArray } from "../../../lib/validate.js";
@@ -126,7 +126,7 @@ export async function POST(request) {
       try {
         let buyCount = 0;
 
-        const { count, errors, summary } = await fetchStockAnalysis({
+        const { count, errors, summary, results: scanResults } = await fetchStockAnalysis({
           tickers: requestedTickers,
           myPortfolio,
           onProgress: async ({
@@ -159,6 +159,15 @@ export async function POST(request) {
             );
           },
         });
+
+        // Batch-update percentile data (computed post-loop by orchestrator)
+        if (Array.isArray(scanResults) && scanResults.length > 0) {
+          try {
+            await updatePercentiles(scanId, scanResults);
+          } catch (pctErr) {
+            console.warn("Percentile update failed (non-fatal):", pctErr?.message);
+          }
+        }
 
         // Final update: mark as completed
         await query(
@@ -379,6 +388,7 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url);
     const requestedScanId = searchParams.get("scanId");
+    const progressOnly = searchParams.get("progress") === "true";
 
     const scanRun = requestedScanId
       ? await query(`SELECT * FROM scan_runs WHERE scan_id = $1`, [requestedScanId])
@@ -388,23 +398,58 @@ export async function GET(request) {
     }
 
     const scan = scanRun.rows[0];
+
+    // Progress-only mode: return scan metadata + count without full results
+    if (progressOnly) {
+      const countResult = await query(
+        `SELECT COUNT(*)::int AS result_count FROM scan_results WHERE scan_id = $1`,
+        [scan.scan_id]
+      );
+      return NextResponse.json({
+        success: true,
+        scan,
+        resultCount: countResult.rows[0]?.result_count || 0,
+      });
+    }
+
     const results = await query(
-      `SELECT sr.*, t.short_name, t.sector,
+      `SELECT sr.ticker_code, sr.current_price, sr.fundamental_score, sr.valuation_score,
+              sr.technical_score, sr.tier, sr.is_buy_now, sr.buy_now_reason, sr.trigger_type,
+              sr.stop_loss, sr.price_target, sr.short_term_score, sr.long_term_score,
+              sr.market_regime, sr.scan_date, sr.scan_id,
+              sr.master_score,
+              (sr.other_data_json->>'ml_signal_confidence')::numeric AS ml_signal_confidence,
+              (sr.other_data_json->>'scoring_confidence')::numeric AS scoring_confidence,
+              (sr.other_data_json->>'data_freshness') AS data_freshness,
+              (sr.other_data_json->>'tier_trajectory') AS tier_trajectory,
+              (sr.other_data_json->>'is_conflicted')::boolean AS is_conflicted,
+              (sr.other_data_json->>'score_disagreement')::numeric AS score_disagreement,
+              (sr.other_data_json->>'fundPctile')::int AS fund_pctile,
+              (sr.other_data_json->>'valPctile')::int AS val_pctile,
+              (sr.other_data_json->>'techPctile')::int AS tech_pctile,
+              t.short_name, t.sector,
               ar.verdict AS ai_verdict, ar.reason AS ai_reason,
               ar.confidence AS ai_confidence, ar.full_analysis AS ai_full_analysis
        FROM scan_results sr
        LEFT JOIN tickers t ON t.code = sr.ticker_code
        LEFT JOIN ai_reviews ar ON ar.scan_id = sr.scan_id AND ar.ticker_code = sr.ticker_code
        WHERE sr.scan_id = $1
-       ORDER BY sr.is_buy_now DESC, sr.tier ASC, sr.ticker_code ASC`,
+       ORDER BY sr.master_score DESC NULLS LAST, sr.is_buy_now DESC, sr.tier ASC`,
       [scan.scan_id]
     );
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       scan,
       results: results.rows,
     });
+    // Cache completed scan results; don't cache running scans
+    if (scan.status === "completed") {
+      response.headers.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    } else {
+      response.headers.set("Cache-Control", "no-store");
+    }
+    return response;
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err.message },

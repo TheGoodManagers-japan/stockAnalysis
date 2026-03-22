@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import Link from "next/link";
 import styles from "./EnhancedStockCard.module.css";
 import AddToPortfolioPopup from "./AddToPortfolioPopup";
 import NewsContextBadge from "../ui/NewsContextBadge";
-import { VERDICT_CONFIG, formatNum, formatSector, scoreColor, rrColor, computeRR, confidenceColor } from "../../lib/uiHelpers";
+import { VERDICT_CONFIG, formatNum, formatSector, scoreColor, rrColor, computeRR, confidenceColor, masterScoreColor } from "../../lib/uiHelpers";
 
 function cardBorderClass(stock, review) {
   if (review?.verdict === "AVOID") return styles.cardAvoid;
@@ -15,7 +15,7 @@ function cardBorderClass(stock, review) {
   return "";
 }
 
-export default function EnhancedStockCard({
+export default memo(function EnhancedStockCard({
   stock,
   review,
   newsContext,
@@ -52,10 +52,27 @@ export default function EnhancedStockCard({
           <div className={styles.name}>{stock.short_name || stock.ticker_code}</div>
           <div className={styles.sector}>{formatSector(stock.sector)}</div>
         </div>
+        {stock.master_score != null && (
+          <div
+            className={styles.masterScoreBadge}
+            style={{ borderColor: masterScoreColor(stock.master_score), color: masterScoreColor(stock.master_score) }}
+            title={`Master Score: ${stock.master_score}/100`}
+          >
+            {stock.master_score}
+          </div>
+        )}
         <div className={styles.badges}>
           <span className={`badge badge-tier-${stock.tier || 3}`}>
             T{stock.tier || "?"}
+            {stock.tier_trajectory && stock.tier_trajectory !== "stable" && (
+              <span style={{ marginLeft: 3, fontSize: "0.6rem" }}>
+                {stock.tier_trajectory === "improving" ? "\u25B2" : "\u25BC"}
+              </span>
+            )}
           </span>
+          {stock.is_conflicted && (
+            <span className={styles.conflictedBadge}>CONFLICTED</span>
+          )}
           {stock.market_regime && (
             <span className={`badge ${
               stock.market_regime === "STRONG_UP" || stock.market_regime === "UP"
@@ -68,26 +85,26 @@ export default function EnhancedStockCard({
           {stock.is_buy_now && (
             <span className="badge badge-buy">BUY</span>
           )}
-          {stock.is_buy_now && stock.other_data_json?.ml_signal_confidence != null && (
+          {stock.is_buy_now && stock.ml_signal_confidence != null && (
             <span
               className="badge"
               style={{
-                background: stock.other_data_json.ml_signal_confidence > 0.65
+                background: stock.ml_signal_confidence > 0.65
                   ? "rgba(0,200,83,0.15)"
-                  : stock.other_data_json.ml_signal_confidence > 0.4
+                  : stock.ml_signal_confidence > 0.4
                   ? "rgba(255,193,7,0.15)"
                   : "rgba(255,82,82,0.15)",
-                color: stock.other_data_json.ml_signal_confidence > 0.65
+                color: stock.ml_signal_confidence > 0.65
                   ? "var(--accent-green)"
-                  : stock.other_data_json.ml_signal_confidence > 0.4
+                  : stock.ml_signal_confidence > 0.4
                   ? "var(--accent-yellow, #ffc107)"
                   : "var(--accent-red)",
                 border: "1px solid currentColor",
                 fontSize: "0.65rem",
               }}
-              title={`ML Signal Confidence: ${Math.round(stock.other_data_json.ml_signal_confidence * 100)}%`}
+              title={`ML Signal Confidence: ${Math.round(stock.ml_signal_confidence * 100)}%`}
             >
-              ML {Math.round(stock.other_data_json.ml_signal_confidence * 100)}%
+              ML {Math.round(stock.ml_signal_confidence * 100)}%
             </span>
           )}
           {newsContext && newsContext.article_count > 0 && (
@@ -103,24 +120,41 @@ export default function EnhancedStockCard({
       </div>
 
       {/* Scores strip */}
-      <div className={`${styles.scoresStrip} ${styles.cardInteractive}`} style={{ pointerEvents: "none" }}>
+      <div
+        className={`${styles.scoresStrip} ${styles.cardInteractive}`}
+        style={{
+          pointerEvents: "none",
+          ...(stock.data_freshness === "stale" ? { opacity: 0.55, border: "1px solid var(--accent-red, #ef4444)" } :
+             stock.data_freshness === "aging" ? { border: "1px solid var(--accent-yellow, #eab308)" } : {}),
+          ...(stock.scoring_confidence != null && Number(stock.scoring_confidence) < 0.4 ? { opacity: 0.5 } : {}),
+        }}
+      >
         <div className={styles.scoreItem}>
           <span className={styles.scoreLabel}>Fund</span>
           <span className={styles.scoreValue} style={{ color: scoreColor(stock.fundamental_score) }}>
             {stock.fundamental_score != null ? Number(stock.fundamental_score).toFixed(1) : "-"}
           </span>
+          {stock.fund_pctile != null && (
+            <span className={styles.pctileLabel}>Top {100 - stock.fund_pctile}%</span>
+          )}
         </div>
         <div className={styles.scoreItem}>
           <span className={styles.scoreLabel}>Val</span>
           <span className={styles.scoreValue} style={{ color: scoreColor(stock.valuation_score) }}>
             {stock.valuation_score != null ? Number(stock.valuation_score).toFixed(1) : "-"}
           </span>
+          {stock.val_pctile != null && (
+            <span className={styles.pctileLabel}>Top {100 - stock.val_pctile}%</span>
+          )}
         </div>
         <div className={styles.scoreItem}>
           <span className={styles.scoreLabel}>Tech</span>
           <span className={styles.scoreValue} style={{ color: scoreColor(stock.technical_score) }}>
             {stock.technical_score != null ? Number(stock.technical_score).toFixed(1) : "-"}
           </span>
+          {stock.tech_pctile != null && (
+            <span className={styles.pctileLabel}>Top {100 - stock.tech_pctile}%</span>
+          )}
         </div>
         <div className={styles.scoreItem}>
           <span className={styles.scoreLabel}>ST</span>
@@ -382,4 +416,17 @@ export default function EnhancedStockCard({
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  return (
+    prev.stock.ticker_code === next.stock.ticker_code &&
+    prev.stock.current_price === next.stock.current_price &&
+    prev.stock.is_buy_now === next.stock.is_buy_now &&
+    prev.stock.master_score === next.stock.master_score &&
+    prev.review?.verdict === next.review?.verdict &&
+    prev.review?.confidence === next.review?.confidence &&
+    prev.isAdded === next.isAdded &&
+    prev.isAiLoading === next.isAiLoading &&
+    prev.isAddingThis === next.isAddingThis &&
+    prev.newsContext?.article_count === next.newsContext?.article_count
+  );
+})

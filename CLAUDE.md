@@ -4,7 +4,7 @@
 
 Japanese stock analysis platform that scans ~570 JPX-listed stocks for swing trade entry signals.
 
-**Next.js Dashboard** (`/dashboard`) — self-contained app with PostgreSQL, deployed on Modal.
+**Next.js Dashboard** (`/dashboard`) — self-contained app with PostgreSQL, deployed on Railway.
 
 The analysis engine lives in `dashboard/engine/`, with the canonical source modules in `public/scripts/`.
 
@@ -39,7 +39,7 @@ dashboard/
 ```
 
 - Database: PostgreSQL (Neon/Supabase)
-- Deployment: Modal (modal_app.py builds from Dockerfile)
+- Deployment: Railway (Dockerfile + railway.toml)
 - Framework: Next.js 16 + React 19
 
 ### Shared Analysis Engine
@@ -95,8 +95,8 @@ Schema file: `dashboard/lib/schema.sql`
 - `JQUANTS_EMAIL`, `JQUANTS_PASSWORD` — J-Quants API for JP disclosures
 - `GEMINI_API_KEY` — Google Gemini for news sentiment analysis
 
-### Modal (modal_app.py)
-- Secrets: `stock-analysis-db` (DATABASE_URL), `stock-analysis-api` (JQUANTS + GEMINI)
+### Railway
+- Environment variables configured in Railway dashboard (DATABASE_URL, JQUANTS_EMAIL, JQUANTS_PASSWORD, GEMINI_API_KEY)
 
 ---
 
@@ -107,7 +107,7 @@ Schema file: `dashboard/lib/schema.sql`
 | Yahoo Finance (yahoo-finance2) | Quotes, historical prices, fundamentals | Aggressive throttling — use retry w/ exponential backoff + jitter |
 | J-Quants API | JP company disclosures (TDnet) | Auth via email/password → refreshToken → idToken |
 | Google Gemini | News sentiment analysis | Per-key quota |
-| Modal | Dashboard hosting (containerized) | |
+| Railway | Dashboard hosting (containerized) | |
 
 ---
 
@@ -141,7 +141,7 @@ Yahoo aggressively rate-limits. Every Yahoo call implements:
 3. The `historicalData` array has a synthetic "today" candle appended; `dataForGates` excludes it
 4. Don't add `.T` suffix twice — `normalizeTicker()` handles this
 5. `kabutan.js` is a **browser bookmarklet** for scraping kabutan.jp news (paste into DevTools)
-6. `modal_app.py` uses Modal's container runtime to deploy the Next.js dashboard
+6. Railway deploys the Next.js dashboard via Dockerfile + `railway.toml`
 
 ---
 
@@ -154,8 +154,8 @@ npm run dev              # next dev --port 3002
 npm run build            # next build
 npm start                # next start
 
-# Modal deployment
-modal deploy modal_app.py
+# Railway deployment (auto-deploys on git push, or manual)
+railway up
 ```
 
 ---

@@ -30,9 +30,10 @@ export default function Header({ title }) {
     (scan) => {
       setScanning(false);
       setScanId(null);
-      router.refresh();
+      // No router.refresh() — useScannerPolling already detects completion
+      // and loads final results without a full-page re-render
     },
-    [router]
+    []
   );
 
   async function handleRunScan() {

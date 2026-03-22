@@ -127,6 +127,9 @@ export function getDeepMarketAnalysis(stock, historicalData) {
   if (volatilityRegime.compression && advancedPatterns.coiledSpring)
     mlScore += 2.5;
 
+  // Re-clamp after contextual adjustments to prevent overflow into tanh compression
+  mlScore = Math.max(-5, Math.min(5, mlScore));
+
   const ltTier = mapRegimeToTier(longTermRegime, mlScore);
 
   return { mlScore, features, longTermRegime, intermediateRegime, ltTier };

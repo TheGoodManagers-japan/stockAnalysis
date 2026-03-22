@@ -41,12 +41,14 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       open: open.rows,
       closed: closed.rows,
       newsAlerts,
     });
+    response.headers.set("Cache-Control", "private, max-age=30");
+    return response;
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err.message },

@@ -29,6 +29,6 @@ To learn more about Next.js, take a look at the following resources:
 
 ## Deployment
 
-This dashboard is deployed on [Modal](https://modal.com) using `modal_app.py` and a Dockerfile.
+This dashboard is deployed on [Railway](https://railway.app) using a Dockerfile and `railway.toml`.
 
 Check out the [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

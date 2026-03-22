@@ -30,8 +30,8 @@ const SECTORS = [
  * @returns Filtered/sorted data plus all filter state setters.
  */
 export function useScannerSort(results) {
-  const [sortKey, setSortKey] = useSessionStorage("scanner-sortKey", "tier");
-  const [sortDir, setSortDir] = useSessionStorage("scanner-sortDir", "asc");
+  const [sortKey, setSortKey] = useSessionStorage("scanner-sortKey", "master_score");
+  const [sortDir, setSortDir] = useSessionStorage("scanner-sortDir", "desc");
   const [sectorFilter, setSectorFilter] = useSessionStorage("scanner-sector", "All");
   const [buyOnly, setBuyOnly] = useSessionStorage("scanner-buyOnly", false);
   const [search, setSearch] = useSessionStorage("scanner-search", "");
@@ -55,8 +55,8 @@ export function useScannerSort(results) {
     }
 
     data.sort((a, b) => {
-      let va = sortKey === "ml_confidence" ? a.other_data_json?.ml_signal_confidence : a[sortKey];
-      let vb = sortKey === "ml_confidence" ? b.other_data_json?.ml_signal_confidence : b[sortKey];
+      let va = sortKey === "ml_confidence" ? a.ml_signal_confidence : a[sortKey];
+      let vb = sortKey === "ml_confidence" ? b.ml_signal_confidence : b[sortKey];
       if (va == null) va = sortDir === "asc" ? Infinity : -Infinity;
       if (vb == null) vb = sortDir === "asc" ? Infinity : -Infinity;
       if (typeof va === "string") va = va.toLowerCase();

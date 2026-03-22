@@ -115,6 +115,23 @@ export function computeRR(price, stop, target) {
   return (reward / risk).toFixed(1);
 }
 
+// --- Tier / Quadrant / Master Score helpers ---
+
+export function tierToQuadrantLabel(tier) {
+  if (tier <= 2) return "Great & Cheap";
+  if (tier === 3) return "Fairly Priced";
+  if (tier === 4) return "Speculative";
+  return "Weak";
+}
+
+export function masterScoreColor(score) {
+  if (score == null) return "var(--text-muted)";
+  if (score >= 70) return "var(--accent-green)";
+  if (score >= 50) return "var(--accent-yellow)";
+  if (score >= 30) return "var(--accent-orange, #f97316)";
+  return "var(--accent-red)";
+}
+
 // --- Value Play UI helpers ---
 
 export function gradeColor(grade) {

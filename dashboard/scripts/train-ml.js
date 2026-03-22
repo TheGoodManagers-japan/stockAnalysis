@@ -4,7 +4,7 @@
 // Standalone ML training script — runs separately from the scan.
 // Usage: DATABASE_URL=... node scripts/train-ml.js [--model signal_quality|stock_ranker|lstm_v2|all]
 //
-// Designed to run as a Modal cron (e.g., Saturday night) or on-demand via API.
+// Designed to run as a Railway cron (e.g., Saturday night) or on-demand via API.
 // Trains models using historical data from the database, saves weights to ml_models table.
 
 import { query } from "../lib/db.js";

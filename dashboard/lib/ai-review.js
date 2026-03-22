@@ -1,12 +1,13 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { query } from "./db.js";
-import { GEMINI_MODEL, AI_REVIEW_BATCH_SIZE, AI_REVIEW_BATCH_DELAY_MS } from "./constants.js";
+import { AI_REVIEW_MODEL, AI_REVIEW_BATCH_SIZE, AI_REVIEW_BATCH_DELAY_MS } from "./constants.js";
 
 const BATCH_SIZE = AI_REVIEW_BATCH_SIZE;
 const BATCH_DELAY_MS = AI_REVIEW_BATCH_DELAY_MS;
 
 /**
  * Perform AI review of buy signals for a given scan.
- * Calls Gemini to validate each buyNow=true signal with company info,
+ * Calls Claude Sonnet to validate each buyNow=true signal with company info,
  * micro/macro news, sector context, fundamentals, and a confidence score.
  *
  * @param {string} scanId - UUID of the scan run
@@ -16,10 +17,10 @@ const BATCH_DELAY_MS = AI_REVIEW_BATCH_DELAY_MS;
  * @returns {{ reviews: object[], errors: string[] }}
  */
 export async function performAiReview(scanId, options = {}) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not configured");
 
-  const { tickerFilter, limit } = options;
+  const { tickerFilter, limit, force } = options;
   const errors = [];
 
   // 1. Get signals — when a specific ticker is requested, analyze it regardless of buy status
@@ -28,7 +29,13 @@ export async function performAiReview(scanId, options = {}) {
            sr.current_price, sr.tier, sr.buy_now_reason, sr.trigger_type,
            sr.short_term_score, sr.long_term_score,
            sr.stop_loss, sr.price_target, sr.market_regime,
-           sr.fundamental_score, sr.valuation_score, sr.value_quadrant
+           sr.fundamental_score, sr.valuation_score, sr.technical_score,
+           sr.master_score,
+           (sr.other_data_json->>'scoring_confidence')::numeric AS scoring_confidence,
+           (sr.other_data_json->>'data_freshness') AS data_freshness,
+           (sr.other_data_json->>'tier_trajectory') AS tier_trajectory,
+           (sr.other_data_json->>'is_conflicted')::boolean AS is_conflicted,
+           (sr.other_data_json->>'score_disagreement')::numeric AS score_disagreement
     FROM scan_results sr
     LEFT JOIN tickers t ON t.code = sr.ticker_code
     WHERE sr.scan_id = $1`;
@@ -73,8 +80,8 @@ export async function performAiReview(scanId, options = {}) {
     });
   });
 
-  // When a specific ticker is requested, always re-analyze (skip cache)
-  const signalsToAnalyze = tickerFilter
+  // When a specific ticker is requested or force=true, always re-analyze (skip cache)
+  const signalsToAnalyze = (tickerFilter || force)
     ? buySignals.rows
     : buySignals.rows.filter((s) => !reviewMap.has(s.ticker_code));
 
@@ -121,7 +128,7 @@ export async function performAiReview(scanId, options = {}) {
       const chunk = chunks[ci];
       try {
         const stockData = await gatherStockContext(chunk);
-        const newReviews = await callGemini(
+        const newReviews = await callClaude(
           stockData,
           macroNews,
           sectorRotation,
@@ -318,13 +325,22 @@ function buildPrompt(stockData, macroNews, sectorRotation) {
         `  Days to Next Earnings: ${c.daysToEarnings != null ? c.daysToEarnings : "Unknown"}`,
       ].join("\n");
 
+      // Build scoring context line
+      const scoringContext = [
+        s.master_score != null ? `Master Score: ${s.master_score}/100` : null,
+        s.scoring_confidence != null ? `Data Confidence: ${Math.round(Number(s.scoring_confidence) * 100)}%` : null,
+        s.tier_trajectory && s.tier_trajectory !== "stable" ? `Trajectory: ${s.tier_trajectory}` : null,
+        s.is_conflicted ? `SCORES CONFLICTED (disagreement: ${Number(s.score_disagreement || 0).toFixed(1)})` : null,
+        s.data_freshness && s.data_freshness !== "fresh" ? `Data Freshness: ${s.data_freshness}` : null,
+      ].filter(Boolean).join(" | ");
+
       return `
 ### ${s.ticker_code} — ${s.short_name || "Unknown"} (${s.sector || "Unknown sector"})
 - Price: ¥${Number(s.current_price || 0).toLocaleString()} | Tier: ${s.tier} | Regime: ${s.market_regime || "N/A"}
 - Trigger: ${s.trigger_type || "N/A"} | Reason: ${s.buy_now_reason || "N/A"}
-- Scores: Fundamental ${s.fundamental_score || "N/A"}/10, Valuation ${s.valuation_score || "N/A"}/10
+- Scores: Fundamental ${s.fundamental_score || "N/A"}/10, Valuation ${s.valuation_score || "N/A"}/10, Technical ${s.technical_score || "N/A"}/10
 - ST Score: ${s.short_term_score ?? "N/A"}, LT Score: ${s.long_term_score ?? "N/A"}
-- Stop: ¥${s.stop_loss ? Number(s.stop_loss).toLocaleString() : "N/A"} | Target: ¥${s.price_target ? Number(s.price_target).toLocaleString() : "N/A"}
+${scoringContext ? `- ${scoringContext}\n` : ""}- Stop: ¥${s.stop_loss ? Number(s.stop_loss).toLocaleString() : "N/A"} | Target: ¥${s.price_target ? Number(s.price_target).toLocaleString() : "N/A"}
 **Computed Metrics:**
 ${computedText}
 **Recent News (micro):**
@@ -350,10 +366,17 @@ CONFIDENCE CALIBRATION (follow strictly):
 - 80-90: Multiple factors strongly aligned. Example: Tier 1, UP/STRONG_UP regime, R:R >= 2.0, fund score >= 7, positive sector rotation.
 - 91+: Extraordinary alignment across all dimensions. Rare.
 
+SCORING CONTEXT:
+- Master Score (0-100): Composite of all scoring dimensions. >=70 = strong, >=50 = decent, <30 = weak.
+- If "SCORES CONFLICTED" appears, the fundamental, valuation, and technical scores strongly disagree — investigate why and note it.
+- If "Trajectory: improving", fundamentals are trending better vs. 30+ days ago. If "deteriorating", they're worsening.
+- If "Data Freshness: aging/stale", fundamental data may be outdated — weight technical signals more heavily and note data staleness.
+- Data Confidence <40% means key metrics are missing — lower your confidence accordingly.
+
 VERDICT CRITERIA:
-- STRONG_BUY: Tier 1-2, regime UP or STRONG_UP, R:R >= 2.0, fundamental score >= 7, no earnings within 14 days. Everything aligned — full position.
+- STRONG_BUY: Tier 1-2, regime UP or STRONG_UP, R:R >= 2.0, fundamental score >= 7, no earnings within 14 days, master score >= 65. Everything aligned — full position.
 - CONFIRMED: At least 3 of 5 factors positive (technicals, fundamentals, news, macro, risk/reward). Good setup — standard position.
-- CAUTION: You must name the ONE specific concern and what would RESOLVE it. Example: "Earnings in 8 days — wait for results or use half position."
+- CAUTION: You must name the ONE specific concern and what would RESOLVE it. Example: "Earnings in 8 days — wait for results or use half position." Conflicted scores alone warrant CAUTION.
 - AVOID: At least 2 concrete red flags. Name them explicitly.
 ${macroSection}${sectorSection}
 For each stock, provide ALL of the following:
@@ -374,71 +397,69 @@ Stocks to review:
 ${stockSummaries}`;
 }
 
-const RESPONSE_SCHEMA = {
-  type: "ARRAY",
-  items: {
-    type: "OBJECT",
+const REVIEW_TOOL = {
+  name: "submit_reviews",
+  description: "Submit structured stock reviews for all analyzed stocks.",
+  input_schema: {
+    type: "object",
     properties: {
-      ticker_code: { type: "STRING" },
-      company_description: { type: "STRING" },
-      news_summary: { type: "STRING" },
-      macro_context: { type: "STRING" },
-      earnings_status: { type: "STRING" },
-      bull_points: { type: "ARRAY", items: { type: "STRING" } },
-      bear_points: { type: "ARRAY", items: { type: "STRING" } },
-      risk_reward_assessment: { type: "STRING" },
-      key_catalyst: { type: "STRING" },
-      watch_for: { type: "STRING" },
-      verdict: { type: "STRING", enum: ["STRONG_BUY", "CONFIRMED", "CAUTION", "AVOID"] },
-      verdict_reason: { type: "STRING" },
-      confidence: { type: "INTEGER" },
+      reviews: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            ticker_code: { type: "string" },
+            company_description: { type: "string" },
+            news_summary: { type: "string" },
+            macro_context: { type: "string" },
+            earnings_status: { type: "string" },
+            bull_points: { type: "array", items: { type: "string" } },
+            bear_points: { type: "array", items: { type: "string" } },
+            risk_reward_assessment: { type: "string" },
+            key_catalyst: { type: "string" },
+            watch_for: { type: "string" },
+            verdict: { type: "string", enum: ["STRONG_BUY", "CONFIRMED", "CAUTION", "AVOID"] },
+            verdict_reason: { type: "string" },
+            confidence: { type: "integer" },
+          },
+          required: [
+            "ticker_code", "company_description", "news_summary",
+            "macro_context", "earnings_status", "bull_points", "bear_points",
+            "risk_reward_assessment", "key_catalyst", "watch_for",
+            "verdict", "verdict_reason", "confidence",
+          ],
+        },
+      },
     },
-    required: [
-      "ticker_code",
-      "company_description",
-      "news_summary",
-      "macro_context",
-      "earnings_status",
-      "bull_points",
-      "bear_points",
-      "risk_reward_assessment",
-      "key_catalyst",
-      "watch_for",
-      "verdict",
-      "verdict_reason",
-      "confidence",
-    ],
+    required: ["reviews"],
   },
 };
 
-async function callGemini(stockData, macroNews, sectorRotation, apiKey) {
+async function callClaude(stockData, macroNews, sectorRotation, apiKey) {
   const prompt = buildPrompt(stockData, macroNews, sectorRotation);
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 8192,
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
-    },
-  };
+  const client = new Anthropic({ apiKey });
 
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+  const response = await client.messages.create({
+    model: AI_REVIEW_MODEL,
+    max_tokens: 8192,
+    temperature: 0.3,
+    system: "You are a decisive Japanese stock market analyst. Analyze the provided stock data and call the submit_reviews tool with your structured analysis. Always use the tool — never respond with plain text.",
+    tools: [REVIEW_TOOL],
+    tool_choice: { type: "tool", name: "submit_reviews" },
+    messages: [{ role: "user", content: prompt }],
   });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Gemini API error ${response.status}: ${text.slice(0, 200)}`);
+  // Extract the tool use result
+  const toolBlock = response.content.find((b) => b.type === "tool_use");
+  if (!toolBlock) {
+    throw new Error("Claude did not return a tool_use block");
   }
 
-  const result = await response.json();
-  const raw = result.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!raw) throw new Error("Empty Gemini response");
+  const result = toolBlock.input;
+  if (!result?.reviews || !Array.isArray(result.reviews)) {
+    throw new Error("Claude returned invalid review structure");
+  }
 
-  return JSON.parse(raw);
+  return result.reviews;
 }

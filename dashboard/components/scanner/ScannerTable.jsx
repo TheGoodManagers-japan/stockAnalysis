@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useCallback } from "react";
+import { Fragment, useState, useMemo, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ScanPicker from "./ScanPicker";
@@ -9,18 +9,20 @@ import EnhancedStockCard from "./EnhancedStockCard";
 import cardStyles from "./EnhancedStockCard.module.css";
 import AddToPortfolioPopup from "./AddToPortfolioPopup";
 import NewsContextBadge from "../ui/NewsContextBadge";
-import { VERDICT_CONFIG, formatNum, formatSector, confidenceColor } from "../../lib/uiHelpers";
+import { VERDICT_CONFIG, formatNum, formatSector, confidenceColor, masterScoreColor } from "../../lib/uiHelpers";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useScannerSort } from "../../hooks/useScannerSort";
 import { useScannerPolling } from "../../hooks/useScannerPolling";
 import { useAddToPortfolio } from "../../hooks/useAddToPortfolio";
 import { useAiReview } from "../../hooks/useAiReview";
 import { useNewsContext } from "../../hooks/useNewsContext";
+import MLErrorsPanel from "./MLErrorsPanel";
 
 const COLUMNS = [
   { key: "ticker_code", label: "Ticker", sortable: true },
   { key: "sector", label: "Sector", sortable: true },
   { key: "current_price", label: "Price", sortable: true, mono: true },
+  { key: "master_score", label: "Score", sortable: true },
   { key: "tier", label: "Tier", sortable: true },
   { key: "is_buy_now", label: "Signal", sortable: true },
   { key: "ml_confidence", label: "ML", sortable: true },
@@ -49,6 +51,7 @@ function getReviewData(row, aiReviews) {
 
 export default function ScannerTable({ results = [], isLive = false }) {
   const [viewMode, setViewMode] = useLocalStorage("scanner-view-mode", "card");
+  const [activeTab, setActiveTab] = useLocalStorage("scanner-active-tab", "results");
 
   const {
     liveResults,
@@ -106,6 +109,27 @@ export default function ScannerTable({ results = [], isLive = false }) {
     [activeResults]
   );
   const newsContext = useNewsContext(tickerList);
+
+  const reviewMap = useMemo(() => {
+    const map = {};
+    for (const r of filtered) {
+      map[r.ticker_code] = getReviewData(r, aiReviews);
+    }
+    return map;
+  }, [filtered, aiReviews]);
+
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  // Reset page when filters/sort change
+  useEffect(() => setPage(1), [sortKey, sortDir, sectorFilter, buyOnly, search]);
+  const visible = filtered.slice(0, page * PAGE_SIZE);
+  const hasMore = page * PAGE_SIZE < filtered.length;
+
+  const mlErrors = useMemo(() => {
+    return activeResults.filter(
+      (r) => r.is_buy_now && (!r.predicted_max_5d || r.ml_skip_reason)
+    );
+  }, [activeResults]);
 
   const totalCols = COLUMNS.length + 1; // +1 for portfolio button column
 
@@ -197,42 +221,88 @@ export default function ScannerTable({ results = [], isLive = false }) {
         </span>
       </div>
 
-      {/* Card view */}
-      {viewMode === "card" && (
-        <div className={cardStyles.cardGrid}>
-          {filtered.length === 0 ? (
-            <div className="text-muted" style={{ gridColumn: "1 / -1", textAlign: "center", padding: 40 }}>
-              No results found
-            </div>
+      {/* Tab bar */}
+      <div className={styles.tabBar}>
+        <button
+          className={`${styles.tab} ${activeTab === "results" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("results")}
+        >
+          Results
+          <span className={`${styles.tabBadge} ${styles.tabBadgeDefault}`}>
+            {filtered.length}
+          </span>
+        </button>
+        <button
+          className={`${styles.tab} ${activeTab === "errors" ? styles.tabActive : ""}`}
+          onClick={() => setActiveTab("errors")}
+        >
+          ML Errors
+          {mlErrors.length > 0 ? (
+            <span className={`${styles.tabBadge} ${styles.tabBadgeError}`}>
+              {mlErrors.length}
+            </span>
           ) : (
-            filtered.map((r) => {
-              const review = getReviewData(r, aiReviews);
-              return (
-                <EnhancedStockCard
-                  key={r.ticker_code}
-                  stock={r}
-                  review={review}
-                  newsContext={newsContext[r.ticker_code]}
-                  isAdded={addedTickers.has(r.ticker_code)}
-                  onAddClick={openAddPopup}
-                  onAiReview={handleAiReview}
-                  isAiLoading={loadingAi === r.ticker_code}
-                  isAddingThis={addingTicker === r.ticker_code}
-                  addForm={addForm}
-                  setAddForm={setAddForm}
-                  addStatus={addStatus}
-                  onAddSubmit={handleAddToPortfolio}
-                  onAddCancel={closePopup}
-                  popupRef={popupRef}
-                />
-              );
-            })
+            <span className={`${styles.tabBadge} ${styles.tabBadgeDefault}`}>0</span>
           )}
-        </div>
+        </button>
+      </div>
+
+      {/* Card view */}
+      {activeTab === "results" && viewMode === "card" && (
+        <>
+          <div className={cardStyles.cardGrid}>
+            {filtered.length === 0 ? (
+              <div className="text-muted" style={{ gridColumn: "1 / -1", textAlign: "center", padding: 40 }}>
+                No results found
+              </div>
+            ) : (
+              visible.map((r) => {
+                return (
+                  <EnhancedStockCard
+                    key={r.ticker_code}
+                    stock={r}
+                    review={reviewMap[r.ticker_code]}
+                    newsContext={newsContext[r.ticker_code]}
+                    isAdded={addedTickers.has(r.ticker_code)}
+                    onAddClick={openAddPopup}
+                    onAiReview={handleAiReview}
+                    isAiLoading={loadingAi === r.ticker_code}
+                    isAddingThis={addingTicker === r.ticker_code}
+                    addForm={addForm}
+                    setAddForm={setAddForm}
+                    addStatus={addStatus}
+                    onAddSubmit={handleAddToPortfolio}
+                    onAddCancel={closePopup}
+                    popupRef={popupRef}
+                  />
+                );
+              })
+            )}
+          </div>
+          {hasMore && (
+            <div style={{ textAlign: "center", padding: "20px 0" }}>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                style={{
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border-primary)",
+                  borderRadius: 8,
+                  padding: "10px 24px",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+              >
+                Load more ({filtered.length - page * PAGE_SIZE} remaining)
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Table view */}
-      {viewMode === "table" && (
+      {activeTab === "results" && viewMode === "table" && (
+      <>
       <div className="table-wrapper">
         <table>
           <thead>
@@ -262,8 +332,8 @@ export default function ScannerTable({ results = [], isLive = false }) {
                 </td>
               </tr>
             ) : (
-              filtered.map((r) => {
-                const review = getReviewData(r, aiReviews);
+              visible.map((r) => {
+                const review = reviewMap[r.ticker_code];
                 const verdict = review ? VERDICT_CONFIG[review.verdict] : null;
                 const isExpanded = expandedTicker === r.ticker_code;
                 const isLoadingThis = loadingAi === r.ticker_code;
@@ -291,6 +361,18 @@ export default function ScannerTable({ results = [], isLive = false }) {
                       </td>
                       <td className="text-mono">{formatNum(r.current_price)}</td>
                       <td>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            fontSize: "0.85rem",
+                            color: masterScoreColor(r.master_score),
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          {r.master_score != null ? r.master_score : "-"}
+                        </span>
+                      </td>
+                      <td>
                         <span className={`badge badge-tier-${r.tier || 3}`}>
                           T{r.tier || "?"}
                         </span>
@@ -303,19 +385,19 @@ export default function ScannerTable({ results = [], isLive = false }) {
                         )}
                       </td>
                       <td>
-                        {r.is_buy_now && r.other_data_json?.ml_signal_confidence != null ? (
+                        {r.is_buy_now && r.ml_signal_confidence != null ? (
                           <span
                             style={{
-                              color: r.other_data_json.ml_signal_confidence > 0.65
+                              color: r.ml_signal_confidence > 0.65
                                 ? "var(--accent-green)"
-                                : r.other_data_json.ml_signal_confidence > 0.4
+                                : r.ml_signal_confidence > 0.4
                                 ? "var(--accent-yellow, #ffc107)"
                                 : "var(--accent-red)",
                               fontWeight: 600,
                               fontSize: "0.82rem",
                             }}
                           >
-                            {Math.round(r.other_data_json.ml_signal_confidence * 100)}%
+                            {Math.round(r.ml_signal_confidence * 100)}%
                           </span>
                         ) : (
                           <span className="text-muted">-</span>
@@ -505,6 +587,30 @@ export default function ScannerTable({ results = [], isLive = false }) {
           </tbody>
         </table>
       </div>
+      {hasMore && (
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            style={{
+              background: "var(--bg-tertiary)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border-primary)",
+              borderRadius: 8,
+              padding: "10px 24px",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            Load more ({filtered.length - page * PAGE_SIZE} remaining)
+          </button>
+        </div>
+      )}
+      </>
+      )}
+
+      {/* ML Errors tab */}
+      {activeTab === "errors" && (
+        <MLErrorsPanel errors={mlErrors} />
       )}
     </>
   );

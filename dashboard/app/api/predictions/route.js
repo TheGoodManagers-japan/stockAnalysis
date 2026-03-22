@@ -34,10 +34,12 @@ export async function GET(request) {
        ORDER BY p.ticker_code, p.prediction_date DESC`
     );
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       predictions: result.rows,
     });
+    response.headers.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+    return response;
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err.message },

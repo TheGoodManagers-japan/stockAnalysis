@@ -99,6 +99,43 @@
   flex-shrink: 0;
 }
 
+/* --- Master score badge --- */
+.masterScoreBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid;
+  font-size: 0.9rem;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+}
+
+/* --- Conflicted badge --- */
+.conflictedBadge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 82, 82, 0.12);
+  color: var(--accent-red);
+  border: 1px solid var(--accent-red);
+}
+
+/* --- Percentile label --- */
+.pctileLabel {
+  font-size: 0.52rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-top: 1px;
+}
+
 /* --- Scores strip --- */
 .scoresStrip {
   display: flex;

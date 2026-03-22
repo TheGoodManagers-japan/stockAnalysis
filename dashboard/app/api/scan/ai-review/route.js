@@ -8,6 +8,7 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const targetTicker = searchParams.get("ticker");
+    const force = searchParams.get("force") === "true";
 
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json(
@@ -33,6 +34,7 @@ export async function GET(request) {
 
     const result = await performAiReview(scanRun.rows[0].scan_id, {
       tickerFilter: targetTicker || undefined,
+      force,
     });
 
     return NextResponse.json({

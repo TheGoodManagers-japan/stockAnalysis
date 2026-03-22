@@ -90,6 +90,29 @@ export function assessTapeReading(data, stock, ms, px, atr, cfg, weeklyRange = n
     }
   }
 
+  // 5) Gap detection — INFORMATIONAL FLAGS
+  if (prev && last) {
+    const prevHigh = num(prev.high);
+    const prevLow = num(prev.low);
+    const lastOpen = num(last.open);
+    const lastClose = num(last.close);
+    const prevClose = num(prev.close);
+
+    const gapUp = lastOpen > prevHigh;
+    const gapDown = lastOpen < prevLow;
+
+    if (gapUp) {
+      // Gap-up that holds above prev close = bullish quality signal
+      const gapHeld = lastClose > prevClose;
+      details.gapUp = { detected: true, held: gapHeld, gapSize: lastOpen - prevHigh };
+    }
+    if (gapDown) {
+      // Gap-down that fills (close > open) = bullish reversal signal
+      const gapFilled = lastClose > lastOpen;
+      details.gapDown = { detected: true, filled: gapFilled, gapSize: prevLow - lastOpen };
+    }
+  }
+
   return {
     pass: true,
     why: "",

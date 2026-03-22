@@ -64,19 +64,27 @@ export function calculateEMA(prices, p) {
 
 /* ======================== RSI ======================== */
 
-/** RSI over plain closes array. Returns single latest value. */
+/** RSI over plain closes array. Returns single latest value (Wilder smoothing). */
 export function calculateRSI(closes, period = 14) {
   if (closes.length < period + 1) return 50;
-  let gains = 0,
-    losses = 0;
-  for (let i = closes.length - period; i < closes.length; i++) {
+  // Seed with simple average over first `period` changes
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
     const d = closes[i] - closes[i - 1];
-    if (d >= 0) gains += d;
-    else losses -= d;
+    if (d >= 0) avgGain += d;
+    else avgLoss -= d;
   }
-  const avgG = gains / period,
-    avgL = losses / period;
-  const rs = avgL === 0 ? 100 : avgG / avgL;
+  avgGain /= period;
+  avgLoss /= period;
+  // Wilder smoothing for remaining bars
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    const gain = d >= 0 ? d : 0;
+    const loss = d < 0 ? -d : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
   return 100 - 100 / (1 + rs);
 }
 
@@ -143,9 +151,10 @@ export function calculateBollinger(closes, period = 20, m = 2) {
 
 /* ======================== ATR ======================== */
 
-/** ATR over OHLCV candle array. Returns single latest value. */
+/** ATR over OHLCV candle array. Returns single latest value (Wilder smoothing). */
 export function calculateATR(data, period = 14) {
   if (!Array.isArray(data) || data.length < period + 1) return 0;
+  // Compute true ranges
   const trs = [];
   for (let i = 1; i < data.length; i++) {
     const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
@@ -153,8 +162,14 @@ export function calculateATR(data, period = 14) {
     const pc = Number(data[i - 1]?.close ?? 0);
     trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
   }
-  const slice = trs.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
+  if (trs.length < period) return 0;
+  // Seed with simple average of first `period` TRs
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  // Wilder smoothing for remaining
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  return atr;
 }
 
 /* ======================== Stochastic ======================== */
@@ -193,4 +208,131 @@ export function calculateOBV(data) {
     else if (cc < pc) obv -= vol;
   }
   return obv;
+}
+
+/** On-Balance Volume series. Returns full OBV array. */
+export function calculateOBVSeries(data) {
+  if (!data || data.length < 2) return [];
+  const out = [0];
+  let obv = 0;
+  for (let i = 1; i < data.length; i++) {
+    const cc = data[i].close,
+      pc = data[i - 1].close,
+      vol = data[i].volume || 0;
+    if (cc > pc) obv += vol;
+    else if (cc < pc) obv -= vol;
+    out.push(obv);
+  }
+  return out;
+}
+
+/* ======================== ADX(14) ======================== */
+
+/**
+ * ADX(14) (Wilder smoothing) with safe fallbacks.
+ * Canonical implementation — all modules should import from here.
+ */
+export function calcADX14(data) {
+  if (!Array.isArray(data) || data.length < 16) return 0;
+
+  const plusDM = [];
+  const minusDM = [];
+  const tr = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
+    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
+    const pc = Number(data[i - 1]?.close ?? 0);
+    const ph = Number(data[i - 1]?.high ?? data[i - 1]?.close ?? 0);
+    const pl = Number(data[i - 1]?.low ?? data[i - 1]?.close ?? 0);
+
+    const up = h - ph;
+    const down = pl - l;
+
+    plusDM.push(up > down && up > 0 ? up : 0);
+    minusDM.push(down > up && down > 0 ? down : 0);
+    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+
+  const p = 14;
+
+  const smooth = (arr, period) => {
+    if (arr.length < period) return [];
+    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
+    const out = [s];
+    for (let i = period; i < arr.length; i++) {
+      s = out[out.length - 1] - out[out.length - 1] / period + arr[i];
+      out.push(s);
+    }
+    return out;
+  };
+
+  const smTR = smooth(tr, p);
+  const smP = smooth(plusDM, p);
+  const smM = smooth(minusDM, p);
+  if (!smTR.length) return 0;
+
+  const plusDI = smTR.map((v, i) => 100 * ((smP[i] || 0) / (v || 1)));
+  const minusDI = smTR.map((v, i) => 100 * ((smM[i] || 0) / (v || 1)));
+  const dx = plusDI.map((pdi, i) => {
+    const mdi = minusDI[i] || 0;
+    const denom = Math.max(1e-8, pdi + mdi);
+    return 100 * (Math.abs(pdi - mdi) / denom);
+  });
+
+  const smDX = smooth(dx, p).map((v) => v / p);
+  return smDX.at(-1) || 0;
+}
+
+/* ======================== Divergence Detection ======================== */
+
+/**
+ * Detect bullish/bearish divergence between price and an indicator.
+ * @param {number[]} prices - Price array (closes or highs/lows)
+ * @param {number[]} indicator - Indicator array (RSI, MACD histogram, OBV)
+ * @param {number} lookback - Bars to look back (default 20)
+ * @returns {{ bullish: boolean, bearish: boolean }}
+ */
+export function detectDivergence(prices, indicator, lookback = 20) {
+  if (!prices || !indicator || prices.length < lookback || indicator.length < lookback) {
+    return { bullish: false, bearish: false };
+  }
+
+  const len = Math.min(prices.length, indicator.length);
+  const start = len - lookback;
+
+  // Find pivot lows and highs
+  const pivotLows = [];
+  const pivotHighs = [];
+  for (let i = start + 1; i < len - 1; i++) {
+    if (prices[i] < prices[i - 1] && prices[i] < prices[i + 1]) {
+      pivotLows.push(i);
+    }
+    if (prices[i] > prices[i - 1] && prices[i] > prices[i + 1]) {
+      pivotHighs.push(i);
+    }
+  }
+
+  let bullish = false;
+  let bearish = false;
+
+  // Bullish: price lower low + indicator higher low
+  if (pivotLows.length >= 2) {
+    const recent = pivotLows[pivotLows.length - 1];
+    const prior = pivotLows[pivotLows.length - 2];
+    if (prices[recent] <= prices[prior] && indicator[recent] > indicator[prior]) {
+      bullish = true;
+    }
+  }
+
+  // Bearish: price higher high + indicator lower high
+  if (pivotHighs.length >= 2) {
+    const recent = pivotHighs[pivotHighs.length - 1];
+    const prior = pivotHighs[pivotHighs.length - 2];
+    if (prices[recent] >= prices[prior] && indicator[recent] < indicator[prior]) {
+      bearish = true;
+    }
+  }
+
+  return { bullish, bearish };
 }

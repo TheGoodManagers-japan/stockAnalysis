@@ -88,6 +88,34 @@ export function detectBPB(stock, data, cfg, U) {
   // Basic “bounce” day: close back above open/prev close, small upper headroom check later
   const dayUp = px >= Math.max(Number(last.open) || 0, Number(prev.close) || 0);
 
+  // Close-position quality: close in upper half of range
+  const lastHigh = Number(last.high) || px;
+  const lastLow = Number(last.low) || px;
+  const lastRange = Math.max(lastHigh - lastLow, 1e-9);
+  const closePos = (px - lastLow) / lastRange;
+  const closePosOK = closePos >= 0.5;
+
+  // Volume averages (needed by pullback analysis and trigger check)
+  const volNow = Math.max(1, Number(last.volume) || 1);
+  const volAvg20 = Math.max(
+    1,
+    data.slice(-20).reduce((a, b) => a + (Number(b.volume) || 0), 0) / 20
+  );
+  const volExp = volNow / volAvg20;
+  const volOK = !Number.isFinite(Number(last.volume)) || volExp >= 1.05;
+
+  // Pullback volume analysis: dry pullback is healthier (low volume on retreat)
+  const pullbackBars = [];
+  for (let j = Math.max(0, breakoutIdx + 1); j < n; j++) {
+    if ((Number(data[j].close) || 0) < (Number(data[j].open) || 0)) {
+      pullbackBars.push(data[j]);
+    }
+  }
+  const avgPullbackVol = pullbackBars.length > 0
+    ? pullbackBars.reduce((s, b) => s + (Number(b.volume) || 0), 0) / pullbackBars.length
+    : volAvg20;
+  const pullbackDry = avgPullbackVol <= volAvg20 * 1.1;
+
   // Avoid overheated/extended
   const distFromMA25_ATR = (px - ma25) / Math.max(atr, 1e-9);
   const tooExtended = distFromMA25_ATR > (cfg.maxATRfromMA25 ?? 3.5) + 0.2;
@@ -109,19 +137,13 @@ export function detectBPB(stock, data, cfg, U) {
   // Trend filter: prefer px ≥ ma25 and ma25 ≥ ma50 (friendly tape)
   const trendOK = px >= ma25 && ma25 >= ma50 && ma50 > 0;
 
-  // Volume confirmation if available (lenient)
-  const volNow = Math.max(1, Number(last.volume) || 1);
-  const volAvg20 = Math.max(
-    1,
-    data.slice(-20).reduce((a, b) => a + (Number(b.volume) || 0), 0) / 20
-  );
-  const volExp = volNow / volAvg20;
-  const volOK = !Number.isFinite(Number(last.volume)) || volExp >= 0.95;
+  // (volNow, volAvg20, volExp, volOK defined above with pullback analysis)
 
   let trigger =
     trendOK &&
     pulledNearLevel &&
     dayUp &&
+    closePosOK &&
     !tooExtended &&
     !rsiTooHot &&
     headroomOK &&
@@ -132,6 +154,8 @@ export function detectBPB(stock, data, cfg, U) {
   else if (!pulledNearLevel)
     waitReason = "no clean pullback test at breakout level.";
   else if (!dayUp) waitReason = "no bounce/reclaim on test.";
+  else if (!closePosOK)
+    waitReason = `close in lower half of range (${(closePos * 100).toFixed(0)}%).`;
   else if (tooExtended)
     waitReason = "already recovered > cap (too extended for BPB).";
   else if (rsiTooHot) waitReason = "RSI too hot for BPB.";
@@ -161,7 +185,12 @@ export function detectBPB(stock, data, cfg, U) {
   }
 
   // ---- 3) Plan: stop under pullback low / level, target at next shelf or measured push ----
-  const pullbackLow = Number(last.low) || px;
+  // Scan from breakout bar to current for the actual lowest low during pullback
+  let pullbackLow = Number(last.low) || px;
+  for (let j = Math.max(0, breakoutIdx + 1); j < n; j++) {
+    const lo = Number(data[j].low);
+    if (Number.isFinite(lo) && lo < pullbackLow) pullbackLow = lo;
+  }
   const stopLevel = Math.min(
     pullbackLow - 0.4 * atr,
     breakoutLevel - 0.6 * atr
@@ -193,6 +222,8 @@ export function detectBPB(stock, data, cfg, U) {
         ? +headroomATR.toFixed(2)
         : null,
       volExp: +volExp.toFixed(2),
+      closePos: +closePos.toFixed(2),
+      pullbackDry,
     },
   };
 }

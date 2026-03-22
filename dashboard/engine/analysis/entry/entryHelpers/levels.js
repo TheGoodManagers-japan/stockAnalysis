@@ -43,7 +43,7 @@ export function findResistancesAbove(data, px, stock, cfg) {
   return clusterLevels(ups, atr, 0.3);
 }
 
-export function findSupportsBelow(data, px) {
+export function findSupportsBelow(data, px, stock) {
   const downs = [];
   const win = data.slice(-60);
   for (let i = 2; i < win.length - 2; i++) {
@@ -51,10 +51,8 @@ export function findSupportsBelow(data, px) {
     if (l < px && l < num(win[i - 1].low) && l < num(win[i + 1].low))
       downs.push(l);
   }
-  const uniq = Array.from(new Set(downs.map((v) => +v.toFixed(2)))).sort(
-    (a, b) => b - a
-  );
-  return uniq;
+  const atr = Math.max(num(stock?.atr14), px * 0.005, 1e-9);
+  return clusterLevels(downs, atr, 0.3).sort((a, b) => b - a);
 }
 
 /* ============================ Market Structure ============================ */

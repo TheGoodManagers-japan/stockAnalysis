@@ -1,0 +1,17 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y cron && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY . .
+
+# Crontab: JPX scan at 21:30 UTC (06:30 JST) Sun-Thu, Space Fund signals at 12:30 UTC (07:30 ET) Mon-Fri
+COPY scripts/crontab /etc/cron.d/stock-cron
+RUN chmod 0644 /etc/cron.d/stock-cron && crontab /etc/cron.d/stock-cron
+
+# Dump runtime env vars (DATABASE_URL etc.) so cron jobs can access them, then start cron
+CMD printenv | grep -v "no_proxy" >> /etc/environment && cron -f

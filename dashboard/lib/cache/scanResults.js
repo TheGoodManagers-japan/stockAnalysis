@@ -28,7 +28,8 @@ export async function saveScanResult(scanId, stock) {
        liq_pass, liq_adv, liq_vol,
        other_data_json,
        is_value_candidate, value_play_score, value_play_grade,
-       value_play_class, value_play_json
+       value_play_class, value_play_json,
+       master_score
      ) VALUES (
        $1, $2, $3,
        $4, $5, $6,
@@ -43,7 +44,8 @@ export async function saveScanResult(scanId, stock) {
        $26, $27, $28,
        $29,
        $30, $31, $32,
-       $33, $34
+       $33, $34,
+       $35
      )`,
     [
       scanId,
@@ -53,7 +55,7 @@ export async function saveScanResult(scanId, stock) {
       stock.valuationScore,
       stock.technicalScore,
       stock.tier,
-      stock.valueQuadrant,
+      null, // value_quadrant deprecated — derived from tier in UI
       stock.shortTermScore,
       stock.longTermScore,
       stock.shortTermBias,
@@ -101,12 +103,46 @@ export async function saveScanResult(scanId, stock) {
         fiftyTwoWeekLow: stock.fiftyTwoWeekLow,
         totalCash: stock.totalCash,
         totalDebt: stock.totalDebt,
+        // Scoring overhaul fields
+        scoring_confidence: stock.scoringConfidence,
+        tech_confidence: stock.techConfidence,
+        fund_confidence: stock.fundConfidence,
+        val_confidence: stock.valConfidence,
+        score_disagreement: stock.scoreDisagreement,
+        is_conflicted: stock.isConflicted,
+        data_freshness: stock.dataFreshness,
+        tier_trajectory: stock.tierTrajectory,
+        ml_signal_confidence: stock.mlSignalConfidence,
       }),
       stock.isValueCandidate || false,
       stock.valuePlayScore,
       stock.valuePlayGrade,
       stock.valuePlayClassification,
       stock.valuePlay ? JSON.stringify(stock.valuePlay) : null,
+      stock.masterScore,
     ]
   );
+}
+
+/**
+ * Batch-update percentile data in other_data_json after scan completes.
+ */
+export async function updatePercentiles(scanId, results) {
+  for (const stock of results) {
+    if (stock.fundamentalScorePctile == null && stock.valuationScorePctile == null) continue;
+    await query(
+      `UPDATE scan_results
+       SET other_data_json = COALESCE(other_data_json, '{}'::jsonb) || $2::jsonb
+       WHERE scan_id = $1 AND ticker_code = $3`,
+      [
+        scanId,
+        JSON.stringify({
+          fundPctile: stock.fundamentalScorePctile,
+          valPctile: stock.valuationScorePctile,
+          techPctile: stock.technicalScorePctile,
+        }),
+        stock.ticker,
+      ]
+    );
+  }
 }

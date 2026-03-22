@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS stock_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_snapshot_date ON stock_snapshots(snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_snapshots_ticker_date ON stock_snapshots(ticker_code, snapshot_date DESC);
 
 -- 4. SCAN RUNS (metadata per execution)
 CREATE TABLE IF NOT EXISTS scan_runs (
@@ -90,6 +91,8 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     status              TEXT DEFAULT 'running',
     current_ticker      TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status, started_at DESC);
 
 -- 5. SCAN RESULTS (analysis output per stock per scan)
 CREATE TABLE IF NOT EXISTS scan_results (
@@ -130,6 +133,7 @@ CREATE TABLE IF NOT EXISTS scan_results (
     value_play_grade        TEXT,
     value_play_class        TEXT,
     value_play_json         JSONB,
+    master_score            NUMERIC(5,1),
     created_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -137,6 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id);
 CREATE INDEX IF NOT EXISTS idx_scan_results_ticker ON scan_results(ticker_code, scan_date DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_results_buy ON scan_results(is_buy_now, scan_date DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_results_value_play ON scan_results(is_value_candidate, scan_date DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_results_master ON scan_results(master_score DESC);
 
 -- 6. SECTOR ROTATION SNAPSHOTS
 CREATE TABLE IF NOT EXISTS sector_rotation_snapshots (
@@ -183,6 +188,7 @@ CREATE TABLE IF NOT EXISTS portfolio_holdings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_holdings(status);
+CREATE INDEX IF NOT EXISTS idx_portfolio_status_date ON portfolio_holdings(status, entry_date DESC);
 CREATE INDEX IF NOT EXISTS idx_portfolio_ticker ON portfolio_holdings(ticker_code);
 
 -- 8. BACKTEST RUNS
@@ -314,6 +320,7 @@ CREATE TABLE IF NOT EXISTS news_articles (
 
 CREATE INDEX IF NOT EXISTS idx_news_articles_source ON news_articles(source, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_analyzed ON news_articles(is_analyzed, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_analyzed_published ON news_articles(is_analyzed, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_published ON news_articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_sentiment ON news_articles(sentiment, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_articles_impact ON news_articles(impact_level, published_at DESC);
@@ -498,3 +505,27 @@ ALTER TABLE predictions
   ADD COLUMN IF NOT EXISTS uncertainty_30d NUMERIC(8,4),
   ADD COLUMN IF NOT EXISTS model_version INTEGER,
   ADD COLUMN IF NOT EXISTS skip_reason TEXT;
+
+-- 26. SPACE FUND SIGNALS (daily entry timing analysis for space fund stocks)
+CREATE TABLE IF NOT EXISTS space_fund_signals (
+    id              BIGSERIAL PRIMARY KEY,
+    ticker_code     TEXT NOT NULL REFERENCES space_fund_members(ticker_code),
+    signal_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+    current_price   NUMERIC(14,4),
+    is_buy_now      BOOLEAN DEFAULT FALSE,
+    trigger_type    TEXT,              -- DIP, BREAKOUT, RETEST, RECLAIM, INSIDE
+    buy_now_reason  TEXT,
+    stop_loss       NUMERIC(14,4),
+    price_target    NUMERIC(14,4),
+    rr_ratio        NUMERIC(6,2),
+    rsi_14          NUMERIC(8,4),
+    market_regime   TEXT,              -- STRONG_UP, UP, RANGE, DOWN
+    technical_score NUMERIC(6,2),
+    details_json    JSONB,             -- full signal payload for UI expansion
+    source          TEXT DEFAULT 'cron',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(ticker_code, signal_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sf_signals_date ON space_fund_signals(signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sf_signals_buy ON space_fund_signals(is_buy_now, signal_date DESC);

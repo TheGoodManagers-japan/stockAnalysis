@@ -426,8 +426,8 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     reasons.push("Structure gate failed for DIP.");
   }
 
-  // ---------- Fallback entry detectors (when DIP doesn't produce a candidate) ----------
-  if (candidates.length === 0) {
+  // ---------- Alternative entry detectors (always run, pick best RR across all) ----------
+  {
     const fallbackDetectors = [
       { name: "SPC", kind: "SPC ENTRY", fn: () => detectSPC(stock, dataForGates2, cfg, U) },
       { name: "BPB", kind: "BPB ENTRY", fn: () => detectBPB(stock, dataForGates2, cfg, U) },
@@ -449,8 +449,6 @@ export function analyzeDipEntry(stock, historicalData, opts = {}) {
     ];
 
     for (const det of fallbackDetectors) {
-      if (candidates.length > 0) break; // stop once we have a candidate
-
       let result;
       try { result = det.fn(); } catch (e) {
         T(det.name.toLowerCase(), "error", false, `${det.name} error: ${e?.message}`, {}, "verbose");

@@ -114,7 +114,7 @@ export async function GET() {
       totalHeat += Math.max(0, risk);
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       performance: {
         totalTrades,
@@ -153,6 +153,8 @@ export async function GET() {
       },
       rMultiples,
     });
+    response.headers.set("Cache-Control", "private, max-age=120");
+    return response;
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err.message },

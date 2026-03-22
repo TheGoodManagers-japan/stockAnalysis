@@ -87,9 +87,9 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
   const entryLimit = entryTrigger * (1 + (cfg.boSlipTicks ?? 0.006));
   const useStopMarket = !!cfg.boUseStopMarketOnTrigger;
 
-  // Stop under breakout line, not entire base — TIGHT stop
+  // Stop below entire base — protective stop
   const lineStop = resistance - 0.5 * atr;
-  const initialStop = Math.max(lineStop, baseLo - 0.15 * atr);
+  const initialStop = Math.min(lineStop, baseLo - 0.5 * atr);
 
   // First target: easier to hit → more winners, let trailing capture the rest
   const boxHeight = Math.max(resistance - baseLo, 1.0 * atr);
@@ -99,12 +99,20 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
   // ---------- 6) Thrust quality ----------
   const d0 = data.at(-1);
   const closeThroughOK =
-    num(d0.close) >= resistance + Math.max(cfg.boCloseThroughATR, 0.08) * atr;
+    num(d0.close) >= resistance + Math.max(cfg.boCloseThroughATR, 0.3) * atr;
   const volThrustOK =
     avgVol20 > 0 &&
     num(d0.volume) >= Math.max(cfg.boVolThrustX, 1.35) * avgVol20;
 
-  const thrustOK = closeThroughOK || volThrustOK;
+  // Close quality: close in upper half of day's range
+  const d0High = num(d0.high) || px;
+  const d0Low = num(d0.low) || px;
+  const d0Range = Math.max(d0High - d0Low, 1e-9);
+  const closePos = (px - d0Low) / d0Range;
+  const closeQualityOK = closePos >= 0.5;
+
+  // Require BOTH close-through AND volume (was OR)
+  const thrustOK = closeThroughOK && volThrustOK;
   const tightBaseExceptional = tightening && baseRangeATR <= 0.8;
 
   // ---------- 7) RR filters ----------
@@ -132,6 +140,14 @@ export function detectPreBreakoutSetup(stock, data, cfg, U) {
     return {
       ready: false,
       waitReason: "no thrust and base not exceptionally tight",
+    };
+  }
+
+  // If close position is weak (lower half of range), require volume thrust
+  if (!closeQualityOK && !volThrustOK) {
+    return {
+      ready: false,
+      waitReason: `close in lower half of range (${(closePos * 100).toFixed(0)}%) without volume`,
     };
   }
 

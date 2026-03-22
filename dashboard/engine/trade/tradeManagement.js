@@ -4,6 +4,7 @@
 // ESM — no browser globals
 
 import { calcATR, calcADX14, sma } from "../regime/regimeLabels.js";
+import { rsiFromData, calculateOBV } from "../indicators.js";
 import { num as n, lastSwingLowRecent } from "../helpers.js";
 
 /* ======================== Private helpers ======================== */
@@ -155,10 +156,17 @@ export function getTradeManagementSignal_V3(
       Array.isArray(iReg.characteristics) &&
       iReg.characteristics.includes("DOWNTREND"));
 
-  if (nowBelowMA25 && madeLowerLow(historicalData) && bearishContext) {
+  // Structural breakdown: require 2 of 3 signals (was all 3)
+  const _madeLL = madeLowerLow(historicalData);
+  const breakdownSignals = [nowBelowMA25, _madeLL, bearishContext].filter(Boolean).length;
+  if (breakdownSignals >= 2 && (nowBelowMA25 || _madeLL)) {
     return {
       status: "Sell Now",
-      reason: "Trend break: close < MA25 with lower low and bearish context.",
+      reason: `Trend break: ${[
+        nowBelowMA25 ? "close < MA25" : null,
+        _madeLL ? "lower low" : null,
+        bearishContext ? "bearish context" : null,
+      ].filter(Boolean).join(" + ")}.`,
     };
   }
 
@@ -215,6 +223,21 @@ export function getTradeManagementSignal_V3(
       reason: `Up >= +1R. Move stop to breakeven at \u00a5${newSL}.`,
       updatedStopLoss: newSL,
     };
+  }
+
+  // 4a) 0-1R trailing: reduce max loss when half-way to 1R
+  if (progressR >= 0.5 && progressR < 1.0) {
+    const proposed = entry - 0.5 * riskPerShare; // halve max loss
+    if (proposed > stop) {
+      const newSL = clampStopLoss(px, atr, proposed, stop);
+      if (newSL > stop) {
+        return {
+          status: "Protect Profit",
+          reason: `Up +${progressR.toFixed(1)}R. Reduce risk: new stop \u00a5${newSL}.`,
+          updatedStopLoss: newSL,
+        };
+      }
+    }
   }
 
   // 4b) No-progress creep
@@ -285,6 +308,46 @@ export function getTradeManagementSignal_V3(
     }
   }
 
+  // 4c) Time-based exit: 12+ bars without meaningful progress
+  {
+    let barsSinceEntry = ctx?.barsSinceEntry ?? null;
+    if (
+      barsSinceEntry == null &&
+      ctx?.entryDate instanceof Date &&
+      Array.isArray(historicalData)
+    ) {
+      const completed = historicalData.slice(0, -1);
+      barsSinceEntry = completed.reduce((acc, b) => {
+        const d = b?.date instanceof Date ? b.date : new Date(b?.date);
+        return acc + (d > ctx.entryDate ? 1 : 0);
+      }, 0);
+    }
+    if ((barsSinceEntry ?? 0) >= 12 && progressR < 0.5) {
+      return {
+        status: "Sell Now",
+        reason: `Time stop: ${barsSinceEntry} bars without meaningful progress (${progressR.toFixed(1)}R).`,
+      };
+    }
+  }
+
+  // 4d) RSI overbought exit
+  {
+    const rsi = rsiFromData(historicalData, 14);
+    if (rsi > 80 && progressR >= 1.5) {
+      const proposed = Math.max(
+        stop,
+        trailingStructStop(historicalData, ma25, atr)
+      );
+      const newSL = clampStopLoss(px, atr, proposed, stop);
+      return {
+        status: "Scale Partial",
+        reason: `RSI overbought (${rsi.toFixed(0)}) at +${progressR.toFixed(1)}R — scale partial, tighten stop to \u00a5${newSL}.`,
+        updatedStopLoss: newSL,
+        suggest: { takeProfitPct: 30 },
+      };
+    }
+  }
+
   // 5) Entry-kind aware holds
   const entryKind = (ctx.entryKind || "").toUpperCase();
   const aboveMA25 = px >= ma25 || ma25 === 0;
@@ -313,9 +376,10 @@ export function getTradeManagementSignal_V3(
     }
   }
 
-  // 6) Bearish engulf near resistance
+  // 6) Bearish patterns near resistance
   const last = historicalData?.at?.(-1) || {};
   const prev = historicalData?.at?.(-2) || {};
+  const prev2 = historicalData?.at?.(-3) || {};
   const bearishEngulf =
     n(last.close) < n(last.open) &&
     n(prev.close) > n(prev.open) &&
@@ -323,7 +387,39 @@ export function getTradeManagementSignal_V3(
     n(last.open) > n(prev.close);
   const near52wHigh = near(px, n(stock.fiftyTwoWeekHigh), 0.02);
 
-  if (near52wHigh && bearishEngulf) {
+  // Evening star: large bull → small body → large bear
+  const eveningStar = (() => {
+    const bar2Body = Math.abs(n(prev2.close) - n(prev2.open));
+    const bar1Body = Math.abs(n(prev.close) - n(prev.open));
+    const bar0Body = Math.abs(n(last.close) - n(last.open));
+    const bar2Range = Math.max(n(prev2.high) - n(prev2.low), 1e-9);
+    const bar0Range = Math.max(n(last.high) - n(last.low), 1e-9);
+    return (
+      n(prev2.close) > n(prev2.open) && // bar2 = bull
+      bar2Body > 0.5 * bar2Range &&      // large body
+      bar1Body < 0.3 * bar2Body &&        // small body (doji-like)
+      n(last.close) < n(last.open) &&     // bar0 = bear
+      bar0Body > 0.5 * bar0Range &&       // large body
+      n(last.close) < n(prev2.open) + 0.5 * bar2Body // closes into bull body
+    );
+  })();
+
+  // Shooting star: small body at bottom, long upper wick
+  const shootingStar = (() => {
+    const body = Math.abs(n(last.close) - n(last.open));
+    const range = Math.max(n(last.high) - n(last.low), 1e-9);
+    const upperWick = n(last.high) - Math.max(n(last.close), n(last.open));
+    return (
+      body < 0.35 * range &&
+      upperWick > 1.5 * body &&
+      Math.min(n(last.close), n(last.open)) - n(last.low) < 0.2 * range
+    );
+  })();
+
+  const bearishPattern = bearishEngulf || eveningStar || shootingStar;
+  const patternName = bearishEngulf ? "bearish engulfing" : eveningStar ? "evening star" : "shooting star";
+
+  if (near52wHigh && bearishPattern) {
     const proposed = Math.max(
       stop,
       trailingStructStop(historicalData, ma25, atr)
@@ -331,9 +427,32 @@ export function getTradeManagementSignal_V3(
     const newSL = clampStopLoss(px, atr, proposed, stop);
     return {
       status: "Protect Profit",
-      reason: `Bearish engulfing near resistance -- tighten stop to \u00a5${newSL}.`,
+      reason: `${patternName} near resistance -- tighten stop to \u00a5${newSL}.`,
       updatedStopLoss: newSL,
     };
+  }
+
+  // 6b) OBV divergence warning: price rising but OBV declining
+  if (progressR >= 1 && Array.isArray(historicalData) && historicalData.length >= 20) {
+    const recentData = historicalData.slice(-10);
+    const priorData = historicalData.slice(-20, -10);
+    const obvRecent = calculateOBV(recentData);
+    const obvPrior = calculateOBV(priorData);
+    const priceUp = n(recentData.at(-1)?.close) > n(priorData.at(-1)?.close);
+    if (priceUp && obvRecent < obvPrior * 0.9) {
+      const proposed = Math.max(
+        stop,
+        trailingStructStop(historicalData, ma25, atr)
+      );
+      const newSL = clampStopLoss(px, atr, proposed, stop);
+      if (newSL > stop) {
+        return {
+          status: "Protect Profit",
+          reason: `OBV divergence: price rising but volume declining -- tighten stop to \u00a5${newSL}.`,
+          updatedStopLoss: newSL,
+        };
+      }
+    }
   }
 
   // 7) DEFAULT -- structure-first, conservative for entries below MA25

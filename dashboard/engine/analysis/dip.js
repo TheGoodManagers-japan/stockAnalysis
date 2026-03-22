@@ -98,9 +98,12 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     const win = arr.slice(-25, -5);
     let low = Infinity;
     for (let i = 2; i < win.length - 2; i++) {
+      // 5-bar pivot: lower than 2 bars each side
       const isPivot =
         num(win[i].low) < num(win[i - 1].low) &&
-        num(win[i].low) < num(win[i + 1].low);
+        num(win[i].low) < num(win[i + 1].low) &&
+        (i < 2 || num(win[i].low) <= num(win[i - 2].low)) &&
+        (i >= win.length - 2 || num(win[i].low) <= num(win[i + 2].low));
       if (isPivot) low = Math.min(low, num(win[i].low));
     }
     return Number.isFinite(low)
@@ -169,8 +172,11 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     let lastTouchIdx = -999;
     for (let i = 2; i < lookback.length - 2; i++) {
       const L = num(lookback[i].low);
+      // 5-bar pivot: lower than 2 bars each side
       const isPivotLow =
-        L < num(lookback[i - 1].low) && L < num(lookback[i + 1].low);
+        L < num(lookback[i - 1].low) && L < num(lookback[i + 1].low) &&
+        (i < 2 || L <= num(lookback[i - 2].low)) &&
+        (i >= lookback.length - 2 || L <= num(lookback[i + 2].low));
       if (
         isPivotLow &&
         Math.abs(L - dipLow) <= tolAbs &&
@@ -291,12 +297,70 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     );
   }
 
+  // --- RSI series for divergence detection (used by both bullish + bearish checks) ---
+  function rsiFromDataLocal(arr, length = 14) {
+    const n = arr.length;
+    if (n < length + 1) return 50;
+    let gains = 0;
+    let losses = 0;
+    for (let i = n - length; i < n; i++) {
+      const prev = num(arr[i - 1].close);
+      const curr = num(arr[i].close);
+      const diff = curr - prev;
+      if (diff > 0) gains += diff;
+      else losses -= diff;
+    }
+    const avgGain = gains / length;
+    const avgLoss = losses / length || 1e-9;
+    const rs = avgGain / avgLoss;
+    return 100 - 100 / (1 + rs);
+  }
+  const rsiSeries = [];
+  for (let i = Math.max(15, data.length - 40); i < data.length; i++) {
+    rsiSeries.push(rsiFromDataLocal(data.slice(0, i), 14));
+  }
+
+  // --- Bullish RSI divergence: price lower low but RSI higher low ---
+  let bullishRSIDivergence = false;
+  {
+    const lookWin = data.slice(-20);
+    if (lookWin.length >= 10 && rsiSeries.length >= 10) {
+      // Find two lowest price lows in recent window
+      let lo1 = Infinity, lo1Idx = -1, lo2 = Infinity, lo2Idx = -1;
+      for (let i = 2; i < lookWin.length - 2; i++) {
+        const L = num(lookWin[i].low);
+        const isPivot = L < num(lookWin[i - 1].low) && L < num(lookWin[i + 1].low);
+        if (isPivot) {
+          if (L < lo1) { lo2 = lo1; lo2Idx = lo1Idx; lo1 = L; lo1Idx = i; }
+          else if (L < lo2) { lo2 = L; lo2Idx = i; }
+        }
+      }
+      if (lo1Idx >= 0 && lo2Idx >= 0 && lo1Idx !== lo2Idx) {
+        // Most recent low vs prior low
+        const [recentIdx, priorIdx] = lo1Idx > lo2Idx ? [lo1Idx, lo2Idx] : [lo2Idx, lo1Idx];
+        const recentPrice = num(lookWin[recentIdx].low);
+        const priorPrice = num(lookWin[priorIdx].low);
+        const rsiRecent = rsiSeries[Math.min(rsiSeries.length - 1, rsiSeries.length - (lookWin.length - recentIdx))];
+        const rsiPrior = rsiSeries[Math.max(0, rsiSeries.length - (lookWin.length - priorIdx))];
+        // Bullish: price lower low + RSI higher low
+        if (recentPrice <= priorPrice * 1.005 && rsiRecent > rsiPrior + 2) {
+          bullishRSIDivergence = true;
+        }
+      }
+    }
+  }
+
   // Bounce quality baselines
   // FIX #2: If tape flags indicate MA5 resistance or dead cat, require stronger bounce
   const baseMinStr = cfg.dipMinBounceStrengthATR ?? 0.6;
-  const minStr = requireStrongerBounce
+  let minStr = requireStrongerBounce
     ? Math.max(baseMinStr, 0.85) // Require stronger bounce when flagged
     : baseMinStr;
+
+  // Bullish divergence quality bonus: reduce bounce requirement
+  if (bullishRSIDivergence) {
+    minStr = Math.max(minStr * 0.85, 0.45); // 15% easier bounce requirement
+  }
 
   const closeAboveYHigh =
     num(d0.close) > num(d1.high) && bounceStrengthATR >= minStr;
@@ -402,25 +466,7 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     };
   }
 
-  // --- RSI divergence veto ---
-  function rsiFromDataLocal(arr, length = 14) {
-    const n = arr.length;
-    if (n < length + 1) return 50;
-    let gains = 0;
-    let losses = 0;
-    for (let i = n - length; i < n; i++) {
-      const prev = num(arr[i - 1].close);
-      const curr = num(arr[i].close);
-      const diff = curr - prev;
-      if (diff > 0) gains += diff;
-      else losses -= diff;
-    }
-    const avgGain = gains / length;
-    const avgLoss = losses / length || 1e-9;
-    const rs = avgGain / avgLoss;
-    return 100 - 100 / (1 + rs);
-  }
-
+  // --- RSI divergence veto (rsiFromDataLocal + rsiSeries defined above) ---
   function recentHighIdx(arr, k = 8) {
     let idx = -1;
     let mx = -Infinity;
@@ -433,11 +479,6 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
       }
     }
     return idx;
-  }
-
-  const rsiSeries = [];
-  for (let i = Math.max(15, data.length - 40); i < data.length; i++) {
-    rsiSeries.push(rsiFromDataLocal(data.slice(0, i), 14));
   }
   const hi1 = recentHighIdx(data.slice(0, -2));
   const hi2 = recentHighIdx(data.slice(0, -10));
@@ -582,6 +623,29 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
     headroomPct == null ||
     (headroomATR >= 0.4 && headroomPct >= 0.8) ||
     (strongBounceOverride && headroomATR >= 0.3);
+
+  // --- MACD/Stochastic confirmation bonus ---
+  // MACD histogram narrowing at bounce = momentum shifting bullish
+  const macdVal = num(stock.macd);
+  const macdSig = num(stock.macdSignal);
+  const macdConfirm = Number.isFinite(macdVal) && Number.isFinite(macdSig) &&
+    (macdVal > macdSig || (macdVal < 0 && macdVal > macdSig)); // above signal or narrowing
+  // Stochastic oversold crossover = bullish
+  const stochK = num(stock.stochasticK);
+  const stochD = num(stock.stochasticD);
+  const stochConfirm = Number.isFinite(stochK) && Number.isFinite(stochD) &&
+    stochK < 30 && stochK > stochD; // oversold bullish crossover
+
+  // --- Weekly candle bonus applied to trigger (looser gates when weekly confirms) ---
+  const weeklyBonusEarly = assessWeeklyCandle(data, num);
+  if (weeklyBonusEarly.score >= 2 && !bounceOK && patternOK && bodyQuality) {
+    // Strong weekly confirmation can soften bounce requirement
+    bounceOK = true;
+  }
+  // MACD + Stochastic confirmation can also soften bounce requirement
+  if (!bounceOK && patternOK && (macdConfirm || stochConfirm) && bounceStrengthATR >= minStr * 0.8) {
+    bounceOK = true;
+  }
 
   // --- Final trigger ---
   const trigger =

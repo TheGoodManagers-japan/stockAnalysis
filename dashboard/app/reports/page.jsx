@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ScanDiffSection from "../../components/reports/ScanDiffSection";
 import SignalTrackingSection from "../../components/reports/SignalTrackingSection";
 import InsightsSection from "../../components/reports/InsightsSection";
@@ -17,6 +17,15 @@ const TABS = [
 export default function ReportsPage() {
   const [tab, setTab] = useState("daily");
   const [days, setDays] = useState(90);
+  const [mountedTabs, setMountedTabs] = useState(new Set(["daily"]));
+
+  // Mount tabs on first visit so they persist across switches
+  useEffect(() => {
+    setMountedTabs((prev) => {
+      if (prev.has(tab)) return prev;
+      return new Set([...prev, tab]);
+    });
+  }, [tab]);
 
   return (
     <>
@@ -64,11 +73,27 @@ export default function ReportsPage() {
         </label>
       </div>
 
-      {/* Tab content */}
-      {tab === "daily" && <DailyReportsSection days={days} />}
-      {tab === "tracking" && <SignalTrackingSection days={days} />}
-      {tab === "diff" && <ScanDiffSection />}
-      {tab === "insights" && <InsightsSection days={days} />}
+      {/* Tab content — mount once, toggle visibility to preserve state */}
+      {mountedTabs.has("daily") && (
+        <div style={{ display: tab === "daily" ? "block" : "none" }}>
+          <DailyReportsSection days={days} />
+        </div>
+      )}
+      {mountedTabs.has("tracking") && (
+        <div style={{ display: tab === "tracking" ? "block" : "none" }}>
+          <SignalTrackingSection days={days} />
+        </div>
+      )}
+      {mountedTabs.has("diff") && (
+        <div style={{ display: tab === "diff" ? "block" : "none" }}>
+          <ScanDiffSection />
+        </div>
+      )}
+      {mountedTabs.has("insights") && (
+        <div style={{ display: tab === "insights" ? "block" : "none" }}>
+          <InsightsSection days={days} />
+        </div>
+      )}
     </>
   );
 }

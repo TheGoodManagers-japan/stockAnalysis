@@ -24,6 +24,7 @@ import { allTickers } from "../data/tickers.js";
 
 import { fetchYahooFinanceData } from "../lib/yahoo.js";
 import { getCachedHistory } from "../lib/cache.js";
+import { query } from "../lib/db.js";
 
 /* ======================== Imports: engine modules ======================== */
 
@@ -58,10 +59,15 @@ import {
   getAdvancedFundamentalScore,
   getValuationScore,
   getNumericTier,
-  classifyValueQuadrant,
 } from "./analysis/techFundValAnalysis.js";
 
 import { analyzeValuePlay } from "./analysis/valuePlay.js";
+
+import { computeDisagreement } from "./scoring/disagreement.js";
+import { classifyFreshness, applyDecay } from "./scoring/dataFreshness.js";
+import { computeTrajectory } from "./scoring/trajectoryModifier.js";
+import { computeMasterScore } from "./scoring/masterScore.js";
+import { computePercentiles } from "./scoring/percentileRanking.js";
 
 import { DEFAULT_REGIME_TICKER } from "../lib/constants.js";
 
@@ -197,6 +203,29 @@ export async function fetchStockAnalysis({
     );
   }
 
+  // --- Pre-load batch data for freshness + trajectory ---
+  let freshnessMap = new Map();
+  let prevSnapshotMap = new Map();
+  try {
+    const [freshResult, prevResult] = await Promise.all([
+      query(`SELECT ticker_code, MAX(snapshot_date) AS latest_date FROM stock_snapshots GROUP BY ticker_code`),
+      query(`SELECT DISTINCT ON (ticker_code) ticker_code, pe_ratio, eps_trailing, eps_forward, dividend_yield
+             FROM stock_snapshots
+             WHERE snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+             ORDER BY ticker_code, snapshot_date DESC`),
+    ]);
+    for (const row of freshResult.rows) {
+      const ageDays = Math.floor((Date.now() - new Date(row.latest_date).getTime()) / 86400000);
+      freshnessMap.set(row.ticker_code, { freshness: classifyFreshness(ageDays), ageDays });
+    }
+    for (const row of prevResult.rows) {
+      prevSnapshotMap.set(row.ticker_code, row);
+    }
+    log(`Batch loaded freshness for ${freshnessMap.size} tickers, trajectory for ${prevSnapshotMap.size}`);
+  } catch (e) {
+    warn(`Batch pre-load failed (freshness/trajectory disabled): ${e?.message || e}`);
+  }
+
   // --- Main loop ---
   for (const tickerObj of filteredTickers) {
     log(`\n--- Fetching data for ${tickerObj.code} ---`);
@@ -316,10 +345,39 @@ export async function fetchStockAnalysis({
 
       enrichForTechnicalScore(stock);
 
-      // 4) Scores (value-first JP)
-      stock.technicalScore = computeTechnicalScore(stock);
-      stock.fundamentalScore = getAdvancedFundamentalScore(stock);
-      stock.valuationScore = getValuationScore(stock);
+      // 4) Scores (value-first JP) with confidence tracking
+      const techResult = computeTechnicalScore(stock, { withConfidence: true });
+      stock.technicalScore = techResult.score;
+      stock.techConfidence = techResult.confidence;
+
+      const fundResult = getAdvancedFundamentalScore(stock, { withConfidence: true });
+      stock.fundamentalScore = fundResult.score;
+      stock.fundConfidence = fundResult.confidence;
+
+      const valResult = getValuationScore(stock, {}, { withConfidence: true });
+      stock.valuationScore = valResult.score;
+      stock.valConfidence = valResult.confidence;
+
+      stock.scoringConfidence = Math.round(
+        ((stock.techConfidence + stock.fundConfidence + stock.valConfidence) / 3) * 100
+      ) / 100;
+
+      // 4a) Disagreement signal
+      const { disagreement, isConflicted } = computeDisagreement(
+        stock.technicalScore, stock.fundamentalScore, stock.valuationScore
+      );
+      stock.scoreDisagreement = disagreement;
+      stock.isConflicted = isConflicted;
+
+      // 4b) Data freshness decay
+      const freshInfo = freshnessMap.get(stock.ticker) || { freshness: "fresh", ageDays: 0 };
+      stock.dataFreshness = freshInfo.freshness;
+      if (freshInfo.freshness !== "fresh") {
+        stock.fundamentalScore = applyDecay(stock.fundamentalScore, freshInfo.freshness);
+        stock.valuationScore = applyDecay(stock.valuationScore, freshInfo.freshness);
+      }
+
+      // 4c) Tier calculation
       stock.tier = getNumericTier(
         {
           technicalScore: stock.technicalScore,
@@ -330,9 +388,19 @@ export async function fetchStockAnalysis({
         },
         { mode: "value_only" }
       );
-      const quad = classifyValueQuadrant(stock);
-      stock.valueQuadrant = quad.label;
-      stock.valueVerdict = quad.verdict;
+
+      // 4d) Trajectory modifier
+      const prevSnapshot = prevSnapshotMap.get(stock.ticker);
+      const trajResult = computeTrajectory(prevSnapshot, {
+        peRatio: stock.peRatio,
+        epsTrailingTwelveMonths: stock.epsTrailingTwelveMonths,
+        epsForward: stock.epsForward,
+        dividendYield: stock.dividendYield,
+      });
+      stock.tierTrajectory = trajResult.trajectory;
+      if (trajResult.tierAdj !== 0) {
+        stock.tier = Math.max(1, Math.min(6, Math.round(stock.tier + trajResult.tierAdj)));
+      }
 
       // 4b) Value play analysis
       const vp = analyzeValuePlay(stock, historicalData);
@@ -535,6 +603,9 @@ export async function fetchStockAnalysis({
         stock.managementSignalReason = null;
       }
 
+      // 8) Master score (after all dimensions are computed)
+      stock.masterScore = computeMasterScore(stock);
+
       // Push the raw stock object to results
       results.push(stock);
       log(`Processed ${stock.ticker}`);
@@ -559,6 +630,9 @@ export async function fetchStockAnalysis({
       errors.push(`Ticker ${tickerObj.code}: ${err?.message || err}`);
     }
   }
+
+  // --- Post-processing: percentile ranking across universe ---
+  computePercentiles(results);
 
   log("Scan complete", { count, errorsCount: errors.length });
 

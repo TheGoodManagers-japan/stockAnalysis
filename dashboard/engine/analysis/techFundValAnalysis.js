@@ -80,7 +80,7 @@ export const FINANCIAL_SECTORS = new Set([
  * – sector-aware; now with optional profitability hints if present (ROE/Margins)
  * =============================================================================
  */
-export function getQualityScore(stock) {
+export function getQualityScore(stock, opts) {
   const sector = stock?.sector || "";
   const isHGrowth = HIGH_GROWTH_SECTORS.has(sector);
   const isDivFocus = DIVIDEND_FOCUS_SECTORS.has(sector);
@@ -163,7 +163,14 @@ export function getQualityScore(stock) {
   };
 
   const score = g * weights.growth + h * weights.health + d * weights.dividend + p * weights.profitability + s * weights.sanity;
-  return Math.round(score * 10) / 10;
+  const finalScore = Math.round(score * 10) / 10;
+  if (!opts?.withConfidence) return finalScore;
+
+  // Confidence: count how many key inputs are present
+  const keyInputs = [pe, pb, d2e, dy, epsGpct, epsF, epsT];
+  const presentCount = keyInputs.filter((v) => Number.isFinite(v) && v !== 0).length;
+  const confidence = Math.round((presentCount / keyInputs.length) * 100) / 100;
+  return { score: finalScore, confidence };
 }
 export const getAdvancedFundamentalScore = getQualityScore; // alias
 
@@ -173,7 +180,7 @@ export const getAdvancedFundamentalScore = getQualityScore; // alias
  *   + FCF yield & shareholder yield sweeteners; size tilt when currency is JPY.
  * =============================================================================
  */
-export function getValuationScore(stock, weightOverrides = {}) {
+export function getValuationScore(stock, weightOverrides = {}, opts) {
   const sector = stock?.sector || "";
   const isHG = HIGH_GROWTH_SECTORS.has(sector);
   const isVAL = DIVIDEND_FOCUS_SECTORS.has(sector) || ["Utilities","Real Estate"].includes(sector);
@@ -282,7 +289,14 @@ export function getValuationScore(stock, weightOverrides = {}) {
 
   // Map raw (roughly -10..+10) into 0..10 band, then clamp
   const score = clamp((raw + 8) * (10 / 16), 0, 10);
-  return Math.round(score * 10) / 10;
+  const finalScore = Math.round(score * 10) / 10;
+  if (!opts?.withConfidence) return finalScore;
+
+  // Confidence: count how many key valuation metrics are available
+  const keyMetrics = [pe, pb, ps, evE, evEbitda, fcfYield, shareholderYield, gEPSpct];
+  const presentCount = keyMetrics.filter((v) => Number.isFinite(v) && v > 0).length;
+  const confidence = Math.round((presentCount / keyMetrics.length) * 100) / 100;
+  return { score: finalScore, confidence };
 }
 
 /* =============================================================================

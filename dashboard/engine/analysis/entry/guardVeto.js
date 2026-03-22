@@ -1,7 +1,8 @@
 // entry/guardVeto.js — Guard vetoes (weekly range, market impulse, RSI, headroom, MA25 extension, streak)
 // FIX #3: Collects ALL veto reasons instead of returning on first failure
 
-import { sma, rsiFromData } from "../../indicators.js";
+import { sma, rsiFromData, calculateATR } from "../../indicators.js";
+import { calcADX14 } from "../../regime/regimeLabels.js";
 import {
   num,
   isFiniteN,
@@ -45,7 +46,7 @@ export function guardVeto(
 
     const topVeto = Number(cfg.weeklyTopVetoPos ?? 0.5);
     const adjTopVeto =
-      ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.05) : topVeto;
+      ms.trend === "STRONG_UP" ? Math.min(0.85, topVeto + 0.15) : topVeto;
 
     const tkr = stock?.ticker || "UNK";
     const pos = weeklyRange.pos;
@@ -203,6 +204,18 @@ export function guardVeto(
       code: "STREAK",
       reason: `Consecutive up days ${ups} ≥ ${cfg.maxConsecutiveUpDays}`,
     });
+  }
+
+  // ADX filter: breakouts fail in trendless markets, strong trends trade higher in range
+  const adx = calcADX14(data);
+  details.adx = adx;
+  if (Number.isFinite(adx)) {
+    if (adx < 15 && _kind === "BREAKOUT") {
+      vetoes.push({
+        code: "ADX_LOW",
+        reason: `ADX ${adx.toFixed(1)} < 15 — breakouts fail in trendless markets`,
+      });
+    }
   }
 
   if (vetoes.length > 0) {

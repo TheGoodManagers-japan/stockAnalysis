@@ -22,7 +22,7 @@ export default function BuySignalReview() {
         setLoading(true);
         setError(null);
         try {
-            const res = await fetch("/api/scan/ai-review");
+            const res = await fetch("/api/scan/ai-review?force=true");
             const data = await res.json();
             if (data.success) {
                 setReviews(data.reviews);

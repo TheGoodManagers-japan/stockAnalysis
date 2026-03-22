@@ -3,69 +3,12 @@
 // ESM — no browser globals
 
 // Re-export indicators used by orchestrator.js and other consumers
-export { sma, smaArr, calculateATR as calcATR } from "../indicators.js";
+export { sma, smaArr, calculateATR as calcATR, calcADX14 } from "../indicators.js";
 import { smaArr } from "../indicators.js";
 
 /* ======================== Helpers ======================== */
 
 const toISO = (d) => new Date(d).toISOString().slice(0, 10);
-
-/* ======================== ADX(14) ======================== */
-
-/**
- * ADX(14) (Wilder smoothing) with safe fallbacks.
- */
-export function calcADX14(data) {
-  if (!Array.isArray(data) || data.length < 16) return 0;
-
-  const plusDM = [];
-  const minusDM = [];
-  const tr = [];
-
-  for (let i = 1; i < data.length; i++) {
-    const h = Number(data[i]?.high ?? data[i]?.close ?? 0);
-    const l = Number(data[i]?.low ?? data[i]?.close ?? 0);
-    const pc = Number(data[i - 1]?.close ?? 0);
-    const ph = Number(data[i - 1]?.high ?? data[i - 1]?.close ?? 0);
-    const pl = Number(data[i - 1]?.low ?? data[i - 1]?.close ?? 0);
-
-    const up = h - ph;
-    const down = pl - l;
-
-    plusDM.push(up > down && up > 0 ? up : 0);
-    minusDM.push(down > up && down > 0 ? down : 0);
-    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-  }
-
-  const p = 14;
-
-  const smooth = (arr, period) => {
-    if (arr.length < period) return [];
-    let s = arr.slice(0, period).reduce((a, b) => a + b, 0);
-    const out = [s];
-    for (let i = period; i < arr.length; i++) {
-      s = out[out.length - 1] - out[out.length - 1] / period + arr[i];
-      out.push(s);
-    }
-    return out;
-  };
-
-  const smTR = smooth(tr, p);
-  const smP = smooth(plusDM, p);
-  const smM = smooth(minusDM, p);
-  if (!smTR.length) return 0;
-
-  const plusDI = smTR.map((v, i) => 100 * ((smP[i] || 0) / (v || 1)));
-  const minusDI = smTR.map((v, i) => 100 * ((smM[i] || 0) / (v || 1)));
-  const dx = plusDI.map((pdi, i) => {
-    const mdi = minusDI[i] || 0;
-    const denom = Math.max(1e-8, pdi + mdi);
-    return 100 * (Math.abs(pdi - mdi) / denom);
-  });
-
-  const smDX = smooth(dx, p).map((v) => v / p);
-  return smDX.at(-1) || 0;
-}
 
 /* ======================== Regime labels ======================== */
 
@@ -128,15 +71,31 @@ export function computeRegimeLabels(candles) {
     const aboveMA = Number.isFinite(m25) && px > m25;
     const strong =
       aboveMA && slope > 0.0002 && Number.isFinite(m75) && m25 > m75;
+    // RANGE: require BOTH flat slope AND near MA25 (was OR)
     const flatish =
-      Math.abs(slope) < 0.0002 ||
+      Math.abs(slope) < 0.0002 &&
       (Number.isFinite(m25) && Math.abs(px - m25) <= a14);
+    // STRONG_DOWN: below MA25, steep negative slope, MA25 < MA75
+    const strongDown =
+      !aboveMA && slope < -0.0002 && Number.isFinite(m75) && m25 < m75;
 
     if (strong) labels.push("STRONG_UP");
     else if (aboveMA && slope >= 0) labels.push("UP");
+    else if (strongDown) labels.push("STRONG_DOWN");
     else if (flatish) labels.push("RANGE");
     else labels.push("DOWN");
   }
+
+  // Regime hysteresis: require 3 consecutive bars of new label before switching
+  if (labels.length >= 3) {
+    for (let i = 2; i < labels.length; i++) {
+      if (labels[i] !== labels[i - 1] && labels[i] !== labels[i - 2]) {
+        // New label doesn't match either of the prior 2 bars — keep previous
+        labels[i] = labels[i - 1];
+      }
+    }
+  }
+
   return labels;
 }
 

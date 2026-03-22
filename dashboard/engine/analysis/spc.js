@@ -90,6 +90,8 @@ export function detectSPC(stock, data, cfg, U) {
   const rangeATR = dayRange / Math.max(atr, 1e-9);
   const insideBar =
     (last.high ?? 0) <= (prev.high ?? 0) && (last.low ?? 0) >= (prev.low ?? 0);
+  // Inside bar directional bias: bullish if close in upper half of range
+  const insideBarBullish = insideBar && (px - (last.low ?? px)) / Math.max(dayRange, 1e-9) > 0.5;
   const tightDrift = rangeATR <= 0.6 && bodyPct <= 0.5;
 
   // tiny-dip thresholds (friendlier in friendly tape)
@@ -99,7 +101,7 @@ export function detectSPC(stock, data, cfg, U) {
   const tinyDipOK =
     pullbackFromMA5 <= tinyDipPctMax ||
     (dipPct <= tinyDipPctMax && dipATR <= tinyDipATRMax) ||
-    insideBar ||
+    insideBarBullish ||
     tightDrift;
 
   // momentum & headroom gates
@@ -148,7 +150,7 @@ export function detectSPC(stock, data, cfg, U) {
     if (strongClose && higherHigh && higherLow) {
       const stopSwing = recentLow - 0.55 * atr; // was 0.4
       const stopMA5 = ma5 > 0 ? ma5 - 0.6 * atr : px - 1.0 * atr; // was 0.5
-      let overrideStop = Math.min(stopSwing, stopMA5);
+      let overrideStop = Math.max(stopSwing, stopMA5); // SPC = tight play, use tighter stop
 
       // prefer next lid sooner if micro-lid too close
       let overrideTarget = Number.isFinite(nearestRes)
@@ -221,10 +223,10 @@ export function detectSPC(stock, data, cfg, U) {
     };
   }
 
-  // --- base plan (slightly wider stop) ---
+  // --- base plan (tight continuation stop) ---
   const stopSwing = recentLow - 0.55 * atr; // was 0.4
   const stopMA5 = ma5 > 0 ? ma5 - 0.6 * atr : px - 1.0 * atr; // was 0.5
-  let stop = Math.min(stopSwing, stopMA5);
+  let stop = Math.max(stopSwing, stopMA5); // SPC = tight play, use tighter stop
 
   let target = Number.isFinite(nearestRes) ? nearestRes : px + 1.8 * atr;
   if (Number.isFinite(nearestRes)) {

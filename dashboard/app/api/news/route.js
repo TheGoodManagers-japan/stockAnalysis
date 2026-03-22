@@ -90,7 +90,7 @@ export async function GET(request) {
       params
     );
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       articles: articles.rows,
       total,
@@ -98,6 +98,8 @@ export async function GET(request) {
       limit,
       stats: stats.rows[0] || {},
     });
+    response.headers.set("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+    return response;
   } catch (err) {
     console.error("[news] Error:", err);
     return NextResponse.json(

@@ -104,37 +104,48 @@ export function enrichForTechnicalScore(stock) {
  * momentum, trend, volatility, and volume indicators.
  *
  * Call AFTER enrichForTechnicalScore() so all indicators are populated.
+ *
+ * @param {Object} stock
+ * @param {Object} [opts]
+ * @param {boolean} [opts.withConfidence] - If true, returns { score, confidence }
+ * @returns {number|{score: number, confidence: number}}
  */
-export function computeTechnicalScore(stock) {
+export function computeTechnicalScore(stock, opts) {
   const f = (v) => (Number.isFinite(v) ? v : null);
   const price = f(stock.currentPrice);
-  if (!price || price <= 0) return 0;
+  if (!price || price <= 0) {
+    return opts?.withConfidence ? { score: 0, confidence: 0 } : 0;
+  }
 
   let total = 0;
   let maxPts = 0;
+  let availGroups = 0;
+  const totalGroups = 8;
 
   // --- 1) Trend alignment (0-3 pts) ---
-  // Price vs key MAs: above = bullish
   maxPts += 3;
   const ma25 = f(stock.movingAverage25d);
   const ma75 = f(stock.movingAverage75d);
   const ma200 = f(stock.movingAverage200d);
+  if (ma25 || ma75 || ma200) availGroups++;
   if (ma25 && price > ma25) total += 1;
   if (ma75 && price > ma75) total += 1;
   if (ma200 && price > ma200) total += 1;
 
   // --- 2) MA structure (0-1 pt) ---
-  // Golden cross: MA25 > MA75
   maxPts += 1;
+  if (ma25 && ma75) { availGroups++; }
   if (ma25 && ma75 && ma25 > ma75) total += 1;
 
-  // --- 3) RSI (0-2 pts) ---
+  // --- 3) RSI (0-2 pts) — reward pullback zone (room to run) ---
   maxPts += 2;
   const rsi = f(stock.rsi14);
   if (rsi != null) {
-    if (rsi >= 40 && rsi <= 60) total += 2;        // healthy mid-range
-    else if (rsi >= 30 && rsi <= 70) total += 1;    // acceptable
-    // oversold (<30) or overbought (>70) = 0
+    availGroups++;
+    if (rsi >= 30 && rsi <= 50) total += 2;      // pullback zone, ideal entry
+    else if (rsi > 50 && rsi <= 65) total += 1;   // moderate, still OK
+    else if (rsi > 65 && rsi <= 70) total += 0.5; // getting warm but not overbought
+    // >70 overbought = 0 pts
   }
 
   // --- 4) MACD (0-1.5 pts) ---
@@ -142,15 +153,22 @@ export function computeTechnicalScore(stock) {
   const macd = f(stock.macd);
   const macdSig = f(stock.macdSignal);
   if (macd != null && macdSig != null) {
-    if (macd > macdSig) total += 1;                 // bullish crossover
-    if (macd > 0) total += 0.5;                     // above zero line
+    availGroups++;
+    if (macd > macdSig) total += 1;
+    if (macd > 0) total += 0.5;
   }
 
-  // --- 5) Stochastic (0-1 pt) ---
+  // --- 5) Stochastic (0-1 pt) — reward oversold/crossover ---
   maxPts += 1;
   const stochK = f(stock.stochasticK);
+  const stochD = f(stock.stochasticD);
   if (stochK != null) {
-    if (stochK >= 20 && stochK <= 80) total += 1;   // not extreme
+    availGroups++;
+    if (stochK < 30 || (stochK >= 20 && stochK <= 40 && stochD != null && stochK > stochD)) {
+      total += 1;   // oversold or bullish crossover in oversold zone
+    } else if (stochK >= 30 && stochK <= 50) {
+      total += 0.5;  // low-mid range, still favorable
+    }
   }
 
   // --- 6) Bollinger position (0-1 pt) ---
@@ -159,8 +177,9 @@ export function computeTechnicalScore(stock) {
   const bbLower = f(stock.bollingerLower);
   const bbMid = f(stock.bollingerMid);
   if (bbUpper && bbLower && bbMid) {
+    availGroups++;
     if (price >= bbLower && price <= bbUpper) {
-      total += price >= bbMid ? 0.5 : 1;            // above mid = ok, below mid = better entry
+      total += price >= bbMid ? 0.5 : 1;
     }
   }
 
@@ -168,12 +187,29 @@ export function computeTechnicalScore(stock) {
   maxPts += 0.5;
   const atr = f(stock.atr14);
   if (atr != null && price > 0) {
+    availGroups++;
     const atrPct = atr / price;
-    if (atrPct < 0.03) total += 0.5;                // low volatility
+    if (atrPct < 0.03) total += 0.5;
     else if (atrPct < 0.05) total += 0.25;
   }
 
+  // --- 8) OBV confirmation (0-1 pt) ---
+  maxPts += 1;
+  const obv = f(stock.obv);
+  const obvMA20 = f(stock.obvMA20);
+  if (obv != null && obvMA20 != null) {
+    availGroups++;
+    if (obv > obvMA20) total += 1;           // volume confirming uptrend
+    else if (obv > obvMA20 * 0.95) total += 0.5; // roughly flat
+  }
+
   // Normalize to 0-10
-  if (maxPts === 0) return 0;
-  return Math.round((total / maxPts) * 100) / 10;   // one decimal, 0.0-10.0
+  if (maxPts === 0) {
+    return opts?.withConfidence ? { score: 0, confidence: 0 } : 0;
+  }
+  const score = Math.round((total / maxPts) * 100) / 10;
+  if (!opts?.withConfidence) return score;
+
+  const confidence = Math.round((availGroups / totalGroups) * 100) / 100;
+  return { score, confidence };
 }

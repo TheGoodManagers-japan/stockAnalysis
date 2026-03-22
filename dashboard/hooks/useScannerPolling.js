@@ -16,7 +16,8 @@ export function useScannerPolling(isLive) {
   const [liveResults, setLiveResults] = useState(null);
   const intervalRef = useRef(null);
 
-  // Live polling when scan is running
+  // Live polling when scan is running — use progress-only mode during scan,
+  // fetch full results only when scan completes
   useEffect(() => {
     if (!isLive) {
       setLiveResults(null);
@@ -25,18 +26,25 @@ export function useScannerPolling(isLive) {
 
     async function pollResults() {
       try {
-        const res = await fetch("/api/scan");
+        // Poll progress only (no full results payload)
+        const res = await fetch("/api/scan?progress=true");
         if (!res.ok) return;
         const data = await res.json();
-        if (data.success && data.results) {
-          setLiveResults(data.results);
-        }
+
         if (
           data.scan?.status === "completed" ||
           data.scan?.status === "failed"
         ) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
+          // Fetch full results once scan is done
+          if (data.scan?.status === "completed") {
+            const fullRes = await fetch("/api/scan");
+            const fullData = await fullRes.json();
+            if (fullData.success && fullData.results) {
+              setLiveResults(fullData.results);
+            }
+          }
         }
       } catch {
         // Silently retry

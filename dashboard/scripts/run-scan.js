@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // dashboard/scripts/run-scan.js
-// Standalone scan runner for Modal cron job.
+// Standalone scan runner for Railway cron job.
 // Usage: DATABASE_URL=... node scripts/run-scan.js
 
 import { fetchStockAnalysis } from "../engine/orchestrator.js";

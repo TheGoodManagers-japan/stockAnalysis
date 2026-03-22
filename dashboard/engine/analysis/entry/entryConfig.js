@@ -29,7 +29,7 @@ export function getConfig(opts = {}) {
     limitBuyDiscountATR: 0.15,
 
     // Hard veto thresholds
-    weeklyTopVetoPos: 0.5,
+    weeklyTopVetoPos: 0.65,
     weeklyBottomPreferPos: 0.25,
     weeklyTopVetoRRBump: 0.1,
 
@@ -127,7 +127,7 @@ export function getConfig(opts = {}) {
     dipFallbackStopATR: 0.8,
 
     // Streak veto
-    maxConsecutiveUpDays: 9,
+    maxConsecutiveUpDays: 7,
 
     // --- Liquidity window ---
     liquidityCheckEnabled: true,
@@ -140,8 +140,8 @@ export function getConfig(opts = {}) {
 
     // Probation
     allowProbation: true,
-    probationRRSlack: 0.02,
-    probationRSIMax: 58,
+    probationRRSlack: 0.08,
+    probationRSIMax: 65,
 
     // Timeline config
     timeline: {
@@ -189,7 +189,7 @@ export function getConfig(opts = {}) {
     boTightenFactor: 0.92,
     boHigherLowsMin: 2,
     boMinDryPullback: 1.05,
-    boSlipTicks: 2,
+    boSlipTicks: 0.006,
     boUseStopMarketOnTrigger: false,
     boCloseThroughATR: 0.08,
     boVolThrustX: 1.35,

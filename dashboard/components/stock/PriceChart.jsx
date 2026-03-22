@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { createChart, ColorType, CrosshairMode } from "lightweight-charts";
 
 function computeSMA(data, period) {
@@ -88,8 +88,35 @@ export default function PriceChart({ history, scan }) {
   const chartRef = useRef(null);
   const rsiChartRef = useRef(null);
 
+  // Memoize OHLC formatting — only recalculates when history changes
+  const ohlc = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    return history.map((bar) => {
+      const d = new Date(bar.date);
+      return {
+        time: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+        open: Number(bar.open),
+        high: Number(bar.high),
+        low: Number(bar.low),
+        close: Number(bar.close),
+        volume: Number(bar.volume) || 0,
+      };
+    });
+  }, [history]);
+
+  // Memoize indicator computations — only recalculates when ohlc changes
+  const indicators = useMemo(() => {
+    if (ohlc.length === 0) return null;
+    const smas = MA_CONFIG
+      .filter((ma) => ohlc.length > ma.period)
+      .map((ma) => ({ ...ma, data: computeSMA(ohlc, ma.period) }));
+    const bb = ohlc.length >= 20 ? computeBollingerBands(ohlc, 20, 2) : null;
+    const rsi = ohlc.length > 14 ? computeRSI(ohlc, 14) : null;
+    return { smas, bb, rsi };
+  }, [ohlc]);
+
   useEffect(() => {
-    if (!containerRef.current || !history || history.length === 0) return;
+    if (!containerRef.current || ohlc.length === 0) return;
 
     const container = containerRef.current;
 
@@ -118,19 +145,6 @@ export default function PriceChart({ history, scan }) {
     });
     chartRef.current = chart;
 
-    // Format history for lightweight-charts
-    const ohlc = history.map((bar) => {
-      const d = new Date(bar.date);
-      return {
-        time: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
-        open: Number(bar.open),
-        high: Number(bar.high),
-        low: Number(bar.low),
-        close: Number(bar.close),
-        volume: Number(bar.volume) || 0,
-      };
-    });
-
     // Candlestick series
     const candleSeries = chart.addCandlestickSeries({
       upColor: "#22c55e",
@@ -142,9 +156,8 @@ export default function PriceChart({ history, scan }) {
     });
     candleSeries.setData(ohlc);
 
-    // Bollinger Bands overlay
-    if (ohlc.length >= 20) {
-      const bb = computeBollingerBands(ohlc, 20, 2);
+    // Bollinger Bands overlay (from memoized indicators)
+    if (indicators?.bb) {
       const bbUpper = chart.addLineSeries({
         color: "rgba(100, 181, 246, 0.4)",
         lineWidth: 1,
@@ -152,7 +165,7 @@ export default function PriceChart({ history, scan }) {
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      bbUpper.setData(bb.upper);
+      bbUpper.setData(indicators.bb.upper);
 
       const bbLower = chart.addLineSeries({
         color: "rgba(100, 181, 246, 0.4)",
@@ -161,7 +174,7 @@ export default function PriceChart({ history, scan }) {
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      bbLower.setData(bb.lower);
+      bbLower.setData(indicators.bb.lower);
 
       const bbMiddle = chart.addLineSeries({
         color: "rgba(100, 181, 246, 0.2)",
@@ -171,13 +184,12 @@ export default function PriceChart({ history, scan }) {
         lastValueVisible: false,
         crosshairMarkerVisible: false,
       });
-      bbMiddle.setData(bb.middle);
+      bbMiddle.setData(indicators.bb.middle);
     }
 
-    // MA overlays
-    for (const ma of MA_CONFIG) {
-      if (ohlc.length > ma.period) {
-        const smaData = computeSMA(ohlc, ma.period);
+    // MA overlays (from memoized indicators)
+    if (indicators?.smas) {
+      for (const ma of indicators.smas) {
         const lineSeries = chart.addLineSeries({
           color: ma.color,
           lineWidth: ma.width,
@@ -185,7 +197,7 @@ export default function PriceChart({ history, scan }) {
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         });
-        lineSeries.setData(smaData);
+        lineSeries.setData(ma.data);
       }
     }
 
@@ -244,7 +256,7 @@ export default function PriceChart({ history, scan }) {
 
     // --- RSI sub-chart ---
     let rsiChart = null;
-    if (rsiContainerRef.current && ohlc.length > 14) {
+    if (rsiContainerRef.current && indicators?.rsi) {
       rsiChart = createChart(rsiContainerRef.current, {
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
@@ -270,7 +282,7 @@ export default function PriceChart({ history, scan }) {
       });
       rsiChartRef.current = rsiChart;
 
-      const rsiData = computeRSI(ohlc, 14);
+      const rsiData = indicators.rsi;
 
       const rsiSeries = rsiChart.addLineSeries({
         color: "#a78bfa",
@@ -350,7 +362,7 @@ export default function PriceChart({ history, scan }) {
         rsiChartRef.current = null;
       }
     };
-  }, [history, scan]);
+  }, [ohlc, indicators, scan]);
 
   return (
     <div style={{ position: "relative" }}>

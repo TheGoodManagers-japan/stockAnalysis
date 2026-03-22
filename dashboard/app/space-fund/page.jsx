@@ -8,6 +8,7 @@ import RebalanceTab from "../../components/space-fund/RebalanceTab";
 import SpaceFundNewsTab from "../../components/space-fund/SpaceFundNewsTab";
 import MemberManagerModal from "../../components/space-fund/MemberManagerModal";
 import TransactionForm from "../../components/space-fund/TransactionForm";
+import SignalsTab from "../../components/space-fund/SignalsTab";
 
 const SpaceFundOverview = dynamic(
   () => import("../../components/space-fund/SpaceFundOverview"),
@@ -25,7 +26,7 @@ const PerformanceTab = dynamic(
   }
 );
 
-const TABS = ["Overview", "DCA Planner", "Rebalance", "Performance", "News"];
+const TABS = ["Overview", "Signals", "DCA Planner", "Rebalance", "Performance", "News"];
 
 export default function SpaceFundPage() {
   const [activeTab, setActiveTab] = useState("Overview");
@@ -36,6 +37,8 @@ export default function SpaceFundPage() {
   const [loading, setLoading] = useState(true);
   const [showTxForm, setShowTxForm] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
+  const [signals, setSignals] = useState(null);
+  const [signalsLoading, setSignalsLoading] = useState(false);
 
   // ---- Shared data fetching ----
 
@@ -74,11 +77,29 @@ export default function SpaceFundPage() {
     }
   }, []);
 
+  const fetchSignals = useCallback(async () => {
+    setSignalsLoading(true);
+    try {
+      const res = await fetch("/api/space-fund/signals");
+      const data = await res.json();
+      if (data.success) setSignals(data);
+    } catch (err) {
+      console.error("Failed to fetch signals:", err);
+    } finally {
+      setSignalsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchOverview();
     fetchSnapshots();
     fetchTransactions();
   }, [fetchOverview, fetchSnapshots, fetchTransactions]);
+
+  // Lazy load signals when tab is first activated
+  useEffect(() => {
+    if (activeTab === "Signals" && !signals) fetchSignals();
+  }, [activeTab, signals, fetchSignals]);
 
   async function handleTakeSnapshot() {
     try {
@@ -117,6 +138,9 @@ export default function SpaceFundPage() {
 
       {activeTab === "Overview" && (
         <SpaceFundOverview fund={fund} members={members} transactions={transactions} loading={loading} />
+      )}
+      {activeTab === "Signals" && (
+        <SignalsTab signals={signals} loading={signalsLoading} onRefresh={fetchSignals} />
       )}
       {activeTab === "DCA Planner" && <DCAPlannerTab />}
       {activeTab === "Rebalance" && <RebalanceTab />}
