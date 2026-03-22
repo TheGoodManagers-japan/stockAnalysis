@@ -270,13 +270,20 @@ function SignalCard({ signal }) {
 
 export default function SignalsTab({ signals, loading, onRefresh }) {
   const [refreshing, setRefreshing] = useState(false);
-  const refreshStartRef = useRef(null);
+  const [progressLabel, setProgressLabel] = useState("");
   const pollRef = useRef(null);
   const timeoutRef = useRef(null);
 
+  const stopPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    pollRef.current = null;
+    timeoutRef.current = null;
+  };
+
   const handleRefresh = async () => {
     setRefreshing(true);
-    refreshStartRef.current = new Date();
+    setProgressLabel("Starting...");
     try {
       // Spawn the full pipeline script (news fetch → signals → Discord report)
       const res = await fetch("/api/space-fund/signals/run-script", { method: "POST" });
@@ -284,33 +291,38 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
       if (!data.success) {
         console.error("Signal refresh failed:", data.error);
         setRefreshing(false);
+        setProgressLabel("");
         return;
       }
-      // Poll for completion — script updates space_fund_signals table
+      // Poll progress endpoint for step updates
       pollRef.current = setInterval(async () => {
         try {
-          const sigRes = await fetch("/api/space-fund/signals");
-          const sigData = await sigRes.json();
-          if (sigData.success && sigData.summary?.lastUpdated) {
-            const updated = new Date(sigData.summary.lastUpdated);
-            if (updated > refreshStartRef.current) {
-              clearInterval(pollRef.current);
-              clearTimeout(timeoutRef.current);
-              if (onRefresh) await onRefresh();
+          const progRes = await fetch("/api/space-fund/signals/progress");
+          const progData = await progRes.json();
+          const prog = progData.progress;
+          if (prog) {
+            if (prog.status === "completed" || prog.status === "failed") {
+              stopPolling();
+              setProgressLabel("");
               setRefreshing(false);
+              if (onRefresh) await onRefresh();
+            } else if (prog.label) {
+              setProgressLabel(prog.label);
             }
           }
         } catch {}
-      }, 5000);
+      }, 2000);
       // Safety timeout: stop polling after 5 minutes
       timeoutRef.current = setTimeout(() => {
-        clearInterval(pollRef.current);
+        stopPolling();
+        setProgressLabel("");
         setRefreshing(false);
         if (onRefresh) onRefresh();
       }, 300000);
     } catch (err) {
       console.error("Signal refresh error:", err);
       setRefreshing(false);
+      setProgressLabel("");
     }
   };
 
@@ -357,13 +369,21 @@ export default function SignalsTab({ signals, loading, onRefresh }) {
             </span>
           )}
         </div>
-        <button
-          className="btn btn-sm btn-primary"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
-          {refreshing ? "Analyzing..." : "Refresh Signals"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {refreshing && progressLabel && (
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {progressLabel}
+            </span>
+          )}
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={handleRefresh}
+            disabled={refreshing}
+          >
+            {refreshing && <span className="spinner" style={{ marginRight: 6 }} />}
+            {refreshing ? "Running..." : "Run Signals"}
+          </button>
+        </div>
       </div>
 
       {/* Empty state */}

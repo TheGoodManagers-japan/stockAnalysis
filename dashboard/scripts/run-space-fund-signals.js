@@ -4,8 +4,36 @@
 
 import { analyzeSpaceFundSignals } from "../lib/spaceFundSignals.js";
 import { query } from "../lib/db.js";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 
 const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
+
+// ── Progress tracking (writes JSON file for UI polling) ──
+const PROGRESS_FILE = join(process.cwd(), ".tmp", "sf-progress.json");
+
+function writeProgress(step, totalSteps, label, extra = {}) {
+  console.log(`[SF-SIGNALS] ${label}`);
+  try {
+    mkdirSync(join(process.cwd(), ".tmp"), { recursive: true });
+    writeFileSync(PROGRESS_FILE, JSON.stringify({
+      step, totalSteps, label,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+      ...extra,
+    }));
+  } catch {}
+}
+
+function writeProgressDone(status = "completed") {
+  try {
+    writeFileSync(PROGRESS_FILE, JSON.stringify({
+      step: 0, totalSteps: 0, label: "",
+      status,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch {}
+}
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
   const controller = new AbortController();
@@ -14,24 +42,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
-  }
-}
-
-async function runUSNewsPipeline() {
-  console.log("[SF-SIGNALS] Fetching US news...");
-  try {
-    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=yahoo_us_rss`, { method: "POST" }, 60000);
-    const fetchData = await fetchRes.json();
-    console.log(`[SF-SIGNALS] US news fetched: ${fetchData.totalInserted ?? 0} new articles.`);
-  } catch (err) {
-    console.warn(`[SF-SIGNALS] US news fetch error: ${err.message}`);
-  }
-  try {
-    const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
-    const analyzeData = await analyzeRes.json();
-    console.log(`[SF-SIGNALS] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
-  } catch (err) {
-    console.warn(`[SF-SIGNALS] News analyze error: ${err.message}`);
   }
 }
 
@@ -141,13 +151,35 @@ async function main() {
   console.log(`[SF-SIGNALS] Starting at ${new Date().toISOString()}`);
   const start = Date.now();
 
-  // Fetch and analyze US news before signals so catalyst data is fresh
-  await runUSNewsPipeline();
+  // Step 1: Fetch US news
+  writeProgress(1, 4, "Step 1/4: Fetching US news...");
+  try {
+    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=yahoo_us_rss`, { method: "POST" }, 60000);
+    const fetchData = await fetchRes.json();
+    console.log(`[SF-SIGNALS] US news fetched: ${fetchData.totalInserted ?? 0} new articles.`);
+  } catch (err) {
+    console.warn(`[SF-SIGNALS] US news fetch error: ${err.message}`);
+  }
 
+  // Step 2: Analyze news
+  writeProgress(2, 4, "Step 2/4: Analyzing news...");
+  try {
+    const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
+    const analyzeData = await analyzeRes.json();
+    console.log(`[SF-SIGNALS] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
+  } catch (err) {
+    console.warn(`[SF-SIGNALS] News analyze error: ${err.message}`);
+  }
+
+  // Step 3: Analyze signals
+  writeProgress(3, 4, "Step 3/4: Analyzing signals...");
   const { count, buyCount, errors, results } = await analyzeSpaceFundSignals({
     source: "cron",
     onProgress: (ticker, i, total) => {
-      process.stdout.write(`\r[SF-SIGNALS] ${i}/${total} ${ticker}      `);
+      writeProgress(3, 4, `Step 3/4: Analyzing ${ticker}...`, {
+        tickerProgress: i,
+        tickerTotal: total,
+      });
     },
   });
 
@@ -163,13 +195,16 @@ async function main() {
     console.log(`  BUY: ${r.ticker} ${r.trigger} @ $${r.currentPrice} -> $${r.priceTarget} (SL $${r.stopLoss})`);
   }
 
-  // Send Discord evening report
+  // Step 4: Discord report
+  writeProgress(4, 4, "Step 4/4: Sending Discord report...");
   await sendEveningReport({ results, count, buyCount, errors, elapsed });
 
+  writeProgressDone("completed");
   process.exit(0);
 }
 
 main().catch((err) => {
   console.error("[SF-SIGNALS] Fatal:", err);
+  writeProgressDone("failed");
   process.exit(1);
 });

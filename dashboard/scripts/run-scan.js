@@ -15,6 +15,18 @@ import { allTickers } from "../data/tickers.js";
 
 const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
 
+// ── Phase tracking (writes to scan_runs.current_ticker for UI) ──
+let _scanId = null;
+async function setPhase(phase) {
+  console.log(`[CRON] ${phase}`);
+  if (_scanId) {
+    await query(
+      `UPDATE scan_runs SET current_ticker = $2 WHERE scan_id = $1`,
+      [_scanId, phase]
+    ).catch(() => {});
+  }
+}
+
 // ── News Pipeline ──────────────────────────────────────────────
 async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
   const controller = new AbortController();
@@ -25,43 +37,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function runNewsPipeline() {
-  console.log("[CRON] Running news pipeline...");
-  let report = null;
-
-  try {
-    // 1. Fetch news from JP sources only (US sources run in Space Fund evening scan)
-    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=kabutan,yahoo_rss,jquants,nikkei,minkabu,reuters`, { method: "POST" }, 180000);
-    const fetchData = await fetchRes.json();
-    console.log(`[CRON] News fetched: ${fetchData.total_saved ?? 0} new articles from ${fetchData.sources_fetched ?? 0} sources.`);
-  } catch (err) {
-    console.warn(`[CRON] News fetch error: ${err.message}`);
-  }
-
-  try {
-    // 2. Analyze unanalyzed articles with Gemini
-    const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
-    const analyzeData = await analyzeRes.json();
-    console.log(`[CRON] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
-  } catch (err) {
-    console.warn(`[CRON] News analyze error: ${err.message}`);
-  }
-
-  try {
-    // 3. Generate daily report
-    const reportRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/daily-report`, { method: "POST" }, 120000);
-    const reportData = await reportRes.json();
-    if (reportData.report) {
-      report = reportData.report;
-      console.log("[CRON] Daily news report generated.");
-    }
-  } catch (err) {
-    console.warn(`[CRON] News report error: ${err.message}`);
-  }
-
-  return report;
 }
 
 // ── Discord Morning Report ─────────────────────────────────────
@@ -231,22 +206,53 @@ async function runScan() {
        WHERE status = 'running' AND started_at < NOW() - INTERVAL '2 hours'`
     );
 
+    // Create scan run record EARLY so the UI can show progress immediately
+    const scanRun = await query(
+      `INSERT INTO scan_runs (ticker_count, total_tickers, status, current_ticker)
+       VALUES (0, $1, 'running', 'Step 1/8: Fetching news...') RETURNING scan_id`,
+      [allTickers.length]
+    );
+    const scanId = scanRun.rows[0].scan_id;
+    _scanId = scanId;
+    console.log(`[CRON] Scan run created: ${scanId}`);
+
     // --- Run news pipeline BEFORE scan so catalyst scores have fresh data ---
     let newsReport = null;
     try {
-      newsReport = await runNewsPipeline();
+      await setPhase("Step 1/8: Fetching news...");
+      try {
+        const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=kabutan,yahoo_rss,jquants,nikkei,minkabu,reuters`, { method: "POST" }, 180000);
+        const fetchData = await fetchRes.json();
+        console.log(`[CRON] News fetched: ${fetchData.total_saved ?? 0} new articles.`);
+      } catch (err) {
+        console.warn(`[CRON] News fetch error: ${err.message}`);
+      }
+
+      await setPhase("Step 2/8: Analyzing news...");
+      try {
+        const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
+        const analyzeData = await analyzeRes.json();
+        console.log(`[CRON] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
+      } catch (err) {
+        console.warn(`[CRON] News analyze error: ${err.message}`);
+      }
+
+      await setPhase("Step 3/8: Generating daily report...");
+      try {
+        const reportRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/daily-report`, { method: "POST" }, 120000);
+        const reportData = await reportRes.json();
+        if (reportData.report) {
+          newsReport = reportData.report;
+          console.log("[CRON] Daily news report generated.");
+        }
+      } catch (err) {
+        console.warn(`[CRON] News report error: ${err.message}`);
+      }
     } catch (err) {
       console.warn(`[CRON] Pre-scan news pipeline failed (non-fatal): ${err.message}`);
     }
 
-    // Create scan run record
-    const scanRun = await query(
-      `INSERT INTO scan_runs (ticker_count, total_tickers, status)
-       VALUES (0, $1, 'running') RETURNING scan_id`,
-      [allTickers.length]
-    );
-    const scanId = scanRun.rows[0].scan_id;
-    console.log(`[CRON] Scan run created: ${scanId}`);
+    await setPhase("Step 4/8: Scanning stocks...");
 
     // Run the full analysis engine with incremental saves
     let buyCount = 0;
@@ -302,6 +308,7 @@ async function runScan() {
     let predCount = 0;
 
     // --- ML Signal Quality Scoring (Phase 1) ---
+    await setPhase("Step 5/8: ML signal scoring...");
     let mlScoredCount = 0;
     try {
       const buySignals = results.filter((r) => r.isBuyNow);
@@ -370,6 +377,7 @@ async function runScan() {
     }
 
     // --- ML Stock Ranking (Phase 2) ---
+    await setPhase("Step 6/8: ML stock ranking...");
     let mlRankedCount = 0;
     try {
       console.log(`[CRON] Running ML stock ranking for ${results.length} stocks...`);
@@ -443,6 +451,7 @@ async function runScan() {
     }
 
     // --- ML LSTM v2 Multi-Horizon Predictions (Phase 3) ---
+    await setPhase("Step 7/8: ML predictions...");
     let lstmPredCount = 0;
     try {
       console.log(`[CRON] Running LSTM v2 predictions for all stocks...`);
@@ -647,6 +656,7 @@ async function runScan() {
     const totalElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
     console.log(`[CRON] All done in ${totalElapsed} min.`);
 
+    await setPhase("Step 8/8: Sending Discord report...");
     await sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount: lstmPredCount || predCount, mlScoredCount, mlRankedCount, elapsed: totalElapsed, newsReport });
     process.exit(0);
   } catch (err) {
