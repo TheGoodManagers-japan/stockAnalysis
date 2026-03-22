@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import TabBar from "../../components/ui/TabBar";
 import DCAPlannerTab from "../../components/space-fund/DCAPlannerTab";
@@ -39,6 +39,59 @@ export default function SpaceFundPage() {
   const [showMemberModal, setShowMemberModal] = useState(false);
   const [signals, setSignals] = useState(null);
   const [signalsLoading, setSignalsLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(null);
+  const pollRef = useRef(null);
+  const timeoutRef = useRef(null);
+
+  // ---- Scan runner ----
+
+  const stopPolling = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    pollRef.current = null;
+    timeoutRef.current = null;
+  };
+
+  const handleRunScan = async () => {
+    setScanning(true);
+    setScanProgress(null);
+    try {
+      const res = await fetch("/api/space-fund/signals/run-script", { method: "POST" });
+      const data = await res.json();
+      if (!data.success) {
+        console.error("Space Fund scan failed:", data.error);
+        setScanning(false);
+        return;
+      }
+      pollRef.current = setInterval(async () => {
+        try {
+          const progRes = await fetch("/api/space-fund/signals/progress");
+          const progData = await progRes.json();
+          const prog = progData.progress;
+          if (prog) {
+            if (prog.status === "completed" || prog.status === "failed") {
+              stopPolling();
+              setScanProgress(null);
+              setScanning(false);
+              fetchSignals();
+            } else {
+              setScanProgress(prog);
+            }
+          }
+        } catch {}
+      }, 2000);
+      timeoutRef.current = setTimeout(() => {
+        stopPolling();
+        setScanProgress(null);
+        setScanning(false);
+        fetchSignals();
+      }, 300000);
+    } catch (err) {
+      console.error("Space Fund scan error:", err);
+      setScanning(false);
+    }
+  };
 
   // ---- Shared data fetching ----
 
@@ -116,7 +169,36 @@ export default function SpaceFundPage() {
     <>
       <div className="flex-between mb-lg">
         <h2 style={{ color: "var(--text-heading)" }}>Space Fund</h2>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {scanning && scanProgress && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 120, height: 6, background: "var(--bg-tertiary, #333)", borderRadius: 3, overflow: "hidden" }}>
+                {scanProgress.tickerProgress > 0 ? (
+                  <div style={{ width: `${Math.round((scanProgress.tickerProgress / (scanProgress.tickerTotal || 1)) * 100)}%`, height: "100%", background: "var(--accent-blue, #3b82f6)", borderRadius: 3, transition: "width 300ms ease" }} />
+                ) : (
+                  <div style={{ width: "40%", height: "100%", background: "var(--accent-blue, #3b82f6)", borderRadius: 3, animation: "sf-indeterminate 1.5s ease-in-out infinite" }} />
+                )}
+              </div>
+              {scanProgress.tickerProgress > 0 ? (
+                <>
+                  <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary, #eee)", whiteSpace: "nowrap" }}>
+                    {Math.round((scanProgress.tickerProgress / (scanProgress.tickerTotal || 1)) * 100)}%
+                  </span>
+                  <span style={{ fontSize: "0.78rem", color: "var(--text-secondary, #aaa)", whiteSpace: "nowrap" }}>
+                    {scanProgress.tickerProgress}/{scanProgress.tickerTotal}
+                  </span>
+                </>
+              ) : (
+                <span style={{ fontSize: "0.78rem", fontWeight: 500, color: "var(--text-secondary, #aaa)", whiteSpace: "nowrap" }}>
+                  {scanProgress.label || "Starting..."}
+                </span>
+              )}
+            </div>
+          )}
+          <button className="btn btn-sm" onClick={handleRunScan} disabled={scanning}>
+            {scanning && !scanProgress && <span className="spinner" style={{ marginRight: 6 }} />}
+            {scanning ? "Scanning..." : "Run Scan"}
+          </button>
           <button className="btn btn-sm" onClick={() => setShowTxForm((v) => !v)}>
             {showTxForm ? "Cancel" : "+ Transaction"}
           </button>
@@ -125,6 +207,13 @@ export default function SpaceFundPage() {
           </button>
         </div>
       </div>
+      <style>{`
+        @keyframes sf-indeterminate {
+          0% { transform: translateX(-100%); }
+          50% { transform: translateX(200%); }
+          100% { transform: translateX(-100%); }
+        }
+      `}</style>
 
       {showTxForm && (
         <TransactionForm
@@ -140,7 +229,7 @@ export default function SpaceFundPage() {
         <SpaceFundOverview fund={fund} members={members} transactions={transactions} loading={loading} />
       )}
       {activeTab === "Signals" && (
-        <SignalsTab signals={signals} loading={signalsLoading} onRefresh={fetchSignals} />
+        <SignalsTab signals={signals} loading={signalsLoading} />
       )}
       {activeTab === "DCA Planner" && <DCAPlannerTab />}
       {activeTab === "Rebalance" && <RebalanceTab />}
