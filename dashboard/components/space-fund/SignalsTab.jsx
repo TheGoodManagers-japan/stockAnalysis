@@ -209,6 +209,31 @@ function SignalCard({ signal }) {
             Limit {formatPrice(details.limitBuyOrder)}
           </span>
         )}
+        {details.catalystScore != null && details.catalystScore !== 5.0 && (
+          <span
+            title={details.catalystReason || "Catalyst score"}
+            style={{
+              fontSize: "0.65rem",
+              padding: "1px 6px",
+              borderRadius: "var(--radius-sm)",
+              background:
+                details.catalystScore >= 7
+                  ? "rgba(16, 185, 129, 0.15)"
+                  : details.catalystScore < 4
+                  ? "rgba(239, 68, 68, 0.15)"
+                  : "var(--bg-tertiary)",
+              color:
+                details.catalystScore >= 7
+                  ? "#10b981"
+                  : details.catalystScore < 4
+                  ? "#ef4444"
+                  : "var(--text-muted)",
+              fontWeight: 600,
+            }}
+          >
+            Cat {details.catalystScore.toFixed(1)}
+          </span>
+        )}
       </div>
 
       {/* Reason (expandable) */}

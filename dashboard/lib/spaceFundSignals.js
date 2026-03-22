@@ -6,6 +6,7 @@ import { query } from "./db.js";
 import { getStockWithIndicators } from "./stockData.js";
 import { analyzeDipEntry } from "../engine/analysis/entry/index.js";
 import { computeRegimeLabels } from "../engine/regime/regimeLabels.js";
+import { computeCatalystScore } from "../engine/scoring/catalystScore.js";
 
 /**
  * Ensure Space Fund US tickers exist in the `tickers` table
@@ -48,6 +49,48 @@ export async function analyzeSpaceFundSignals({ source = "cron", onProgress } = 
   // 2. Ensure tickers exist for FK
   await ensureSpaceFundTickers(members);
 
+  // 2b. Batch-load news data for catalyst scores
+  const newsStatsMap = new Map();
+  const disclosureMap = new Map();
+  try {
+    const tickerCodes = members.map((m) => m.ticker_code);
+    const newsRes = await query(
+      `SELECT nat.ticker_code,
+              COUNT(*) as article_count,
+              ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
+              MAX(CASE na.impact_level WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END) as max_impact,
+              COUNT(DISTINCT na.source) as sources_count
+       FROM news_article_tickers nat
+       JOIN news_articles na ON na.id = nat.article_id
+       WHERE na.is_analyzed = TRUE
+         AND na.published_at >= NOW() - INTERVAL '7 days'
+         AND na.relevance_score >= 0.3
+         AND nat.ticker_code = ANY($1)
+       GROUP BY nat.ticker_code`,
+      [tickerCodes]
+    );
+    for (const row of newsRes.rows) newsStatsMap.set(row.ticker_code, row);
+
+    // US stocks won't have jquants disclosures, but query anyway for completeness
+    const discRes = await query(
+      `SELECT nat.ticker_code, na.news_category, na.sentiment_score
+       FROM news_article_tickers nat
+       JOIN news_articles na ON na.id = nat.article_id
+       WHERE na.is_analyzed = TRUE
+         AND na.published_at >= NOW() - INTERVAL '14 days'
+         AND na.news_category IN ('earnings', 'buyback', 'dividend', 'guidance', 'm&a', 'restructuring')
+         AND nat.ticker_code = ANY($1)`,
+      [tickerCodes]
+    );
+    for (const row of discRes.rows) {
+      if (!disclosureMap.has(row.ticker_code)) disclosureMap.set(row.ticker_code, []);
+      disclosureMap.get(row.ticker_code).push(row);
+    }
+    console.log(`[SF] News data loaded: ${newsStatsMap.size} tickers with news, ${disclosureMap.size} with categorized events`);
+  } catch (err) {
+    console.warn(`[SF] News data load failed (non-fatal): ${err.message}`);
+  }
+
   const results = [];
   const errors = [];
   let buyCount = 0;
@@ -86,8 +129,16 @@ export async function analyzeSpaceFundSignals({ source = "cron", onProgress } = 
         if (risk > 0) rrRatio = +(reward / risk).toFixed(2);
       }
 
+      // Compute catalyst score from news data
+      const catalyst = computeCatalystScore(
+        newsStatsMap.get(ticker),
+        disclosureMap.get(ticker)
+      );
+
       // Build details JSON for expandable UI
       const details = {
+        catalystScore: catalyst.score,
+        catalystReason: catalyst.reason,
         shortName: stock.shortName,
         ma5: stock.movingAverage5d,
         ma25: stock.movingAverage25d,
