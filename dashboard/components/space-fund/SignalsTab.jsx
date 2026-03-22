@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import styles from "./SpaceFund.module.css";
 
 function formatPrice(val, currency = "USD") {
@@ -270,20 +270,46 @@ function SignalCard({ signal }) {
 
 export default function SignalsTab({ signals, loading, onRefresh }) {
   const [refreshing, setRefreshing] = useState(false);
+  const refreshStartRef = useRef(null);
+  const pollRef = useRef(null);
+  const timeoutRef = useRef(null);
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    refreshStartRef.current = new Date();
     try {
-      const res = await fetch("/api/space-fund/signals", { method: "POST" });
+      // Spawn the full pipeline script (news fetch → signals → Discord report)
+      const res = await fetch("/api/space-fund/signals/run-script", { method: "POST" });
       const data = await res.json();
       if (!data.success) {
         console.error("Signal refresh failed:", data.error);
+        setRefreshing(false);
+        return;
       }
-      // Re-fetch latest signals after analysis
-      if (onRefresh) await onRefresh();
+      // Poll for completion — script updates space_fund_signals table
+      pollRef.current = setInterval(async () => {
+        try {
+          const sigRes = await fetch("/api/space-fund/signals");
+          const sigData = await sigRes.json();
+          if (sigData.success && sigData.summary?.lastUpdated) {
+            const updated = new Date(sigData.summary.lastUpdated);
+            if (updated > refreshStartRef.current) {
+              clearInterval(pollRef.current);
+              clearTimeout(timeoutRef.current);
+              if (onRefresh) await onRefresh();
+              setRefreshing(false);
+            }
+          }
+        } catch {}
+      }, 5000);
+      // Safety timeout: stop polling after 5 minutes
+      timeoutRef.current = setTimeout(() => {
+        clearInterval(pollRef.current);
+        setRefreshing(false);
+        if (onRefresh) onRefresh();
+      }, 300000);
     } catch (err) {
       console.error("Signal refresh error:", err);
-    } finally {
       setRefreshing(false);
     }
   };

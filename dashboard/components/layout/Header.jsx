@@ -40,10 +40,8 @@ export default function Header({ title }) {
     if (scanning) return;
     setScanning(true);
     try {
-      const res = await fetch("/api/scan", {
+      const res = await fetch("/api/scan/run-script", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
       });
 
       if (!res.ok) {
@@ -58,8 +56,10 @@ export default function Header({ title }) {
         return;
       }
 
-      const data = await res.json();
-      setScanId(data.scanId);
+      // Script spawned — it will create its own scan_run.
+      // Set a placeholder scanId so ScanProgress starts polling
+      // /api/scan/progress, which returns the latest scan_run.
+      setScanId("pending");
     } catch (err) {
       console.error("Scan error:", err);
       setScanning(false);
