@@ -20,7 +20,9 @@ async function getStockDetail(tickerCode) {
                 (sr.other_data_json->>'score_disagreement')::numeric AS score_disagreement,
                 (sr.other_data_json->>'fundPctile')::int AS fund_pctile,
                 (sr.other_data_json->>'valPctile')::int AS val_pctile,
-                (sr.other_data_json->>'techPctile')::int AS tech_pctile
+                (sr.other_data_json->>'techPctile')::int AS tech_pctile,
+                (sr.other_data_json->>'catalyst_score')::numeric AS catalyst_score,
+                (sr.other_data_json->>'catalyst_reason') AS catalyst_reason
          FROM scan_results sr
          JOIN tickers t ON t.code = sr.ticker_code
          WHERE sr.ticker_code = $1
@@ -239,6 +241,16 @@ export default async function StockDetailPage({ params }) {
             <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: -6, marginBottom: 8 }}>
               Top {100 - scan.tech_pctile}% of scanned stocks
             </div>
+          )}
+          {scan?.catalyst_score != null && (
+            <>
+              <ScoreRow label="Catalyst" value={scan.catalyst_score} />
+              {scan.catalyst_reason && (
+                <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: -6, marginBottom: 8 }}>
+                  {scan.catalyst_reason}
+                </div>
+              )}
+            </>
           )}
           {scan?.scoring_confidence != null && (
             <div style={{ marginTop: 8, fontSize: "0.72rem", color: "var(--text-muted)", borderTop: "1px solid var(--border-primary)", paddingTop: 8 }}>

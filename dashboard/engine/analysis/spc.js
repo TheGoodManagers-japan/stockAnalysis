@@ -45,9 +45,10 @@ export function detectSPC(stock, data, cfg, U) {
 
   // dip sizing
   const loN = Math.min(5, n - 1);
-  const recentLow = Math.min(
+  const recentLowRaw = Math.min(
     ...data.slice(n - loN).map((b) => Number(b.low) || Infinity)
   );
+  const recentLow = Number.isFinite(recentLowRaw) ? recentLowRaw : px;
   const dipPct = ((px - recentLow) / Math.max(px, 1e-9)) * 100;
   const dipATR = (px - recentLow) / Math.max(atr, 1e-9);
   const pullbackFromMA5 =

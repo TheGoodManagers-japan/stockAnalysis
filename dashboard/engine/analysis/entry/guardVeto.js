@@ -105,7 +105,7 @@ export function guardVeto(
     const dayPct = Number(marketCtx.dayPct) || 0;
     const thrPct = Number(cfg.marketImpulseVetoPct ?? 1.8);
 
-    if (dayPct > 0) {
+    if (dayPct >= thrPct) {
       const reason = `Market impulse day (${dayPct.toFixed(
         1
       )}% ≥ ${thrPct.toFixed(1)}%) — skip DIP buys`;

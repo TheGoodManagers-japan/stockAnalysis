@@ -1,10 +1,10 @@
 // dashboard/engine/scoring/masterScore.js
 // Unified master score (0-100) combining all scoring dimensions.
-// Weights tuned for swing trading: technicals + RR matter most.
+// Weights tuned for swing trading: technicals + RR + catalyst matter most.
 
 /**
  * Compute a unified master score from all scoring dimensions.
- * Formula: (Tech*25 + Fund*15 + Val*15 + Momentum*15 + Sentiment*10 + RR*20) / 10
+ * Formula: (Tech*22 + Fund*14 + Val*14 + Momentum*12 + Sentiment*8 + RR*18 + Catalyst*12) / 10
  *
  * @param {Object} stock - Stock object with all scores computed
  * @returns {number} - Master score 0-100
@@ -41,9 +41,13 @@ export function computeMasterScore(stock) {
     }
   }
 
-  // Weighted composite: max = 10*25 + 10*15 + 10*15 + 10*15 + 10*10 + 10*20 = 1000
+  // Catalyst: news sentiment + disclosure events (0-10), defaults to 5 if no data
+  const catalyst = f(stock.catalystScore) || 5;
+
+  // Weighted composite: max = 10*(22+14+14+12+8+18+12) = 1000
   const raw =
-    tech * 25 + fund * 15 + val * 15 + momentum * 15 + sentiment * 10 + rrNorm * 20;
+    tech * 22 + fund * 14 + val * 14 + momentum * 12 +
+    sentiment * 8 + rrNorm * 18 + catalyst * 12;
 
   return Math.round(raw / 10);
 }

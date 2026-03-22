@@ -168,6 +168,18 @@ export default memo(function EnhancedStockCard({
             {stock.long_term_score ?? "-"}
           </span>
         </div>
+        {stock.catalyst_score != null && Number(stock.catalyst_score) !== 5.0 && (
+          <div className={styles.scoreItem}>
+            <span className={styles.scoreLabel}>Cat</span>
+            <span className={styles.scoreValue} style={{
+              color: Number(stock.catalyst_score) >= 7 ? "var(--accent-green)"
+                : Number(stock.catalyst_score) < 4 ? "var(--accent-red)"
+                : "var(--text-secondary)"
+            }}>
+              {Number(stock.catalyst_score).toFixed(1)}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Entry data grid */}

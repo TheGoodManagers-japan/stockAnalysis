@@ -165,7 +165,7 @@ export function analyzeRR(entryPx, stop, target, stock, ms, cfg, ctx = {}) {
         const maxRisk = reward / Math.max(1e-9, needNow);
         if (risk > maxRisk) {
           const pad = Math.max(0, cfg.dipTightenStopATR ?? 0.25) * atr;
-          const sup = findSupportsBelow(ctx?.data || [], entryPx)[0] ?? stop;
+          const sup = findSupportsBelow(ctx?.data || [], entryPx, stock)[0] ?? stop;
           const structuralFloor = sup - pad;
           const floor = Math.max(structuralFloor, stop);
           const proposed = Math.max(entryPx - maxRisk, floor);

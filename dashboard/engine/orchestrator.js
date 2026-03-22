@@ -68,6 +68,7 @@ import { classifyFreshness, applyDecay } from "./scoring/dataFreshness.js";
 import { computeTrajectory } from "./scoring/trajectoryModifier.js";
 import { computeMasterScore } from "./scoring/masterScore.js";
 import { computePercentiles } from "./scoring/percentileRanking.js";
+import { computeCatalystScore } from "./scoring/catalystScore.js";
 
 import { DEFAULT_REGIME_TICKER } from "../lib/constants.js";
 
@@ -224,6 +225,43 @@ export async function fetchStockAnalysis({
     log(`Batch loaded freshness for ${freshnessMap.size} tickers, trajectory for ${prevSnapshotMap.size}`);
   } catch (e) {
     warn(`Batch pre-load failed (freshness/trajectory disabled): ${e?.message || e}`);
+  }
+
+  // --- Pre-load batch data for catalyst scoring (news + disclosures) ---
+  let newsStatsMap = new Map();
+  let disclosureMap = new Map();
+  try {
+    const [newsResult, discResult] = await Promise.all([
+      query(`SELECT nat.ticker_code,
+                    COUNT(*) as article_count,
+                    ROUND(AVG(na.sentiment_score)::numeric, 2) as avg_sentiment,
+                    MAX(CASE na.impact_level WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END) as max_impact,
+                    COUNT(DISTINCT na.source) as sources_count
+             FROM news_article_tickers nat
+             JOIN news_articles na ON na.id = nat.article_id
+             WHERE na.is_analyzed = TRUE
+               AND na.published_at >= NOW() - INTERVAL '7 days'
+               AND na.relevance_score >= 0.3
+             GROUP BY nat.ticker_code`),
+      query(`SELECT nat.ticker_code,
+                    na.news_category,
+                    na.sentiment_score
+             FROM news_article_tickers nat
+             JOIN news_articles na ON na.id = nat.article_id
+             WHERE na.source = 'jquants'
+               AND na.published_at >= NOW() - INTERVAL '14 days'
+               AND na.is_analyzed = TRUE`),
+    ]);
+    for (const row of newsResult.rows) {
+      newsStatsMap.set(row.ticker_code, row);
+    }
+    for (const row of discResult.rows) {
+      if (!disclosureMap.has(row.ticker_code)) disclosureMap.set(row.ticker_code, []);
+      disclosureMap.get(row.ticker_code).push(row);
+    }
+    log(`Batch loaded news stats for ${newsStatsMap.size} tickers, disclosures for ${disclosureMap.size}`);
+  } catch (e) {
+    warn(`Batch pre-load failed (catalyst scoring disabled): ${e?.message || e}`);
   }
 
   // --- Main loop ---
@@ -603,7 +641,15 @@ export async function fetchStockAnalysis({
         stock.managementSignalReason = null;
       }
 
-      // 8) Master score (after all dimensions are computed)
+      // 8) Catalyst score (news sentiment + disclosure events)
+      const catalyst = computeCatalystScore(
+        newsStatsMap.get(stock.ticker),
+        disclosureMap.get(stock.ticker)
+      );
+      stock.catalystScore = catalyst.score;
+      stock._catalystReason = catalyst.reason;
+
+      // 9) Master score (after all dimensions are computed)
       stock.masterScore = computeMasterScore(stock);
 
       // Push the raw stock object to results

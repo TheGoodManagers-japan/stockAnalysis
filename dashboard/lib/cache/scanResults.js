@@ -113,6 +113,8 @@ export async function saveScanResult(scanId, stock) {
         data_freshness: stock.dataFreshness,
         tier_trajectory: stock.tierTrajectory,
         ml_signal_confidence: stock.mlSignalConfidence,
+        catalyst_score: stock.catalystScore,
+        catalyst_reason: stock._catalystReason,
       }),
       stock.isValueCandidate || false,
       stock.valuePlayScore,

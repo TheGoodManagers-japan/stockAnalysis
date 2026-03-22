@@ -33,7 +33,7 @@ export function getDeepMarketAnalysis(stock, historicalData) {
         type: "UNKNOWN",
         characteristics: ["INSUFFICIENT_HISTORY"],
       },
-      shortTermRegime: {
+      intermediateRegime: {
         type: "UNKNOWN",
         characteristics: ["INSUFFICIENT_HISTORY"],
       },
