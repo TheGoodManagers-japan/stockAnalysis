@@ -9,6 +9,6 @@ export const DEFAULT_REGIME_TICKER = "1306.T"; // TOPIX ETF
 
 // AI review
 export const GEMINI_MODEL = "gemini-2.0-flash"; // legacy, kept for reference
-export const AI_REVIEW_MODEL = "claude-sonnet-4-6-20250514";
+export const AI_REVIEW_MODEL = "claude-sonnet-4-20250514";
 export const AI_REVIEW_BATCH_SIZE = 2;
 export const AI_REVIEW_BATCH_DELAY_MS = 1000;
