@@ -8,6 +8,7 @@ import { fetchArticles as fetchNikkei } from "../../../../lib/news/nikkei.js";
 import { fetchArticles as fetchMinkabu } from "../../../../lib/news/minkabu.js";
 import { fetchArticles as fetchReuters } from "../../../../lib/news/reuters.js";
 import { fetchArticles as fetchKabutan } from "../../../../lib/news/kabutan.js";
+import { fetchArticles as fetchYahooUS } from "../../../../lib/news/yahoo-us-rss.js";
 
 const FETCHERS = {
   kabutan: fetchKabutan,
@@ -16,6 +17,7 @@ const FETCHERS = {
   nikkei: fetchNikkei,
   minkabu: fetchMinkabu,
   reuters: fetchReuters,
+  yahoo_us_rss: fetchYahooUS,
 };
 
 async function insertArticles(articles) {
@@ -63,7 +65,7 @@ async function insertArticles(articles) {
       const code = tickers[i];
       if (!code) continue;
       const tickerCode = /^\d{4}$/.test(code) ? `${code}.T` : code;
-      if (!/^\d{4}\.T$/.test(tickerCode)) continue;
+      if (!/^\d{4}\.T$/.test(tickerCode) && !/^[A-Z]{1,5}$/.test(tickerCode)) continue;
       await query(
         `INSERT INTO news_article_tickers (article_id, ticker_code, is_primary)
          VALUES ($1, $2, $3)

@@ -4,9 +4,42 @@
 
 import { analyzeSpaceFundSignals } from "../lib/spaceFundSignals.js";
 
+const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runUSNewsPipeline() {
+  console.log("[SF-SIGNALS] Fetching US news...");
+  try {
+    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=yahoo_us_rss`, { method: "POST" }, 60000);
+    const fetchData = await fetchRes.json();
+    console.log(`[SF-SIGNALS] US news fetched: ${fetchData.totalInserted ?? 0} new articles.`);
+  } catch (err) {
+    console.warn(`[SF-SIGNALS] US news fetch error: ${err.message}`);
+  }
+  try {
+    const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
+    const analyzeData = await analyzeRes.json();
+    console.log(`[SF-SIGNALS] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
+  } catch (err) {
+    console.warn(`[SF-SIGNALS] News analyze error: ${err.message}`);
+  }
+}
+
 async function main() {
   console.log(`[SF-SIGNALS] Starting at ${new Date().toISOString()}`);
   const start = Date.now();
+
+  // Fetch and analyze US news before signals so catalyst data is fresh
+  await runUSNewsPipeline();
 
   const { count, buyCount, errors, results } = await analyzeSpaceFundSignals({
     source: "cron",

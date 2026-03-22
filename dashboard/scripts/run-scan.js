@@ -32,8 +32,8 @@ async function runNewsPipeline() {
   let report = null;
 
   try {
-    // 1. Fetch news from all sources
-    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=all`, { method: "POST" }, 180000);
+    // 1. Fetch news from JP sources only (US sources run in Space Fund evening scan)
+    const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=kabutan,yahoo_rss,jquants,nikkei,minkabu,reuters`, { method: "POST" }, 180000);
     const fetchData = await fetchRes.json();
     console.log(`[CRON] News fetched: ${fetchData.total_saved ?? 0} new articles from ${fetchData.sources_fetched ?? 0} sources.`);
   } catch (err) {
@@ -230,6 +230,14 @@ async function runScan() {
               errors = '["Marked as failed: scan was stuck in running state"]'::jsonb
        WHERE status = 'running' AND started_at < NOW() - INTERVAL '2 hours'`
     );
+
+    // --- Run news pipeline BEFORE scan so catalyst scores have fresh data ---
+    let newsReport = null;
+    try {
+      newsReport = await runNewsPipeline();
+    } catch (err) {
+      console.warn(`[CRON] Pre-scan news pipeline failed (non-fatal): ${err.message}`);
+    }
 
     // Create scan run record
     const scanRun = await query(
@@ -635,9 +643,6 @@ async function runScan() {
     } catch (err) {
       console.warn(`[CRON] Portfolio snapshot failed: ${err.message}`);
     }
-
-    // --- Run news pipeline ---
-    const newsReport = await runNewsPipeline();
 
     const totalElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
     console.log(`[CRON] All done in ${totalElapsed} min.`);
