@@ -74,7 +74,11 @@ export default function SpaceFundPage() {
               stopPolling();
               setScanProgress(null);
               setScanning(false);
+              // Force re-fetch signals (clear cached state so lazy-load triggers)
+              setSignals(null);
+              setActiveTab("Signals");
               fetchSignals();
+              fetchOverview();
             } else {
               setScanProgress(prog);
             }
@@ -85,7 +89,10 @@ export default function SpaceFundPage() {
         stopPolling();
         setScanProgress(null);
         setScanning(false);
+        setSignals(null);
+        setActiveTab("Signals");
         fetchSignals();
+        fetchOverview();
       }, 300000);
     } catch (err) {
       console.error("Space Fund scan error:", err);

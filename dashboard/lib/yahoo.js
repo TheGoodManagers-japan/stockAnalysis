@@ -17,7 +17,7 @@ if (typeof YahooFinance !== "function") {
   );
 }
 
-const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey", "ripHistorical"] });
 
 /* ======================== Error helpers ======================== */
 
@@ -142,16 +142,30 @@ export async function fetchYahooFinanceData(ticker, sector = "") {
     const quote = await withRetry(() => yahooFinance.quote(ticker), { label: `quote(${ticker})` });
     await sleep(150 + Math.random() * 200);
 
-    const historicalPrices = await withRetry(
-      () => yahooFinance.historical(ticker, { period1: oneYearAgo, period2: now, interval: "1d" }),
-      { label: `historical(${ticker})`, timeoutMs: 45000 }
+    const chartResult = await withRetry(
+      () => yahooFinance.chart(ticker, { period1: oneYearAgo, period2: now, interval: "1d" }),
+      { label: `chart(${ticker})`, timeoutMs: 45000 }
+    );
+    // Filter out partial candles (e.g. today's bar with null close on weekends/off-hours)
+    const historicalPrices = (chartResult?.quotes || []).filter(
+      (q) => q && typeof q.close === "number" && !Number.isNaN(q.close)
     );
     await sleep(150 + Math.random() * 200);
 
-    const dividendEvents = await withRetry(
-      () => yahooFinance.historical(ticker, { period1: fiveYearsAgo, period2: now, events: "dividends" }),
-      { label: `dividends(${ticker})` }
-    );
+    let dividendEvents = [];
+    try {
+      dividendEvents = await withRetry(
+        () => yahooFinance.chart(ticker, { period1: fiveYearsAgo, period2: now, interval: "1d" }),
+        { label: `dividends(${ticker})` }
+      );
+      // Extract dividend events from chart result
+      dividendEvents = (dividendEvents?.events?.dividends || []).map((d) => ({
+        date: d.date,
+        dividends: d.amount,
+      }));
+    } catch {
+      dividendEvents = [];
+    }
     await sleep(150 + Math.random() * 200);
 
     const summary = await withRetry(

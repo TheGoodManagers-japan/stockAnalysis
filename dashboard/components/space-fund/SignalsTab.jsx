@@ -318,7 +318,7 @@ export default function SignalsTab({ signals, loading }) {
       {/* Empty state */}
       {signalList.length === 0 && (
         <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>
-          <p>No signals yet. Click &quot;Refresh Signals&quot; to run analysis.</p>
+          <p>No signals yet. Click &quot;Run Scan&quot; to analyze entry signals.</p>
         </div>
       )}
 
