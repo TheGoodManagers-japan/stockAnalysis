@@ -6,7 +6,24 @@ import { validateTicker, validatePositiveNum } from "../../../lib/validate.js";
 export async function GET() {
   try {
     const open = await query(
-      `SELECT * FROM portfolio_holdings WHERE status = 'open' ORDER BY entry_date DESC`
+      `SELECT ph.*,
+              sr.current_price AS live_price,
+              sr.mgmt_signal_status,
+              sr.mgmt_signal_reason,
+              sr.short_term_score,
+              sr.long_term_score,
+              sr.market_regime
+       FROM portfolio_holdings ph
+       LEFT JOIN LATERAL (
+         SELECT current_price, mgmt_signal_status, mgmt_signal_reason,
+                short_term_score, long_term_score, market_regime
+         FROM scan_results
+         WHERE ticker_code = ph.ticker_code
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) sr ON true
+       WHERE ph.status = 'open'
+       ORDER BY ph.entry_date DESC`
     );
     const closed = await query(
       `SELECT * FROM portfolio_holdings WHERE status = 'closed' ORDER BY closed_at DESC LIMIT 50`
