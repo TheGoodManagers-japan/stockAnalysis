@@ -56,7 +56,8 @@ export default function DCAPlannerTab() {
                   <th>Price</th>
                   <th>Shares</th>
                   <th>Amount</th>
-                  <th>Spike Check</th>
+                  <th>Signal</th>
+                  <th>Recommendation</th>
                 </tr>
               </thead>
               <tbody>
@@ -82,7 +83,28 @@ export default function DCAPlannerTab() {
                       {item.currency === "JPY" ? formatJPY(Math.round(item.actualAmountLocal)) : `$${item.actualAmountLocal.toFixed(2)}`}
                     </td>
                     <td>
-                      {item.spike?.isSpiked ? (
+                      {item.signal ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span className={`badge ${item.signal.isBuyNow ? "badge-buy" : "badge-neutral"}`} style={{ fontSize: "0.7rem" }}>
+                            {item.signal.isBuyNow ? item.signal.triggerType || "BUY" : "WAIT"}
+                          </span>
+                          {item.signal.regime && (
+                            <span className="text-muted" style={{ fontSize: "0.6rem" }}>{item.signal.regime}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted" style={{ fontSize: "0.7rem" }}>No signal</span>
+                      )}
+                    </td>
+                    <td>
+                      {item.recommendation === "BUY" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <span style={{ color: "var(--accent-green)", fontWeight: 700, fontSize: "0.85rem" }}>BUY</span>
+                          {item.signal?.rrRatio != null && (
+                            <span className="text-muted" style={{ fontSize: "0.6rem" }}>R:R {item.signal.rrRatio.toFixed(1)}</span>
+                          )}
+                        </div>
+                      ) : item.recommendation === "SPIKED" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                           {item.spike.warnings.map((w, i) => (
                             <span key={i} className={styles.spikeWarning} data-severity={w.severity}>
@@ -91,7 +113,7 @@ export default function DCAPlannerTab() {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ color: "var(--accent-green)", fontSize: "0.8rem" }}>OK</span>
+                        <span style={{ color: "var(--accent-yellow)", fontWeight: 600, fontSize: "0.8rem" }}>WAIT</span>
                       )}
                     </td>
                   </tr>

@@ -86,10 +86,21 @@ export async function GET(request) {
       });
     }
 
-    // 2. Fetch forex rate
+    // 2. Fetch latest signals for each member
+    const signalsRes = await query(
+      `SELECT DISTINCT ON (ticker_code)
+              ticker_code, is_buy_now, trigger_type, market_regime, rsi_14,
+              stop_loss, price_target, rr_ratio, buy_now_reason
+       FROM space_fund_signals
+       ORDER BY ticker_code, signal_date DESC`
+    );
+    const signalMap = {};
+    for (const s of signalsRes.rows) signalMap[s.ticker_code] = s;
+
+    // 3. Fetch forex rate
     const usdJpy = await fetchForexRate();
 
-    // 3. Fetch quotes for each member
+    // 4. Fetch quotes for each member
     const plan = [];
     let totalAllocatedJPY = 0;
 
@@ -176,6 +187,29 @@ export async function GET(request) {
 
       totalAllocatedJPY += actualAmountJPY;
 
+      // Combine spike check with signal status
+      const sig = signalMap[m.ticker_code] || null;
+      const signal = sig ? {
+        isBuyNow: sig.is_buy_now,
+        triggerType: sig.trigger_type,
+        regime: sig.market_regime,
+        rsi: sig.rsi_14 ? Number(sig.rsi_14) : null,
+        stopLoss: sig.stop_loss ? Number(sig.stop_loss) : null,
+        priceTarget: sig.price_target ? Number(sig.price_target) : null,
+        rrRatio: sig.rr_ratio ? Number(sig.rr_ratio) : null,
+        reason: sig.buy_now_reason,
+      } : null;
+
+      // Combined recommendation: BUY / WAIT / SPIKED
+      let recommendation;
+      if (spike.isSpiked) {
+        recommendation = "SPIKED";
+      } else if (signal?.isBuyNow) {
+        recommendation = "BUY";
+      } else {
+        recommendation = "WAIT";
+      }
+
       plan.push({
         ticker: m.ticker_code,
         shortName: m.short_name,
@@ -189,6 +223,8 @@ export async function GET(request) {
         actualAmountLocal,
         actualAmountJPY,
         spike,
+        signal,
+        recommendation,
       });
     }
 
