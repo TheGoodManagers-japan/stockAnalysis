@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { reportError } from "../../lib/reportError";
 import DailyReport from "../../components/news/DailyReport";
 import NewsFilters from "../../components/news/NewsFilters";
 import NewsTimeline from "../../components/news/NewsTimeline";
@@ -33,7 +34,7 @@ export default function NewsPage() {
       const res = await fetch(`/api/news?${params}`);
       const json = await res.json();
       if (json.success) { setArticles(json.articles || []); setTotal(json.total || 0); setStats(json.stats || {}); }
-    } catch (err) { console.error("Failed to fetch news:", err); }
+    } catch (err) { reportError("page/news", err, { action: "fetchNews" }); }
     finally { setLoading(false); }
   }, [filters.source, filters.sentiment, filters.impact, filters.ticker, page]);
 
@@ -42,7 +43,7 @@ export default function NewsPage() {
       const res = await fetch("/api/news/watchlist");
       const json = await res.json();
       if (json.success) setWatchlist(json.watchlist || []);
-    } catch (err) { console.error("Failed to fetch watchlist:", err); }
+    } catch (err) { reportError("page/news", err, { action: "fetchWatchlist" }); }
   }, []);
 
   const fetchDailyReport = useCallback(async () => {
@@ -51,7 +52,7 @@ export default function NewsPage() {
       const res = await fetch(`/api/news/daily-report?date=${today}`);
       const json = await res.json();
       if (json.success && !json.empty) setDailyReport(json);
-    } catch (err) { console.error("Failed to fetch daily report:", err); }
+    } catch (err) { reportError("page/news", err, { action: "fetchDailyReport" }); }
   }, []);
 
   async function generateDailyReport() {
@@ -60,7 +61,7 @@ export default function NewsPage() {
       const res = await fetch("/api/news/daily-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
       const json = await res.json();
       if (json.success && !json.empty) setDailyReport(json);
-    } catch (err) { console.error("Failed to generate daily report:", err); }
+    } catch (err) { reportError("page/news", err, { action: "generateDailyReport" }); }
     finally { setGeneratingReport(false); }
   }
 

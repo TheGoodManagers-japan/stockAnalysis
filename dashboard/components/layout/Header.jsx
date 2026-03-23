@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { reportError } from "../../lib/reportError";
 import ScanProgress from "./ScanProgress";
 import styles from "./Header.module.css";
 
@@ -21,7 +22,9 @@ export default function Header({ title }) {
           setScanId(data.scan.scan_id);
           setScanning(true);
         }
-      } catch {}
+      } catch (err) {
+        reportError("component/Header", err, { action: "checkRunningScan" });
+      }
     }
     checkRunning();
   }, []);
@@ -51,7 +54,7 @@ export default function Header({ title }) {
           setScanId(data.scanId);
           return;
         }
-        console.error("Scan failed:", res.status);
+        reportError("component/Header", `Scan failed: ${res.status}`, { status: res.status });
         setScanning(false);
         return;
       }
@@ -61,7 +64,7 @@ export default function Header({ title }) {
       // /api/scan/progress, which returns the latest scan_run.
       setScanId("pending");
     } catch (err) {
-      console.error("Scan error:", err);
+      reportError("component/Header", err, { action: "runScan" });
       setScanning(false);
     }
   }

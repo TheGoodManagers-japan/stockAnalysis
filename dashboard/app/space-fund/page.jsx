@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
+import { reportError } from "../../lib/reportError";
 import TabBar from "../../components/ui/TabBar";
 import DCAPlannerTab from "../../components/space-fund/DCAPlannerTab";
 import RebalanceTab from "../../components/space-fund/RebalanceTab";
@@ -60,7 +61,7 @@ export default function SpaceFundPage() {
       const res = await fetch("/api/space-fund/signals/run-script", { method: "POST" });
       const data = await res.json();
       if (!data.success) {
-        console.error("Space Fund scan failed:", data.error);
+        reportError("page/space-fund", `Scan failed: ${data.error}`);
         setScanning(false);
         return;
       }
@@ -83,7 +84,9 @@ export default function SpaceFundPage() {
               setScanProgress(prog);
             }
           }
-        } catch {}
+        } catch (err) {
+          reportError("page/space-fund", err, { action: "pollProgress" });
+        }
       }, 2000);
       timeoutRef.current = setTimeout(() => {
         stopPolling();
@@ -95,7 +98,7 @@ export default function SpaceFundPage() {
         fetchOverview();
       }, 300000);
     } catch (err) {
-      console.error("Space Fund scan error:", err);
+      reportError("page/space-fund", err, { action: "runScan" });
       setScanning(false);
     }
   };
@@ -111,7 +114,7 @@ export default function SpaceFundPage() {
         setMembers(data.members);
       }
     } catch (err) {
-      console.error("Failed to fetch fund overview:", err);
+      reportError("page/space-fund", err, { action: "fetchOverview" });
     } finally {
       setLoading(false);
     }
@@ -123,7 +126,7 @@ export default function SpaceFundPage() {
       const data = await res.json();
       if (data.success) setSnapshots(data.snapshots);
     } catch (err) {
-      console.error("Failed to fetch snapshots:", err);
+      reportError("page/space-fund", err, { action: "fetchSnapshots" });
     }
   }, []);
 
@@ -133,7 +136,7 @@ export default function SpaceFundPage() {
       const data = await res.json();
       if (data.success) setTransactions(data.transactions);
     } catch (err) {
-      console.error("Failed to fetch transactions:", err);
+      reportError("page/space-fund", err, { action: "fetchTransactions" });
     }
   }, []);
 
@@ -144,7 +147,7 @@ export default function SpaceFundPage() {
       const data = await res.json();
       if (data.success) setSignals(data);
     } catch (err) {
-      console.error("Failed to fetch signals:", err);
+      reportError("page/space-fund", err, { action: "fetchSignals" });
     } finally {
       setSignalsLoading(false);
     }
@@ -166,7 +169,7 @@ export default function SpaceFundPage() {
       await fetch("/api/space-fund/snapshots", { method: "POST" });
       fetchSnapshots();
     } catch (err) {
-      console.error("Failed to take snapshot:", err);
+      reportError("page/space-fund", err, { action: "takeSnapshot" });
     }
   }
 

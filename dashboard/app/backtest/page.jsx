@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { reportError } from "../../lib/reportError";
 import { formatNum } from "../../lib/uiHelpers";
 
 export default function BacktestPage() {
@@ -20,7 +21,7 @@ export default function BacktestPage() {
         setRuns(data.runs || []);
       }
     } catch (err) {
-      console.error("Failed to fetch backtest runs:", err);
+      reportError("page/backtest", err, { action: "fetchRuns" });
     } finally {
       setLoading(false);
     }
@@ -39,7 +40,7 @@ export default function BacktestPage() {
         fetchRuns();
       }
     } catch (err) {
-      console.error("Backtest failed:", err);
+      reportError("page/backtest", err, { action: "runBacktest" });
     } finally {
       setRunning(false);
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import { reportError } from "../lib/reportError";
 
 const CACHE_TTL = 60_000; // 60 seconds
 
@@ -44,7 +45,7 @@ export function useNewsContext(tickers) {
           setNewsContext(json.context);
         }
       } catch (err) {
-        console.error("useNewsContext fetch failed:", err);
+        reportError("hook/useNewsContext", err);
       }
     }
 

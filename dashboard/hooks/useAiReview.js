@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { reportError } from "../lib/reportError";
 
 /**
  * Manages AI review fetching and expanded-row state for the scanner table.
@@ -21,7 +22,7 @@ export function useAiReview() {
         setExpandedTicker(ticker);
       }
     } catch (err) {
-      console.error("AI review failed:", err);
+      reportError("hook/useAiReview", err, { ticker });
     } finally {
       setLoadingAi(null);
     }

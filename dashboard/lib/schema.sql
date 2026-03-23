@@ -529,3 +529,18 @@ CREATE TABLE IF NOT EXISTS space_fund_signals (
 
 CREATE INDEX IF NOT EXISTS idx_sf_signals_date ON space_fund_signals(signal_date DESC);
 CREATE INDEX IF NOT EXISTS idx_sf_signals_buy ON space_fund_signals(is_buy_now, signal_date DESC);
+
+-- 18. ERROR LOG (centralized error tracking)
+CREATE TABLE IF NOT EXISTS error_log (
+    id              BIGSERIAL PRIMARY KEY,
+    severity        TEXT NOT NULL DEFAULT 'error',    -- 'error', 'warning', 'critical'
+    source          TEXT NOT NULL,                     -- 'api/scan', 'component/Header', etc.
+    message         TEXT NOT NULL,
+    stack           TEXT,
+    details_json    JSONB,
+    is_acknowledged BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_error_log_ack ON error_log(is_acknowledged, created_at DESC);

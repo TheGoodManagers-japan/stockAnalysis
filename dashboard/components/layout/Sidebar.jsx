@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useErrorCount } from "../../hooks/useErrorCount";
 import styles from "./Sidebar.module.css";
 
 const NAV_ITEMS = [
@@ -135,6 +136,17 @@ const NAV_ITEMS = [
       </svg>
     ),
   },
+  {
+    href: "/errors",
+    label: "Errors",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+    ),
+  },
 ];
 
 // Top items shown in mobile bottom bar (max 5 for usability)
@@ -143,6 +155,7 @@ const MOBILE_NAV_ITEMS = NAV_ITEMS.slice(0, 5);
 export default function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const errorCount = useErrorCount();
 
   return (
     <>
@@ -163,6 +176,11 @@ export default function Sidebar() {
               >
                 {item.icon}
                 {item.label}
+                {item.href === "/errors" && errorCount > 0 && (
+                  <span className={styles.errorBadge}>
+                    {errorCount > 99 ? "99+" : errorCount}
+                  </span>
+                )}
               </Link>
             );
           })}

@@ -8,6 +8,7 @@ import { analyzeSectorRotation, sectorPoolsJP } from "../../../engine/sector/sec
 import { validateTickerArray } from "../../../lib/validate.js";
 import { SCAN_TIMEOUT_MS, STALE_SCAN_MINUTES } from "../../../lib/constants.js";
 import { recordScannerSignal, recordValuePlaySignal, resolveOpenSignals } from "../../../lib/signalTracker.js";
+import { logErrorFromCatch } from "../../../lib/errorLog.js";
 
 /**
  * Ensure benchmark + sector pool tickers exist in the tickers table.
@@ -166,6 +167,7 @@ export async function POST(request) {
             await updatePercentiles(scanId, scanResults);
           } catch (pctErr) {
             console.warn("Percentile update failed (non-fatal):", pctErr?.message);
+            await logErrorFromCatch("api/scan", pctErr, { step: "percentileUpdate", scanId });
           }
         }
 
@@ -271,6 +273,7 @@ export async function POST(request) {
           console.log(`Sector rotation: ${sectorResult.ranked.length} sectors saved`);
         } catch (sectorErr) {
           console.error("Sector rotation analysis failed:", sectorErr);
+          await logErrorFromCatch("api/scan", sectorErr, { step: "sectorRotation", scanId });
         }
 
         // Auto-trigger AI review for all buy signals
@@ -280,6 +283,7 @@ export async function POST(request) {
           console.log(`AI review: ${reviewResult.reviews.length} reviews completed, ${reviewResult.errors.length} errors`);
         } catch (aiErr) {
           console.error("AI review auto-trigger failed:", aiErr);
+          await logErrorFromCatch("api/scan", aiErr, { step: "aiReview", scanId });
         }
 
         // Auto-persist news watchlist snapshot (non-fatal, no new API calls)
@@ -290,6 +294,7 @@ export async function POST(request) {
           console.log(`News watchlist snapshot: ${wlData.saved || 0} entries saved`);
         } catch (wlErr) {
           console.error("News watchlist auto-persist failed:", wlErr);
+          await logErrorFromCatch("api/scan", wlErr, { step: "newsWatchlist", scanId });
         }
 
         // Resolve open signal trades using snapshot prices (has high/low)
@@ -312,9 +317,11 @@ export async function POST(request) {
           console.log(`Signal tracker: resolved ${resolveResult.resolved} trades, ${resolveResult.errors.length} errors`);
         } catch (sigErr) {
           console.error("Signal tracker resolve failed:", sigErr);
+          await logErrorFromCatch("api/scan", sigErr, { step: "signalResolve", scanId });
         }
       } catch (err) {
         console.error("Background scan failed:", err);
+        await logErrorFromCatch("api/scan", err, { step: "backgroundScan", scanId });
         await query(
           `UPDATE scan_runs
            SET status = 'failed',

@@ -57,6 +57,19 @@
   flex-shrink: 0;
 }
 
+.errorBadge {
+  margin-left: auto;
+  background: var(--accent-red);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 1.4;
+}
+
 /* Mobile bottom bar — hidden on desktop */
 .mobileBar {
   display: none;

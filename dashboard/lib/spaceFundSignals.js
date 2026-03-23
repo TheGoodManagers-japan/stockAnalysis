@@ -3,6 +3,7 @@
 // Reuses getStockWithIndicators() + analyzeDipEntry() from the JPX scanner.
 
 import { query } from "./db.js";
+import { logErrorFromCatch } from "./errorLog.js";
 import { getStockWithIndicators } from "./stockData.js";
 import { analyzeDipEntry } from "../engine/analysis/entry/index.js";
 import { computeRegimeLabels } from "../engine/regime/regimeLabels.js";
@@ -220,6 +221,7 @@ export async function analyzeSpaceFundSignals({ source = "cron", onProgress } = 
       results.push(result);
     } catch (err) {
       console.error(`[SF] Error analyzing ${ticker}:`, err.message);
+      logErrorFromCatch("lib/spaceFundSignals", err, { ticker });
       errors.push({ ticker, error: err.message });
     }
 

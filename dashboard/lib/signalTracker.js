@@ -3,6 +3,7 @@
 // as paper trades, then resolves them when price hits stop/target.
 
 import { query } from "./db.js";
+import { logErrorFromCatch } from "./errorLog.js";
 
 // Lazy table creation guard — runs DDL once per process lifetime
 let tableEnsured = false;
@@ -40,6 +41,7 @@ async function ensureSignalTable() {
     tableEnsured = true;
   } catch (err) {
     console.error("Failed to ensure signal_trades table:", err.message);
+    logErrorFromCatch("lib/signalTracker", err, { step: "ensureTable" });
   }
 }
 
@@ -84,6 +86,7 @@ export async function recordScannerSignal(scanId, stock) {
     ]
   ).catch((err) => {
     console.error(`Signal tracker: failed to record scanner signal for ${stock.ticker}:`, err.message);
+    logErrorFromCatch("lib/signalTracker", err, { step: "recordScanner", ticker: stock.ticker });
   });
 }
 
@@ -131,6 +134,7 @@ export async function recordValuePlaySignal(scanId, stock) {
     ]
   ).catch((err) => {
     console.error(`Signal tracker: failed to record value play signal for ${stock.ticker}:`, err.message);
+    logErrorFromCatch("lib/signalTracker", err, { step: "recordValuePlay", ticker: stock.ticker });
   });
 }
 
@@ -172,6 +176,7 @@ export async function recordSpaceFundSignal(transaction) {
     ]
   ).catch((err) => {
     console.error(`Signal tracker: failed to record space fund signal for ${transaction.ticker_code}:`, err.message);
+    logErrorFromCatch("lib/signalTracker", err, { step: "recordSpaceFund", ticker: transaction.ticker_code });
   });
 }
 

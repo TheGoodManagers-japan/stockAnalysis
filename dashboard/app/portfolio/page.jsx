@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
+import { reportError } from "../../lib/reportError";
 import TabBar from "../../components/ui/TabBar";
 import PositionsTab from "../../components/portfolio/PositionsTab";
 import JournalTab from "../../components/portfolio/JournalTab";
@@ -36,7 +37,7 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
 
-  const fetchJson = useCallback(async (url) => { try { const r = await fetch(url); return await r.json(); } catch (e) { console.error(`Fetch ${url}:`, e); return {}; } }, []);
+  const fetchJson = useCallback(async (url) => { try { const r = await fetch(url); return await r.json(); } catch (e) { reportError("page/portfolio", e, { url }); return {}; } }, []);
 
   const fetchPortfolio = useCallback(async () => {
     const data = await fetchJson("/api/portfolio");
@@ -67,14 +68,14 @@ export default function PortfolioPage() {
   }, [activeTab, fetchAnalytics, fetchSnapshots, fetchJournal]);
 
   const patchPortfolio = useCallback(async (body) => {
-    try { await fetch("/api/portfolio", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch (e) { console.error("PATCH portfolio:", e); }
+    try { await fetch("/api/portfolio", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch (e) { reportError("page/portfolio", e, { action: "patchPortfolio" }); }
   }, []);
 
   async function handleAddPosition(payload) {
     try {
       const res = await fetch("/api/portfolio", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (res.ok) { setShowAddForm(false); fetchPortfolio(); fetchAnalytics(); }
-    } catch (e) { console.error("Add position:", e); }
+    } catch (e) { reportError("page/portfolio", e, { action: "addPosition" }); }
   }
 
   async function handleClosePosition(id, exitPrice, exitReason) {
@@ -89,7 +90,7 @@ export default function PortfolioPage() {
 
   async function handleAddJournalEntry(entry) {
     try { await fetch("/api/portfolio/journal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }); fetchJournal(); }
-    catch (e) { console.error("Add journal:", e); }
+    catch (e) { reportError("page/portfolio", e, { action: "addJournal" }); }
   }
 
   return (

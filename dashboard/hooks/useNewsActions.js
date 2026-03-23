@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { reportError } from "../lib/reportError";
 
 export function useNewsActions(onRefresh) {
   const [fetching, setFetching] = useState(false);
@@ -15,7 +16,7 @@ export function useNewsActions(onRefresh) {
       console.log("[news] Fetch results:", json);
       if (onRefresh) await onRefresh();
     } catch (err) {
-      console.error("Fetch failed:", err);
+      reportError("hook/useNewsActions", err, { action: "fetchAll" });
     } finally {
       setFetching(false);
     }
@@ -51,7 +52,7 @@ export function useNewsActions(onRefresh) {
       setAnalyzeProgress(totalAnalyzed > 0 ? `Done: ${totalAnalyzed} articles` : "No pending articles");
       return totalAnalyzed;
     } catch (err) {
-      console.error("Analyze failed:", err);
+      reportError("hook/useNewsActions", err, { action: "analyze" });
       setAnalyzeProgress("Error");
       return 0;
     } finally {

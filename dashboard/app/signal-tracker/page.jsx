@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
+import { reportError } from "../../lib/reportError";
 import TabBar from "../../components/ui/TabBar";
 import SignalTable from "../../components/signal-tracker/SignalTable";
 import styles from "../../components/signal-tracker/SignalTracker.module.css";
@@ -38,7 +39,7 @@ export default function SignalTrackerPage() {
       const data = await res.json();
       if (data.success) setStats(data);
     } catch (err) {
-      console.error("Failed to fetch signal stats:", err);
+      reportError("page/signal-tracker", err, { action: "fetchStats" });
     }
   }, []);
 
@@ -50,7 +51,7 @@ export default function SignalTrackerPage() {
       const data = await res.json();
       if (data.success) setTrades(data.trades);
     } catch (err) {
-      console.error("Failed to fetch signal trades:", err);
+      reportError("page/signal-tracker", err, { action: "fetchTrades" });
     } finally {
       setLoading(false);
     }
