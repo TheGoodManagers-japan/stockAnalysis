@@ -25,6 +25,41 @@ async function ensureSpaceFundTickers(members) {
 }
 
 /**
+ * Default Space Fund members — auto-seeded if the table is empty.
+ */
+const DEFAULT_MEMBERS = [
+  { ticker_code: "RKLB",  short_name: "Rocket Lab",         category: "Launch",         target_weight: 0.18 },
+  { ticker_code: "PL",    short_name: "Planet Labs",         category: "Satellite",      target_weight: 0.12 },
+  { ticker_code: "LUNR",  short_name: "Intuitive Machines",  category: "Launch",         target_weight: 0.08 },
+  { ticker_code: "RDW",   short_name: "Redwire",             category: "Infrastructure", target_weight: 0.08 },
+  { ticker_code: "NVDA",  short_name: "NVIDIA",              category: "Infrastructure", target_weight: 0.14 },
+  { ticker_code: "GOOGL", short_name: "Alphabet",            category: "Infrastructure", target_weight: 0.12 },
+  { ticker_code: "AVGO",  short_name: "Broadcom",            category: "Infrastructure", target_weight: 0.10 },
+  { ticker_code: "LITE",  short_name: "Lumentum Holdings",   category: "Infrastructure", target_weight: 0.09 },
+  { ticker_code: "COHR",  short_name: "Coherent Corp",       category: "Infrastructure", target_weight: 0.09 },
+];
+
+/**
+ * Seed default members if the table is empty. Returns seeded count.
+ */
+async function autoSeedIfEmpty() {
+  const check = await query(`SELECT COUNT(*)::int AS n FROM space_fund_members`);
+  if (check.rows[0].n > 0) return 0;
+
+  console.log("[SF] space_fund_members is empty — auto-seeding defaults...");
+  for (const m of DEFAULT_MEMBERS) {
+    await query(
+      `INSERT INTO space_fund_members (ticker_code, short_name, currency, exchange, target_weight, category, is_active)
+       VALUES ($1, $2, 'USD', 'US', $3, $4, TRUE)
+       ON CONFLICT (ticker_code) DO NOTHING`,
+      [m.ticker_code, m.short_name, m.target_weight, m.category]
+    );
+  }
+  console.log(`[SF] Auto-seeded ${DEFAULT_MEMBERS.length} default members.`);
+  return DEFAULT_MEMBERS.length;
+}
+
+/**
  * Sleep for ms milliseconds.
  */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -38,6 +73,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * @returns {Promise<{ count: number, buyCount: number, errors: Array, results: Array }>}
  */
 export async function analyzeSpaceFundSignals({ source = "cron", onProgress } = {}) {
+  // 0. Auto-seed if table is empty (prevents silent 0-stock scans on fresh deploys)
+  await autoSeedIfEmpty();
+
   // 1. Fetch active members
   const membersResult = await query(
     `SELECT ticker_code, short_name, category, target_weight
