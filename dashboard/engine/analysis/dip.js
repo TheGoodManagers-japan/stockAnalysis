@@ -762,72 +762,7 @@ export function detectDipBounce(stock, data, cfg, U, tapeFlags = {}) {
   };
 }
 
-// ========== WEEKLY CANDLE CONFIRMATION (informational bonus) ==========
-
-function assessWeeklyCandle(dailyData, num) {
-  const sorted = [...dailyData].sort((a, b) => +new Date(a.date) - +new Date(b.date));
-  const weeks = resampleToWeeksInternal(sorted);
-  if (weeks.length < 3) return { score: 0, isHammer: false, isEngulfing: false, closeAbovePriorWeekHigh: false };
-
-  const cur = weeks.at(-1);
-  const prev = weeks.at(-2);
-
-  const cOpen = +cur.open || 0;
-  const cHigh = +cur.high || 0;
-  const cLow = +cur.low || 0;
-  const cClose = +cur.close || 0;
-  const pOpen = +prev.open || 0;
-  const pHigh = +prev.high || 0;
-  const pClose = +prev.close || 0;
-
-  const range = cHigh - cLow;
-  const body = Math.abs(cClose - cOpen);
-  const lowerWick = Math.min(cClose, cOpen) - cLow;
-
-  const isHammer = range > 0 && body < 0.4 * range && lowerWick > 1.3 * body && cClose >= cOpen;
-  const isEngulfing = pClose < pOpen && cClose > cOpen && cClose > pOpen && cOpen <= pClose;
-  const closeAbovePriorWeekHigh = cClose > pHigh;
-
-  let score = 0;
-  if (isHammer) score++;
-  if (isEngulfing) score++;
-  if (closeAbovePriorWeekHigh) score++;
-
-  return { score, isHammer, isEngulfing, closeAbovePriorWeekHigh };
-}
-
-// Internal weekly resampler shared by assessWeeklyCandle
-function resampleToWeeksInternal(daily) {
-  const out = [];
-  let curKey = "";
-  let agg = null;
-  for (const d of daily) {
-    const dt = new Date(d.date);
-    const y = dt.getUTCFullYear();
-    const w = isoWeek(dt);
-    const key = `${y}-W${w}`;
-    const o = +d.open || +d.close || 0;
-    const h = +d.high || +d.close || 0;
-    const l = +d.low || +d.close || 0;
-    const c = +d.close || 0;
-    const v = +d.volume || 0;
-    if (key !== curKey) {
-      if (agg) out.push(agg);
-      agg = { date: d.date, open: o, high: h, low: l, close: c, volume: v };
-      curKey = key;
-    } else {
-      agg.date = d.date;
-      agg.high = Math.max(agg.high, h);
-      agg.low = Math.min(agg.low, l);
-      agg.close = c;
-      agg.volume += v;
-    }
-  }
-  if (agg) out.push(agg);
-  return out;
-}
-
-// ========== WEEKLY RANGE WITH TREND CONTEXT ==========
+// ========== WEEKLY HELPERS ==========
 
 function isoWeek(d) {
   const date = new Date(
@@ -879,6 +814,42 @@ function resampleToWeeks(daily) {
   if (agg) out.push(agg);
   return out;
 }
+
+// ========== WEEKLY CANDLE CONFIRMATION (informational bonus) ==========
+
+function assessWeeklyCandle(dailyData, num) {
+  const sorted = [...dailyData].sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const weeks = resampleToWeeks(sorted);
+  if (weeks.length < 3) return { score: 0, isHammer: false, isEngulfing: false, closeAbovePriorWeekHigh: false };
+
+  const cur = weeks.at(-1);
+  const prev = weeks.at(-2);
+
+  const cOpen = +cur.open || 0;
+  const cHigh = +cur.high || 0;
+  const cLow = +cur.low || 0;
+  const cClose = +cur.close || 0;
+  const pOpen = +prev.open || 0;
+  const pHigh = +prev.high || 0;
+  const pClose = +prev.close || 0;
+
+  const range = cHigh - cLow;
+  const body = Math.abs(cClose - cOpen);
+  const lowerWick = Math.min(cClose, cOpen) - cLow;
+
+  const isHammer = range > 0 && body < 0.4 * range && lowerWick > 1.3 * body && cClose >= cOpen;
+  const isEngulfing = pClose < pOpen && cClose > cOpen && cClose > pOpen && cOpen <= pClose;
+  const closeAbovePriorWeekHigh = cClose > pHigh;
+
+  let score = 0;
+  if (isHammer) score++;
+  if (isEngulfing) score++;
+  if (closeAbovePriorWeekHigh) score++;
+
+  return { score, isHammer, isEngulfing, closeAbovePriorWeekHigh };
+}
+
+// ========== WEEKLY RANGE WITH TREND CONTEXT ==========
 
 // Simple SMA for weekly data
 function weeklySMA(weeks, n) {

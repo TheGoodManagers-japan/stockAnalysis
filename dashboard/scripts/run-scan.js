@@ -184,7 +184,8 @@ async function runScan() {
     // Fetch open portfolio holdings for trade management signals
     const portfolioResult = await query(
       `SELECT ticker_code, entry_price, initial_stop, current_stop,
-              price_target, entry_date, entry_kind
+              price_target, entry_date, entry_kind,
+              scaled_count, exit_profile_id
        FROM portfolio_holdings
        WHERE status = 'open'`
     );
@@ -197,6 +198,8 @@ async function runScan() {
         entryDate: row.entry_date,
         initialStop: row.initial_stop ? Number(row.initial_stop) : undefined,
       },
+      scaledCount: Number(row.scaled_count) || 0,
+      exitProfileId: row.exit_profile_id || null,
     }));
 
     // Mark any old stuck 'running' scans as failed (from previous crashes)

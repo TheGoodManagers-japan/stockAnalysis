@@ -183,9 +183,17 @@ CREATE TABLE IF NOT EXISTS portfolio_holdings (
     pnl_amount          NUMERIC(14,4),
     pnl_pct             NUMERIC(8,4),
     notes               TEXT,
+    scaled_count        INTEGER DEFAULT 0,
+    last_scaled_at      TIMESTAMPTZ,
+    exit_profile_id     TEXT,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration for existing tables
+ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS scaled_count INTEGER DEFAULT 0;
+ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS last_scaled_at TIMESTAMPTZ;
+ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS exit_profile_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_holdings(status);
 CREATE INDEX IF NOT EXISTS idx_portfolio_status_date ON portfolio_holdings(status, entry_date DESC);

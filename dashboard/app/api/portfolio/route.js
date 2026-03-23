@@ -165,6 +165,9 @@ export async function PATCH(request) {
       "current_stop",
       "price_target",
       "notes",
+      "scaled_count",
+      "last_scaled_at",
+      "exit_profile_id",
     ];
 
     for (const key of allowed) {

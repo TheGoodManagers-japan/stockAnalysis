@@ -602,6 +602,29 @@ export async function fetchStockAnalysis({
           }, 0);
         }
 
+        // Build news context for V3
+        let newsCtx = null;
+        const tickerNewsStats = newsStatsMap.get(stock.ticker);
+        const tickerDisclosures = disclosureMap.get(stock.ticker);
+        if (tickerNewsStats || tickerDisclosures) {
+          newsCtx = {
+            articleCount: Number(tickerNewsStats?.article_count) || 0,
+            avgSentiment: Number(tickerNewsStats?.avg_sentiment) || 0,
+            maxImpact: tickerNewsStats?.max_impact === 3
+              ? "high"
+              : tickerNewsStats?.max_impact === 2
+                ? "medium"
+                : tickerNewsStats?.max_impact
+                  ? "low"
+                  : null,
+            latestHeadline: null,
+            disclosures: (tickerDisclosures || []).map((d) => ({
+              category: d.news_category,
+              sentimentScore: Number(d.sentiment_score) || 0,
+            })),
+          };
+        }
+
         const mgmt = getTradeManagementSignal_V3(
           stock,
           {
@@ -622,15 +645,19 @@ export async function fetchStockAnalysis({
                     stock.bollingerMid >
                   0.15
                 : false,
+            news: newsCtx,
+            scaledCount: portfolioEntry.scaledCount || 0,
+            exitProfileId: portfolioEntry.exitProfileId || null,
           }
         );
 
         stock.managementSignalStatus = mgmt.status;
         stock.managementSignalReason = mgmt.reason;
+        stock._managementCandidates = mgmt._candidates;
 
         // If V3 suggests a tighter stop, surface it
         if (Number.isFinite(mgmt.updatedStopLoss)) {
-          const proposed = Math.round(mgmt.updatedStopLoss);
+          const proposed = toTick(mgmt.updatedStopLoss, stock);
           const current = Number(stock.stopLoss) || 0;
           if (proposed > current) {
             stock.stopLoss = proposed;
