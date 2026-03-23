@@ -144,6 +144,7 @@ export async function PATCH(request) {
       "exit_price",
       "exit_reason",
       "closed_at",
+      "initial_stop",
       "current_stop",
       "price_target",
       "notes",
