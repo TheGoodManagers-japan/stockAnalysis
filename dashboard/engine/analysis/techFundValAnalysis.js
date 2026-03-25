@@ -40,39 +40,25 @@ export function nz(v, d = 0) {
  * =============================================================================
  */
 export const HIGH_GROWTH_SECTORS = new Set([
-  // Growth-leaning groups (expanded to match your universe labels)
-  "Technology",
-  "Communication Services", // synonym for "Communications"
-  "Communications",
-  "Healthcare",             // captures Pharmaceuticals/Medtech
-  "Pharmaceuticals",
-  "Electric Machinery",
-  "Precision Instruments",
-  "Machinery",
-  "Automobiles & Auto parts",
-  "Technology Hardware",
-  "Semiconductors",
+  // Growth-leaning JPX sectors (snake_case matching tickers.js)
+  "it_services_others",             // Technology, Communications, Semiconductors
+  "pharmaceutical",                 // Healthcare, Pharma
+  "electric_appliances_precision",  // Electric Machinery, Precision Instruments, Tech Hardware
+  "machinery",                      // Industrial machinery
+  "automobiles_transportation_equipment", // Autos & auto parts
 ]);
 export const DIVIDEND_FOCUS_SECTORS = new Set([
-  // More defensive / income-oriented
-  "Utilities",
-  "Electric Power",
-  "Gas",
-  "Real Estate",
-  "Consumer Defensive",     // staples often dividend-heavy in JP
-  "Staples",
-  "Banking",
-  "Insurance",
+  // Defensive / income-oriented JPX sectors
+  "electric_power_gas",   // Utilities, Electric Power, Gas
+  "real_estate",          // Real Estate
+  "foods",               // Consumer Defensive / Staples
+  "banks",               // Banking
+  "financials_ex_banks",  // Insurance + other financials (dividend payers)
 ]);
 export const FINANCIAL_SECTORS = new Set([
-  // Anything we should treat with financials logic (ignore PS, D/E, etc.)
-  "Financial Services",
-  "Banking",
-  "Insurance",
-  "Other Financial Services",
-  "Securities",
-  "Capital Markets",
-  "Diversified Financials",
+  // Financials: skip PS, treat D/E differently
+  "banks",
+  "financials_ex_banks",  // Insurance, Securities, Capital Markets, etc.
 ]);
 
 /* =============================================================================
@@ -208,7 +194,7 @@ export function getValuationScore(stock, weightOverrides = {}, opts) {
   }
 
   const scaleLowBetter = (val, good, ok, bad) => {
-    if (!Number.isFinite(val) || val <= 0) return -2;
+    if (!Number.isFinite(val) || val <= 0) return 0; // missing data = neutral, not penalized
     if (val <= good) return 2;
     if (val <= ok) return 1;
     if (val <= bad) return -1;

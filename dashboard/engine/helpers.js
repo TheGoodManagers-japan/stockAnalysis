@@ -102,7 +102,10 @@ export function resolveTickers(tickers) {
 
 /* ======================== Tick helpers ======================== */
 
-export function inferTickFromPrice(p) {
+export function inferTickFromPrice(p, currency = "JPY") {
+  // Non-JPY markets use penny increments
+  if (currency !== "JPY") return 0.01;
+  // JPX tick sizes based on price level
   if (p >= 5000) return 1;
   if (p >= 1000) return 0.5;
   if (p >= 100) return 0.1;
@@ -115,8 +118,9 @@ export function toTick(v, priceRefOrStock) {
     typeof priceRefOrStock === "number"
       ? priceRefOrStock
       : Number(priceRefOrStock?.currentPrice) || Number(v) || 0;
+  const currency = priceRefOrStock?.currency || "JPY";
   const tick =
-    Number(priceRefOrStock?.tickSize) || inferTickFromPrice(p) || 0.1;
+    Number(priceRefOrStock?.tickSize) || inferTickFromPrice(p, currency) || 0.1;
   const q = Math.round((Number(v) || 0) / tick);
   return Number((q * tick).toFixed(6));
 }

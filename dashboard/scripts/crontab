@@ -1,6 +1,10 @@
-# JPX daily scan — 21:30 UTC (06:30 JST) Sun-Thu = Mon-Fri mornings in Tokyo
+# JPX daily scan - 21:30 UTC (06:30 JST) Sun-Thu = Mon-Fri mornings in Tokyo
 30 21 * * 0-4 cd /app && node scripts/run-scan.js >> /proc/1/fd/1 2>> /proc/1/fd/2
 
-# Space Fund signals — 12:30 UTC (07:30 ET) Mon-Fri = 2 hours before US market open
+# Space Fund signals - 12:30 UTC (07:30 ET) Mon-Fri = 2 hours before US market open
 30 12 * * 1-5 cd /app && node scripts/run-space-fund-signals.js >> /proc/1/fd/1 2>> /proc/1/fd/2
+
+# Global market analysis - 22:00 UTC (07:00 JST next day) Mon-Fri = after US close
+# Runs: global regime (13 tickers) → ETF signals (25 tickers) → US sector rotation
+0 22 * * 1-5 cd /app && node scripts/run-global-markets.js >> /proc/1/fd/1 2>> /proc/1/fd/2
 

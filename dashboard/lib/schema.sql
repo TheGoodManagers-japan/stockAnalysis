@@ -538,6 +538,63 @@ CREATE TABLE IF NOT EXISTS space_fund_signals (
 CREATE INDEX IF NOT EXISTS idx_sf_signals_date ON space_fund_signals(signal_date DESC);
 CREATE INDEX IF NOT EXISTS idx_sf_signals_buy ON space_fund_signals(is_buy_now, signal_date DESC);
 
+-- ==========================================
+-- GLOBAL MARKET AWARENESS TABLES
+-- ==========================================
+
+-- GLOBAL REGIME SNAPSHOTS (daily regime + momentum for index ETFs and macro instruments)
+CREATE TABLE IF NOT EXISTS global_regime_snapshots (
+    id              BIGSERIAL PRIMARY KEY,
+    scan_date       DATE NOT NULL DEFAULT CURRENT_DATE,
+    ticker_code     TEXT NOT NULL,
+    ticker_name     TEXT,
+    ticker_type     TEXT,           -- 'index_etf' | 'fx' | 'volatility' | 'bond' | 'commodity'
+    region          TEXT,           -- 'US' | 'JP' | 'EU' | 'EM' | 'CN' | 'BR' | 'IN' | 'GL'
+    current_price   NUMERIC(14,4),
+    regime          TEXT,           -- STRONG_UP | UP | RANGE | DOWN
+    ret_5d          NUMERIC(8,4),
+    ret_10d         NUMERIC(8,4),
+    ret_20d         NUMERIC(8,4),
+    ret_60d         NUMERIC(8,4),
+    rsi_14          NUMERIC(8,4),
+    above_ma20      BOOLEAN,
+    above_ma50      BOOLEAN,
+    above_ma200     BOOLEAN,
+    momentum_score  NUMERIC(8,4),
+    details_json    JSONB,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(scan_date, ticker_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_global_regime_date ON global_regime_snapshots(scan_date DESC);
+
+-- GLOBAL ETF SIGNALS (entry timing signals for global ETFs)
+CREATE TABLE IF NOT EXISTS global_etf_signals (
+    id              BIGSERIAL PRIMARY KEY,
+    ticker_code     TEXT NOT NULL,
+    signal_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+    current_price   NUMERIC(14,4),
+    is_buy_now      BOOLEAN DEFAULT FALSE,
+    trigger_type    TEXT,           -- DIP | BREAKOUT | RETEST | RECLAIM | INSIDE
+    buy_now_reason  TEXT,
+    stop_loss       NUMERIC(14,4),
+    price_target    NUMERIC(14,4),
+    rr_ratio        NUMERIC(6,2),
+    rsi_14          NUMERIC(8,4),
+    market_regime   TEXT,           -- STRONG_UP | UP | RANGE | DOWN
+    technical_score NUMERIC(6,2),
+    details_json    JSONB,
+    source          TEXT DEFAULT 'cron',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(ticker_code, signal_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_etf_signals_date ON global_etf_signals(signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_etf_signals_buy ON global_etf_signals(is_buy_now, signal_date DESC);
+
+-- Add market column to sector_rotation_snapshots for cross-market comparison
+ALTER TABLE sector_rotation_snapshots ADD COLUMN IF NOT EXISTS market TEXT DEFAULT 'JP';
+
 -- 18. ERROR LOG (centralized error tracking)
 CREATE TABLE IF NOT EXISTS error_log (
     id              BIGSERIAL PRIMARY KEY,

@@ -4,7 +4,7 @@ import Link from "next/link";
 import NewsContextBadge from "../ui/NewsContextBadge";
 import { formatNum } from "../../lib/uiHelpers";
 
-export default function PositionsTab({ holdings, closedTrades, newsAlerts = {}, loading, onUpdateStop, onClosePosition }) {
+export default function PositionsTab({ holdings, closedTrades, newsAlerts = {}, loading, onUpdateStop, onClosePosition, onEditPosition, onDeletePosition }) {
   return (
     <>
       <div className="card mb-lg">
@@ -63,8 +63,10 @@ export default function PositionsTab({ holdings, closedTrades, newsAlerts = {}, 
                         />
                       </td>
                       <td style={{ display: "flex", gap: 4 }}>
+                        <button className="btn btn-sm" onClick={() => onEditPosition(h)}>Edit</button>
                         <button className="btn btn-sm" onClick={() => { const s = prompt("New stop price?"); if (s) onUpdateStop(h.id, s); }}>Stop</button>
                         <button className="btn btn-sm btn-danger" onClick={() => { const p = prompt("Exit price?"); const r = prompt("Exit reason?"); if (p) onClosePosition(h.id, Number(p), r || "Manual"); }}>Close</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`Delete ${h.ticker_code} position? This cannot be undone.`)) onDeletePosition(h.id); }}>Del</button>
                       </td>
                     </tr>
                   );
@@ -81,7 +83,7 @@ export default function PositionsTab({ holdings, closedTrades, newsAlerts = {}, 
           <div className="table-wrapper">
             <table>
               <thead>
-                <tr><th>Ticker</th><th>Entry</th><th>Exit</th><th>P&L</th><th>P&L %</th><th>Reason</th><th>Closed</th></tr>
+                <tr><th>Ticker</th><th>Entry</th><th>Exit</th><th>P&L</th><th>P&L %</th><th>Reason</th><th>Closed</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 {closedTrades.map((t) => {
@@ -95,6 +97,9 @@ export default function PositionsTab({ holdings, closedTrades, newsAlerts = {}, 
                       <td className="text-mono" style={{ color: pnlPct != null && pnlPct >= 0 ? "var(--accent-green)" : "var(--accent-red)" }}>{pnlPct != null ? `${pnlPct.toFixed(2)}%` : "-"}</td>
                       <td>{t.exit_reason || "-"}</td>
                       <td className="text-muted">{t.closed_at || "-"}</td>
+                      <td>
+                        <button className="btn btn-sm btn-danger" onClick={() => { if (confirm(`Delete closed trade ${t.ticker_code}? This cannot be undone.`)) onDeletePosition(t.id); }}>Del</button>
+                      </td>
                     </tr>
                   );
                 })}

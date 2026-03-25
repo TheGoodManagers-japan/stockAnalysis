@@ -15,6 +15,13 @@ import { allTickers } from "../data/tickers.js";
 
 const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
 
+// ── Ensure schema migrations are applied ──
+async function ensureMigrations() {
+  await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS scaled_count INTEGER DEFAULT 0`).catch(() => {});
+  await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS last_scaled_at TIMESTAMPTZ`).catch(() => {});
+  await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS exit_profile_id TEXT`).catch(() => {});
+}
+
 // ── Phase tracking (writes to scan_runs.current_ticker for UI) ──
 let _scanId = null;
 async function setPhase(phase) {
@@ -181,6 +188,7 @@ async function runScan() {
   console.log(`[CRON] Starting daily scan at ${new Date().toISOString()}`);
 
   try {
+    await ensureMigrations();
     // Fetch open portfolio holdings for trade management signals
     const portfolioResult = await query(
       `SELECT ticker_code, entry_price, initial_stop, current_stop,

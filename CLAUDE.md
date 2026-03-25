@@ -96,7 +96,7 @@ Schema file: `dashboard/lib/schema.sql`
 - `GEMINI_API_KEY` — Google Gemini for news sentiment analysis
 
 ### Railway
-- Environment variables configured in Railway dashboard (DATABASE_URL, JQUANTS_EMAIL, JQUANTS_PASSWORD, GEMINI_API_KEY)
+- Environment variables configured in Railway dashboard (DATABASE_URL, JQUANTS_EMAIL, JQUANTS_PASSWORD, GEMINI_API_KEY, ANTHROPIC_API_KEY)
 
 ---
 
@@ -157,6 +157,16 @@ npm start                # next start
 # Railway deployment (auto-deploys on git push, or manual)
 railway up
 ```
+
+## Deployment
+
+Railway auto-deploys on push to `main`. Full deployment guide with pre-push checklist, monitoring, rollback, and troubleshooting: **`workflows/deploy.md`**
+
+Key rules:
+- Always `npm run build` locally before pushing
+- New env vars must be added in Railway dashboard before deploy
+- New `dashboard/` directories needed at runtime must be added as `COPY` lines in `Dockerfile`
+- Two services: **Web** (`Dockerfile`) and **Cron** (`Dockerfile.cron`)
 
 ---
 

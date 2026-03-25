@@ -99,7 +99,7 @@ function scoreIntrinsicValue(stock) {
 
   const pe = f(stock.peRatio);
   const eps = f(stock.epsTrailingTwelveMonths);
-  const pb = f(toRatio(stock.pbRatio));
+  const pb = f(stock.pbRatio);
   const price = f(stock.currentPrice);
   const evEbitda = f(stock.evToEbitda);
 
@@ -160,7 +160,7 @@ function scoreQuality(stock) {
   const de = f(toRatio(stock.debtEquityRatio));
   const totalCash = f(stock.totalCash);
   const totalDebt = f(stock.totalDebt);
-  const pb = f(toRatio(stock.pbRatio));
+  const pb = f(stock.pbRatio);
   const price = f(stock.currentPrice);
 
   // Earnings consistency
@@ -179,11 +179,12 @@ function scoreQuality(stock) {
   if (isFinSector(stock.sector)) {
     pts += 2; // financials: skip D/E, give default
   } else {
-    if (de > 0 && de < 0.3) pts += 4;
+    if (de >= 0 && de < 0.3) pts += 4;
     else if (de < 0.5) pts += 3;
     else if (de < 1.0) pts += 2;
     else if (de < 1.5) pts += 1;
-    else if (de > 2.0) pts -= 2;
+    else if (de < 2.0) pts -= 1;
+    else if (de >= 2.0) pts -= 2;
   }
 
   // Net cash bonus
@@ -210,7 +211,7 @@ function scoreSafetyMargin(stock) {
   let pts = 0;
 
   const ptbv = f(stock.ptbv);
-  const pb = f(toRatio(stock.pbRatio));
+  const pb = f(stock.pbRatio);
   const divYield = f(toPercent(stock.dividendYield));
   const totalCash = f(stock.totalCash);
   const totalDebt = f(stock.totalDebt);
@@ -230,11 +231,15 @@ function scoreSafetyMargin(stock) {
   }
 
   // Dividend floor
+  const fcfYield = f(stock.fcfYieldPct);
   if (divYield > 5) pts += 5;
   else if (divYield > 4) pts += 4;
   else if (divYield > 3) pts += 3;
   else if (divYield > 2) pts += 2;
   else if (divYield > 1) pts += 1;
+
+  // Dividend sustainability: penalize if dividend exceeds free cash flow
+  if (divYield > 2 && fcfYield > 0 && fcfYield < divYield) pts -= 2;
 
   // Net cash cushion
   let netCashRatio = 0;
@@ -282,7 +287,7 @@ function scoreCatalyst(stock) {
   const ma25 = f(stock.movingAverage25d);
   const rsi = f(stock.rsi14);
   const divGrowth = f(toPercent(stock.dividendGrowth5yr));
-  const shYield = f(stock.shareholderYieldPct);
+  const shYield = f(toPercent(stock.shareholderYieldPct));
 
   // LT Regime
   if (regime === "STRONG_UP") pts += 5;
@@ -332,7 +337,7 @@ function scoreCatalyst(stock) {
 function classify(stock, pillars, metrics) {
   const { intrinsicValue, quality, safetyMargin, catalyst } = pillars;
   const pe = f(stock.peRatio);
-  const pb = f(toRatio(stock.pbRatio));
+  const pb = f(stock.pbRatio);
   const ptbv = f(stock.ptbv) || pb;
   const divYield = f(toPercent(stock.dividendYield));
   const divGrowth = f(toPercent(stock.dividendGrowth5yr));
@@ -371,10 +376,10 @@ function classify(stock, pillars, metrics) {
     }
   }
 
-  // Recovery Value
-  if (epsF > eps && eps > 0 && catalyst >= 15) {
+  // Recovery Value — require meaningful EPS improvement + uptrend (not just ranging)
+  if (epsF > eps * 1.1 && eps > 0 && catalyst >= 15) {
     const nearLow = low52 > 0 && price > 0 && price <= low52 * 1.2;
-    const regimeImproving = regime === "UP" || regime === "RANGE" || regime === "STRONG_UP";
+    const regimeImproving = regime === "UP" || regime === "STRONG_UP";
     if (nearLow || regimeImproving) {
       candidates.push({ cls: "RECOVERY_VALUE", score: catalyst });
     }
@@ -401,7 +406,7 @@ function classify(stock, pillars, metrics) {
 function buildThesis(stock, metrics, classification) {
   const parts = [];
   const pe = f(stock.peRatio);
-  const pb = f(toRatio(stock.pbRatio));
+  const pb = f(stock.pbRatio);
 
   if (pe > 0 && metrics.earningsYield > 3) {
     parts.push(`Trading at ${fmt(pe)}x earnings (${fmt(metrics.earningsYield)}% yield)`);
@@ -482,8 +487,8 @@ function buildRisks(stock, metrics) {
 function buildCatalyst(stock, metrics) {
   const parts = [];
   const divGrowth = f(toPercent(stock.dividendGrowth5yr));
-  const pb = f(toRatio(stock.pbRatio));
-  const shYield = f(stock.shareholderYieldPct);
+  const pb = f(stock.pbRatio);
+  const shYield = f(toPercent(stock.shareholderYieldPct));
   const regime = stock.marketRegime || "";
 
   if (divGrowth > 5) {
@@ -624,7 +629,7 @@ export function analyzeValuePlay(stock, historicalData) {
     dividendYield: f(toPercent(stock.dividendYield)),
     dividendGrowth5yr: f(toPercent(stock.dividendGrowth5yr)),
     shareholderYield: f(toPercent(stock.shareholderYieldPct)),
-    pbRatio: f(toRatio(stock.pbRatio)),
+    pbRatio: f(stock.pbRatio),
     ptbv: f(stock.ptbv),
     netCashRatio: safety.netCashRatio,
     evToEbitda: f(stock.evToEbitda),

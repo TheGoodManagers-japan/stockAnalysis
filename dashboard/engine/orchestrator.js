@@ -204,6 +204,25 @@ export async function fetchStockAnalysis({
     );
   }
 
+  // --- Market-relative metrics (for trade management context) ---
+  let marketReturn5d = null;
+  let marketRegimeDown = false;
+
+  if (marketLevels && marketLevels.length >= 6) {
+    const mktLast = Number(marketLevels.at(-1)?.close) || 0;
+    const mkt5ago = Number(marketLevels.at(-6)?.close) || 0;
+    if (mktLast > 0 && mkt5ago > 0) {
+      marketReturn5d = (mktLast / mkt5ago) - 1;
+    }
+    const latestRegime = regimeMap
+      ? regimeForDate(regimeMap, marketLevels.at(-1)?.date)
+      : null;
+    marketRegimeDown =
+      latestRegime === "DOWN" || latestRegime === "STRONG_DOWN";
+  }
+
+  log("Market-relative metrics", { marketReturn5d, marketRegimeDown });
+
   // --- Pre-load batch data for freshness + trajectory ---
   let freshnessMap = new Map();
   let prevSnapshotMap = new Map();
@@ -648,6 +667,10 @@ export async function fetchStockAnalysis({
             news: newsCtx,
             scaledCount: portfolioEntry.scaledCount || 0,
             exitProfileId: portfolioEntry.exitProfileId || null,
+            market:
+              marketLevels && marketReturn5d !== null
+                ? { return5d: marketReturn5d, regimeDown: marketRegimeDown }
+                : null,
           }
         );
 

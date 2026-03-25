@@ -4,6 +4,10 @@ import { GEMINI_MODEL } from "../../../lib/constants.js";
 
 export const dynamic = "force-dynamic";
 
+// In-memory cache for AI analysis results (TTL: 24 hours)
+const AI_CACHE = new Map();
+const AI_CACHE_TTL = 24 * 60 * 60 * 1000;
+
 // GET /api/value-plays — get value play candidates from latest (or specific) scan
 export async function GET(request) {
   try {
@@ -70,6 +74,12 @@ export async function POST(request) {
         { success: false, error: "ticker is required" },
         { status: 400 }
       );
+    }
+
+    // Check cache first
+    const cached = AI_CACHE.get(ticker);
+    if (cached && Date.now() - cached.ts < AI_CACHE_TTL) {
+      return NextResponse.json({ success: true, ticker, analysis: cached.analysis, cached: true });
     }
 
     // Get the stock's value play data from latest scan
@@ -244,7 +254,9 @@ Provide a deep-dive analysis with:
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`Gemini API error ${response.status}: ${text.slice(0, 200)}`);
+      // Strip API key from error text to prevent leaking secrets
+      const safeText = text.replace(new RegExp(apiKey, "g"), "[REDACTED]");
+      throw new Error(`Gemini API error ${response.status}: ${safeText.slice(0, 200)}`);
     }
 
     const geminiResult = await response.json();
@@ -252,6 +264,9 @@ Provide a deep-dive analysis with:
     if (!raw) throw new Error("Empty Gemini response");
 
     const analysis = JSON.parse(raw);
+
+    // Cache the result
+    AI_CACHE.set(ticker, { analysis, ts: Date.now() });
 
     return NextResponse.json({
       success: true,

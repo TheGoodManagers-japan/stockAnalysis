@@ -38,7 +38,7 @@ export async function POST() {
     const child = cp.spawn("node", ["scripts/run-scan.js"], {
       cwd: process.cwd(),
       env: process.env,
-      stdio: "ignore",
+      stdio: "inherit",
       detached: true,
     });
 

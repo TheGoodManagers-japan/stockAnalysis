@@ -7,6 +7,7 @@ import TabBar from "../../components/ui/TabBar";
 import PositionsTab from "../../components/portfolio/PositionsTab";
 import JournalTab from "../../components/portfolio/JournalTab";
 import AddPositionForm from "../../components/portfolio/AddPositionForm";
+import EditPositionModal from "../../components/portfolio/EditPositionModal";
 
 const AnalyticsTab = dynamic(
   () => import("../../components/portfolio/AnalyticsTab"),
@@ -36,6 +37,7 @@ export default function PortfolioPage() {
   const [newsAlerts, setNewsAlerts] = useState({});
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editHolding, setEditHolding] = useState(null);
 
   const fetchJson = useCallback(async (url) => { try { const r = await fetch(url); return await r.json(); } catch (e) { reportError("page/portfolio", e, { url }); return {}; } }, []);
 
@@ -88,6 +90,23 @@ export default function PortfolioPage() {
     fetchPortfolio();
   }
 
+  async function handleEditPosition(id, updates) {
+    await patchPortfolio({ id, ...updates });
+    setEditHolding(null);
+    fetchPortfolio();
+    fetchAnalytics();
+  }
+
+  async function handleDeletePosition(id) {
+    try {
+      const res = await fetch(`/api/portfolio?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!data.success) { alert(`Delete failed: ${data.error}`); return; }
+      fetchPortfolio();
+      fetchAnalytics();
+    } catch (e) { reportError("page/portfolio", e, { action: "deletePosition", id }); }
+  }
+
   async function handleAddJournalEntry(entry) {
     try { await fetch("/api/portfolio/journal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) }); fetchJournal(); }
     catch (e) { reportError("page/portfolio", e, { action: "addJournal" }); }
@@ -104,10 +123,12 @@ export default function PortfolioPage() {
 
       <TabBar tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
 
-      {activeTab === "Positions" && <PositionsTab holdings={holdings} closedTrades={closedTrades} newsAlerts={newsAlerts} loading={loading} onUpdateStop={handleUpdateStop} onClosePosition={handleClosePosition} />}
+      {activeTab === "Positions" && <PositionsTab holdings={holdings} closedTrades={closedTrades} newsAlerts={newsAlerts} loading={loading} onUpdateStop={handleUpdateStop} onClosePosition={handleClosePosition} onEditPosition={(h) => setEditHolding(h)} onDeletePosition={handleDeletePosition} />}
       {activeTab === "Analytics" && <AnalyticsTab analytics={analytics} />}
       {activeTab === "Risk" && <RiskTab analytics={analytics} />}
       {activeTab === "Journal" && <JournalTab holdings={holdings} closedTrades={closedTrades} journal={journal} onAddEntry={handleAddJournalEntry} />}
+
+      <EditPositionModal isOpen={!!editHolding} onClose={() => setEditHolding(null)} holding={editHolding} onSave={handleEditPosition} />
     </>
   );
 }

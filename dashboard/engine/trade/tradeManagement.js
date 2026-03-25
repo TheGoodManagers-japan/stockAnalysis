@@ -124,7 +124,8 @@ function computeBarsSinceEntry(ctx, historicalData) {
  *
  * ctx fields:
  *   entryKind, sentimentScore, entryDate, barsSinceEntry,
- *   deep, isExtended, news, scaledCount, exitProfileId
+ *   deep, isExtended, news, scaledCount, exitProfileId,
+ *   market {return5d, regimeDown} — TOPIX 5d return + regime for relative strength
  */
 export function getTradeManagementSignal_V3(
   stock,
@@ -246,6 +247,34 @@ export function getTradeManagementSignal_V3(
   // Gap-down detection
   const gapDown = px < stop - 2 * atr;
 
+  // ─── MARKET-RELATIVE CONTEXT ───
+  const market = ctx.market || null;
+  let marketSupportive = false;
+  let marketCtxLabel = "";
+
+  if (market && Number.isFinite(market.return5d) && market.return5d < -0.015) {
+    // Market stressed: TOPIX down >1.5% in 5 days
+    let stockReturn5d = null;
+    if (Array.isArray(historicalData) && historicalData.length >= 6) {
+      const sLast = n(historicalData.at(-1)?.close);
+      const s5ago = n(historicalData.at(-6)?.close);
+      if (sLast > 0 && s5ago > 0) {
+        stockReturn5d = (sLast / s5ago) - 1;
+      }
+    }
+
+    if (stockReturn5d !== null) {
+      const rs = stockReturn5d - market.return5d;
+      // Stock "holds up" if it outperforms TOPIX within -0.5% tolerance
+      marketSupportive = rs >= -0.005;
+      if (marketSupportive) {
+        const mktPct = (market.return5d * 100).toFixed(1);
+        const rsPct = (rs * 100).toFixed(1);
+        marketCtxLabel = ` [mkt: TOPIX ${mktPct}% 5d, RS +${rsPct}%]`;
+      }
+    }
+  }
+
   // ─── EXIT PROFILE STOP FLOOR ───
   let profileStopFloor = stop;
   if (ctx.exitProfileId) {
@@ -281,9 +310,10 @@ export function getTradeManagementSignal_V3(
     candidates.push({ priority: 1, status: "Sell Now", reason });
   }
 
-  // --- Priority 2: Structural breakdown (2+ of 3 signals) ---
+  // --- Priority 2: Structural breakdown (2+ of 3 signals, 3/3 when market supportive) ---
   const breakdownSignals = [nowBelowMA25, _madeLL, bearishContext].filter(Boolean).length;
-  if (breakdownSignals >= 2 && (nowBelowMA25 || _madeLL)) {
+  const breakdownThreshold = marketSupportive ? 3 : 2;
+  if (breakdownSignals >= breakdownThreshold && (nowBelowMA25 || _madeLL)) {
     candidates.push({
       priority: 2,
       status: "Sell Now",
@@ -293,7 +323,16 @@ export function getTradeManagementSignal_V3(
         bearishContext ? "bearish context" : null,
       ]
         .filter(Boolean)
-        .join(" + ")}.`,
+        .join(" + ")}.${marketCtxLabel}`,
+    });
+  }
+  // Suppressed breakdown: would have fired at normal threshold
+  if (breakdownSignals >= 2 && breakdownSignals < breakdownThreshold && marketSupportive) {
+    candidates.push({
+      priority: 2,
+      status: "_Suppressed",
+      _suppressed: true,
+      reason: `[Mkt-suppressed] Breakdown (${breakdownSignals}/3)${marketCtxLabel}`,
     });
   }
 
@@ -325,13 +364,15 @@ export function getTradeManagementSignal_V3(
     }
   }
 
-  // --- Priority 4: Time stop (entry-kind aware) ---
-  // Check base time stop
-  if ((barsSinceEntry ?? 0) >= timeStopThreshold && progressR < 0.5) {
+  // --- Priority 4: Time stop (entry-kind aware, +3 bars grace when market supportive) ---
+  const effectiveTimeThreshold = marketSupportive
+    ? timeStopThreshold + 3
+    : timeStopThreshold;
+  if ((barsSinceEntry ?? 0) >= effectiveTimeThreshold && progressR < 0.5) {
     candidates.push({
       priority: 4,
       status: "Sell Now",
-      reason: `Time stop: ${barsSinceEntry} bars without meaningful progress (${progressR.toFixed(1)}R). Limit: ${timeStopThreshold} for ${entryKind || "default"}.`,
+      reason: `Time stop: ${barsSinceEntry} bars without meaningful progress (${progressR.toFixed(1)}R). Limit: ${effectiveTimeThreshold} for ${entryKind || "default"}.${marketCtxLabel}`,
     });
   }
 
@@ -445,7 +486,7 @@ export function getTradeManagementSignal_V3(
     const enoughBars = (barsSinceEntry ?? 0) >= NP_BARS;
     const clearlyRed = progressR < -0.1;
 
-    if (enoughBars && !touchedHalfR && progressR < NEED_TOUCH_R && !clearlyRed) {
+    if (enoughBars && !touchedHalfR && progressR < NEED_TOUCH_R && !clearlyRed && !marketSupportive) {
       const structural = trailingStructStop(historicalData, ma25, atr);
       const creepTarget = Math.min(entry - 0.2 * riskPerShare, entry - 0.01);
       let proposed = Math.max(stop, profileStopFloor, structural, creepTarget);
@@ -469,6 +510,15 @@ export function getTradeManagementSignal_V3(
           updatedStopLoss: tickedSL,
         });
       }
+    }
+    // Suppressed no-progress creep: would have fired without market context
+    if (enoughBars && !touchedHalfR && progressR < NEED_TOUCH_R && !clearlyRed && marketSupportive) {
+      candidates.push({
+        priority: 9,
+        status: "_Suppressed",
+        _suppressed: true,
+        reason: `[Mkt-suppressed] No-progress creep skipped${marketCtxLabel}`,
+      });
     }
   }
 
@@ -646,7 +696,7 @@ export function getTradeManagementSignal_V3(
   // ─── SELECTION LOGIC ───
   candidates.sort((a, b) => a.priority - b.priority);
 
-  const best = candidates[0];
+  const best = candidates.find((c) => !c._suppressed) || candidates[0];
   const entryHold = candidates.find(
     (c) => c.priority === 11 && c.status === "Hold" && !c._holdBoost
   );

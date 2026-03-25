@@ -156,6 +156,20 @@ export async function PATCH(request) {
     const values = [];
     let idx = 1;
 
+    // Validate editable entry fields if present
+    if (updates.ticker_code !== undefined) {
+      const tv = validateTicker(updates.ticker_code);
+      if (!tv.valid) {
+        return NextResponse.json({ success: false, error: tv.error }, { status: 400 });
+      }
+    }
+    if (updates.entry_price !== undefined) {
+      const pv = validatePositiveNum(updates.entry_price, "entry_price");
+      if (!pv.valid) {
+        return NextResponse.json({ success: false, error: pv.error }, { status: 400 });
+      }
+    }
+
     const allowed = [
       "status",
       "exit_price",
@@ -168,6 +182,12 @@ export async function PATCH(request) {
       "scaled_count",
       "last_scaled_at",
       "exit_profile_id",
+      "ticker_code",
+      "entry_price",
+      "entry_date",
+      "shares",
+      "entry_kind",
+      "entry_reason",
     ];
 
     for (const key of allowed) {
@@ -218,6 +238,40 @@ export async function PATCH(request) {
     );
 
     return NextResponse.json({ success: true, holding: result.rows[0] });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err.message },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/portfolio?id=<number> — hard delete a position
+export async function DELETE(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: "id query param is required" },
+        { status: 400 }
+      );
+    }
+
+    const result = await query(
+      `DELETE FROM portfolio_holdings WHERE id = $1 RETURNING id, ticker_code`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Position not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true, deleted: result.rows[0] });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err.message },
