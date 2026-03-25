@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import ETFSignalTable from "../../components/etf/ETFSignalTable";
+import ScanStatusBanner from "../../components/global/ScanStatusBanner";
 
 export default function ETFScannerPage() {
   const [data, setData] = useState(null);
@@ -101,6 +102,7 @@ export default function ETFScannerPage() {
         </button>
       </div>
 
+      <ScanStatusBanner scanning={scanning} />
       <ETFSignalTable signals={signals} />
     </>
   );

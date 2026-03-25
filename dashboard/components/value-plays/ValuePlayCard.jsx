@@ -78,7 +78,7 @@ export default function ValuePlayCard({ stock, isAdded, onAddClick }) {
     <div className={styles.card}>
       {/* Clickable overlay */}
       <Link
-        href={`/scanner/${stock.ticker_code}`}
+        href={`/scanner/${stock.ticker_code}?view=value-play`}
         className={styles.cardLink}
         aria-label={`View details for ${stock.ticker_code}`}
       />

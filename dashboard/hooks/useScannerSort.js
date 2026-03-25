@@ -34,6 +34,7 @@ export function useScannerSort(results) {
   const [sortDir, setSortDir] = useSessionStorage("scanner-sortDir", "desc");
   const [sectorFilter, setSectorFilter] = useSessionStorage("scanner-sector", "All");
   const [buyOnly, setBuyOnly] = useSessionStorage("scanner-buyOnly", false);
+  const [liquidOnly, setLiquidOnly] = useSessionStorage("scanner-liquidOnly", false);
   const [search, setSearch] = useSessionStorage("scanner-search", "");
 
   const filtered = useMemo(() => {
@@ -44,6 +45,9 @@ export function useScannerSort(results) {
     }
     if (buyOnly) {
       data = data.filter((r) => r.is_buy_now);
+    }
+    if (liquidOnly) {
+      data = data.filter((r) => r.liq_pass);
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -68,7 +72,7 @@ export function useScannerSort(results) {
     });
 
     return data;
-  }, [results, sortKey, sortDir, sectorFilter, buyOnly, search]);
+  }, [results, sortKey, sortDir, sectorFilter, buyOnly, liquidOnly, search]);
 
   function handleSort(key) {
     if (sortKey === key) {
@@ -88,6 +92,8 @@ export function useScannerSort(results) {
     setSectorFilter,
     buyOnly,
     setBuyOnly,
+    liquidOnly,
+    setLiquidOnly,
     search,
     setSearch,
     SECTORS,

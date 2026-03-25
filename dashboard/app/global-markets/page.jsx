@@ -6,6 +6,7 @@ import MacroPanel from "../../components/global/MacroPanel";
 import AllocationAlerts from "../../components/global/AllocationAlerts";
 import CrossMarketOverlay from "../../components/sectors/CrossMarketOverlay";
 import SeasonalCalendar from "../../components/global/SeasonalCalendar";
+import ScanStatusBanner from "../../components/global/ScanStatusBanner";
 
 export default function GlobalMarketsPage() {
   const [data, setData] = useState(null);
@@ -120,6 +121,8 @@ export default function GlobalMarketsPage() {
           {scanning ? "Scanning..." : "Run Global Scan"}
         </button>
       </div>
+
+      <ScanStatusBanner scanning={scanning} />
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
         <AllocationAlerts alerts={alerts} />

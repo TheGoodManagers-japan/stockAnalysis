@@ -425,6 +425,7 @@ export async function GET(request) {
               sr.stop_loss, sr.price_target, sr.short_term_score, sr.long_term_score,
               sr.market_regime, sr.scan_date, sr.scan_id,
               sr.master_score,
+              sr.liq_pass,
               (sr.other_data_json->>'ml_signal_confidence')::numeric AS ml_signal_confidence,
               (sr.other_data_json->>'scoring_confidence')::numeric AS scoring_confidence,
               (sr.other_data_json->>'data_freshness') AS data_freshness,

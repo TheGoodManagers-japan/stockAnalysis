@@ -73,6 +73,8 @@ export default function ScannerTable({ results = [], isLive = false }) {
     setSectorFilter,
     buyOnly,
     setBuyOnly,
+    liquidOnly,
+    setLiquidOnly,
     search,
     setSearch,
     SECTORS,
@@ -121,7 +123,7 @@ export default function ScannerTable({ results = [], isLive = false }) {
   const PAGE_SIZE = 50;
   const [page, setPage] = useState(1);
   // Reset page when filters/sort change
-  useEffect(() => setPage(1), [sortKey, sortDir, sectorFilter, buyOnly, search]);
+  useEffect(() => setPage(1), [sortKey, sortDir, sectorFilter, buyOnly, liquidOnly, search]);
   const visible = filtered.slice(0, page * PAGE_SIZE);
   const hasMore = page * PAGE_SIZE < filtered.length;
 
@@ -181,6 +183,21 @@ export default function ScannerTable({ results = [], isLive = false }) {
             onChange={(e) => setBuyOnly(e.target.checked)}
           />
           Buy signals only
+        </label>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={liquidOnly}
+            onChange={(e) => setLiquidOnly(e.target.checked)}
+          />
+          Liquid only
         </label>
         <div className={styles.viewToggle}>
           <button

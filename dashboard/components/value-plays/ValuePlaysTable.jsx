@@ -281,7 +281,7 @@ export default function ValuePlaysTable({ results = [] }) {
               {filtered.map((row) => (
                 <tr key={row.ticker_code} className={styles.tableRow}>
                   <td>
-                    <Link href={`/scanner/${row.ticker_code}`} className={styles.tickerLink}>
+                    <Link href={`/scanner/${row.ticker_code}?view=value-play`} className={styles.tickerLink}>
                       {row.ticker_code}
                     </Link>
                     {row.short_name && (

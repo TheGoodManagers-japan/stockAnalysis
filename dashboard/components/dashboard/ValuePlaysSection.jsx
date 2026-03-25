@@ -44,7 +44,7 @@ export default function ValuePlaysSection({ valuePlays }) {
 
         return (
           <div key={v.ticker_code} className={styles.compactRow}>
-            <Link href={`/scanner/${v.ticker_code}`} className={styles.rowTicker}>
+            <Link href={`/scanner/${v.ticker_code}?view=value-play`} className={styles.rowTicker}>
               {v.ticker_code}
             </Link>
             <span className={styles.rowName}>{v.short_name || ""}</span>
