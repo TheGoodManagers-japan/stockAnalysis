@@ -18,7 +18,7 @@ export default function AddToPortfolioPopup({
   styles,
 }) {
   return (
-    <div className={styles.addPopup} ref={popupRef}>
+    <div className={styles.addPopup} ref={popupRef} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
       {status === "success" ? (
         <div
           style={{
