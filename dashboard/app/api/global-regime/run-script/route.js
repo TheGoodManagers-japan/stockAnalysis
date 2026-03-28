@@ -5,8 +5,16 @@ let lastSpawnedAt = 0;
 
 // POST /api/global-regime/run-script — spawn run-global-markets.js as a child process
 // This runs the full pipeline: regime scan → ETF signals
-export async function POST() {
+export async function POST(request) {
   try {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
+      const auth = request.headers.get("authorization");
+      if (auth !== `Bearer ${cronSecret}`) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     // Reject if spawned within last 30 seconds
     if (Date.now() - lastSpawnedAt < 30000) {
       return NextResponse.json(

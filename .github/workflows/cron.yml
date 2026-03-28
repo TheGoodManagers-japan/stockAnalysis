@@ -1,0 +1,73 @@
+name: Scheduled Scans
+
+on:
+  schedule:
+    # JPX daily scan — 21:30 UTC Sun-Thu (= Mon-Fri 06:30 JST)
+    - cron: "30 21 * * 0-4"
+    # Space Fund signals — 12:30 UTC Mon-Fri (= 07:30 ET, 2h before US open)
+    - cron: "30 12 * * 1-5"
+    # Global markets — 22:00 UTC Mon-Fri (= 07:00 JST next day, after US close)
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which job to run"
+        required: true
+        type: choice
+        options:
+          - jpx-scan
+          - space-fund
+          - global-markets
+
+env:
+  DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+  CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+jobs:
+  jpx-scan:
+    if: github.event.schedule == '30 21 * * 0-4' || (github.event_name == 'workflow_dispatch' && inputs.job == 'jpx-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger JPX scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  space-fund:
+    if: github.event.schedule == '30 12 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'space-fund')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Space Fund signals
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/space-fund/signals/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  global-markets:
+    if: github.event.schedule == '0 22 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'global-markets')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Global markets scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/global-regime/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json")
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
