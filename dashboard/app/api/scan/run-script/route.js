@@ -11,7 +11,9 @@ export async function POST(request) {
     const cronSecret = process.env.CRON_SECRET;
     if (cronSecret) {
       const auth = request.headers.get("authorization");
-      if (auth !== `Bearer ${cronSecret}`) {
+      const fetchSite = request.headers.get("sec-fetch-site");
+      // Allow: Bearer token (cron/GitHub Actions) OR same-origin browser requests (dashboard UI)
+      if (auth !== `Bearer ${cronSecret}` && fetchSite !== "same-origin") {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
     }
