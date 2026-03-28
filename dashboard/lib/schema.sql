@@ -89,10 +89,12 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     errors              JSONB,
     summary_json        JSONB,
     status              TEXT DEFAULT 'running',
-    current_ticker      TEXT
+    current_ticker      TEXT,
+    market              TEXT DEFAULT 'JP'
 );
 
 CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_market ON scan_runs(market, started_at DESC);
 
 -- 5. SCAN RESULTS (analysis output per stock per scan)
 CREATE TABLE IF NOT EXISTS scan_results (

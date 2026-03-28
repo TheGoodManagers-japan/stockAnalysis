@@ -11,7 +11,15 @@ import { predictForTicker } from "../engine/ml/predictions.js";
 import { predictBatch as predictSignalQuality, disposeModel as disposeSignalQualityModel } from "../engine/ml/signalQuality.js";
 import { rankStocks, disposeModel as disposeRankerModel } from "../engine/ml/stockRanker.js";
 import { predictBatch as predictLstmV2, disposeModel as disposeLstmV2Model } from "../engine/ml/lstmV2.js";
-import { allTickers } from "../data/tickers.js";
+import { getTickersForMarket } from "../data/marketTickers.js";
+import { getMarket } from "../data/markets.js";
+
+// Parse --market flag (default: JP for backwards compatibility)
+const marketArg = process.argv.find(a => a.startsWith("--market="))?.split("=")[1]
+  || process.argv[process.argv.indexOf("--market") + 1]
+  || "JP";
+const marketConfig = getMarket(marketArg);
+const marketTickers = getTickersForMarket(marketArg);
 
 const DASHBOARD_URL = process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3002}`;
 
@@ -20,6 +28,33 @@ async function ensureMigrations() {
   await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS scaled_count INTEGER DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS last_scaled_at TIMESTAMPTZ`).catch(() => {});
   await query(`ALTER TABLE portfolio_holdings ADD COLUMN IF NOT EXISTS exit_profile_id TEXT`).catch(() => {});
+  await query(`ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS market TEXT DEFAULT 'JP'`).catch(() => {});
+}
+
+// ── Seed market tickers into DB (FK constraint requires this) ──
+async function ensureMarketTickers(tickers, config) {
+  const batchSize = 50;
+  for (let i = 0; i < tickers.length; i += batchSize) {
+    const batch = tickers.slice(i, i + batchSize);
+    const values = [];
+    const params = [];
+    let idx = 1;
+    for (const t of batch) {
+      values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3})`);
+      params.push(t.code, t.sector, config.currency, config.exchange);
+      idx += 4;
+    }
+    await query(
+      `INSERT INTO tickers (code, sector, currency, exchange)
+       VALUES ${values.join(", ")}
+       ON CONFLICT (code) DO UPDATE SET
+         sector = EXCLUDED.sector,
+         currency = EXCLUDED.currency,
+         exchange = EXCLUDED.exchange,
+         updated_at = NOW()`,
+      params
+    );
+  }
 }
 
 // ── Phase tracking (writes to scan_runs.current_ticker for UI) ──
@@ -47,19 +82,22 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 120000) {
 }
 
 // ── Discord Morning Report ─────────────────────────────────────
-async function sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount, mlScoredCount = 0, mlRankedCount = 0, elapsed, newsReport }) {
+const CURRENCY_SYMBOLS = { JPY: "\u00a5", USD: "$", EUR: "\u20ac", GBP: "\u00a3", HKD: "HK$", INR: "\u20b9", KRW: "\u20a9" };
+
+async function sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount, mlScoredCount = 0, mlRankedCount = 0, elapsed, newsReport, market }) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn("[CRON] DISCORD_WEBHOOK_URL not set, skipping alert.");
     return;
   }
 
-  const fmt = (n) => (n != null ? `\u00a5${Math.round(n).toLocaleString()}` : "-");
+  const sym = CURRENCY_SYMBOLS[market?.currency] || "$";
+  const fmt = (n) => (n != null ? `${sym}${Math.round(n).toLocaleString()}` : "-");
   const embeds = [];
 
   // ── Embed 1: Market & News ──
   const newsEmbed = {
-    title: "Morning Report",
+    title: `${market?.name || "Morning"} Report`,
     color: 0x1a73e8,
     fields: [
       {
@@ -185,10 +223,18 @@ async function sendMorningReport({ results, myPortfolio, count, buyCount, errors
 
 async function runScan() {
   const startTime = Date.now();
-  console.log(`[CRON] Starting daily scan at ${new Date().toISOString()}`);
+  console.log(`[CRON] Starting ${marketConfig.code} scan at ${new Date().toISOString()}`);
+
+  // Calculate total steps based on market capabilities
+  const hasNews = marketConfig.newsEnabled;
+  const hasMl = marketConfig.mlEnabled;
+  const totalSteps = (hasNews ? 3 : 0) + 1 + (hasMl ? 3 : 0) + 1; // news(3) + scan(1) + ml(3) + report(1)
+  let stepNum = 0;
+  const nextStep = (label) => setPhase(`Step ${++stepNum}/${totalSteps}: ${label}`);
 
   try {
     await ensureMigrations();
+    await ensureMarketTickers(marketTickers, marketConfig);
     // Fetch open portfolio holdings for trade management signals
     const portfolioResult = await query(
       `SELECT ticker_code, entry_price, initial_stop, current_stop,
@@ -218,10 +264,11 @@ async function runScan() {
     );
 
     // Create scan run record EARLY so the UI can show progress immediately
+    const firstStep = hasNews ? "Fetching news..." : "Scanning stocks...";
     const scanRun = await query(
-      `INSERT INTO scan_runs (ticker_count, total_tickers, status, current_ticker)
-       VALUES (0, $1, 'running', 'Step 1/8: Fetching news...') RETURNING scan_id`,
-      [allTickers.length]
+      `INSERT INTO scan_runs (ticker_count, total_tickers, status, current_ticker, market)
+       VALUES (0, $1, 'running', $2, $3) RETURNING scan_id`,
+      [marketTickers.length, `Step 1/${totalSteps}: ${firstStep}`, marketConfig.code]
     );
     const scanId = scanRun.rows[0].scan_id;
     _scanId = scanId;
@@ -229,47 +276,50 @@ async function runScan() {
 
     // --- Run news pipeline BEFORE scan so catalyst scores have fresh data ---
     let newsReport = null;
-    try {
-      await setPhase("Step 1/8: Fetching news...");
+    if (hasNews) {
       try {
-        const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=kabutan,yahoo_rss,jquants,nikkei,minkabu,reuters`, { method: "POST" }, 180000);
-        const fetchData = await fetchRes.json();
-        console.log(`[CRON] News fetched: ${fetchData.total_saved ?? 0} new articles.`);
-      } catch (err) {
-        console.warn(`[CRON] News fetch error: ${err.message}`);
-      }
+        await nextStep("Fetching news...");
+        try {
+          const fetchRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/fetch?source=kabutan,yahoo_rss,jquants,nikkei,minkabu,reuters`, { method: "POST" }, 180000);
+          const fetchData = await fetchRes.json();
+          console.log(`[CRON] News fetched: ${fetchData.total_saved ?? 0} new articles.`);
+        } catch (err) {
+          console.warn(`[CRON] News fetch error: ${err.message}`);
+        }
 
-      await setPhase("Step 2/8: Analyzing news...");
-      try {
-        const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
-        const analyzeData = await analyzeRes.json();
-        console.log(`[CRON] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
-      } catch (err) {
-        console.warn(`[CRON] News analyze error: ${err.message}`);
-      }
+        await nextStep("Analyzing news...");
+        try {
+          const analyzeRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/analyze`, { method: "POST" }, 120000);
+          const analyzeData = await analyzeRes.json();
+          console.log(`[CRON] News analyzed: ${analyzeData.analyzed ?? 0} articles.`);
+        } catch (err) {
+          console.warn(`[CRON] News analyze error: ${err.message}`);
+        }
 
-      await setPhase("Step 3/8: Generating daily report...");
-      try {
-        const reportRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/daily-report`, { method: "POST" }, 120000);
-        const reportData = await reportRes.json();
-        if (reportData.report) {
-          newsReport = reportData.report;
-          console.log("[CRON] Daily news report generated.");
+        await nextStep("Generating daily report...");
+        try {
+          const reportRes = await fetchWithTimeout(`${DASHBOARD_URL}/api/news/daily-report`, { method: "POST" }, 120000);
+          const reportData = await reportRes.json();
+          if (reportData.report) {
+            newsReport = reportData.report;
+            console.log("[CRON] Daily news report generated.");
+          }
+        } catch (err) {
+          console.warn(`[CRON] News report error: ${err.message}`);
         }
       } catch (err) {
-        console.warn(`[CRON] News report error: ${err.message}`);
+        console.warn(`[CRON] Pre-scan news pipeline failed (non-fatal): ${err.message}`);
       }
-    } catch (err) {
-      console.warn(`[CRON] Pre-scan news pipeline failed (non-fatal): ${err.message}`);
     }
 
-    await setPhase("Step 4/8: Scanning stocks...");
+    await nextStep("Scanning stocks...");
 
     // Run the full analysis engine with incremental saves
     let buyCount = 0;
     const { count, errors, summary, results } = await fetchStockAnalysis({
-      tickers: [],
+      tickers: marketTickers.map(t => t.code),
       myPortfolio,
+      regimeTicker: marketConfig.regimeTicker,
       onProgress: async ({ stock, processed, total, currentTicker, buyCount: rb }) => {
         stock.triggerType = stock.trigger || null;
         await saveScanResult(scanId, stock);
@@ -319,8 +369,9 @@ async function runScan() {
     let predCount = 0;
 
     // --- ML Signal Quality Scoring (Phase 1) ---
-    await setPhase("Step 5/8: ML signal scoring...");
     let mlScoredCount = 0;
+    if (hasMl) {
+    await nextStep("ML signal scoring...");
     try {
       const buySignals = results.filter((r) => r.isBuyNow);
       if (buySignals.length > 0) {
@@ -388,7 +439,7 @@ async function runScan() {
     }
 
     // --- ML Stock Ranking (Phase 2) ---
-    await setPhase("Step 6/8: ML stock ranking...");
+    await nextStep("ML stock ranking...");
     let mlRankedCount = 0;
     try {
       console.log(`[CRON] Running ML stock ranking for ${results.length} stocks...`);
@@ -462,12 +513,12 @@ async function runScan() {
     }
 
     // --- ML LSTM v2 Multi-Horizon Predictions (Phase 3) ---
-    await setPhase("Step 7/8: ML predictions...");
+    await nextStep("ML predictions...");
     let lstmPredCount = 0;
     try {
       console.log(`[CRON] Running LSTM v2 predictions for all stocks...`);
 
-      const predResults = await predictLstmV2(allTickers.map((t) => t.code));
+      const predResults = await predictLstmV2(marketTickers.map((t) => t.code));
 
       if (predResults && predResults.predictions.size > 0) {
         for (const [ticker, pred] of predResults.predictions) {
@@ -593,7 +644,7 @@ async function runScan() {
           }
         }
         // Record skip for tickers not in legacy set (no model)
-        const allCodes = allTickers.map((t) => t.code);
+        const allCodes = marketTickers.map((t) => t.code);
         for (const ticker of allCodes) {
           if (!predictionTickers.has(ticker)) {
             await query(
@@ -611,6 +662,8 @@ async function runScan() {
     } finally {
       disposeLstmV2Model();
     }
+
+    } // end if (hasMl)
 
     // --- Snapshot portfolio ---
     try {
@@ -667,8 +720,8 @@ async function runScan() {
     const totalElapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
     console.log(`[CRON] All done in ${totalElapsed} min.`);
 
-    await setPhase("Step 8/8: Sending Discord report...");
-    await sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount: lstmPredCount || predCount, mlScoredCount, mlRankedCount, elapsed: totalElapsed, newsReport });
+    await nextStep("Sending Discord report...");
+    await sendMorningReport({ results, myPortfolio, count, buyCount, errors, predCount: lstmPredCount || predCount, mlScoredCount, mlRankedCount, elapsed: totalElapsed, newsReport, market: marketConfig });
     process.exit(0);
   } catch (err) {
     console.error(`[CRON] Fatal error:`, err);

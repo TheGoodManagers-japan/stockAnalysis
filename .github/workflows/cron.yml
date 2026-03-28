@@ -8,6 +8,16 @@ on:
     - cron: "30 12 * * 1-5"
     # Global markets — 22:00 UTC Mon-Fri (= 07:00 JST next day, after US close)
     - cron: "0 22 * * 1-5"
+    # US scan — 21:30 UTC Mon-Fri (after US market close 16:00 ET = 21:00 UTC)
+    - cron: "30 21 * * 1-5"
+    # EU/UK scan — 17:30 UTC Mon-Fri (after EU/UK close)
+    - cron: "30 17 * * 1-5"
+    # CN scan — 10:00 UTC Mon-Fri (after HK close 16:00 HKT = 08:00 UTC + buffer)
+    - cron: "0 10 * * 1-5"
+    # IN scan — 12:00 UTC Mon-Fri (after India close 15:30 IST = 10:00 UTC + buffer)
+    - cron: "0 12 * * 1-5"
+    # KR scan — 09:00 UTC Mon-Fri (after Korea close 15:30 KST = 06:30 UTC + buffer)
+    - cron: "0 9 * * 1-5"
   workflow_dispatch:
     inputs:
       job:
@@ -16,6 +26,12 @@ on:
         type: choice
         options:
           - jpx-scan
+          - us-scan
+          - eu-scan
+          - uk-scan
+          - cn-scan
+          - in-scan
+          - kr-scan
           - space-fund
           - global-markets
 
@@ -33,7 +49,110 @@ jobs:
           response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
             "${DASHBOARD_URL}/api/scan/run-script" \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            -H "Content-Type: application/json")
+            -H "Content-Type: application/json" \
+            -d '{"market":"JP"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  us-scan:
+    if: github.event.schedule == '30 21 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'us-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger US scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"US"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  eu-scan:
+    if: github.event.schedule == '30 17 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'eu-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EU scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"EU"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  uk-scan:
+    if: github.event.schedule == '30 17 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'uk-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger UK scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"UK"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  cn-scan:
+    if: github.event.schedule == '0 10 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'cn-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger CN scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"CN"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  in-scan:
+    if: github.event.schedule == '0 12 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'in-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger IN scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"IN"}')
+          echo "HTTP status: $response"
+          if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
+            echo "::error::Request failed with status $response"
+            exit 1
+          fi
+
+  kr-scan:
+    if: github.event.schedule == '0 9 * * 1-5' || (github.event_name == 'workflow_dispatch' && inputs.job == 'kr-scan')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger KR scan
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${DASHBOARD_URL}/api/scan/run-script" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"market":"KR"}')
           echo "HTTP status: $response"
           if [ "$response" -ge 400 ] && [ "$response" -ne 409 ]; then
             echo "::error::Request failed with status $response"

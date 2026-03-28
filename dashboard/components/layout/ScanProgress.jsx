@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 
-export default function ScanProgress({ scanId, onComplete }) {
+export default function ScanProgress({ scanId, onComplete, market }) {
   const [progress, setProgress] = useState(null);
   const intervalRef = useRef(null);
   const onCompleteRef = useRef(onComplete);
@@ -13,7 +13,8 @@ export default function ScanProgress({ scanId, onComplete }) {
 
     async function poll() {
       try {
-        const res = await fetch("/api/scan/progress");
+        const qs = market ? `?market=${market}` : "";
+        const res = await fetch(`/api/scan/progress${qs}`);
         if (!res.ok) return;
         const data = await res.json();
         const scan = data.scan;

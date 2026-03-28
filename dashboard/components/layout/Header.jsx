@@ -6,9 +6,20 @@ import { reportError } from "../../lib/reportError";
 import ScanProgress from "./ScanProgress";
 import styles from "./Header.module.css";
 
+const MARKETS = [
+  { code: "JP", name: "Japan (JPX)" },
+  { code: "US", name: "US (S&P 500)" },
+  { code: "EU", name: "Europe (Euro Stoxx 50)" },
+  { code: "UK", name: "UK (FTSE 100)" },
+  { code: "CN", name: "China (Hang Seng)" },
+  { code: "IN", name: "India (Nifty 50)" },
+  { code: "KR", name: "Korea (KOSPI 50)" },
+];
+
 export default function Header({ title }) {
   const [scanning, setScanning] = useState(false);
   const [scanId, setScanId] = useState(null);
+  const [market, setMarket] = useState("JP");
   const router = useRouter();
 
   // On mount, check if there's already a running scan
@@ -21,6 +32,7 @@ export default function Header({ title }) {
         if (data.scan?.status === "running") {
           setScanId(data.scan.scan_id);
           setScanning(true);
+          if (data.scan.market) setMarket(data.scan.market);
         }
       } catch (err) {
         reportError("component/Header", err, { action: "checkRunningScan" });
@@ -33,8 +45,6 @@ export default function Header({ title }) {
     (scan) => {
       setScanning(false);
       setScanId(null);
-      // No router.refresh() — useScannerPolling already detects completion
-      // and loads final results without a full-page re-render
     },
     []
   );
@@ -45,12 +55,13 @@ export default function Header({ title }) {
     try {
       const res = await fetch("/api/scan/run-script", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ market }),
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         if (res.status === 409 && data.scanId) {
-          // Already running — attach to existing scan
           setScanId(data.scanId);
           return;
         }
@@ -59,9 +70,6 @@ export default function Header({ title }) {
         return;
       }
 
-      // Script spawned — it will create its own scan_run.
-      // Set a placeholder scanId so ScanProgress starts polling
-      // /api/scan/progress, which returns the latest scan_run.
       setScanId("pending");
     } catch (err) {
       reportError("component/Header", err, { action: "runScan" });
@@ -74,8 +82,20 @@ export default function Header({ title }) {
       <h1 className={styles.title}>{title || "Dashboard"}</h1>
       <div className={styles.actions}>
         {scanning && scanId && (
-          <ScanProgress scanId={scanId} onComplete={handleComplete} />
+          <ScanProgress scanId={scanId} onComplete={handleComplete} market={market} />
         )}
+        <select
+          className={styles.marketSelect}
+          value={market}
+          onChange={(e) => setMarket(e.target.value)}
+          disabled={scanning}
+        >
+          {MARKETS.map((m) => (
+            <option key={m.code} value={m.code}>
+              {m.name}
+            </option>
+          ))}
+        </select>
         <button
           className="btn btn-primary"
           onClick={handleRunScan}
