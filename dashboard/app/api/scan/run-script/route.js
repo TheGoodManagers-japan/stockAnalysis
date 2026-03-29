@@ -4,6 +4,19 @@ import { MARKET_CODES } from "../../../../data/markets";
 
 // In-memory lock to prevent double-spawns before the script creates its scan_run
 let lastSpawnedAt = 0;
+let migrated = false;
+
+async function ensureMarketColumn() {
+  if (migrated) return;
+  try {
+    await query(`ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS market TEXT DEFAULT 'JP'`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_scan_runs_market ON scan_runs (market)`);
+    migrated = true;
+  } catch (err) {
+    console.error("[run-script] Migration warning:", err.message);
+    migrated = true; // Don't retry on error
+  }
+}
 
 // POST /api/scan/run-script — spawn run-scan.js as a child process
 // Accepts { market: "JP" | "US" | "EU" | ... } in request body
@@ -35,6 +48,9 @@ export async function POST(request) {
         { status: 409 }
       );
     }
+
+    // Ensure market column exists before querying
+    await ensureMarketColumn();
 
     // Check for already-running scan for this market in DB
     const running = await query(
